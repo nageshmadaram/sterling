@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "strategy_version": "2.1.0-proposed",
+  "status": "PREREGISTERED_RESEARCH_ONLY",
+  "bar_interval": "1min",
+  "horizons_bars": [5, 10, 15, 30],
+  "thresholds_sigma": [0.25, 0.5, 0.75, 1.0],
+  "volatility_estimators": [
+    {"id": "RV-15", "type": "population_std_log_return", "window_bars": 15},
+    {"id": "RV-30", "type": "population_std_log_return", "window_bars": 30},
+    {"id": "RV-60", "type": "population_std_log_return", "window_bars": 60}
+  ],
+  "candidate_count": 48,
+  "selection_metric": "validation_log_loss",
+  "secondary_metrics": [
+    "validation_brier_score",
+    "classwise_precision_recall",
+    "calibration_error",
+    "neutral_coverage",
+    "probability_concentration",
+    "walk_forward_stability"
+  ],
+  "holdout_policy": "LOCKED_UNTIL_SELECTION_FREEZE",
+  "live_authorization": false
+}
