@@ -47,6 +47,15 @@ def test_validate_rows_rejects_out_of_order_timestamps():
         MODULE.validate_rows(bars)
 
 
+def test_validate_rows_rejects_mixed_timestamp_timezone_awareness():
+    bars = [
+        row("2026-08-12T09:15:00"),
+        row("2026-08-12T09:16:00+05:30"),
+    ]
+    with pytest.raises(ValueError, match="mixed timestamp timezone awareness"):
+        MODULE.validate_rows(bars)
+
+
 def test_validate_rows_rejects_missing_canonical_fields():
     bars = [row("2026-08-12T09:15:00")]
     del bars[0]["oi"]

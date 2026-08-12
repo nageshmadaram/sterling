@@ -15,8 +15,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# The application package lives under backend/. Make this script executable from
-# the repository root without requiring PYTHONPATH to be configured manually.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 if str(BACKEND_ROOT) not in sys.path:
@@ -56,6 +54,10 @@ def validate_rows(bars: list[dict[str, object]]) -> tuple[int, str, str]:
 
     if len(parsed_timestamps) != len(bars):
         raise ValueError("one or more rows have no timestamp")
+
+    awareness = {timestamp.tzinfo is not None for timestamp in parsed_timestamps}
+    if len(awareness) > 1:
+        raise ValueError("mixed timestamp timezone awareness is not permitted")
 
     duplicate_count = len(parsed_timestamps) - len(set(parsed_timestamps))
     if duplicate_count:
