@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 from app.engines.sterling_kite_engine.config import SterlingKiteEngineConfig
 from app.engines.sterling_kite_engine.schemas import EngineConfigModel
 from app.services import live_safety
-from app.services.kite_engine import monitor, positions, protection, protective_stop, sizing, state
+from app.services.kite_engine import monitor, order_journal, positions, protection, protective_stop, sizing, state
 from app.services.kite_engine import futures as futures_mod
 from app.services.kite_engine.greeks import (
     black_scholes_greeks, implied_vol, premium_stop_from_move,
@@ -887,11 +887,37 @@ def _make_place_cb(client, uid: str):
         if session_reason:
             state.log(uid, "order_blocked", f"{trade_symbol}: {session_reason}")
             return
+        intent = None
+        if getattr(client, "_is_paper", True) is False:
+            try:
+                import hashlib, json
+                generation = hashlib.sha256(
+                    json.dumps(cfg.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
+                intent = order_journal.reserve(
+                    uid=uid, account_id=str(getattr(client, "_account_id", "") or uid),
+                    strategy_id="sterling-kite", generation_id=generation,
+                    signal_id=f"{row.source}:{row.timestamp_ms}:{row.direction}",
+                    exchange=trade_exchange, symbol=trade_symbol, side=trade_side, quantity=qty,
+                    payload=dict(symbol=trade_symbol, exchange=trade_exchange, quantity=qty,
+                        lot_size=trade_lot, entry_premium=entry_px, stop_premium=stop_px,
+                        direction=pos_direction, signal_direction=signal_dir, vehicle=vehicle_label,
+                        underlying=row.underlying, token=trade_token, guard_key=guard_key,
+                        entry_spot=pos_entry_spot, entry_delta=pos_delta, strike=pos_strike,
+                        expiry=pos_expiry, target_premium=target_px, exit_mode=cfg.exit_mode,
+                        stop_mode=cfg.stop_mode))
+                if intent.state != "RESERVED":
+                    state.log(uid, "order_blocked", f"{trade_symbol}: durable intent already {intent.state}")
+                    return
+                intent = order_journal.transition(intent.intent_key, "SUBMITTING")
+            except Exception as exc:
+                state.log(uid, "order_blocked", f"{trade_symbol}: durable order reservation failed: {exc}")
+                return
         try:
             if use_futures:
                 side = "buy" if signal_dir == "long" else "sell"
                 result = await client.place_order_future(
-                    trade_symbol, side, qty, exchange=trade_exchange, tag=idem)
+                    trade_symbol, side, qty, exchange=trade_exchange,
+                    tag=(intent.tag if intent else idem))
             else:
                 # `stop_px` — not args["stop_loss"] — is the authoritative premium stop:
                 # it is what the protective GTT and the tick monitor below use, and for
@@ -907,13 +933,20 @@ def _make_place_cb(client, uid: str):
                 result = await client.place_order_option(
                     trade_symbol, "buy", qty, order_type=order_type, limit_price=limit_px,
                     exchange=trade_exchange,
-                    stop_loss=(stop_px if stop_px > 0 else None), tag=idem)
+                    stop_loss=(stop_px if stop_px > 0 else None),
+                    tag=(intent.tag if intent else idem))
         except Exception as exc:  # noqa: BLE001
+            if intent is not None:
+                order_journal.transition(intent.intent_key, "UNKNOWN", error=type(exc).__name__)
             state.log(uid, "order_failed", f"{row.underlying} {trade_symbol}: {exc}")
             return
         oid = (result or {}).get("order_id", "")
         if not oid:
+            if intent is not None:
+                order_journal.transition(intent.intent_key, "UNKNOWN", error="missing_order_id")
             return
+        if intent is not None:
+            order_journal.transition(intent.intent_key, "SUBMITTED", order_id=str(oid))
         live_safety.record_idempotency(idem, oid)
         state.mark_auto_open(uid, guard_key)  # one-position guard (per slot)
 
@@ -1280,6 +1313,13 @@ def autoexec_preflight(uid: str) -> List[str]:
     Registry-only — no broker calls — so it can run inline on the config write.
     """
     reasons: List[str] = []
+    try:
+        pending_intents = order_journal.unresolved(uid)
+    except Exception:
+        pending_intents = []
+    if pending_intents:
+        reasons.append("Unresolved durable order intents: " +
+                       ", ".join(i.symbol for i in pending_intents[:5]))
     now = int(time.time() * 1000)
     live = [p for p in positions.open_positions(uid)
             if p.status in (positions.PENDING, positions.OPEN)]

@@ -427,10 +427,13 @@ def build_client(a: _Account):
     empty instrument cache and no connection pool, so building one per request
     re-downloads the ~80k-row instrument dump and re-does the TLS handshake."""
     from .client import KiteClient
-    return KiteClient(
+    client = KiteClient(
         api_key=a.api_key, api_secret=a.api_secret, access_token=a.access_token,
         is_paper=a.is_paper,
     )
+    client._account_id = str(a.id)
+    client._kite_user_id = str(a.kite_user_id or "")
+    return client
 
 
 # ─── Cached clients (warm instrument dump + connection pool, per account) ──────

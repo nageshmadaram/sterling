@@ -20,9 +20,9 @@ _IST = ZoneInfo("Asia/Kolkata")
 from app.engines.sterling_kite_engine.schemas import (
     AlignmentChip, EngineConfigModel, EngineSignalRow, OptionLeg,
 )
-from app.services import live_safety
+from app.services import db, live_safety
 from app.services.exchanges.kite import constants as K
-from app.services.kite_engine import positions, service, state
+from app.services.kite_engine import order_journal, positions, service, state
 from app.services.kite_engine.universe import UniverseItem
 
 UID = "test-dir-exec"
@@ -165,6 +165,28 @@ def _run(cfg: EngineConfigModel, row, client, item=None):
     cb = service._make_place_cb(client, UID)
     asyncio.run(cb(row, item or _item()))
     return positions.open_positions(UID)
+
+
+def test_live_entry_is_reserved_before_send_and_duplicate_signal_cannot_resend():
+    prior=db._available; db.init(); order_journal.clear_for_tests(UID)
+    try:
+        positions.reset(UID); state.reset(UID); state.set_config(UID,EngineConfigModel())
+        class LostAck(FakeClient):
+            _is_paper=False; _account_id='acct-1'
+            calls=0
+            async def place_order_option(self,*a,**kw):
+                self.calls+=1; self.sent_tag=kw['tag']
+                raise TimeoutError('response lost')
+        client=LostAck()
+        cb=service._make_place_cb(client,UID)
+        asyncio.run(cb(_bear_row(),_item()))
+        intents=order_journal.unresolved(UID)
+        assert client.calls == 1 and len(intents) == 1
+        assert intents[0].state == 'UNKNOWN' and intents[0].tag == client.sent_tag
+        asyncio.run(cb(_bear_row(),_item()))
+        assert client.calls == 1
+    finally:
+        order_journal.clear_for_tests(UID); positions.reset(UID); db._available=prior
 
 
 # ── P0 regression: a bear PE BUY must be a LONG-premium position ──────────────

@@ -27,6 +27,7 @@ from app.engines.common.exit_counter import get_exit_threshold
 from app.services.kite_engine import positions as pos
 from app.services.kite_engine import protective_stop as pstop
 from app.services.kite_engine import state
+from app.services.kite_engine import order_journal
 
 log = get_logger(__name__)
 
@@ -123,6 +124,12 @@ async def on_order_update(uid: str, order: dict, *, client=None) -> None:
         oid = str(order.get("order_id", "")).strip()
         exit_side = "SELL" if p.direction == "long" else "BUY"  # side that CLOSES us
         is_entry = bool(oid) and oid == str(p.order_id)
+        intent = None
+        try:
+            intent = order_journal.find(uid=uid, order_id=oid,
+                                        tag=str(order.get("tag") or ""))
+        except Exception:
+            pass
 
         # Only matched strategy exits may consume quantity. Unattributed external
         # sells require broker-position reconciliation; a symbol match is insufficient.
@@ -205,6 +212,8 @@ async def on_order_update(uid: str, order: dict, *, client=None) -> None:
             state.log(uid, "info",
                       f"Fill confirmed: {symbol} @ ₹{avg:.2f}{qty_note} (#{oid})")
             await _resize_broker_stop(client, uid, p, old_qty)
+            if intent and intent.state in order_journal.UNRESOLVED:
+                order_journal.transition(intent.intent_key, "FILLED", order_id=oid)
         elif status in _DEAD_STATUSES and is_entry:
             if filled > 0:
                 # PARTIALLY filled then cancelled: we DO hold something. Treating this
@@ -218,6 +227,8 @@ async def on_order_update(uid: str, order: dict, *, client=None) -> None:
                           f"{filled} qty @ ₹{avg:.2f}; protection kept on the filled part")
                 # …and resized to it. The GTT was armed for the full intended size.
                 await _resize_broker_stop(client, uid, p, old_qty)
+                if intent and intent.state in order_journal.UNRESOLVED:
+                    order_journal.transition(intent.intent_key, "PARTIAL", order_id=oid)
                 return
             # Nothing filled → the position does not exist. Any protective GTT armed for
             # it is now an ORPHAN: a resting SELL with nothing to sell, which opens a
@@ -236,6 +247,8 @@ async def on_order_update(uid: str, order: dict, *, client=None) -> None:
                           f"⚠ {symbol} never filled and its GTT #{p.gtt_id} was left armed "
                           f"(no broker client on this postback path) — cancel it in Zerodha")
             pos.mark_rejected(uid, symbol, reason=str(order.get("status_message") or status))
+            if intent and intent.state in order_journal.UNRESOLVED:
+                order_journal.transition(intent.intent_key, status, order_id=oid)
             # Entry never filled → release the auto-open guard so the slot can re-enter.
             if p.guard_key:
                 state.clear_auto_open(uid, p.guard_key)

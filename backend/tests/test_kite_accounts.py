@@ -85,6 +85,8 @@ def test_build_client_carries_decrypted_creds():
     assert client._api_key == "apikey123"
     assert client._api_secret == "topsecret"
     assert client._access_token == "ATOK"
+    assert client._account_id == str(a.id)
+    assert client._kite_user_id == ""
 
 
 def test_save_session_persists_refresh_token():

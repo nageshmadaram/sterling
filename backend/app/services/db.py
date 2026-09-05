@@ -123,6 +123,75 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("INSERT OR IGNORE INTO system_config VALUES ('trading_mode', 'swing')")
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS kite_order_intents (
+            intent_key      TEXT PRIMARY KEY,
+            uid             TEXT NOT NULL,
+            account_id      TEXT NOT NULL,
+            strategy_id     TEXT NOT NULL,
+            generation_id   TEXT NOT NULL,
+            signal_id       TEXT NOT NULL,
+            exchange        TEXT NOT NULL,
+            symbol          TEXT NOT NULL,
+            side            TEXT NOT NULL,
+            quantity        INTEGER NOT NULL,
+            tag             TEXT NOT NULL UNIQUE,
+            state           TEXT NOT NULL,
+            order_id        TEXT NOT NULL DEFAULT '',
+            payload_json    TEXT NOT NULL DEFAULT '{}',
+            error           TEXT NOT NULL DEFAULT '',
+            capital_required REAL NOT NULL DEFAULT 0,
+            observed_quantity INTEGER NOT NULL DEFAULT 0,
+            observed_value REAL NOT NULL DEFAULT 0,
+            reconciliation_required INTEGER NOT NULL DEFAULT 0,
+            created_ms      INTEGER NOT NULL,
+            updated_ms      INTEGER NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_kite_intents_uid_state ON kite_order_intents(uid, state)")
+    # Additive migration for databases created by the initial journal rollout.
+    journal_columns = {r[1] for r in conn.execute("PRAGMA table_info(kite_order_intents)")}
+    for name, declaration in (
+        ("capital_required", "REAL NOT NULL DEFAULT 0"),
+        ("observed_quantity", "INTEGER NOT NULL DEFAULT 0"),
+        ("observed_value", "REAL NOT NULL DEFAULT 0"),
+        ("reconciliation_required", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in journal_columns:
+            conn.execute(f"ALTER TABLE kite_order_intents ADD COLUMN {name} {declaration}")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_kite_intents_account_order ON kite_order_intents(account_id, order_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS kite_order_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            intent_key TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            broker_status TEXT NOT NULL,
+            filled_quantity INTEGER NOT NULL,
+            filled_value REAL NOT NULL,
+            disposition TEXT NOT NULL,
+            received_ts_ms INTEGER NOT NULL,
+            raw_json TEXT NOT NULL DEFAULT '{}',
+            UNIQUE(intent_key, fingerprint)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS kite_fill_ledger (
+            account_id       TEXT NOT NULL,
+            order_id         TEXT NOT NULL,
+            trade_id         TEXT NOT NULL,
+            uid              TEXT NOT NULL,
+            symbol           TEXT NOT NULL,
+            side             TEXT NOT NULL,
+            quantity         INTEGER NOT NULL,
+            price            REAL NOT NULL,
+            fees             REAL NOT NULL DEFAULT 0,
+            exchange_ts_ms   INTEGER NOT NULL DEFAULT 0,
+            received_ts_ms   INTEGER NOT NULL,
+            raw_json         TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (account_id, order_id, trade_id)
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS iv_history (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             underlying TEXT NOT NULL,
