@@ -1,0 +1,419 @@
+{
+  "lake": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "interval": "day",
+  "timeframe_minutes": 1,
+  "symbols": 362,
+  "slippage": 0.0002,
+  "position_size": "one exchange LOT per trade, from the instrument master",
+  "axes": {
+    "exit_mode": [
+      "one_red",
+      "two_red",
+      "three_red",
+      "three_red_signal"
+    ],
+    "exit_aligned_trail": [
+      false,
+      true
+    ],
+    "side": [
+      "long",
+      "short"
+    ]
+  },
+  "why_aligned_trail_is_swept": "With exit_aligned_trail OFF the stop rides the tightest still-green line and fires at roughly one_red whatever exit_mode says, so sweeping the mode alone measures nothing. config.py records this.",
+  "multiple_testing": {
+    "cells_tested": 16,
+    "cells_passed": 0,
+    "passing_cells": [],
+    "cells_with_positive_holdout_gross": [],
+    "note": "A pass here is a candidate for confirmation on the full slippage grid and the intraday series, not a result."
+  },
+  "cells": {
+    "one_red|aligned=0|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 9840,
+        "gross_pnl": -27191648.96,
+        "net_pnl": -31133631.62,
+        "median_symbol_net": -54703.19,
+        "profitable_symbols": 97,
+        "mean_bars_held": 7.76,
+        "win_rate": 0.3511
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 3200,
+        "gross_pnl": -7362544.83,
+        "net_pnl": -9050924.48,
+        "median_symbol_net": -44059.88,
+        "profitable_symbols": 109,
+        "mean_bars_held": 7.54,
+        "win_rate": 0.3212
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "one_red|aligned=0|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 8224,
+        "gross_pnl": -19305646.24,
+        "net_pnl": -22528712.42,
+        "median_symbol_net": -109499.62,
+        "profitable_symbols": 66,
+        "mean_bars_held": 7.41,
+        "win_rate": 0.2913
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2621,
+        "gross_pnl": -15892784.52,
+        "net_pnl": -17202076.57,
+        "median_symbol_net": -47587.76,
+        "profitable_symbols": 72,
+        "mean_bars_held": 7.13,
+        "win_rate": 0.28
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "one_red|aligned=1|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 9840,
+        "gross_pnl": -27191648.96,
+        "net_pnl": -31133631.62,
+        "median_symbol_net": -54703.19,
+        "profitable_symbols": 97,
+        "mean_bars_held": 7.76,
+        "win_rate": 0.3511
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 3200,
+        "gross_pnl": -7362544.83,
+        "net_pnl": -9050924.48,
+        "median_symbol_net": -44059.88,
+        "profitable_symbols": 109,
+        "mean_bars_held": 7.54,
+        "win_rate": 0.3212
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "one_red|aligned=1|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 8224,
+        "gross_pnl": -19305646.24,
+        "net_pnl": -22528712.42,
+        "median_symbol_net": -109499.62,
+        "profitable_symbols": 66,
+        "mean_bars_held": 7.41,
+        "win_rate": 0.2913
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2621,
+        "gross_pnl": -15892784.52,
+        "net_pnl": -17202076.57,
+        "median_symbol_net": -47587.76,
+        "profitable_symbols": 72,
+        "mean_bars_held": 7.13,
+        "win_rate": 0.28
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "two_red|aligned=0|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 9852,
+        "gross_pnl": -12195408.6,
+        "net_pnl": -16149057.35,
+        "median_symbol_net": -6236.66,
+        "profitable_symbols": 134,
+        "mean_bars_held": 7.58,
+        "win_rate": 0.364
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 3210,
+        "gross_pnl": -2885535.2,
+        "net_pnl": -4581922.16,
+        "median_symbol_net": -32003.28,
+        "profitable_symbols": 125,
+        "mean_bars_held": 7.34,
+        "win_rate": 0.3315
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "two_red|aligned=0|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 8244,
+        "gross_pnl": -6043606.63,
+        "net_pnl": -9270269.01,
+        "median_symbol_net": -66088.61,
+        "profitable_symbols": 90,
+        "mean_bars_held": 7.2,
+        "win_rate": 0.3041
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2630,
+        "gross_pnl": -10595682.25,
+        "net_pnl": -11907263.59,
+        "median_symbol_net": -33115.73,
+        "profitable_symbols": 98,
+        "mean_bars_held": 6.89,
+        "win_rate": 0.2886
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "two_red|aligned=1|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 7661,
+        "gross_pnl": -22924664.48,
+        "net_pnl": -25990026.33,
+        "median_symbol_net": -43964.2,
+        "profitable_symbols": 113,
+        "mean_bars_held": 20.19,
+        "win_rate": 0.3587
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2428,
+        "gross_pnl": -8933740.82,
+        "net_pnl": -10202179.96,
+        "median_symbol_net": -51265.11,
+        "profitable_symbols": 122,
+        "mean_bars_held": 19.44,
+        "win_rate": 0.3357
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "two_red|aligned=1|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 6422,
+        "gross_pnl": -22530243.67,
+        "net_pnl": -25030238.9,
+        "median_symbol_net": -156164.13,
+        "profitable_symbols": 70,
+        "mean_bars_held": 19.52,
+        "win_rate": 0.299
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2133,
+        "gross_pnl": -31754838.98,
+        "net_pnl": -32828322.15,
+        "median_symbol_net": -98392.5,
+        "profitable_symbols": 49,
+        "mean_bars_held": 16.57,
+        "win_rate": 0.2489
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red|aligned=0|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 9852,
+        "gross_pnl": -10296615.2,
+        "net_pnl": -14250949.13,
+        "median_symbol_net": 7173.14,
+        "profitable_symbols": 140,
+        "mean_bars_held": 7.56,
+        "win_rate": 0.3648
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 3210,
+        "gross_pnl": -2386766.29,
+        "net_pnl": -4083363.55,
+        "median_symbol_net": -29801.48,
+        "profitable_symbols": 127,
+        "mean_bars_held": 7.32,
+        "win_rate": 0.3312
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red|aligned=0|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 8244,
+        "gross_pnl": -4340103.73,
+        "net_pnl": -7566142.69,
+        "median_symbol_net": -65853.13,
+        "profitable_symbols": 91,
+        "mean_bars_held": 7.19,
+        "win_rate": 0.3045
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2630,
+        "gross_pnl": -9979215.34,
+        "net_pnl": -11290536.85,
+        "median_symbol_net": -30448.8,
+        "profitable_symbols": 100,
+        "mean_bars_held": 6.87,
+        "win_rate": 0.2894
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red|aligned=1|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 5009,
+        "gross_pnl": -6874475.08,
+        "net_pnl": -8860183.07,
+        "median_symbol_net": 21706.8,
+        "profitable_symbols": 149,
+        "mean_bars_held": 39.38,
+        "win_rate": 0.3805
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 1571,
+        "gross_pnl": -7292885.53,
+        "net_pnl": -8103010.93,
+        "median_symbol_net": -32633.76,
+        "profitable_symbols": 128,
+        "mean_bars_held": 36.15,
+        "win_rate": 0.3482
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red|aligned=1|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 4696,
+        "gross_pnl": -27272217.65,
+        "net_pnl": -29119749.3,
+        "median_symbol_net": -175934.63,
+        "profitable_symbols": 66,
+        "mean_bars_held": 34.54,
+        "win_rate": 0.2926
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 1597,
+        "gross_pnl": -39006462.5,
+        "net_pnl": -39817884.33,
+        "median_symbol_net": -111857.36,
+        "profitable_symbols": 44,
+        "mean_bars_held": 28.6,
+        "win_rate": 0.2173
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red_signal|aligned=0|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 9852,
+        "gross_pnl": -10296615.2,
+        "net_pnl": -14250949.13,
+        "median_symbol_net": 7173.14,
+        "profitable_symbols": 140,
+        "mean_bars_held": 7.56,
+        "win_rate": 0.3648
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 3210,
+        "gross_pnl": -2386766.29,
+        "net_pnl": -4083363.55,
+        "median_symbol_net": -29801.48,
+        "profitable_symbols": 127,
+        "mean_bars_held": 7.32,
+        "win_rate": 0.3312
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red_signal|aligned=0|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 8244,
+        "gross_pnl": -4340103.73,
+        "net_pnl": -7566142.69,
+        "median_symbol_net": -65853.13,
+        "profitable_symbols": 91,
+        "mean_bars_held": 7.19,
+        "win_rate": 0.3045
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 2630,
+        "gross_pnl": -9979215.34,
+        "net_pnl": -11290536.85,
+        "median_symbol_net": -30448.8,
+        "profitable_symbols": 100,
+        "mean_bars_held": 6.87,
+        "win_rate": 0.2894
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red_signal|aligned=1|long": {
+      "full": {
+        "symbols": 275,
+        "trades": 5009,
+        "gross_pnl": -6874475.08,
+        "net_pnl": -8860183.07,
+        "median_symbol_net": 21706.8,
+        "profitable_symbols": 149,
+        "mean_bars_held": 39.38,
+        "win_rate": 0.3805
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 1571,
+        "gross_pnl": -7292885.53,
+        "net_pnl": -8103010.93,
+        "median_symbol_net": -32633.76,
+        "profitable_symbols": 128,
+        "mean_bars_held": 36.15,
+        "win_rate": 0.3482
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    },
+    "three_red_signal|aligned=1|short": {
+      "full": {
+        "symbols": 275,
+        "trades": 4696,
+        "gross_pnl": -27272217.65,
+        "net_pnl": -29119749.3,
+        "median_symbol_net": -175934.63,
+        "profitable_symbols": 66,
+        "mean_bars_held": 34.54,
+        "win_rate": 0.2926
+      },
+      "holdout": {
+        "symbols": 341,
+        "trades": 1597,
+        "gross_pnl": -39006462.5,
+        "net_pnl": -39817884.33,
+        "median_symbol_net": -111857.36,
+        "profitable_symbols": 44,
+        "mean_bars_held": 28.6,
+        "win_rate": 0.2173
+      },
+      "passed": false,
+      "gross_positive_holdout": false
+    }
+  },
+  "verdict": "FAIL"
+}

@@ -233,6 +233,7 @@ def replay_premium_series(
     starting_capital: float,
     direction_label: str = "long",
     side: str = "long",
+    entry_from: Optional[str] = None,
 ) -> BacktestRun:
     """Replay the ST on a PREMIUM series (the 'real' mode, and the inner loop the
     'synthetic' mode reuses on its modeled premium series). BUY on a fresh up-
@@ -249,6 +250,8 @@ def replay_premium_series(
     """
     if side not in ("long", "short"):
         raise ValueError("side must be 'long' or 'short'")
+    if entry_from not in (None, "long", "short"):
+        raise ValueError("entry_from must be None, 'long' or 'short'")
     o = np.asarray(premium_open, float)
     h = np.asarray(premium_high, float)
     l = np.asarray(premium_low, float)
@@ -270,7 +273,14 @@ def replay_premium_series(
     r = compute_regime(o, h, l, c, cfg)
     longs, shorts = entry_transitions(r)     # premium up-transition = BUY
     is_long = side == "long"
-    entries, want = (longs, 1) if is_long else (shorts, -1)
+    want = 1 if is_long else -1
+    # ``entry_from`` decouples WHICH signal opens a trade from WHICH WAY the trade
+    # is taken. Only a research path uses it: the forward-return study found the
+    # bear alignment is anti-predictive — price RISES after it — so "buy the bear
+    # signal" is a hypothesis that has to be testable without editing the engine.
+    # Exits still resolve for the side actually held.
+    entries = (longs if is_long else shorts) if entry_from is None else (
+        longs if entry_from == "long" else shorts)
 
     i = 0
     while i < n:

@@ -1,0 +1,53 @@
+{
+  "generated_at": "2026-09-07",
+  "question": "Why does it lose, and what would make it profitable?",
+  "dataset": "NFO/BFO futures, continuous daily 2018-2026, 362 symbols, real exchange lot sizes",
+  "position_sizing_correction": {
+    "finding": "An earlier run used qty=1, which is not a tradable size \u2014 the minimum is one LOT (20..71,475 here, median 600). Brokerage plus GST is ~Rs 47 per round trip and does NOT scale with size, so qty=1 charged a whole fee against one unit of notional.",
+    "effect": "Correcting it does NOT rescue the strategy. Lot sizing is close to equal-NOTIONAL weighting; unit sizing over-weights expensive names. On the correct basis the best long cell goes from gross +13,006 (qty=1) to gross -2,386,766 (lots)."
+  },
+  "exit_mode_sweep": {
+    "cells": 16,
+    "passed": 0,
+    "finding": "Looser exits are consistently BETTER than the shipped one_red, and holding longer is worse. Best long: three_red with exit_aligned_trail OFF (gross -2.39M vs one_red -7.36M). exit_aligned_trail ON holds ~36 bars and gives the edge back (-7.29M). three_red and three_red_signal are identical because the trail fires first.",
+    "short_side": "Catastrophic in every cell: -9.98M to -39.01M gross. Not a tuning problem."
+  },
+  "entry_forward_return": {
+    "method": "Open-to-open forward return after a fresh alignment, vs the base rate of all bars.",
+    "horizon_20_bars": {
+      "base_bps": 175.0,
+      "long_signal_bps": 149.1,
+      "long_alpha_bps": -25.8,
+      "short_signal_bps": 365.7,
+      "short_alpha_bps": -190.7
+    },
+    "finding": "The entry has NEGATIVE alpha. A long signal underperforms a random bar by 26 bps; price RISES 366 bps after a bear signal, so the short side is strongly anti-predictive. Three-line agreement on Heikin-Ashi is a late confirmation: by the time all three agree, the move is over. No exit tuning fixes negative entry alpha \u2014 that is arithmetic."
+  },
+  "inverted_hypothesis": {
+    "rule": "Buy the BEAR alignment. Fixed 20-bar hold, next-open in and out, lot-sized, futures costs at 0.0002 slippage.",
+    "note": "The engine's own exits cannot express this: they are defined against the alignment that opened the trade, so an entry taken against alignment closes on the next bar (gross exactly 0). It needs a different exit, so it is a different strategy.",
+    "holdout_net_inr": 13790228,
+    "profitable_symbols": "217/334",
+    "random_control": {
+      "draws": 40,
+      "mean_inr": 6730653,
+      "sd_inr": 2341500,
+      "z_score": 3.01,
+      "draws_beating_signal": 0,
+      "empirical_p": 0.0
+    },
+    "honest_reading": [
+      "About half the return is market DRIFT: random entries in the same symbols and window returned 6.73M. The signal's own contribution is ~7.06M at z=+3.01.",
+      "The hypothesis was generated FROM this data \u2014 the forward-return table spanned 2018-2026 including the 2025+ holdout. This is in-sample, not out-of-sample.",
+      "Roughly 30 configurations have now been tested. Nominal two-sided p from z=3.01 is 0.0026; a Bonferroni-style correction over that search puts it near 0.08. Not significant at 5%.",
+      "The control randomises entry TIMING but not the fact that bear alignments cluster in drawdowns. Buying dips in a bull market is a known beta-timing effect.",
+      "Verdict: SUGGESTIVE, NOT ESTABLISHED. It is a lead to test on data this hypothesis has never seen, not a strategy to fund."
+    ]
+  },
+  "recommendation": [
+    "Do not trade the current logic in any configuration. Entry alpha is negative on both sides.",
+    "Delete the short side outright: -191 bps of alpha per signal, worst cell in every sweep.",
+    "If the engine is kept, three_red with exit_aligned_trail OFF is strictly better than the shipped one_red \u2014 but better here means losing less, not making money.",
+    "The only positive lead is fading the signal rather than following it, with a fixed-horizon exit. That is a new strategy and needs its own forward-collected holdout before it means anything."
+  ]
+}
