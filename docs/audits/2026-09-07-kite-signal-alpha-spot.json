@@ -1,0 +1,266 @@
+{
+  "lake": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "source": "spot",
+  "holdout_from": "2025-01-01",
+  "scan_source_equivalent": "spot \u2014 THE SHIPPED CONFIGURATION",
+  "series": 615,
+  "signals": {
+    "long": 30417,
+    "short": 24890
+  },
+  "method": "open-to-open forward return after a fresh 3-line alignment, against the base rate of every bar in the same series",
+  "windows": {
+    "full": [
+      {
+        "horizon_bars": 1,
+        "base_rate_bps": 19.0,
+        "long": {
+          "n": 30395,
+          "mean_bps": 13.6,
+          "alpha_bps": -5.4,
+          "hit_rate": 0.5223
+        },
+        "short": {
+          "n": 24874,
+          "mean_bps": 12.4,
+          "alpha_bps": 6.6,
+          "hit_rate": 0.4688
+        }
+      },
+      {
+        "horizon_bars": 3,
+        "base_rate_bps": 34.1,
+        "long": {
+          "n": 30384,
+          "mean_bps": 36.7,
+          "alpha_bps": 2.6,
+          "hit_rate": 0.5494
+        },
+        "short": {
+          "n": 24786,
+          "mean_bps": 29.0,
+          "alpha_bps": 5.1,
+          "hit_rate": 0.4628
+        }
+      },
+      {
+        "horizon_bars": 5,
+        "base_rate_bps": 49.5,
+        "long": {
+          "n": 30375,
+          "mean_bps": 53.9,
+          "alpha_bps": 4.4,
+          "hit_rate": 0.5501
+        },
+        "short": {
+          "n": 24755,
+          "mean_bps": 46.7,
+          "alpha_bps": 2.8,
+          "hit_rate": 0.4469
+        }
+      },
+      {
+        "horizon_bars": 10,
+        "base_rate_bps": 77.4,
+        "long": {
+          "n": 30308,
+          "mean_bps": 88.7,
+          "alpha_bps": 11.3,
+          "hit_rate": 0.5515
+        },
+        "short": {
+          "n": 24733,
+          "mean_bps": 60.3,
+          "alpha_bps": 17.0,
+          "hit_rate": 0.4445
+        }
+      },
+      {
+        "horizon_bars": 20,
+        "base_rate_bps": 157.8,
+        "long": {
+          "n": 30247,
+          "mean_bps": 189.8,
+          "alpha_bps": 32.0,
+          "hit_rate": 0.585
+        },
+        "short": {
+          "n": 24637,
+          "mean_bps": 90.2,
+          "alpha_bps": 67.6,
+          "hit_rate": 0.4498
+        }
+      }
+    ],
+    "in_sample": [
+      {
+        "horizon_bars": 1,
+        "base_rate_bps": 23.2,
+        "long": {
+          "n": 24166,
+          "mean_bps": 15.9,
+          "alpha_bps": -7.3,
+          "hit_rate": 0.5235
+        },
+        "short": {
+          "n": 19337,
+          "mean_bps": 13.4,
+          "alpha_bps": 9.8,
+          "hit_rate": 0.4661
+        }
+      },
+      {
+        "horizon_bars": 3,
+        "base_rate_bps": 40.7,
+        "long": {
+          "n": 24166,
+          "mean_bps": 44.3,
+          "alpha_bps": 3.6,
+          "hit_rate": 0.5605
+        },
+        "short": {
+          "n": 19337,
+          "mean_bps": 31.9,
+          "alpha_bps": 8.8,
+          "hit_rate": 0.4598
+        }
+      },
+      {
+        "horizon_bars": 5,
+        "base_rate_bps": 58.3,
+        "long": {
+          "n": 24166,
+          "mean_bps": 66.9,
+          "alpha_bps": 8.6,
+          "hit_rate": 0.5629
+        },
+        "short": {
+          "n": 19336,
+          "mean_bps": 47.1,
+          "alpha_bps": 11.2,
+          "hit_rate": 0.4437
+        }
+      },
+      {
+        "horizon_bars": 10,
+        "base_rate_bps": 87.6,
+        "long": {
+          "n": 24164,
+          "mean_bps": 114.9,
+          "alpha_bps": 27.3,
+          "hit_rate": 0.5702
+        },
+        "short": {
+          "n": 19336,
+          "mean_bps": 60.3,
+          "alpha_bps": 27.3,
+          "hit_rate": 0.4373
+        }
+      },
+      {
+        "horizon_bars": 20,
+        "base_rate_bps": 175.9,
+        "long": {
+          "n": 24163,
+          "mean_bps": 222.1,
+          "alpha_bps": 46.2,
+          "hit_rate": 0.5979
+        },
+        "short": {
+          "n": 19336,
+          "mean_bps": 85.9,
+          "alpha_bps": 90.0,
+          "hit_rate": 0.4486
+        }
+      }
+    ],
+    "holdout": [
+      {
+        "horizon_bars": 1,
+        "base_rate_bps": 3.1,
+        "long": {
+          "n": 6229,
+          "mean_bps": 4.6,
+          "alpha_bps": 1.5,
+          "hit_rate": 0.5176
+        },
+        "short": {
+          "n": 5537,
+          "mean_bps": 9.1,
+          "alpha_bps": -6.1,
+          "hit_rate": 0.4781
+        }
+      },
+      {
+        "horizon_bars": 3,
+        "base_rate_bps": 8.9,
+        "long": {
+          "n": 6218,
+          "mean_bps": 7.0,
+          "alpha_bps": -1.9,
+          "hit_rate": 0.5063
+        },
+        "short": {
+          "n": 5449,
+          "mean_bps": 18.6,
+          "alpha_bps": -9.8,
+          "hit_rate": 0.4733
+        }
+      },
+      {
+        "horizon_bars": 5,
+        "base_rate_bps": 15.8,
+        "long": {
+          "n": 6209,
+          "mean_bps": 3.1,
+          "alpha_bps": -12.6,
+          "hit_rate": 0.5002
+        },
+        "short": {
+          "n": 5419,
+          "mean_bps": 45.5,
+          "alpha_bps": -29.7,
+          "hit_rate": 0.4582
+        }
+      },
+      {
+        "horizon_bars": 10,
+        "base_rate_bps": 37.9,
+        "long": {
+          "n": 6144,
+          "mean_bps": -14.4,
+          "alpha_bps": -52.3,
+          "hit_rate": 0.4779
+        },
+        "short": {
+          "n": 5397,
+          "mean_bps": 60.6,
+          "alpha_bps": -22.7,
+          "hit_rate": 0.4703
+        }
+      },
+      {
+        "horizon_bars": 20,
+        "base_rate_bps": 85.8,
+        "long": {
+          "n": 6084,
+          "mean_bps": 61.3,
+          "alpha_bps": -24.4,
+          "hit_rate": 0.5335
+        },
+        "short": {
+          "n": 5301,
+          "mean_bps": 105.8,
+          "alpha_bps": -20.1,
+          "hit_rate": 0.4541
+        }
+      }
+    ]
+  },
+  "verdict": "NEGATIVE_ALPHA_OUT_OF_SAMPLE",
+  "caveats": [
+    "Measures the UNDERLYING's move, not an option's P&L. No option history exists to price the leg with.",
+    "A bought CE or PE is LONG PREMIUM: it pays theta and needs the underlying to move enough, not merely the right way. Underlying alpha is an upper bound on the option strategy, never an estimate of it.",
+    "Exit-free by design. An exit redistributes what the entry provides; it cannot manufacture alpha the entry does not have."
+  ]
+}
