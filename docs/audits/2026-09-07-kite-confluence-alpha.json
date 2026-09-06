@@ -1,0 +1,407 @@
+{
+  "lake": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "holdout_from": "2025-01-01",
+  "definition": "underlying fires FRESH and the derivative's own triple-ST is aligned the same way on the SAME bar (scanner._confluence_one)",
+  "derivative_used": "the underlying's FUTURE, standing in for the option leg \u2014 no option history exists to confirm against",
+  "paired_underlyings": 334,
+  "windows": {
+    "in_sample": [
+      {
+        "horizon_bars": 5,
+        "base_rate_bps": 42.7,
+        "spot_only_long": {
+          "n": 8196,
+          "mean_bps": 55.2,
+          "alpha_bps": 12.4,
+          "hit_rate": 0.5438
+        },
+        "spot_only_short": {
+          "n": 6279,
+          "mean_bps": -50.4,
+          "alpha_bps": -7.7,
+          "hit_rate": 0.4658
+        },
+        "confluence_long": {
+          "n": 6983,
+          "mean_bps": 54.3,
+          "alpha_bps": 11.5,
+          "hit_rate": 0.5452
+        },
+        "confluence_short": {
+          "n": 5507,
+          "mean_bps": -55.3,
+          "alpha_bps": -12.6,
+          "hit_rate": 0.4632
+        },
+        "confluence_strict_long": {
+          "n": 5373,
+          "mean_bps": 53.5,
+          "alpha_bps": 10.7,
+          "hit_rate": 0.5414
+        },
+        "confluence_strict_short": {
+          "n": 4164,
+          "mean_bps": -62.8,
+          "alpha_bps": -20.0,
+          "hit_rate": 0.4635
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.852,
+          "alpha_improvement_bps": -0.9,
+          "filter_helps": false,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6556,
+          "alpha_improvement_bps": -1.7,
+          "filter_helps": false,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.8771,
+          "alpha_improvement_bps": -4.9,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6632,
+          "alpha_improvement_bps": -12.3,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        }
+      },
+      {
+        "horizon_bars": 10,
+        "base_rate_bps": 83.1,
+        "spot_only_long": {
+          "n": 8196,
+          "mean_bps": 101.0,
+          "alpha_bps": 17.9,
+          "hit_rate": 0.5499
+        },
+        "spot_only_short": {
+          "n": 6279,
+          "mean_bps": -81.7,
+          "alpha_bps": 1.4,
+          "hit_rate": 0.4412
+        },
+        "confluence_long": {
+          "n": 6983,
+          "mean_bps": 101.9,
+          "alpha_bps": 18.8,
+          "hit_rate": 0.5495
+        },
+        "confluence_short": {
+          "n": 5507,
+          "mean_bps": -88.5,
+          "alpha_bps": -5.4,
+          "hit_rate": 0.4362
+        },
+        "confluence_strict_long": {
+          "n": 5373,
+          "mean_bps": 97.1,
+          "alpha_bps": 13.9,
+          "hit_rate": 0.5438
+        },
+        "confluence_strict_short": {
+          "n": 4164,
+          "mean_bps": -103.6,
+          "alpha_bps": -20.5,
+          "hit_rate": 0.4289
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.852,
+          "alpha_improvement_bps": 0.9,
+          "filter_helps": true,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6556,
+          "alpha_improvement_bps": -4.0,
+          "filter_helps": false,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.8771,
+          "alpha_improvement_bps": -6.8,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6632,
+          "alpha_improvement_bps": -21.9,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        }
+      },
+      {
+        "horizon_bars": 20,
+        "base_rate_bps": 166.7,
+        "spot_only_long": {
+          "n": 8196,
+          "mean_bps": 177.8,
+          "alpha_bps": 11.1,
+          "hit_rate": 0.557
+        },
+        "spot_only_short": {
+          "n": 6279,
+          "mean_bps": -136.6,
+          "alpha_bps": 30.1,
+          "hit_rate": 0.4434
+        },
+        "confluence_long": {
+          "n": 6983,
+          "mean_bps": 185.3,
+          "alpha_bps": 18.7,
+          "hit_rate": 0.5578
+        },
+        "confluence_short": {
+          "n": 5507,
+          "mean_bps": -139.1,
+          "alpha_bps": 27.6,
+          "hit_rate": 0.442
+        },
+        "confluence_strict_long": {
+          "n": 5373,
+          "mean_bps": 178.0,
+          "alpha_bps": 11.4,
+          "hit_rate": 0.5511
+        },
+        "confluence_strict_short": {
+          "n": 4164,
+          "mean_bps": -155.7,
+          "alpha_bps": 11.0,
+          "hit_rate": 0.439
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.852,
+          "alpha_improvement_bps": 7.6,
+          "filter_helps": true,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6556,
+          "alpha_improvement_bps": 0.3,
+          "filter_helps": true,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.8771,
+          "alpha_improvement_bps": -2.5,
+          "filter_helps": false,
+          "alpha_reaches_zero": true
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6632,
+          "alpha_improvement_bps": -19.1,
+          "filter_helps": false,
+          "alpha_reaches_zero": true
+        }
+      }
+    ],
+    "holdout": [
+      {
+        "horizon_bars": 5,
+        "base_rate_bps": 18.8,
+        "spot_only_long": {
+          "n": 3153,
+          "mean_bps": 0.6,
+          "alpha_bps": -18.2,
+          "hit_rate": 0.4938
+        },
+        "spot_only_short": {
+          "n": 2810,
+          "mean_bps": -42.0,
+          "alpha_bps": -23.2,
+          "hit_rate": 0.4698
+        },
+        "confluence_long": {
+          "n": 2696,
+          "mean_bps": 1.5,
+          "alpha_bps": -17.2,
+          "hit_rate": 0.5011
+        },
+        "confluence_short": {
+          "n": 2442,
+          "mean_bps": -43.3,
+          "alpha_bps": -24.6,
+          "hit_rate": 0.466
+        },
+        "confluence_strict_long": {
+          "n": 2165,
+          "mean_bps": 13.9,
+          "alpha_bps": -4.9,
+          "hit_rate": 0.5136
+        },
+        "confluence_strict_short": {
+          "n": 1902,
+          "mean_bps": -39.3,
+          "alpha_bps": -20.6,
+          "hit_rate": 0.4805
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.8551,
+          "alpha_improvement_bps": 1.0,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6866,
+          "alpha_improvement_bps": 13.3,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.869,
+          "alpha_improvement_bps": -1.4,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6769,
+          "alpha_improvement_bps": 2.6,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        }
+      },
+      {
+        "horizon_bars": 10,
+        "base_rate_bps": 44.4,
+        "spot_only_long": {
+          "n": 3115,
+          "mean_bps": 4.8,
+          "alpha_bps": -39.6,
+          "hit_rate": 0.4873
+        },
+        "spot_only_short": {
+          "n": 2800,
+          "mean_bps": -55.4,
+          "alpha_bps": -11.0,
+          "hit_rate": 0.46
+        },
+        "confluence_long": {
+          "n": 2660,
+          "mean_bps": 7.8,
+          "alpha_bps": -36.6,
+          "hit_rate": 0.4872
+        },
+        "confluence_short": {
+          "n": 2434,
+          "mean_bps": -56.7,
+          "alpha_bps": -12.3,
+          "hit_rate": 0.4577
+        },
+        "confluence_strict_long": {
+          "n": 2136,
+          "mean_bps": 12.1,
+          "alpha_bps": -32.3,
+          "hit_rate": 0.493
+        },
+        "confluence_strict_short": {
+          "n": 1898,
+          "mean_bps": -53.4,
+          "alpha_bps": -9.0,
+          "hit_rate": 0.4626
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.8539,
+          "alpha_improvement_bps": 3.0,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6857,
+          "alpha_improvement_bps": 7.3,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.8693,
+          "alpha_improvement_bps": -1.3,
+          "filter_helps": false,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6779,
+          "alpha_improvement_bps": 2.0,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        }
+      },
+      {
+        "horizon_bars": 20,
+        "base_rate_bps": 98.6,
+        "spot_only_long": {
+          "n": 3082,
+          "mean_bps": 67.8,
+          "alpha_bps": -30.8,
+          "hit_rate": 0.5114
+        },
+        "spot_only_short": {
+          "n": 2741,
+          "mean_bps": -118.9,
+          "alpha_bps": -20.3,
+          "hit_rate": 0.4633
+        },
+        "confluence_long": {
+          "n": 2632,
+          "mean_bps": 74.5,
+          "alpha_bps": -24.1,
+          "hit_rate": 0.5182
+        },
+        "confluence_short": {
+          "n": 2380,
+          "mean_bps": -117.8,
+          "alpha_bps": -19.1,
+          "hit_rate": 0.463
+        },
+        "confluence_strict_long": {
+          "n": 2121,
+          "mean_bps": 83.8,
+          "alpha_bps": -14.8,
+          "hit_rate": 0.5219
+        },
+        "confluence_strict_short": {
+          "n": 1858,
+          "mean_bps": -116.6,
+          "alpha_bps": -18.0,
+          "hit_rate": 0.4607
+        },
+        "filter_confluence_long": {
+          "kept_fraction": 0.854,
+          "alpha_improvement_bps": 6.7,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_long": {
+          "kept_fraction": 0.6882,
+          "alpha_improvement_bps": 16.0,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_short": {
+          "kept_fraction": 0.8683,
+          "alpha_improvement_bps": 1.2,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        },
+        "filter_confluence_strict_short": {
+          "kept_fraction": 0.6779,
+          "alpha_improvement_bps": 2.3,
+          "filter_helps": true,
+          "alpha_reaches_zero": false
+        }
+      }
+    ]
+  },
+  "holdout_cells": 6,
+  "holdout_cells_where_filter_helps": 4,
+  "holdout_cells_with_positive_alpha": 0,
+  "verdict": "NO_OUT_OF_SAMPLE_EDGE",
+  "caveats": [
+    "Filtering always reduces trade count; that is not a benefit. The filter earns its place only by RAISING alpha on what it keeps.",
+    "Confirmed on futures, not options. The live filter reads an option's own premium, which decays; a future does not.",
+    "Continuous futures are back-adjusted by the broker, which shifts levels. The ST trend state is shape-driven so it is largely preserved, but this is a real difference from the per-contract series the engine reads.",
+    "Measures the UNDERLYING's move \u2014 an upper bound on a long-premium option position, never an estimate of one."
+  ]
+}
