@@ -88,10 +88,33 @@ const TradeRow = memo(function TradeRow({
       </td>
       <td data-align="right" className="rd-num">
         {t.exit_price == null ? (
-          <span className="rd-absent">{ABSENT}</span>
+          open && t.quantity > 0 && t.pnl_usd != null && t.pnl_usd !== 0 ? (
+            <span
+              className="rd-sub"
+              style={{
+                color: t.pnl_usd >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
+                fontWeight: 500,
+              }}
+            >
+              ~{t.pnl_usd >= 0 ? '+' : ''}{fmtInr(t.pnl_usd / t.quantity)} pts
+            </span>
+          ) : (
+            <span className="rd-absent">{ABSENT}</span>
+          )
         ) : (
           <>
             {fmtInr(t.exit_price)}
+            {t.entry_price != null && (
+              <span
+                className="rd-sub"
+                style={{
+                  color: (t.exit_price - t.entry_price) >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
+                  fontWeight: 500,
+                }}
+              >
+                {(t.exit_price - t.entry_price) >= 0 ? '+' : ''}{fmtInr(t.exit_price - t.entry_price)} pts
+              </span>
+            )}
             {hasFriction && t.raw_exit != null && t.raw_exit !== t.exit_price && (
               <span className="rd-sub" title="Theoretical target or stop before spread and slippage">
                 raw {fmtInr(t.raw_exit)}
