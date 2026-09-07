@@ -149,7 +149,10 @@ async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,An
         plan=row.get("trade") or {}; contract=plan.get("contract") or {}; symbol=str(contract.get("symbol") or ""); underlying=str(row.get("underlying") or "").upper(); requested=int(plan.get("quantity") or 0); signal=row.get("signal") or {}; direction=str(signal.get("direction") or "")
         expected="CE" if direction=="LONG" else "PE" if direction=="SHORT" else ""
         fingerprint=ticket_fingerprint(plan,signal); ticket=ticket_fields(plan)
-        if not symbol or requested<=0 or not underlying or underlying in seen:continue
+        if not symbol or requested<=0 or not underlying:
+            executed.append({"status":"blocked","symbol":symbol,"reason":"incomplete ticket"});continue
+        if underlying in seen:
+            executed.append({"status":"blocked","symbol":symbol,"underlying":underlying,"reason":"already in an open ORB position"});continue
         if expected!=str(contract.get("option_type") or ""):
             executed.append({"status":"blocked","symbol":symbol,"reason":"option direction mismatch"});continue
         age=_signal_age(signal.get("timestamp"))

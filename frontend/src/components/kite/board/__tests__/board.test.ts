@@ -218,6 +218,13 @@ describe('ORB adapter', () => {
     expect(orbToBoard(entry()).instrument.quoteKey).toBe('NFO:NIFTY26AUG24100CE');
     expect(orbToBoard(entry({ optionSymbol: null })).instrument.quoteKey).toBeNull();
   });
+
+  it('puts an Auto refusal on the unexpanded row', () => {
+    const s = orbToBoard(entry({ autoBlock: 'daily trade limit reached' }));
+    expect(s.flags?.[0]?.label).toBe('AUTO BLOCK');
+    expect(s.flags?.[0]?.hint).toBe('daily trade limit reached');
+    expect(s.reason).toBe('daily trade limit reached');
+  });
 });
 
 describe('shared vocabulary', () => {

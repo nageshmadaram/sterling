@@ -49,12 +49,12 @@ function QuietRow({ entry }: { entry: OrbFeedEntry }) {
   );
 }
 
-/** Ticket columns: qty and risk on the row; no SuperTrend TSL / Exited / Score. */
+/** Ticket columns that survive a ~982px dock: qty + at-risk stay; SuperTrend TSL/leg/time go. */
 const ORB_COLUMNS: readonly ColumnId[] = BOARD_COLUMNS.filter(
-  (id) => id !== 'trail' && id !== 'exit' && id !== 'score',
+  (id) => !['trail', 'exit', 'score', 'engine', 'leg', 'time', 'status'].includes(id),
 );
-/** Qty and At risk are the ticket; do not hide them behind the column picker. */
-const ORB_HIDDEN: readonly ColumnId[] = [];
+/** Chart is in the picker; leaving it on would steal the width qty needs. */
+const ORB_HIDDEN: readonly ColumnId[] = ['chart'];
 
 function quietReason(entry: OrbFeedEntry): string {
   return (entry.autoBlock || entry.reason || entry.state.toLowerCase().replace(/_/g, ' ')).trim();
@@ -184,7 +184,7 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
   const blocked = promoted.length - tradable.length;
   const view = useBoardView(promoted, {
     endedByDefault: true,
-    storageKey: 'orb-ticket',
+    storageKey: 'orb-ticket-v2',
     defaultHidden: ORB_HIDDEN,
   });
   const windowLabel = `${config.data?.config?.entry_start ?? '09:30'}–${config.data?.config?.entry_end ?? '12:00'} IST`;
