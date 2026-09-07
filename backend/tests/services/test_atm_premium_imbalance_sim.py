@@ -397,6 +397,8 @@ async def test_a_skipped_day_is_reported_not_silently_stepped_over(wired, monkey
     # Model a rate limit on the requested day and a valid preceding session.
     import app.services.atm_premium_imbalance_replay as replay
     earlier = DAY - timedelta(days=1)
+    while earlier.weekday() >= 5:
+        earlier -= timedelta(days=1)
 
     async def flaky(uid, token, day):
         if day >= DAY:

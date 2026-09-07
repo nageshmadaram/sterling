@@ -170,10 +170,18 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
 
     # One indexed lookup for the series actually asked about, instead of
     # summarising every symbol in the store and then discarding all but one.
+    try:
+        from zoneinfo import ZoneInfo
+        ist_tz = ZoneInfo("Asia/Kolkata")
+    except ImportError:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+
     entry = get_symbol_coverage(instrument.upper(), resolution)
     if entry and entry["earliest"] and entry["latest"]:
         current = datetime.fromtimestamp(entry["earliest"], tz=timezone.utc)
         end = datetime.fromtimestamp(entry["latest"], tz=timezone.utc)
+        current = datetime.fromtimestamp(entry["earliest"], tz=ist_tz)
+        end = datetime.fromtimestamp(entry["latest"], tz=ist_tz)
         earliest_iso = current.strftime("%Y-%m-%d")
         latest_iso = end.strftime("%Y-%m-%d")
         while current <= end:

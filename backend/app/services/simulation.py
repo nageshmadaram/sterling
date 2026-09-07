@@ -1728,6 +1728,37 @@ class SimulationRunner:
         default_sym = ae_events[0].instrument if ae_events else "NIFTY-I"
         all_syms = list(dict.fromkeys([ev.instrument for ev in ae_events])) or ["NIFTY-I"]
 
+        sim_legs = []
+        for s in signals:
+            for opt_leg in s.get("legs", []):
+                sim_legs.append({
+                    "symbol": s.get("underlying", "NIFTY-I"),
+                    "side": s.get("side", "BUY"),
+                    "entry_price": s.get("spot_entry"),
+                    "entry_time": s.get("entry_time"),
+                    "exit_price": s.get("spot_exit"),
+                    "exit_time": s.get("exit_time"),
+                    "stop_price": s.get("spot_sl"),
+                    "trail_price": s.get("spot_tsl"),
+                    "flattened": s.get("flattened", False),
+                    "quantity": s.get("quantity", 1),
+                    "session_date": sim_date,
+                    "horizon": s.get("horizon", "IMPULSE"),
+                    "entry_mode": s.get("entry_mode", "SCALP"),
+                    "peak_mode": s.get("peak_mode", "SCALP"),
+                    "exit_mode": s.get("exit_mode"),
+                    "thesis": s.get("thesis", "Replay trade"),
+                    "entry_score": s.get("score", 85.0),
+                    "entry_vwap": s.get("vwap"),
+                    "entry_poc": s.get("poc"),
+                    "entry_cvd": s.get("cvd"),
+                    "ltp": opt_leg.get("ltp"),
+                    "strike": opt_leg.get("strike"),
+                    "expiry": opt_leg.get("expiry"),
+                    "lot_size": opt_leg.get("lot_size"),
+                    "moneyness": opt_leg.get("moneyness"),
+                })
+
         return {
             "label": "SIMULATION_REPLAY",
             "software_complete": True,
@@ -1788,6 +1819,7 @@ class SimulationRunner:
                 "audit_stages": ["SIM_REPLAY"],
             },
             "legs": [],
+            "legs": sim_legs,
             "signals": signals,
             "scan": {
                 "underlyings": len(all_syms),
@@ -2216,6 +2248,7 @@ class SimulationRunner:
                     })
 
         # 3. Adaptive Edge: Canonical Mean Reversion with Candlestick Reversal Confirmation
+        # 3. Adaptive Edge: Canonical Multi-Horizon Value Area & Order Flow Pipeline
         has_recorded = bool(getattr(self, "_recorded_signals", []))
         is_ae_symbol = _is_index(sym) or (bool(self._config and self._config.instruments and sym in self._config.instruments))
         if not has_recorded and is_ae_symbol and len(history) >= 15:
@@ -2236,6 +2269,31 @@ class SimulationRunner:
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
+        if not has_recorded and is_ae_symbol and len(history) >= 20:
+            from app.services.adaptive_edge_strategy import decide_from_candles
+            from app.services.adaptive_edge import get_config as get_ae_config
+            c_input = [
+                {
+                    "timestamp_ms": int(float(b.get("time", 0)) * 1000),
+                    "open": float(b.get("open", 0)),
+                    "high": float(b.get("high", 0)),
+                    "low": float(b.get("low", 0)),
+                    "close": float(b.get("close", 0)),
+                    "volume": float(b.get("volume", 0)),
+                }
+                for b in history
+            ]
+            try:
+                ae_cfg = get_ae_config()
+                dec = decide_from_candles(sym, c_input, ae_cfg, expiry=cfg.date if cfg else "", spot=close)
+                if dec and dec.actionable:
+                    signals_to_fire.append({
+                        "strategy": "adaptive_edge",
+                        "direction": dec.direction,
+                        "strength": "STRONG",
+                    })
+            except Exception as e:
+                log.debug("Adaptive Edge bar evaluation error for %s: %s", sym, e)
 
         # 4. Bear to Bearish: Canonical Lower Highs Breakdown (detect_lower_highs)
         if len(history) >= 10:
@@ -2505,6 +2563,17 @@ async def _hydrate_missing_candles(
                     from_str = datetime.fromtimestamp(start_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     to_str = datetime.fromtimestamp(end_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     k_res = "5minute" if resolution == "5m" else ("15minute" if resolution == "15m" else "60minute")
+                    k_res_map = {
+                        "1m": "minute",
+                        "3m": "3minute",
+                        "5m": "5minute",
+                        "10m": "10minute",
+                        "15m": "15minute",
+                        "30m": "30minute",
+                        "60m": "60minute",
+                        "1h": "60minute",
+                    }
+                    k_res = k_res_map.get(resolution, "5minute")
                     hist_data = await kc.get_historical(token, k_res, from_str, to_str)
                     if isinstance(hist_data, dict) and "candles" in hist_data:
                         raw_list = hist_data["candles"]
