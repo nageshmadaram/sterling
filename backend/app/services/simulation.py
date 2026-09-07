@@ -503,6 +503,10 @@ class SimulationRunner:
             "losses": self._stats.losses,
             "signals_fired": self._stats.signals_fired,
             "slippage_total": self._stats.slippage_total,
+            "open_positions": sum(len(v) for v in self._open_by_symbol.values()),
+            "unrealised_pnl": round(
+                sum(tr.pnl_usd for tr in self._stats.trades if tr.status == "OPEN"), 2
+            ),
         })
 
     async def subscribe(self):
@@ -552,6 +556,12 @@ class SimulationRunner:
         sym = bar.get("symbol")
         book = self._open_by_symbol.get(sym)
         if not book:
+            from app.services.ohlcv_store import INDEX_ALIASES
+            alias = INDEX_ALIASES.get(sym) or INDEX_ALIASES.get(sym.upper() if sym else "")
+            if alias and alias in self._open_by_symbol:
+                book = self._open_by_symbol[alias]
+                sym = alias
+        if not book:
             return
 
         high = float(bar["high"])
@@ -593,6 +603,7 @@ class SimulationRunner:
                 ) if trade.entry_price > 0 else 0.0
                 trade.duration_mins = trade.bars_held * self._bar_minutes()
                 still_open.append(trade)
+                self._publish("trade", trade.model_dump())
                 continue
 
             self._close_position(trade, exit_spot, bar_dt)
@@ -948,9 +959,16 @@ class SimulationRunner:
             return
 
         sym = rec["underlying"]
+        from app.services.ohlcv_store import INDEX_ALIASES
+        if hasattr(self, "_candles") and self._candles:
+            candle_syms = {b.get("symbol") for b in self._candles}
+            if sym not in candle_syms:
+                alias = INDEX_ALIASES.get(sym) or INDEX_ALIASES.get(sym.upper() if sym else "")
+                if alias and alias in candle_syms:
+                    sym = alias
+
         if self._config and self._config.instruments:
             allowed_insts = set(self._config.instruments)
-            from app.services.ohlcv_store import INDEX_ALIASES
             expanded = set(allowed_insts)
             for inst in allowed_insts:
                 if inst in INDEX_ALIASES:
@@ -958,17 +976,37 @@ class SimulationRunner:
             if sym not in expanded and sym.upper() not in expanded:
                 return
 
-
         raw = rec.get("raw_row", {})
         direction = rec["direction"]
         spot = float(rec.get("spot") or raw.get("spot") or 1000.0)
-        stop = float(rec.get("stop_loss") or raw.get("stop_loss") or (spot * 1.01 if direction in ("BEARISH", "SHORT") else spot * 0.99))
-        target = rec.get("target") or raw.get("target")
-        if target is None:
+
+        # Sanity check: ensure stop and target are underlying spot levels, not option premiums!
+        raw_sl = float(rec.get("stop_loss") or raw.get("stop_loss") or 0.0)
+        if raw_sl >= spot * 0.50:
+            stop = raw_sl
+        else:
+            stop = round(spot * 1.01, 2) if direction in ("BEARISH", "SHORT") else round(spot * 0.99, 2)
+
+        raw_tgt = rec.get("target") or raw.get("target")
+        if raw_tgt and float(raw_tgt) >= spot * 0.50:
+            target = float(raw_tgt)
+        else:
             stop_dist = abs(spot - stop)
             target = round(spot - 2.0 * stop_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot + 2.0 * stop_dist, 2)
+
+        # Ensure correct orientation: for PE/SHORT stop > spot and target < spot; for CE/BULLISH stop < spot and target > spot
+        if direction in ("BEARISH", "SHORT"):
+            if stop <= spot:
+                stop = round(spot * 1.01, 2)
+            if target >= spot:
+                stop_dist = abs(spot - stop)
+                target = round(spot - 2.0 * stop_dist, 2)
         else:
-            target = float(target)
+            if stop >= spot:
+                stop = round(spot * 0.99, 2)
+            if target <= spot:
+                stop_dist = abs(spot - stop)
+                target = round(spot + 2.0 * stop_dist, 2)
 
         cfg_lots = max(1, self._config.lots) if self._config else 1
         opt_type = "PE" if direction in ("BEARISH", "SHORT") else "CE"
@@ -993,13 +1031,16 @@ class SimulationRunner:
             strike = float(selected_leg.get("strike") or spot)
             lot_size = int(selected_leg.get("lot_size") or lot_size)
             entry_prem = float(selected_leg.get("premium_spot") or round(spot * 0.02, 2))
-            stop_prem = float(selected_leg.get("entry_sl") or selected_leg.get("premium_sl") or round(entry_prem * 0.8, 2))
+            stop_prem = float(selected_leg.get("entry_sl") or selected_leg.get("premium_sl") or round(entry_prem * 0.75, 2))
+            if stop_prem <= 0 or stop_prem >= entry_prem:
+                stop_prem = round(entry_prem * 0.75, 2)
             tgt_prem = float(selected_leg.get("premium_target") or round(entry_prem * 1.5, 2))
             opt_symbol = selected_leg.get("option_symbol") or f"{sym}26SEP{int(strike)}{opt_type}"
         else:
-            strike = round(spot / 50.0) * 50.0
+            step = 100.0 if any(k in sym.upper() for k in ("SENSEX", "BANKNIFTY")) else (50.0 if "NIFTY" in sym.upper() else 20.0)
+            strike = round(spot / step) * step
             entry_prem = round(spot * 0.02, 2)
-            stop_prem = round(entry_prem * 0.8, 2)
+            stop_prem = round(entry_prem * 0.75, 2)
             tgt_prem = round(entry_prem * 1.5, 2)
             opt_symbol = f"{sym}26SEP{int(strike)}{opt_type}"
 
@@ -1024,79 +1065,23 @@ class SimulationRunner:
         self._stats.signals_fired += 1
         self._stats.events.append(event)
         self._last_signal = event
-
-        self._stats.trades_entered += 1
-
-        # Scan subsequent bars from replay candles to evaluate trade outcome
-        future_bars = [b for b in self._candles[self._bars_played:] if b.get("symbol") == sym]
-        won = False
-        exit_close = spot
-        bars_held = 0
-        if direction in ("BEARISH", "SHORT"):
-            for fb in future_bars[:30]:
-                bars_held += 1
-                fb_high = float(fb["high"])
-                fb_low = float(fb["low"])
-                if fb_high >= stop:
-                    exit_close = stop
-                    break
-                if fb_low <= target:
-                    exit_close = target
-                    won = True
-                    break
-                exit_close = float(fb["close"])
-        else:
-            for fb in future_bars[:30]:
-                bars_held += 1
-                fb_high = float(fb["high"])
-                fb_low = float(fb["low"])
-                if fb_low <= stop:
-                    exit_close = stop
-                    break
-                if fb_high >= target:
-                    exit_close = target
-                    won = True
-                    break
-                exit_close = float(fb["close"])
-
-        if bars_held == 0:
-            bars_held = 1
-        if not won and exit_close != stop:
-            won = (exit_close < spot) if direction in ("BEARISH", "SHORT") else (exit_close > spot)
-
-        spot_move = (spot - exit_close) if direction in ("BEARISH", "SHORT") else (exit_close - spot)
-        premium_move = round(spot_move * 0.50, 2)
-        raw_exit_p = round(max(0.05, entry_prem + premium_move), 2)
-
-        is_index = any(idx in sym.upper() for idx in ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "MIDCPNIFTY"))
-        friction = (getattr(self._config, "friction_mode", "realistic") or "realistic").lower()
-        slip_pct = (0.005 if is_index else 0.015) if friction == "realistic" else 0.0
-        effective_entry = round(entry_prem * (1.0 + slip_pct), 2)
-        effective_exit = round(max(0.05, raw_exit_p * (1.0 - slip_pct)), 2)
+        self._publish("signal", event.model_dump())
 
         qty = cfg_lots * lot_size
-        pnl_per_unit = effective_exit - effective_entry
-        pnl_usd_val = round(pnl_per_unit * qty, 2)
-        pnl_pct_val = round((pnl_per_unit / effective_entry) * 100.0, 2) if effective_entry > 0 else 0.0
-        slippage_drag = round(((effective_entry - entry_prem) + (raw_exit_p - effective_exit)) * qty, 2)
-        dur_mins = bars_held * 5
-        entry_dt = datetime.fromtimestamp(rec["timestamp_ms"] / 1000, tz=ist)
-        exit_dt = entry_dt + timedelta(minutes=dur_mins)
-        entry_time_str = rec.get("time_iso") or entry_dt.strftime("%H:%M:%S")
-        exit_time_str = exit_dt.strftime("%H:%M:%S")
+        effective_entry, _, friction_mode = _apply_friction(
+            entry_prem, entry_prem, sym, self._config
+        )
+        entry_slip = round((effective_entry - entry_prem) * qty, 2)
 
-        won = pnl_usd_val > 0
-        if won:
-            self._stats.wins += 1
-        else:
-            self._stats.losses += 1
+        entry_dt = datetime.fromtimestamp(rec["timestamp_ms"] / 1000, tz=ist)
+        entry_time_str = rec.get("time_iso") or entry_dt.strftime("%H:%M:%S")
 
         trade = SimTradeEvent(
             trade_id=f"TRD-{1000 + len(self._stats.trades) + 1}",
             entry_time_iso=entry_time_str,
-            exit_time_iso=exit_time_str,
+            exit_time_iso="OPEN",
             timestamp_ms=rec["timestamp_ms"],
-            strategy="supertrend",
+            strategy=rec.get("strategy", "supertrend"),
             symbol=opt_symbol,
             underlying=sym,
             direction="BUY",
@@ -1105,19 +1090,26 @@ class SimulationRunner:
             lots=cfg_lots,
             quantity=qty,
             entry_price=effective_entry,
-            exit_price=effective_exit,
+            exit_price=None,
             stop_loss=stop_prem,
             target_price=tgt_prem,
-            status="WIN" if won else "LOSS",
-            pnl_usd=pnl_usd_val,
-            pnl_pct=pnl_pct_val,
-            duration_mins=dur_mins,
-            slippage=slippage_drag,
+            status="OPEN",
+            pnl_usd=0.0,
+            pnl_pct=0.0,
+            duration_mins=0,
             raw_entry=entry_prem,
-            raw_exit=raw_exit_p,
+            raw_exit=None,
+            slippage=0.0 if friction_mode == "ideal" else max(0.0, entry_slip),
+            spot_entry=spot,
+            spot_stop=stop,
+            spot_target=target,
+            bars_held=0,
         )
+        self._stats.trades_entered += 1
         self._stats.trades.append(trade)
-        self._stats.pnl = round(sum(tr.pnl_usd for tr in self._stats.trades), 2)
+        self._open_by_symbol.setdefault(sym, []).append(trade)
+        self._recompute_totals()
+        self._publish("trade", trade.model_dump())
 
     async def _run_loop(self, generation: int = 0):
         """Main replay loop — fetch candles, then step through them."""
@@ -1584,6 +1576,31 @@ class SimulationRunner:
             inst_u = ev.instrument.upper()
             spot_val = float(ev.spot) if (ev.spot and ev.spot > 0) else float(ev.entry)
 
+            # Determine current simulated spot price from replay history or candles
+            curr_spot = spot_val
+            target_syms = {inst_u}
+            from app.services.ohlcv_store import INDEX_ALIASES
+            for k, v in INDEX_ALIASES.items():
+                if inst_u in (k.upper(), v.upper()):
+                    target_syms.add(k.upper())
+                    target_syms.add(v.upper())
+
+            found_bar = False
+            if hasattr(self, "_bar_history") and self._bar_history:
+                for sym_key in target_syms:
+                    bars = self._bar_history.get(sym_key)
+                    if bars:
+                        curr_spot = float(bars[-1].get("close") or spot_val)
+                        found_bar = True
+                        break
+
+            if not found_bar and hasattr(self, "_candles") and self._candles:
+                played_idx = getattr(self, "_bars_played", 0)
+                for b in reversed(self._candles[:played_idx]):
+                    if b.get("symbol", "").upper() in target_syms:
+                        curr_spot = float(b.get("close") or spot_val)
+                        break
+
             if "SENSEX" in inst_u or "BANKNIFTY" in inst_u:
                 step = 100.0
             elif "NIFTY" in inst_u:
@@ -1616,6 +1633,11 @@ class SimulationRunner:
                     premium_est = max(5.0, round(spot_val * mult, 2))
                     sl_est = round(max(2.0, premium_est * 0.7), 2)
 
+                # Dynamically calculate option LTP based on current spot movement
+                spot_move = (curr_spot - spot_val) if is_long else (spot_val - curr_spot)
+                delta_mult = 0.60 if moneyness == "ITM1" else (0.40 if moneyness == "OTM1" else 0.50)
+                current_ltp = round(max(0.05, premium_est + spot_move * delta_mult), 2)
+
                 opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}26SEP{int(strike)}{opt_type}"
                 legs.append({
                     "moneyness": moneyness,
@@ -1629,7 +1651,7 @@ class SimulationRunner:
                     "entry_premium": premium_est,
                     "stop_premium": sl_est,
                     "trail_premium": sl_est,
-                    "ltp": premium_est,
+                    "ltp": current_ltp,
                     "resolution_reason": None,
                 })
 
@@ -1649,8 +1671,8 @@ class SimulationRunner:
                 "entry_time": entry_iso,
                 "exit_time": None,
                 "score": 88.0 if ev.strength == "STRONG" else 72.0,
-                "poc": round(spot_val * 0.999, 2),
-                "vwap": round(spot_val * 1.001, 2),
+                "poc": round(curr_spot * 0.999, 2),
+                "vwap": round(curr_spot * 1.001, 2),
                 "cvd": 1500.0 if is_long else -1500.0,
                 "scanned": True,
                 "skip_reason": None,
@@ -1923,6 +1945,34 @@ class SimulationRunner:
             strike_val = round(ev.entry / step) * step
             premium_est = round(max(5.0, ev.entry * 0.02), 2)
 
+            curr_spot = ev.entry
+            inst_u = ev.instrument.upper()
+            target_syms = {inst_u}
+            from app.services.ohlcv_store import INDEX_ALIASES
+            for k, v in INDEX_ALIASES.items():
+                if inst_u in (k.upper(), v.upper()):
+                    target_syms.add(k.upper())
+                    target_syms.add(v.upper())
+
+            found_bar = False
+            if hasattr(self, "_bar_history") and self._bar_history:
+                for sym_key in target_syms:
+                    bars = self._bar_history.get(sym_key)
+                    if bars:
+                        curr_spot = float(bars[-1].get("close") or ev.entry)
+                        found_bar = True
+                        break
+
+            if not found_bar and hasattr(self, "_candles") and self._candles:
+                played_idx = getattr(self, "_bars_played", 0)
+                for b in reversed(self._candles[:played_idx]):
+                    if b.get("symbol", "").upper() in target_syms:
+                        curr_spot = float(b.get("close") or ev.entry)
+                        break
+
+            spot_move = (curr_spot - ev.entry) if is_long else (ev.entry - curr_spot)
+            current_ltp = round(max(0.05, premium_est + spot_move * 0.50), 2)
+
             signals.append({
                 "instrument": {
                     "tradingsymbol": f"{ev.instrument}26AUG{int(strike_val)}{opt_type}",
@@ -1943,7 +1993,7 @@ class SimulationRunner:
                 "level_type": "SUPPORT" if is_long else "RESISTANCE",
                 "distance_pct": 0.15,
                 "score": 88.0 if ev.strength == "STRONG" else 70.0,
-                "ltp": premium_est,
+                "ltp": current_ltp,
                 "entry_premium": premium_est,
                 "stop_premium": round(premium_est * 0.7, 2),
                 "target_premium": round(premium_est * 1.5, 2),
