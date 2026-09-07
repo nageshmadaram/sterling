@@ -226,7 +226,8 @@ async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,An
             oid=str(existing.get("order_id") or existing.get("orderId") or "")
             exsym=str(existing.get("tradingsymbol") or existing.get("symbol") or symbol).upper(); side=str(existing.get("transaction_type") or existing.get("side") or "BUY").upper()
             if exsym!=symbol.upper() or side!="BUY":
-                live_safety.set_kill_switch(True,f"ORB tag mapped to unexpected broker order {oid}");continue
+                live_safety.set_kill_switch(True,f"ORB tag mapped to unexpected broker order {oid}")
+                executed.append({"status":"blocked","symbol":symbol,"reason":"unexpected broker order","order_id":oid});continue
         else:
             try:r=await client.place_order_option(symbol,"buy",quantity,exchange=exchange,tag=idem)
             except Exception as exc:

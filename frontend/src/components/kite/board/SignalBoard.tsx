@@ -1045,6 +1045,7 @@ export function SignalBoard({
   sort = DEFAULT_SORT, onSortChange, hidden, collapsedGroups, onToggleGroup,
   onReorderColumn, rowScroll = false, renderRowActions,
   renderTrade, renderChart, collapseOlderDays = false, isHistoricalSim = false,
+  columnLabels, columnHints,
 }: {
   signals: readonly BoardSignal[];
   /**
@@ -1123,6 +1124,13 @@ export function SignalBoard({
   isHistoricalSim?: boolean;
   emptyLabel?: string;
   collapseOlderDays?: boolean;
+  /**
+   * Per-engine heading overrides. SuperTrend keeps "Entry (Δpts)"; ORB is a
+   * bought option, so it names the same column "Entry ₹". Switching tabs
+   * renaming a column is the cost of not lying about the unit.
+   */
+  columnLabels?: Partial<Record<ColumnId, string>>;
+  columnHints?: Partial<Record<ColumnId, string>>;
 }) {
   const wanted = requested ?? BOARD_COLUMNS;
   const chosen = hidden ? wanted.filter((c) => !hidden.has(c)) : wanted;
@@ -1144,11 +1152,16 @@ export function SignalBoard({
     return () => ro.disconnect();
   }, []);
 
-  const { columns: cols } = fitColumns(all, boardWidth, {
+  const { columns: fitted } = fitColumns(all, boardWidth, {
     minInstrument: ROW_METRICS.instrumentMinWidth,
     gap: ROW_METRICS.gap,
     reserve: ACTION_RESERVE,
   });
+  const cols = fitted.map((c) => ({
+    ...c,
+    label: columnLabels?.[c.id] ?? c.label,
+    hint: columnHints?.[c.id] ?? c.hint,
+  }));
 
   const [userToggledDays, setUserToggledDays] = React.useState<Map<string, boolean>>(new Map());
 

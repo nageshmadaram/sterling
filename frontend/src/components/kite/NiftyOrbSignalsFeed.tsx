@@ -56,6 +56,23 @@ const ORB_COLUMNS: readonly ColumnId[] = BOARD_COLUMNS.filter(
 /** Chart is in the picker; leaving it on would steal the width qty needs. */
 const ORB_HIDDEN: readonly ColumnId[] = ['chart'];
 
+/** Premium rupees, not SuperTrend underlying points. */
+const ORB_COLUMN_LABELS: Partial<Record<ColumnId, string>> = {
+  entry: 'Entry ₹',
+  stop: 'SL',
+  target: 'Target',
+  qty: 'Qty',
+  risk: 'At risk',
+  ltp: 'LTP',
+};
+const ORB_COLUMN_HINTS: Partial<Record<ColumnId, string>> = {
+  entry: 'Option premium this ticket buys at',
+  stop: 'Premium stop armed at the broker',
+  target: 'Premium target',
+  risk: 'Full premium outlay — a bought option can go to zero',
+  ltp: 'Last traded premium of the contract',
+};
+
 function quietReason(entry: OrbFeedEntry): string {
   return (entry.autoBlock || entry.reason || entry.state.toLowerCase().replace(/_/g, ' ')).trim();
 }
@@ -274,6 +291,8 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
             onSortChange={setSort}
             nowMs={nowMs}
             emptyLabel="No tradable ORB setup right now. The universe is being scanned — the list below says what each underlying is waiting on."
+            columnLabels={ORB_COLUMN_LABELS}
+            columnHints={ORB_COLUMN_HINTS}
           />
           {quiet.length > 0 && (
             <>

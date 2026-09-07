@@ -230,6 +230,11 @@ describe('ORB adapter', () => {
     const s = orbToBoard(entry({ ticketFingerprint: 'LONG|ts|NIFTY26AUG24100CE' }));
     expect(s.ticketFingerprint).toBe('LONG|ts|NIFTY26AUG24100CE');
   });
+
+  it('marks an assumed delta on the unexpanded row', () => {
+    const s = orbToBoard(entry({ deltaSource: 'assumed', delta: 0.5 }));
+    expect(s.flags?.some((f) => f.label === 'Δ ASSUMED')).toBe(true);
+  });
 });
 
 describe('shared vocabulary', () => {
