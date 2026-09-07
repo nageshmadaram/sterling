@@ -129,16 +129,30 @@ def preview_auto_refusal(
         return "contract outside configured expiry policy"
     if int(plan.get("quantity") or 0) <= 0:
         return "one option lot exceeds conservative premium risk budget"
+    vol = float(contract.get("volume") or 0)
+    oi = float(contract.get("open_interest") or 0)
+    # 0/0 is the OptionContract default, not a measurement. A positive print
+    # below the floor is what Auto would refuse from the live quote too.
+    if (vol > 0 and vol < cfg.min_option_volume) or (oi > 0 and oi < cfg.min_open_interest):
+        return "option liquidity below configured minimum"
     return None
 
 
 def orb_open_positions(uid: str) -> list:
+    """Positions this strategy opened — not every untagged kite row.
+
+    Empty ``vehicle`` used to match SuperTrend / equity leftovers and let
+    expiry square-off and restart recovery touch them. An ORB fill tags
+    ``otm_options`` / ``deep_itm_options``, or carries ORB on the order id.
+    """
     from app.services.kite_engine import positions
 
     out = []
     for p in positions.open_positions(uid):
         vehicle = str(getattr(p, "vehicle", "") or "")
-        if vehicle in ORB_VEHICLES or vehicle == "":
+        oid = str(getattr(p, "order_id", "") or "").upper()
+        guard = str(getattr(p, "guard_key", "") or "").upper()
+        if vehicle in ORB_VEHICLES or "ORB" in oid or "ORB" in guard:
             out.append(p)
     return out
 

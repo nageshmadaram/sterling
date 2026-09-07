@@ -94,3 +94,51 @@ async def test_runner_recovers_once_per_user_then_scans(monkeypatch):
     assert first["status"] == "no_trade"
     assert [c[0] for c in calls] == ["recover", "square", "scan", "execute", "square", "scan", "execute"]
     assert "u1" in runner._recovered
+
+
+@pytest.mark.asyncio
+async def test_failed_recovery_is_retried_next_tick(monkeypatch):
+    calls = []
+
+    async def recover(uid):
+        calls.append("recover")
+        raise RuntimeError("broker down")
+
+    async def square(client, uid):
+        calls.append("square")
+        return {"status": "ok", "squared": []}
+
+    async def scan(uid, cfg):
+        calls.append("scan")
+        return {"signals": []}
+
+    async def execute(uid, *, scan, max_trades):
+        calls.append("execute")
+        return {"status": "no_trade", "executed": []}
+
+    class Cfg:
+        enabled = True
+        max_trades_per_day = 2
+
+    class Acct:
+        pass
+
+    monkeypatch.setattr(runner, "_is_verified_market_open", lambda: True)
+    monkeypatch.setattr("app.services.nifty_orb_lifecycle.recover_after_restart", recover)
+    monkeypatch.setattr("app.services.nifty_orb_lifecycle.square_off_expired", square)
+    monkeypatch.setattr("app.services.nifty_orb_scanner.scan_user", scan)
+    monkeypatch.setattr("app.services.nifty_orb_execution.execute_scan", execute)
+    monkeypatch.setattr("app.services.nifty_orb_options.get_config", lambda: Cfg())
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.get_active", lambda uid: Acct())
+
+    async def acquire(acct):
+        return object()
+
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", acquire)
+    runner._recovered.clear()
+    first = await runner._run_user("u1")
+    second = await runner._run_user("u1")
+    assert first["status"] == "no_trade"
+    assert second["status"] == "no_trade"
+    assert calls.count("recover") == 2
+    assert "u1" not in runner._recovered

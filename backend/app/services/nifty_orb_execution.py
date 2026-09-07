@@ -122,10 +122,18 @@ def _entry_window_open(now,cfg):
         return False
 
 def _market_open(now):
-    """NSE F&O cash session in IST. Same gate ``execute_scan`` uses before any order."""
+    """NSE F&O cash session in IST. Same calendar the runner uses.
+
+    Weekday+clock is the fallback when the holiday calendar cannot answer, so a
+    missing year cannot silently open a holiday session.
+    """
     now=_as_ist(now)
-    start=datetime.strptime("09:15","%H:%M").time(); end=datetime.strptime("15:29","%H:%M").time()
-    return now.weekday()<5 and start<=now.time()<=end
+    try:
+        from app.services.navigator.calendar import is_market_open_at
+        return bool(is_market_open_at(int(now.timestamp()*1000)))
+    except Exception:
+        start=datetime.strptime("09:15","%H:%M").time(); end=datetime.strptime("15:29","%H:%M").time()
+        return now.weekday()<5 and start<=now.time()<=end
 
 async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,Any]:
     from app.services.kite_engine import state as engine_state,positions,protection

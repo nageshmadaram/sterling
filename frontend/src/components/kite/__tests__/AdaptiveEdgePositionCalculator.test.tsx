@@ -126,4 +126,24 @@ describe('AdaptiveEdgePositionCalculator', () => {
     expect(writes[0]).not.toMatch(/TSL:/);
     expect(writes[0]).toMatch(/Stop Loss/);
   });
+
+  it('treats the whole premium as at risk when hideTsl', () => {
+    render(
+      <AdaptiveEdgePositionCalculator
+        symbol="NIFTY26AUG25000CE"
+        tradingsymbol="NIFTY26AUG25000CE"
+        lotSize={75}
+        defaultLots={2}
+        defaultEntryPrice={18}
+        defaultSl={14}
+        defaultExit={26}
+        currentLtp={18}
+        optionType="CE"
+        hideTsl
+      />,
+    );
+    expect(screen.getByText('Premium at risk')).toBeInTheDocument();
+    // 18 × 150 = ₹2,700 — the board row's maxLossInr, not stop-distance × qty.
+    expect(screen.getAllByText('-₹2,700.00').length).toBeGreaterThan(0);
+  });
 });

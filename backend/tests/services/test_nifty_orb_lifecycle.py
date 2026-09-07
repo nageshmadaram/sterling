@@ -126,6 +126,39 @@ def test_preview_auto_refusal_matches_execute_scan_reasons():
     far["trade"] = {**row["trade"], "contract": {**row["trade"]["contract"], "expiry": "2026-12-31"}}
     assert life.preview_auto_refusal(far, cfg, now=now) == "contract outside configured expiry policy"
 
+    thin = dict(row)
+    thin["trade"] = {**row["trade"], "contract": {**row["trade"]["contract"], "volume": 10, "open_interest": 50_000}}
+    assert life.preview_auto_refusal(thin, cfg, now=now) == "option liquidity below configured minimum"
+
+
+def test_untagged_kite_positions_are_not_orb_positions(monkeypatch):
+    """Empty vehicle used to match every leftover kite row."""
+    positions.reset("u1")
+    positions.register(
+        positions.OpenPosition(
+            uid="u1",
+            symbol="SBIN",
+            exchange="NSE",
+            qty=1,
+            vehicle="",
+            status=positions.OPEN,
+        )
+    )
+    positions.register(
+        positions.OpenPosition(
+            uid="u1",
+            symbol="NIFTY26AUG25000CE",
+            exchange="NFO",
+            qty=75,
+            vehicle="otm_options",
+            order_id="ORB-1",
+            status=positions.OPEN,
+        )
+    )
+    held = {p.symbol for p in life.orb_open_positions("u1")}
+    assert "NIFTY26AUG25000CE" in held
+    assert "SBIN" not in held
+
 
 def test_recover_trade_state_lists_open_orb_underlyings(monkeypatch):
     store = {}

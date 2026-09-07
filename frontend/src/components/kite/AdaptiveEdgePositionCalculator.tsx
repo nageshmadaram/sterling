@@ -113,10 +113,14 @@ export function AdaptiveEdgePositionCalculator({
   const unrealizedPnl = roundToTick(coveredPoints * totalQty) ?? 0;
   const isProfit = coveredPoints >= 0;
 
-  // Hard SL Risk
+  // Hard SL Risk. A bought option can go to zero, so ORB (hideTsl) sizes
+  // against the full premium outlay — the same number the board row shows.
   const slDistance = Math.max(0, roundToTick(entryPrice - slPrice) ?? 0);
-  const maxRiskAmount = roundToTick(slDistance * totalQty) ?? 0;
-  const riskPerLot = roundToTick(slDistance * lotSize) ?? 0;
+  const premiumOutlay = roundToTick(entryPrice * totalQty) ?? (entryPrice * totalQty);
+  const maxRiskAmount = hideTsl ? premiumOutlay : (roundToTick(slDistance * totalQty) ?? 0);
+  const riskPerLot = hideTsl
+    ? (roundToTick(entryPrice * lotSize) ?? (entryPrice * lotSize))
+    : (roundToTick(slDistance * lotSize) ?? 0);
 
   // Trailing Stop Loss (TSL) Locked Profit / Risk Protection
   const tslDistance = roundToTick(tslPrice - entryPrice) ?? 0;
@@ -597,7 +601,7 @@ export function AdaptiveEdgePositionCalculator({
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ color: k.dim }}>Defined SL risk</span>
+              <span style={{ color: k.dim }}>{hideTsl ? 'Premium at risk' : 'Defined SL risk'}</span>
               <span style={{ fontVariantNumeric: 'tabular-nums' }}>
                 <span style={{ color: k.red }}>{fmtINR(-maxRiskAmount)}</span>
                 <span style={{ color: k.dim, fontSize: 11, marginLeft: 6 }}>(-{fmtINR(riskPerLot)}/lot)</span>

@@ -130,16 +130,24 @@ async def test_execute_manual_returns_the_same_ticket_without_placing(monkeypatc
     }
     signal = {"direction": "LONG", "timestamp": "2026-08-25T10:30:00+05:30"}
 
-    async def snap(uid):
-        return {"plan": plan, "signal": signal}
+    async def fake_scan(uid, cfg=None):
+        return {
+            "signals": [{
+                "status": "signal",
+                "underlying": "BANKNIFTY",
+                "trade": plan,
+                "signal": signal,
+            }],
+        }
 
     monkeypatch.setattr(service, "get_config", lambda: StrategyConfig(enabled=True))
-    monkeypatch.setattr(service, "snapshot", snap)
+    monkeypatch.setattr("app.services.nifty_orb_scanner.scan_user", fake_scan)
     monkeypatch.setattr("app.services.kite_engine.service.place_manual_order", boom, raising=False)
     out = await service.execute_manual("u1")
     assert out["status"] == "manual"
     assert out["ticket"]["symbol"] == "NIFTY26AUG25000CE"
     assert out["ticket_fingerprint"]
+    assert out["signals"][0]["underlying"] == "BANKNIFTY"
     assert placed == []
 
 

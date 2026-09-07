@@ -2,7 +2,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from app.services.nifty_orb_execution import _conservative_quantity, _entry_window_open, _parse_timestamp, _quote_age
+from app.services.nifty_orb_execution import _conservative_quantity, _entry_window_open, _market_open, _parse_timestamp, _quote_age
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -35,3 +35,12 @@ def test_execution_rechecks_configured_entry_window():
     assert _entry_window_open(datetime(2026, 8, 19, 9, 29, tzinfo=IST), cfg) is False
     assert _entry_window_open(datetime(2026, 8, 19, 9, 30, tzinfo=IST), cfg) is True
     assert _entry_window_open(datetime(2026, 8, 19, 12, 1, tzinfo=IST), cfg) is False
+
+
+def test_market_open_uses_the_nse_holiday_calendar():
+    session = datetime(2026, 8, 25, 10, 30, tzinfo=IST)
+    holiday = datetime(2026, 1, 26, 10, 30, tzinfo=IST)  # Republic Day, a Monday
+    saturday = datetime(2026, 8, 29, 10, 30, tzinfo=IST)
+    assert _market_open(session) is True
+    assert _market_open(holiday) is False
+    assert _market_open(saturday) is False

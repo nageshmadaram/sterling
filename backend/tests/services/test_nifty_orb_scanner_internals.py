@@ -99,6 +99,60 @@ def test_expired_cache_entries_are_evicted_on_write():
     assert list(cache) == [("u1", "NIFTY", "2026-08-20")]
 
 
+@pytest.mark.asyncio
+async def test_scan_underlying_stamps_auto_block_and_fingerprint(monkeypatch):
+    """The board reads auto_block off the scan row. Dropping the stamp would
+    leave Manual looking clean while Auto refuses."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.engines.nifty_orb_options import Bar, OptionContract, Signal, TradePlan
+
+    ist = ZoneInfo("Asia/Kolkata")
+    now = datetime(2026, 8, 25, 10, 30, tzinfo=ist)
+    bar = Bar(timestamp=now, open=25000, high=25010, low=24990, close=25005, volume=1e6)
+    sig = Signal(
+        direction="LONG", regime="TREND", timestamp=now,
+        or_high=25000, or_low=24900, vwap=24980, atr=20,
+        breakout_distance=5, volume_ratio=1.5, confidence=0.8, reason="breakout",
+    )
+    opt = OptionContract(
+        "NIFTY26AUG25000CE", 25000, "2026-08-27", "CE",
+        ltp=18, bid=17.5, ask=18.5, lot_size=75, volume=5000, open_interest=20000,
+    )
+    plan = TradePlan(
+        direction="LONG", option_type="CE", contract=opt,
+        underlying_entry=25005, underlying_stop=24980,
+        initial_risk_points=25, target_points=50,
+        entry_premium=18, stop_premium=14, target_premium=26,
+        premium_risk_per_share=4, quantity=75, risk_inr=300, reason="plan",
+        max_loss_inr=1350, delta_is_estimated=True, delta_source="implied", delta=0.5,
+    )
+
+    async def bars(*_a, **_k):
+        return [bar] * 80
+
+    async def contracts(*_a, **_k):
+        return [opt]
+
+    monkeypatch.setattr(scanner, "_kite_bars_for_underlying", bars)
+    monkeypatch.setattr(scanner, "generate_signal", lambda *_a, **_k: sig)
+    monkeypatch.setattr(scanner, "_option_contracts", contracts)
+    monkeypatch.setattr(scanner, "select_option", lambda *_a, **_k: opt)
+    monkeypatch.setattr(scanner, "build_trade_plan", lambda *_a, **_k: plan)
+    monkeypatch.setattr(
+        "app.services.nifty_orb_lifecycle.preview_auto_refusal",
+        lambda *_a, **_k: "daily trade limit reached",
+    )
+    monkeypatch.setattr("app.services.nifty_orb_execution._state", lambda uid: {"count": 2})
+
+    cfg = StrategyConfig(enabled=True, data_source="kite")
+    out = await scanner.scan_underlying("u1", "NIFTY", cfg)
+    assert out["status"] == "signal"
+    assert out["auto_block"] == "daily trade limit reached"
+    assert out["reason"] == "daily trade limit reached"
+    assert out["ticket_fingerprint"]
+
+
 def test_a_live_cache_entry_survives_a_write_for_another_key():
     cache: dict = {}
     scanner._cache_put(cache, ("a",), [1])
