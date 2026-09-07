@@ -177,6 +177,10 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
         ist_tz = timezone(timedelta(hours=5, minutes=30))
 
     entry = get_symbol_coverage(instrument.upper(), resolution)
+    if not entry and resolution != "5m":
+        # Check if 5m coverage exists in local store as source of truth for available market dates
+        entry = get_symbol_coverage(instrument.upper(), "5m")
+
     if entry and entry["earliest"] and entry["latest"]:
         current = datetime.fromtimestamp(entry["earliest"], tz=timezone.utc)
         end = datetime.fromtimestamp(entry["latest"], tz=timezone.utc)

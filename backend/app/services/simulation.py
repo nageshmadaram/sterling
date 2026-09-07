@@ -654,14 +654,30 @@ class SimulationRunner:
         self._publish("trade", trade.model_dump())
 
     def _close_all_open(self, reason: str = "session end") -> None:
-        """Leave end-of-session positions OPEN rather than inventing an exit.
+        """Square off any remaining open intraday positions at the session close."""
+        from datetime import datetime, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        epoch = self._current_sim_epoch if getattr(self, "_current_sim_epoch", None) else time.time()
+        bar_dt = datetime.fromtimestamp(epoch, tz=ist)
 
-        Force-closing them at the last close would book a fill the market never
-        offered; the honest report is that the session ended with them open.
-        """
         count = sum(len(v) for v in self._open_by_symbol.values())
         if count:
-            log.info("Replay ended with %d position(s) still open (%s).", count, reason)
+            log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
+        for sym, book in list(self._open_by_symbol.items()):
+            last_close = None
+            if hasattr(self, "_bar_history") and self._bar_history.get(sym):
+                last_bar = self._bar_history[sym][-1]
+                last_close = float(last_bar.get("close", 0.0))
+            elif hasattr(self, "_candles") and self._candles:
+                played_idx = getattr(self, "_bars_played", 0)
+                for b in reversed(self._candles[:played_idx]):
+                    if b.get("symbol") == sym:
+                        last_close = float(b.get("close", 0.0))
+                        break
+
+            for trade in list(book):
+                exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
+                self._close_position(trade, exit_spot, bar_dt)
         self._open_by_symbol = {}
 
     def _recompute_totals(self) -> None:
@@ -992,35 +1008,61 @@ class SimulationRunner:
 
         raw = rec.get("raw_row", {})
         direction = rec["direction"]
-        spot = float(rec.get("spot") or raw.get("spot") or 1000.0)
+        # Align spot with current replay candle price at this simulation timestamp
+        current_candle_spot = None
+        if hasattr(self, "_candles") and self._candles:
+            curr_epoch = int(rec["timestamp_ms"] / 1000)
+            from app.services.ohlcv_store import INDEX_ALIASES
+            target_syms = {sym, sym.upper()}
+            for k, v in INDEX_ALIASES.items():
+                if sym.upper() in (k.upper(), v.upper()):
+                    target_syms.add(k.upper())
+                    target_syms.add(v.upper())
+
+            # Check candle matching exact timestamp
+            for b in self._candles:
+                if b.get("symbol", "").upper() in target_syms and b.get("time") == curr_epoch:
+                    current_candle_spot = float(b.get("close", 0.0))
+                    break
+
+            # If not found, check closest played candle up to this time
+            if not current_candle_spot:
+                played_idx = getattr(self, "_bars_played", 0)
+                for b in reversed(self._candles[:played_idx]):
+                    if b.get("symbol", "").upper() in target_syms:
+                        current_candle_spot = float(b.get("close", 0.0))
+                        break
+
+        spot = current_candle_spot if (current_candle_spot and current_candle_spot > 0) else float(rec.get("spot") or raw.get("spot") or 1000.0)
 
         # Sanity check: ensure stop and target are underlying spot levels, not option premiums!
         raw_sl = float(rec.get("stop_loss") or raw.get("stop_loss") or 0.0)
+        valid_sl = False
         if raw_sl >= spot * 0.50:
+            if direction in ("BEARISH", "SHORT") and raw_sl > spot:
+                valid_sl = True
+            elif direction in ("BULLISH", "LONG", "BUY") and raw_sl < spot:
+                valid_sl = True
+
+        if valid_sl:
             stop = raw_sl
         else:
-            stop = round(spot * 1.01, 2) if direction in ("BEARISH", "SHORT") else round(spot * 0.99, 2)
+            min_dist = max(0.005 * spot, 50.0 if "NIFTY" in sym.upper() else (100.0 if "SENSEX" in sym.upper() else 5.0))
+            stop = round(spot + min_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot - min_dist, 2)
 
+        stop_dist = abs(spot - stop)
         raw_tgt = rec.get("target") or raw.get("target")
+        valid_tgt = False
         if raw_tgt and float(raw_tgt) >= spot * 0.50:
+            if direction in ("BEARISH", "SHORT") and float(raw_tgt) < spot:
+                valid_tgt = True
+            elif direction in ("BULLISH", "LONG", "BUY") and float(raw_tgt) > spot:
+                valid_tgt = True
+
+        if valid_tgt:
             target = float(raw_tgt)
         else:
-            stop_dist = abs(spot - stop)
             target = round(spot - 2.0 * stop_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot + 2.0 * stop_dist, 2)
-
-        # Ensure correct orientation: for PE/SHORT stop > spot and target < spot; for CE/BULLISH stop < spot and target > spot
-        if direction in ("BEARISH", "SHORT"):
-            if stop <= spot:
-                stop = round(spot * 1.01, 2)
-            if target >= spot:
-                stop_dist = abs(spot - stop)
-                target = round(spot - 2.0 * stop_dist, 2)
-        else:
-            if stop >= spot:
-                stop = round(spot * 0.99, 2)
-            if target <= spot:
-                stop_dist = abs(spot - stop)
-                target = round(spot + 2.0 * stop_dist, 2)
 
         cfg_lots = max(1, self._config.lots) if self._config else 1
         opt_type = "PE" if direction in ("BEARISH", "SHORT") else "CE"
@@ -1346,6 +1388,13 @@ class SimulationRunner:
                     if rec_id not in self._emitted_recorded_keys and curr_sim_ms >= rec["timestamp_ms"]:
                         self._emitted_recorded_keys.add(rec_id)
                         self._emit_recorded_signal(rec)
+
+                # Process bars up to current simulated timestamp
+                while bar_idx < len(all_bars) and self._current_sim_epoch >= all_bars[bar_idx]["time"]:
+                    bar = all_bars[bar_idx]
+                    self._bars_played = bar_idx + 1
+                    self._evaluate_bar(bar, datetime.fromtimestamp(bar["time"], tz=ist))
+                    bar_idx += 1
 
                 # Advance simulated clock by speed * dt
                 self._current_sim_epoch += self._speed * dt
@@ -2403,6 +2452,11 @@ class SimulationRunner:
             self._active_until_bar: Dict[Tuple[str, str], int] = {}
 
         sym_bar_idx = len(history)
+
+        # Intraday entry cutoff: Do not enter new trades after 15:15:00 (F&O cash stops at 15:15)
+        time_hhmmss = bar_dt.strftime("%H:%M:%S")
+        if time_hhmmss >= "15:15:00":
+            return
 
         # Emit all generated strategy signals for this bar (or filter by selected strategies)
         cfg_strats = [s.lower() for s in (self._config.strategies if self._config and self._config.strategies else [self._config.strategy if self._config else "all"])]
