@@ -110,13 +110,11 @@ describe('ORB feed — tradable setups', () => {
     expect(document.querySelector('.sb-row')?.textContent).toMatch(/24000/);
     expect(screen.getByText('CE · LONG')).toBeInTheDocument();
     expect(screen.getByText('NFO')).toBeInTheDocument();
-    // The eleven core columns every board opens with. Qty and At risk are
-    // real for ORB but start hidden, one click away in the column picker, so
-    // that all four boards open identical.
-    ['LTP', 'Entry (Δpts)', 'SL', 'TSL', 'Target', 'Exc.', 'Leg (Δ)', 'Time', 'Status'].forEach((label) => {
+    // Ticket columns: qty and risk visible. SuperTrend's TSL is not an ORB field.
+    ['LTP', 'Entry (Δpts)', 'SL', 'Target', 'Qty', 'At risk', 'Exc.', 'Leg (Δ)', 'Time', 'Status'].forEach((label) => {
       expect(screen.getByText(label), label).toBeInTheDocument();
     });
-    expect(screen.queryByText('At risk')).not.toBeInTheDocument();
+    expect(screen.queryByText('TSL')).not.toBeInTheDocument();
   });
 
   it('shows the signal time and marks a stale quote', () => {
@@ -134,7 +132,9 @@ describe('ORB feed — tradable setups', () => {
 
   it('says so plainly when nothing is tradable', () => {
     show({ rows: [entry({ state: 'WATCHING', reason: 'outside entry window' })] });
-    expect(screen.getByText(/No tradable ORB setup right now/)).toBeInTheDocument();
+    expect(screen.getByText('Waiting for entry window')).toBeInTheDocument();
+    expect(screen.getByText(/09:30–12:00 IST/)).toBeInTheDocument();
+    expect(screen.queryByText(/No tradable ORB setup right now/)).not.toBeInTheDocument();
   });
 
   it('promotes an errored underlying to the board instead of burying it', () => {
@@ -147,12 +147,20 @@ describe('ORB feed — tradable setups', () => {
       .test((el?.textContent ?? '').replace(/\s+/g, ' ').trim()))).toBeTruthy();
   });
 
-  it('opens the disclosure by default when the board has nothing to show', () => {
-    // Closed-by-default plus an empty board rendered a healthy scan as one line
-    // of grey text, which reads exactly like a dead engine.
-    show({ rows: [entry({ state: 'WATCHING', reason: 'outside entry window' })] });
-    expect(screen.getByText('outside entry window')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /1 not signalling/ })).toHaveAttribute('aria-expanded', 'true');
+  it('does not dump every underlying as a table when they share one gate', () => {
+    // Auto-expanded identical "outside entry window" rows looked like a broken
+    // SuperTrend table. The card states the gate; names stay collapsed.
+    show({
+      rows: [
+        entry({ underlying: 'NIFTY', state: 'WATCHING', reason: 'outside entry window' }),
+        entry({ underlying: 'SBIN', id: 'SBIN', state: 'WATCHING', reason: 'outside entry window' }),
+      ],
+    });
+    expect(screen.getByText('Waiting for entry window')).toBeInTheDocument();
+    expect(screen.queryByText('NIFTY')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /outside entry window/ }));
+    expect(screen.getByText('NIFTY')).toBeInTheDocument();
+    expect(screen.getByText('SBIN')).toBeInTheDocument();
   });
 
   it('calls out a scan that failed for everything', () => {

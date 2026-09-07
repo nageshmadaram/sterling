@@ -6,7 +6,7 @@ import { useEngineConfig } from '../../hooks/useSterlingKiteEngine';
 import type { OrbFeedEntry } from '../../utils/niftyOrbSignalAdapter';
 import { openSettingsSection } from './config/registry';
 import { EngineOffNotice } from './EngineOffNotice';
-import { BOARD_COLUMNS, DEFAULT_SORT, SignalBoard } from './board/SignalBoard';
+import { BOARD_COLUMNS, DEFAULT_SORT, SignalBoard, type ColumnId } from './board/SignalBoard';
 import { useBoardRowActions } from './board/useBoardRowActions';
 import { BoardTicket } from './board/BoardTicket';
 import { BoardFilters } from './board/BoardFilters';
@@ -45,6 +45,84 @@ function QuietRow({ entry }: { entry: OrbFeedEntry }) {
       <span style={{ color, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {entry.reason || entry.state.toLowerCase().replace(/_/g, ' ')}
       </span>
+    </div>
+  );
+}
+
+/** Ticket columns: qty and risk on the row; no SuperTrend TSL / Exited / Score. */
+const ORB_COLUMNS: readonly ColumnId[] = BOARD_COLUMNS.filter(
+  (id) => id !== 'trail' && id !== 'exit' && id !== 'score',
+);
+/** Qty and At risk are the ticket; do not hide them behind the column picker. */
+const ORB_HIDDEN: readonly ColumnId[] = [];
+
+function quietReason(entry: OrbFeedEntry): string {
+  return (entry.autoBlock || entry.reason || entry.state.toLowerCase().replace(/_/g, ' ')).trim();
+}
+
+function groupQuiet(entries: OrbFeedEntry[]): { reason: string; entries: OrbFeedEntry[] }[] {
+  const map = new Map<string, OrbFeedEntry[]>();
+  for (const entry of entries) {
+    const reason = quietReason(entry);
+    const list = map.get(reason) ?? [];
+    list.push(entry);
+    map.set(reason, list);
+  }
+  return [...map.entries()]
+    .map(([reason, grouped]) => ({ reason, entries: grouped }))
+    .sort((a, b) => b.entries.length - a.entries.length);
+}
+
+/**
+ * Overnight / outside-window empty state.
+ *
+ * Dumping every underlying as a row that says the same gate made a healthy
+ * scan look like a broken SuperTrend table. One card states the gate; names
+ * stay behind a disclosure.
+ */
+function WaitingPanel({
+  groups,
+  windowLabel,
+}: {
+  groups: { reason: string; entries: OrbFeedEntry[] }[];
+  windowLabel: string;
+}) {
+  const only = groups.length === 1 ? groups[0] : null;
+  const isWindow = !!only && /entry window/i.test(only.reason);
+  const scanned = groups.reduce((n, g) => n + g.entries.length, 0);
+  const [open, setOpen] = React.useState<string | null>(null);
+  const title = isWindow ? 'Waiting for entry window' : 'No tradable ORB setup';
+  const detail = isWindow
+    ? `ORB only arms ${windowLabel}. ${scanned} underlyings scanned — none can fire until then.`
+    : `${scanned} underlyings scanned. Nothing is armed.`;
+
+  return (
+    <div role="status" style={{ margin: 12, padding: '16px 14px', borderRadius: 6, border: `1px solid ${k.border}`, background: k.surface }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: k.text }}>{title}</div>
+      <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: 1.5, color: k.dim }}>{detail}</p>
+      {groups.map((g) => {
+        const expanded = open === g.reason;
+        return (
+          <div key={g.reason} style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              onClick={() => setOpen(expanded ? null : g.reason)}
+              aria-expanded={expanded}
+              style={{
+                width: '100%', textAlign: 'left', padding: '6px 8px', cursor: 'pointer',
+                border: `1px solid ${k.border}`, borderRadius: 4, background: k.bg,
+                color: k.dim, fontFamily: 'inherit', fontSize: 10,
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}
+            >
+              <Chevron open={expanded} />
+              <span style={{ fontWeight: 600, color: k.text }}>{g.reason}</span>
+              <span style={{ marginLeft: 'auto' }}>{g.entries.length}</span>
+            </button>
+            {expanded && g.entries.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -104,7 +182,12 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
     [promoted],
   );
   const blocked = promoted.length - tradable.length;
-  const view = useBoardView(promoted, { endedByDefault: true, storageKey: 'orb' });
+  const view = useBoardView(promoted, {
+    endedByDefault: true,
+    storageKey: 'orb-ticket',
+    defaultHidden: ORB_HIDDEN,
+  });
+  const windowLabel = `${config.data?.config?.entry_start ?? '09:30'}–${config.data?.config?.entry_end ?? '12:00'} IST`;
 
   if (config.isLoading) return <p style={{ padding: 12, margin: 0, fontSize: 11, color: k.dim }}>Loading ORB configuration…</p>;
 
@@ -140,7 +223,9 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
   const promotedIds = new Set(promoted.map((s) => s.id));
   const quiet = signals.filter((s) => !promotedIds.has(s.id));
   const failed = signals.filter((s) => s.state === 'ERROR');
-  const showQuiet = quietOverride ?? promoted.length === 0;
+  const waiting = tradable.length === 0 && blocked === 0;
+  const showQuiet = quietOverride ?? false;
+  const quietGroups = groupQuiet(quiet);
 
   return (
     <div>
@@ -170,41 +255,45 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
         </span>
       </div>
 
-      <BoardFilters view={view} columns={BOARD_COLUMNS} />
-
-      <SignalBoard
-        renderTrade={rowActions.renderTrade}
-        renderChart={rowActions.renderChart}
-        signals={view.visible}
-        columns={BOARD_COLUMNS}
-        hidden={view.hidden}
-        openId={openId}
-        onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
-        renderDetail={(s) => <BoardTicket signal={s} tag="ORB" />}
-        onOpenDetail={onOpenDetail}
-        sort={sort}
-        onSortChange={setSort}
-        nowMs={nowMs}
-        emptyLabel="No tradable ORB setup right now. The universe is being scanned — the list below says what each underlying is waiting on."
-      />
-
-      {quiet.length > 0 && (
+      {waiting ? (
+        <WaitingPanel groups={quietGroups} windowLabel={windowLabel} />
+      ) : (
         <>
-          <button
-            type="button"
-            onClick={() => setQuietOverride(!showQuiet)}
-            aria-expanded={showQuiet}
-            style={{
-              width: '100%', textAlign: 'left', padding: '7px 12px', cursor: 'pointer',
-              border: 'none', borderTop: `1px solid ${k.border}`, borderBottom: showQuiet ? `1px solid ${k.border}` : 'none',
-              background: k.surface, color: k.dim, fontFamily: 'inherit', fontSize: 9.5,
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}
-          >
-            <Chevron open={showQuiet} />
-            {quiet.length} not signalling
-          </button>
-          {showQuiet && quiet.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
+          <BoardFilters view={view} columns={ORB_COLUMNS} />
+          <SignalBoard
+            renderTrade={rowActions.renderTrade}
+            renderChart={rowActions.renderChart}
+            signals={view.visible}
+            columns={ORB_COLUMNS}
+            hidden={view.hidden}
+            openId={openId}
+            onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
+            renderDetail={(s) => <BoardTicket signal={s} tag="ORB" />}
+            onOpenDetail={onOpenDetail}
+            sort={sort}
+            onSortChange={setSort}
+            nowMs={nowMs}
+            emptyLabel="No tradable ORB setup right now. The universe is being scanned — the list below says what each underlying is waiting on."
+          />
+          {quiet.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setQuietOverride(!showQuiet)}
+                aria-expanded={showQuiet}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '7px 12px', cursor: 'pointer',
+                  border: 'none', borderTop: `1px solid ${k.border}`, borderBottom: showQuiet ? `1px solid ${k.border}` : 'none',
+                  background: k.surface, color: k.dim, fontFamily: 'inherit', fontSize: 9.5,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                <Chevron open={showQuiet} />
+                {quiet.length} not signalling
+              </button>
+              {showQuiet && quiet.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
+            </>
+          )}
         </>
       )}
     </div>

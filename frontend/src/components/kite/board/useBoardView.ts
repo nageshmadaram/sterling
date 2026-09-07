@@ -45,10 +45,10 @@ export interface BoardView {
  * cannot fill, so one shared list of hidden columns would mean hiding a column
  * on one board silently changed another.
  */
-function loadHidden(storageKey: string | undefined): Set<ColumnId> {
+function loadHidden(storageKey: string | undefined, defaults: readonly ColumnId[]): Set<ColumnId> {
   // No stored choice yet means the defaults, not "everything visible" — every
-  // board opens on the same eleven core columns.
-  const fallback = () => new Set<ColumnId>(DEFAULT_HIDDEN_COLUMNS);
+  // board opens on the same eleven core columns unless the caller overrides.
+  const fallback = () => new Set<ColumnId>(defaults);
   if (!storageKey || typeof localStorage === 'undefined') return fallback();
   try {
     const stored = localStorage.getItem(`sterling.board.hidden.v2.${storageKey}`);
@@ -123,18 +123,21 @@ function bestLegPerUnderlying(signals: BoardSignal[]): BoardSignal[] {
  */
 export function useBoardView(
   signals: readonly BoardSignal[],
-  { endedByDefault = false, todayByDefault = false, nowMs, storageKey }: {
+  { endedByDefault = false, todayByDefault = false, nowMs, storageKey, defaultHidden }: {
     endedByDefault?: boolean;
     todayByDefault?: boolean;
     nowMs?: number;
     storageKey?: string;
+    /** Columns off on first paint. ORB shows qty/risk; SuperTrend hides them. */
+    defaultHidden?: readonly ColumnId[];
   } = {},
 ): BoardView {
+  const defaults = defaultHidden ?? DEFAULT_HIDDEN_COLUMNS;
   const [query, setQuery] = useState('');
   const [showEnded, setShowEnded] = useState(endedByDefault);
   const [todayOnly, setTodayOnly] = useState(todayByDefault);
   const [bestOnly, setBestOnly] = useState(false);
-  const [hidden, setHidden] = useState<Set<ColumnId>>(() => loadHidden(storageKey));
+  const [hidden, setHidden] = useState<Set<ColumnId>>(() => loadHidden(storageKey, defaults));
 
   const toggleColumn = useCallback((id: ColumnId) => {
     setHidden((prev) => {
@@ -157,11 +160,11 @@ export function useBoardView(
   /** Back to the eleven core columns every board opens with. */
   const resetColumns = useCallback(() => {
     setHidden(() => {
-      const next = new Set<ColumnId>(DEFAULT_HIDDEN_COLUMNS);
+      const next = new Set<ColumnId>(defaults);
       saveHidden(storageKey, next);
       return next;
     });
-  }, [storageKey]);
+  }, [storageKey, defaults]);
 
   return useMemo(() => {
     const all = [...signals];
