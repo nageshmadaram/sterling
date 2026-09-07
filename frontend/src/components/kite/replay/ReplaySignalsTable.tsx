@@ -1,6 +1,7 @@
 import React, { memo, useMemo, useRef } from 'react';
 import {
   ReplaySignal,
+  useFilteredReplayEvents,
   useReplayState,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
@@ -92,7 +93,7 @@ const SignalRow = memo(function SignalRow({
  * ("CONTRACT / UNDERLYING") a promise the data never kept.
  */
 export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
-  const events = useReplayStore((s) => s.status.stats.events);
+  const events = useFilteredReplayEvents();
   const state = useReplayState();
   const barsPlayed = useReplayStore((s) => s.status.bars_played);
   const selected = useReplayStore((s) => s.selectedSignalKey);

@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { getLastMarketWorkingDay } from '../lib/replay/marketSessions';
 
@@ -230,33 +231,10 @@ export const DEFAULT_STATUS: ReplayStatus = {
   unrealised_pnl: 0,
 };
 
-function initialDraft(): ReplayDraft {
-  const d = getLastMarketWorkingDay();
-  return {
-    date: d,
-    endDate: d,
-    // Market open. 09:00 is pre-open and has no candles, so it opened every
-    // replay on a dead stretch the user had to sit through.
-    startTime: '09:15:00',
-    // NFO continuous close since the Closing Auction Session began on
-    // 2026-08-03. 15:30 truncated every derivatives replay by ten minutes.
-    endTime: '15:40:00',
-    speed: 5,
-    resolution: '5m',
-    strategies: ['all'],
-    moneyness: ['ATM'],
-    lots: 1,
-    frictionMode: 'realistic',
-    indexSpreadPct: 0.5,
-    stockSpreadPct: 1.5,
-    slippagePct: 0.25,
-    instruments: [],
-  };
-}
-
 /* ── Persistence ──────────────────────────────────────────────────────── */
 
 export const REPLAY_UI_KEY = 'sterling:replay-dock:ui';
+export const REPLAY_DRAFT_KEY = 'sterling:replay-dock:draft';
 const LEGACY_HEIGHT_KEY = 'sterling:replay-dock:height';
 export const MIN_DOCK_HEIGHT = 220;
 
@@ -267,6 +245,97 @@ export interface ReplayUiPrefs {
   height: number;
   tab: ReplayTab;
   open: boolean;
+}
+
+export interface ReplayDraftPrefs {
+  strategies?: string[];
+  moneyness?: string[];
+  speed?: number;
+  resolution?: string;
+  lots?: number;
+  frictionMode?: 'realistic' | 'ideal';
+  indexSpreadPct?: number;
+  stockSpreadPct?: number;
+  slippagePct?: number;
+  instruments?: string[];
+}
+
+export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Partial<ReplayDraft> {
+  if (!storage) return {};
+  try {
+    const raw = storage.getItem(REPLAY_DRAFT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<ReplayDraft> = {};
+    if (Array.isArray(parsed.strategies) && parsed.strategies.length) {
+      out.strategies = parsed.strategies.filter((s): s is string => typeof s === 'string');
+    }
+    if (Array.isArray(parsed.moneyness) && parsed.moneyness.length) {
+      out.moneyness = parsed.moneyness.filter((m): m is string => typeof m === 'string');
+    }
+    if (typeof parsed.speed === 'number' && parsed.speed > 0) out.speed = parsed.speed;
+    if (typeof parsed.resolution === 'string') out.resolution = parsed.resolution;
+    if (typeof parsed.lots === 'number' && parsed.lots >= 1) out.lots = parsed.lots;
+    if (parsed.frictionMode === 'realistic' || parsed.frictionMode === 'ideal') out.frictionMode = parsed.frictionMode;
+    if (typeof parsed.indexSpreadPct === 'number') out.indexSpreadPct = parsed.indexSpreadPct;
+    if (typeof parsed.stockSpreadPct === 'number') out.stockSpreadPct = parsed.stockSpreadPct;
+    if (typeof parsed.slippagePct === 'number') out.slippagePct = parsed.slippagePct;
+    if (Array.isArray(parsed.instruments)) {
+      out.instruments = parsed.instruments.filter((i): i is string => typeof i === 'string');
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+let persistDraftTimer: ReturnType<typeof setTimeout> | null = null;
+export function persistDraft(draft: ReplayDraft) {
+  if (persistDraftTimer) clearTimeout(persistDraftTimer);
+  persistDraftTimer = setTimeout(() => {
+    try {
+      const payload: ReplayDraftPrefs = {
+        strategies: draft.strategies,
+        moneyness: draft.moneyness,
+        speed: draft.speed,
+        resolution: draft.resolution,
+        lots: draft.lots,
+        frictionMode: draft.frictionMode,
+        indexSpreadPct: draft.indexSpreadPct,
+        stockSpreadPct: draft.stockSpreadPct,
+        slippagePct: draft.slippagePct,
+        instruments: draft.instruments,
+      };
+      safeStorage()?.setItem(REPLAY_DRAFT_KEY, JSON.stringify(payload));
+    } catch {
+      /* quota */
+    }
+  }, 250);
+}
+
+function initialDraft(): ReplayDraft {
+  const d = getLastMarketWorkingDay();
+  const saved = loadDraftPrefs();
+  return {
+    date: d,
+    endDate: d,
+    // Market open. 09:00 is pre-open and has no candles, so it opened every
+    // replay on a dead stretch the user had to sit through.
+    startTime: '09:15:00',
+    // NFO continuous close since the Closing Auction Session began on
+    // 2026-08-03. 15:30 truncated every derivatives replay by ten minutes.
+    endTime: '15:40:00',
+    speed: saved.speed ?? 5,
+    resolution: saved.resolution ?? '5m',
+    strategies: saved.strategies ?? ['all'],
+    moneyness: saved.moneyness ?? ['ATM'],
+    lots: saved.lots ?? 1,
+    frictionMode: saved.frictionMode ?? 'realistic',
+    indexSpreadPct: saved.indexSpreadPct ?? 0.5,
+    stockSpreadPct: saved.stockSpreadPct ?? 1.5,
+    slippagePct: saved.slippagePct ?? 0.25,
+    instruments: saved.instruments ?? [],
+  };
 }
 
 const DEFAULT_PREFS: ReplayUiPrefs = { v: 1, mode: 'docked', height: 320, tab: 'split', open: false };
@@ -491,25 +560,46 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
     hostFocusApi?.clear();
   },
 
-  setDraft: (patch) => set((s) => ({ draft: { ...s.draft, ...patch } })),
-  resetDraft: () => set({ draft: initialDraft() }),
+  setDraft: (patch) =>
+    set((s) => {
+      const draft = { ...s.draft, ...patch };
+      persistDraft(draft);
+      return { draft };
+    }),
+  resetDraft: () => {
+    const draft = initialDraft();
+    persistDraft(draft);
+    set({ draft });
+  },
 
   // Deselecting the last item falls back to "all". Unusual, but it prevents a
   // replay that can never produce anything, and the existing tests assert it.
   toggleStrategy: (id) =>
     set((s) => {
-      if (id === 'all') return { draft: { ...s.draft, strategies: ['all'] } };
+      if (id === 'all') {
+        const draft = { ...s.draft, strategies: ['all'] };
+        persistDraft(draft);
+        return { draft };
+      }
       const cur = s.draft.strategies.filter((x) => x !== 'all');
       const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-      return { draft: { ...s.draft, strategies: next.length ? next : ['all'] } };
+      const draft = { ...s.draft, strategies: next.length ? next : ['all'] };
+      persistDraft(draft);
+      return { draft };
     }),
 
   toggleMoneyness: (id) =>
     set((s) => {
-      if (id === 'ALL') return { draft: { ...s.draft, moneyness: ['ALL'] } };
+      if (id === 'ALL') {
+        const draft = { ...s.draft, moneyness: ['ALL'] };
+        persistDraft(draft);
+        return { draft };
+      }
       const cur = s.draft.moneyness.filter((x) => x !== 'ALL');
       const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-      return { draft: { ...s.draft, moneyness: next.length ? next : ['ALL'] } };
+      const draft = { ...s.draft, moneyness: next.length ? next : ['ALL'] };
+      persistDraft(draft);
+      return { draft };
     }),
 
   setStatus: (status) =>
@@ -616,6 +706,40 @@ export const useReplayTab = () => useReplayStore((s) => s.tab);
 export const useReplayHeight = () => useReplayStore((s) => s.height);
 export const useReplayEvents = () => useReplayStore((s) => s.status.stats.events);
 export const useReplayTrades = () => useReplayStore((s) => s.status.stats.trades);
+
+export function matchStrategyFilter(strategy: string | undefined | null, filterStrategies: readonly string[]): boolean {
+  if (!filterStrategies.length || filterStrategies.includes('all') || filterStrategies.includes('*')) return true;
+  if (!strategy) return false;
+  const s = strategy.trim().toLowerCase();
+  return filterStrategies.some((f) => f.trim().toLowerCase() === s);
+}
+
+export function matchMoneynessFilter(contractOrSymbol: string | undefined | null, filterMoneyness: readonly string[]): boolean {
+  if (!filterMoneyness.length || filterMoneyness.includes('ALL') || filterMoneyness.includes('*')) return true;
+  if (!contractOrSymbol) return true;
+  const text = contractOrSymbol.toUpperCase();
+  return filterMoneyness.some((m) => text.includes(m.toUpperCase()));
+}
+
+export function useFilteredReplayEvents(): ReplaySignal[] {
+  const events = useReplayStore((s) => s.status.stats.events);
+  const strats = useReplayStore((s) => s.draft.strategies);
+
+  return useMemo(() => {
+    if (!strats.length || strats.includes('all') || strats.includes('*')) return events;
+    return events.filter((ev) => matchStrategyFilter(ev.strategy, strats));
+  }, [events, strats]);
+}
+
+export function useFilteredReplayTrades(): ReplayTrade[] {
+  const trades = useReplayStore((s) => s.status.stats.trades);
+  const strats = useReplayStore((s) => s.draft.strategies);
+
+  return useMemo(() => {
+    if (!strats.length || strats.includes('all') || strats.includes('*')) return trades;
+    return trades.filter((t) => matchStrategyFilter(t.strategy, strats));
+  }, [trades, strats]);
+}
 export const useReplayClock = () => useReplayStore((s) => s.status.current_time_iso);
 export const useReplayPct = () => useReplayStore((s) => s.status.progress_pct);
 export const useReplayError = () => useReplayStore((s) => s.error);

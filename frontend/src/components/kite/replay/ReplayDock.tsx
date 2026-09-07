@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import {
   MIN_DOCK_HEIGHT,
   ReplayMode,
+  useFilteredReplayEvents,
+  useFilteredReplayTrades,
   useReplayHostHidden,
   useReplayIsHistorical,
   useReplayState,
@@ -53,8 +55,8 @@ export function ReplayDock() {
   const setHeight = useReplayStore((s) => s.setHeight);
   const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
   const state = useReplayState();
-  const events = useReplayStore((s) => s.status.stats.events);
-  const trades = useReplayStore((s) => s.status.stats.trades);
+  const events = useFilteredReplayEvents();
+  const trades = useFilteredReplayTrades();
   const errorMsg = useReplayStore((s) => s.error?.message);
   const setError = useReplayStore((s) => s.setError);
   const cfg = useReplayStore((s) => s.status.config);

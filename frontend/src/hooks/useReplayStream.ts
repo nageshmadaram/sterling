@@ -121,6 +121,9 @@ function applyStatus(next: ReplayStatus, wasDelta: boolean) {
   if (next.last_signal) {
     useReplayStore.setState((s) => ({ status: { ...s.status, last_signal: next.last_signal } }));
   }
+  if (store.status.state !== 'idle' && next.state === 'idle') {
+    void fetchStatus().then((full) => full && store.setStatus(full));
+  }
 }
 
 /**
@@ -234,6 +237,9 @@ export function useReplayStream(enabled: boolean): void {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data);
           useReplayStore.getState().applyFrame(d);
+          if (d.state === 'idle') {
+            void fetchStatus().then((full) => full && useReplayStore.getState().setStatus(full));
+          }
         });
         es.addEventListener('frame', (e) => {
           armWatchdog();

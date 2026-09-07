@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_STATUS,
   MIN_DOCK_HEIGHT,
+  REPLAY_DRAFT_KEY,
   REPLAY_UI_KEY,
   getReplayNowMs,
+  loadDraftPrefs,
   loadPrefs,
+  matchStrategyFilter,
   useReplayStore,
 } from '../../../../hooks/useReplayStore';
 import { makeSignal, makeStatus, makeTrade, primeStore } from './testUtils';
@@ -256,3 +259,30 @@ describe('replay-aware clock', () => {
     ).toBeNull();
   });
 });
+
+describe('draft preferences persistence', () => {
+  it('loads saved draft preferences from localStorage', () => {
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        strategies: ['adaptive_edge'],
+        speed: 10,
+        resolution: '1m',
+        lots: 2,
+      }),
+    );
+    const loaded = loadDraftPrefs(localStorage);
+    expect(loaded.strategies).toEqual(['adaptive_edge']);
+    expect(loaded.speed).toBe(10);
+    expect(loaded.resolution).toBe('1m');
+    expect(loaded.lots).toBe(2);
+  });
+
+  it('matches strategy filter correctly', () => {
+    expect(matchStrategyFilter('adaptive_edge', ['adaptive_edge'])).toBe(true);
+    expect(matchStrategyFilter('supertrend', ['adaptive_edge'])).toBe(false);
+    expect(matchStrategyFilter('supertrend', ['all'])).toBe(true);
+    expect(matchStrategyFilter('supertrend', [])).toBe(true);
+  });
+});
+

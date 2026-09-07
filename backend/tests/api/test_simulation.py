@@ -603,3 +603,79 @@ def test_emit_recorded_signal_dynamic_lifecycle():
     assert trade.pnl_usd > 0
     assert "NIFTY" not in simulation_runner._open_by_symbol
 
+
+def test_emit_recorded_signal_strategy_filtering():
+    """Verify that _emit_recorded_signal respects cfg.strategies and does not leak unwanted strategies."""
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["vcp"])
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
+
+    rec = {
+        "underlying": "NIFTY",
+        "direction": "BULLISH",
+        "time_iso": "09:15:00",
+        "timestamp_ms": 1788752700000,
+        "spot": 24000.0,
+        "stop_loss": 23900.0,
+        "target": 24200.0,
+        "strategy": "supertrend",
+        "raw_row": {},
+    }
+
+    # Should NOT emit when filtered for vcp
+    simulation_runner._emit_recorded_signal(rec)
+    assert len(simulation_runner._stats.events) == 0
+
+    # When filtered for adaptive_edge, maps cleanly to adaptive_edge
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["adaptive_edge"])
+    simulation_runner._emit_recorded_signal(rec)
+    assert len(simulation_runner._stats.events) == 1
+    assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
+
+
+def test_evaluate_bar_skips_synthetic_ae_when_recorded_present():
+    """Verify that RSI pin-bar heuristics in _evaluate_bar do not fire synthetic AE signals when recorded signals exist for the day."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["adaptive_edge"])
+    simulation_runner._recorded_signals = [{"underlying": "SENSEX", "timestamp_ms": 1788752700000}]
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
+    simulation_runner._bar_history = {}
+
+    # Feed 20 bars for LT with oversold RSI (<25) and hammer pin-bar
+    t0 = datetime(2026, 9, 7, 10, 0, 0, tzinfo=ist)
+    for i in range(20):
+        bar = {
+            "symbol": "LT",
+            "open": 3500.0 - i * 10,
+            "high": 3505.0 - i * 10,
+            "low": 3480.0 - i * 10,
+            "close": 3495.0 - i * 10, # hammer
+            "volume": 20000,
+        }
+        simulation_runner._evaluate_bar(bar, t0 + timedelta(minutes=5 * i))
+
+    # Because recorded signals exist for the day, synthetic AE signals for LT must NOT fire
+    ae_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "adaptive_edge"]
+    assert len(ae_events) == 0
+
+
+def test_status_since_preserves_closed_trades_under_delta_polling():
+    """Verify status_since returns all trades (with updated status/exit price) so delta polling never misses exits."""
+    from app.services.simulation import SimTradeEvent
+    trade1 = SimTradeEvent(
+        trade_id="TRD-1", entry_time_iso="09:15:00", exit_time_iso="09:20:00",
+        timestamp_ms=1, strategy="adaptive_edge", symbol="NIFTY2690823800PE",
+        underlying="NIFTY", direction="BUY", opt_type="PE", strike=23800,
+        lots=1, quantity=25, entry_price=100, exit_price=120, stop_loss=80,
+        target_price=150, status="WIN", pnl_usd=500, pnl_pct=20, duration_mins=5,
+    )
+    simulation_runner._stats.trades = [trade1]
+    st = simulation_runner.status_since(since_events=0, since_trades=1)
+    assert len(st.stats.trades) == 1
+    assert st.stats.trades[0].status == "WIN"
+    assert st.stats.trades[0].exit_price == 120
+
+
+
