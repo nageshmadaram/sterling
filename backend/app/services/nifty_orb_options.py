@@ -210,20 +210,30 @@ def backtest_from_bars(rows:list[dict[str,Any]],cfg:StrategyConfig|None=None)->d
 async def execute_manual(uid:str)->dict[str,Any]:
     """Manual does not place from this endpoint.
 
-    The board Buy button (shared order window) is the Manual path. A previous
-    implementation called ``place_manual_order`` on the snapshot without
-    protection, market hours, or the same-ticket gates — the same class of
-    second order path as the deleted ``execute_auto``. Return the ticket Auto
-    would use; placing it is the operator's Buy click.
+    The board Buy button (shared order window) is the Manual path. Return the
+    same universe tickets Auto would consume from ``scan_user`` — not the
+    NIFTY-only snapshot, which is a different planner.
     """
     from app.services.nifty_orb_lifecycle import attach_ticket, manual_mode_response
+    from app.services.nifty_orb_scanner import scan_user
     cfg=get_config()
     out=manual_mode_response()
     if not cfg.enabled:
         out["enabled"]=False
         return out
-    snap=await snapshot(uid)
-    row={"status":"signal" if snap.get("plan") else "watching","trade":snap.get("plan") or {},"signal":snap.get("signal") or {}}
-    attach_ticket(row)
-    out.update({"enabled":True,"ticket":row.get("ticket"),"ticket_fingerprint":row.get("ticket_fingerprint"),"plan":snap.get("plan"),"signal":snap.get("signal")})
+    scan=await scan_user(uid, cfg)
+    rows=list(scan.get("signals") or [])
+    armed=next((r for r in rows if r.get("status")=="signal" and (r.get("trade") or r.get("ticket"))), None)
+    if armed is None:
+        out.update({"enabled":True,"ticket":None,"ticket_fingerprint":None,"plan":None,"signal":None,"signals":rows})
+        return out
+    attach_ticket(armed)
+    out.update({
+        "enabled":True,
+        "ticket":armed.get("ticket"),
+        "ticket_fingerprint":armed.get("ticket_fingerprint"),
+        "plan":armed.get("trade"),
+        "signal":armed.get("signal"),
+        "signals":rows,
+    })
     return out

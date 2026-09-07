@@ -41,9 +41,9 @@ async def _ensure_recovered(user_id: str) -> None:
     try:
         report = await recover_after_restart(user_id)
         log.info("NIFTY ORB restart recovery user=%s report=%s", user_id, report)
+        _recovered.add(user_id)
     except Exception as exc:  # noqa: BLE001
         log.warning("NIFTY ORB restart recovery failed user=%s: %s", user_id, exc)
-    _recovered.add(user_id)
 
 
 async def _run_user(user_id: str):
