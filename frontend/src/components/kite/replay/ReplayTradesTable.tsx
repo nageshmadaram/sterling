@@ -1,6 +1,7 @@
 import React, { memo, useMemo, useRef, useState } from 'react';
 import {
   ReplayTrade,
+  useFilteredReplayTrades,
   useReplayState,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
@@ -28,18 +29,28 @@ export type TradeGroupBy = 'none' | 'strategy' | 'contract';
 const TradeRow = memo(function TradeRow({
   t,
   hasFriction,
-  colSpanBase,
+  colSpanBase: _colSpanBase,
 }: {
   t: ReplayTrade;
   hasFriction: boolean;
-  colSpanBase: number;
+  colSpanBase?: number;
 }) {
   const open = t.status === 'OPEN';
   const win = t.status === 'WIN';
+
   return (
-    <tr className="rd-tr" data-tone={open ? 'open' : win ? 'bull' : 'bear'} tabIndex={0}>
-      <td data-col="id" className="rd-mono" style={{ color: 'var(--k-blue)' }}>{t.trade_id}</td>
-      <td className="rd-num">{fmtTime(t.entry_time_iso)}</td>
+    <tr
+      className="rd-tr"
+      data-tone={open ? 'open' : win ? 'profit' : 'loss'}
+      data-status={t.status.toLowerCase()}
+      tabIndex={0}
+    >
+      <td data-col="id" className="rd-mono" style={{ color: 'var(--k-blue)' }}>
+        {t.trade_id}
+      </td>
+      <td className="rd-num" style={{ color: 'var(--k-dim)' }}>
+        {fmtTime(t.entry_time_iso)}
+      </td>
       <td data-col="out" className="rd-num">
         {open ? (
           <span className="rd-status-chip" data-tone="open">OPEN</span>
@@ -47,7 +58,9 @@ const TradeRow = memo(function TradeRow({
           fmtTime(t.exit_time_iso)
         )}
       </td>
-      <td data-align="right" data-col="held" className="rd-num">{fmtDuration(t.duration_mins)}</td>
+      <td data-align="right" data-col="held" className="rd-num" style={{ color: 'var(--k-dim)' }}>
+        {fmtDuration(t.duration_mins)}
+      </td>
       <td>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: strategyTone(t.strategy) }}>
           <span className="rd-dot-tone" />
@@ -56,7 +69,11 @@ const TradeRow = memo(function TradeRow({
       </td>
       <td>
         <strong>{t.symbol}</strong>
-        <span className="rd-sub">{t.underlying} · {t.strike} {t.opt_type}</span>
+        {t.underlying && (
+          <span className="rd-sub">
+            {t.underlying}{t.strike ? ` · ${t.strike} ${t.opt_type || ''}` : ''}
+          </span>
+        )}
       </td>
       <td data-align="right" data-col="size" className="rd-num">
         {fmtInt(t.lots)}L<span className="rd-sub">{fmtInt(t.quantity)} qty</span>
@@ -121,11 +138,25 @@ const TradeRow = memo(function TradeRow({
  * column you do not render.
  */
 export const ReplayTradesTable = memo(function ReplayTradesTable() {
-  const trades = useReplayStore((s) => s.status.stats.trades);
-  const pnl = useReplayStore((s) => s.status.stats.pnl);
-  const wins = useReplayStore((s) => s.status.stats.wins);
-  const losses = useReplayStore((s) => s.status.stats.losses);
-  const drag = useReplayStore((s) => s.status.stats.slippage_total);
+  const trades = useFilteredReplayTrades();
+  const rawPnl = useReplayStore((s) => s.status.stats.pnl);
+  const rawWins = useReplayStore((s) => s.status.stats.wins);
+  const rawLosses = useReplayStore((s) => s.status.stats.losses);
+  const rawDrag = useReplayStore((s) => s.status.stats.slippage_total);
+  const isNarrowed = useReplayStore(
+    (s) => !s.draft.strategies.includes('all') && !s.draft.strategies.includes('*'),
+  );
+
+  const pnl = isNarrowed
+    ? Number(trades.reduce((sum, t) => sum + (t.pnl_usd || 0), 0).toFixed(2))
+    : rawPnl;
+  const wins = isNarrowed ? trades.filter((t) => t.status === 'WIN').length : rawWins;
+  const losses = isNarrowed ? trades.filter((t) => t.status === 'LOSS').length : rawLosses;
+  const drag = isNarrowed
+    ? trades.some((t) => t.slippage != null)
+      ? Number(trades.reduce((sum, t) => sum + (t.slippage || 0), 0).toFixed(2))
+      : null
+    : rawDrag;
   const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
   const state = useReplayState();
 

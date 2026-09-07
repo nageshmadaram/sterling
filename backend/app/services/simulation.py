@@ -710,10 +710,13 @@ class SimulationRunner:
             payload = stats
         else:
             ev_from = max(0, since_events or 0)
-            tr_from = max(0, since_trades or 0)
             # A truncation (seek/restart) invalidates the client's offsets.
-            if ev_from > len(stats.events) or tr_from > len(stats.trades):
-                ev_from = tr_from = 0
+            if ev_from > len(stats.events):
+                ev_from = 0
+            # Trades are mutating entities (their live P&L, bars_held, and crucially
+            # their exit_price and status WIN/LOSS update over time). Slicing trades
+            # by index prevents the client from receiving exit and outcome updates
+            # for trades entered earlier. Therefore, always return the latest trades.
             payload = SimStats(
                 signals_fired=stats.signals_fired,
                 trades_entered=stats.trades_entered,
@@ -721,7 +724,7 @@ class SimulationRunner:
                 losses=stats.losses,
                 pnl=stats.pnl,
                 events=stats.events[ev_from:],
-                trades=stats.trades[tr_from:],
+                trades=stats.trades,
                 slippage_total=stats.slippage_total,
             )
 
@@ -953,10 +956,21 @@ class SimulationRunner:
         # Check strategy filter
         cfg_strats = [s.lower() for s in (self._config.strategies if self._config and self._config.strategies else [self._config.strategy if self._config else "all"])]
         allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
-        strat = rec.get("strategy", "supertrend").lower()
-        is_ae_matching = "adaptive_edge" in cfg_strats and strat in ("supertrend", "spot_scan")
-        if not allow_all and strat not in cfg_strats and not is_ae_matching:
-            return
+        strat_raw = rec.get("strategy", "supertrend").lower()
+
+        if not allow_all:
+            if "adaptive_edge" in cfg_strats and "supertrend" not in cfg_strats:
+                # User specifically requested Adaptive Edge: map recorded spot scan to Adaptive Edge
+                strat_to_emit = "adaptive_edge"
+            elif "supertrend" in cfg_strats and "adaptive_edge" not in cfg_strats:
+                # User specifically requested SuperTrend: map recorded spot scan to SuperTrend
+                strat_to_emit = "supertrend"
+            elif strat_raw in cfg_strats:
+                strat_to_emit = strat_raw
+            else:
+                return
+        else:
+            strat_to_emit = rec.get("strategy", "supertrend")
 
         sym = rec["underlying"]
         from app.services.ohlcv_store import INDEX_ALIASES
@@ -1047,7 +1061,7 @@ class SimulationRunner:
         event = SimSignalEvent(
             time_iso=rec["time_iso"],
             timestamp_ms=rec["timestamp_ms"],
-            strategy=rec.get("strategy", "supertrend"),
+            strategy=strat_to_emit,
             instrument=sym,
             direction=direction,
             strength="STRONG",
@@ -1081,7 +1095,7 @@ class SimulationRunner:
             entry_time_iso=entry_time_str,
             exit_time_iso="OPEN",
             timestamp_ms=rec["timestamp_ms"],
-            strategy=rec.get("strategy", "supertrend"),
+            strategy=strat_to_emit,
             symbol=opt_symbol,
             underlying=sym,
             direction="BUY",
@@ -1165,29 +1179,40 @@ class SimulationRunner:
         self._emitted_recorded_keys = set()
 
         if not cfg.instruments:
-            try:
-                from app.services import db
-                import json
-                raw_c = db.get_config("kite_engine_config_default")
-                if raw_c:
-                    parsed_c = json.loads(raw_c)
-                    stocks = parsed_c.get("scan_stocks", [])
-                    indices = [s.replace(" 50", "").replace(" SERVICE", "").replace(" ", "") for s in parsed_c.get("scan_indices", [])]
-                    instruments = list(dict.fromkeys(indices + stocks))
-                else:
+            if self._recorded_signals:
+                # Real session with recorded signals: only replay the instruments that actually traded / fired signals
+                rec_syms = list(dict.fromkeys([
+                    r["underlying"] for r in self._recorded_signals if r.get("underlying")
+                ]))
+                # Keep core indices available for market benchmark / spot tracking
+                for core in ("NIFTY", "BANKNIFTY", "SENSEX"):
+                    if core not in rec_syms:
+                        rec_syms.append(core)
+                instruments = rec_syms
+            else:
+                try:
+                    from app.services import db
+                    import json
+                    raw_c = db.get_config("kite_engine_config_default")
+                    if raw_c:
+                        parsed_c = json.loads(raw_c)
+                        stocks = parsed_c.get("scan_stocks", [])
+                        indices = [s.replace(" 50", "").replace(" SERVICE", "").replace(" ", "") for s in parsed_c.get("scan_indices", [])]
+                        instruments = list(dict.fromkeys(indices + stocks))
+                    else:
+                        instruments = [
+                            "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
+                            "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
+                            "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
+                            "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
+                        ]
+                except Exception:
                     instruments = [
                         "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
                         "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
                         "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
                         "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
                     ]
-            except Exception:
-                instruments = [
-                    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
-                    "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
-                    "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
-                    "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
-                ]
         else:
             instruments = list(cfg.instruments)
 
@@ -1562,7 +1587,11 @@ class SimulationRunner:
         sim_date = cfg.date if cfg else "2026-08-28"
 
         # Return events specifically triggered for adaptive_edge or spot scans consumed by AE
-        ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
+        has_pure_ae = any(ev.strategy == "adaptive_edge" for ev in self._stats.events)
+        if has_pure_ae:
+            ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "spot_scan")]
+        else:
+            ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
 
         signals = []
         for i, ev in enumerate(ae_events):
@@ -2187,7 +2216,9 @@ class SimulationRunner:
                     })
 
         # 3. Adaptive Edge: Canonical Mean Reversion with Candlestick Reversal Confirmation
-        if len(history) >= 15:
+        has_recorded = bool(getattr(self, "_recorded_signals", []))
+        is_ae_symbol = _is_index(sym) or (bool(self._config and self._config.instruments and sym in self._config.instruments))
+        if not has_recorded and is_ae_symbol and len(history) >= 15:
             body = abs(close - opens)
             lower_wick = min(opens, close) - low
             upper_wick = high - max(opens, close)
