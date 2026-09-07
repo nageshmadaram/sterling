@@ -7,6 +7,7 @@ import {
   getReplayNowMs,
   loadDraftPrefs,
   loadPrefs,
+  matchInstrumentFilter,
   matchStrategyFilter,
   useReplayStore,
 } from '../../../../hooks/useReplayStore';
@@ -283,6 +284,35 @@ describe('draft preferences persistence', () => {
     expect(matchStrategyFilter('supertrend', ['adaptive_edge'])).toBe(false);
     expect(matchStrategyFilter('supertrend', ['all'])).toBe(true);
     expect(matchStrategyFilter('supertrend', [])).toBe(true);
+  });
+
+  it('matches instrument filter with aliases and contract prefixes', () => {
+    expect(matchInstrumentFilter('NIFTY 50', ['NIFTY'])).toBe(true);
+    expect(matchInstrumentFilter('NSE:NIFTY 50', ['NIFTY'])).toBe(true);
+    expect(matchInstrumentFilter('NIFTY2690823800PE', ['NIFTY'])).toBe(true);
+    expect(matchInstrumentFilter('BANKNIFTY26SEP57000PE', ['NIFTY'])).toBe(false);
+    expect(matchInstrumentFilter('BANKNIFTY26SEP57000PE', ['BANKNIFTY'])).toBe(true);
+    expect(matchInstrumentFilter('BAJAJFINSV26SEP1960PE', ['BAJAJFINSV'])).toBe(true);
+    expect(matchInstrumentFilter('BAJFINANCE26AUG1060PE', ['BAJAJFINSV'])).toBe(false);
+    expect(matchInstrumentFilter('LT26AUG3950CE', ['TCS'])).toBe(false);
+    expect(matchInstrumentFilter('TCS', [])).toBe(true);
+  });
+
+  it('toggles and sets instruments in draft store', () => {
+    const s = () => useReplayStore.getState();
+    expect(s().draft.instruments).toEqual([]);
+
+    s().toggleInstrument('NIFTY');
+    expect(s().draft.instruments).toEqual(['NIFTY']);
+
+    s().toggleInstrument('BANKNIFTY');
+    expect(s().draft.instruments).toEqual(['NIFTY', 'BANKNIFTY']);
+
+    s().toggleInstrument('NIFTY');
+    expect(s().draft.instruments).toEqual(['BANKNIFTY']);
+
+    s().setInstruments(['SENSEX', 'INFY', 'TCS']);
+    expect(s().draft.instruments).toEqual(['SENSEX', 'INFY', 'TCS']);
   });
 });
 

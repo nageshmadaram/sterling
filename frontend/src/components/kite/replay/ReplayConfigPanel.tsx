@@ -4,6 +4,7 @@ import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { useFocusTrap } from './primitives/useFocusTrap';
 import { fmtSessionDate, fmtTime } from './replayFormat';
 import { MONEYNESS_LEGS, REPLAY_STRATEGIES } from './replayStrategies';
+import { CORE_INDICES, CORE_STOCKS, MONEYNESS_LEGS, REPLAY_STRATEGIES } from './replayStrategies';
 import { useAvailableDates, verdictForDate } from './useAvailableDates';
 import * as Icons from './ReplayIcons';
 
@@ -24,6 +25,7 @@ export function ReplayConfigSheet() {
   const resetDraft = useReplayStore((s) => s.resetDraft);
   const toggleStrategy = useReplayStore((s) => s.toggleStrategy);
   const toggleMoneyness = useReplayStore((s) => s.toggleMoneyness);
+  const toggleInstrument = useReplayStore((s) => s.toggleInstrument);
   const caps = useReplayStore((s) => s.status.capabilities);
   const echo = useReplayStore((s) => s.status.config);
   const transport = useReplayTransport();
@@ -42,6 +44,7 @@ export function ReplayConfigSheet() {
 
   const allStrategies = draft.strategies.includes('all');
   const allLegs = draft.moneyness.includes('ALL');
+  const allInstruments = !draft.instruments || draft.instruments.length === 0;
   const frictionSupported = caps?.friction === true;
 
   // The engine's own values, if it reported them. A mismatch here is how the
@@ -123,6 +126,13 @@ export function ReplayConfigSheet() {
                   type="checkbox"
                   checked={allStrategies}
                   onChange={() => setDraft({ strategies: ['all'] })}
+                  onChange={() => {
+                    if (allStrategies) {
+                      setDraft({ strategies: [REPLAY_STRATEGIES[0].id] });
+                    } else {
+                      setDraft({ strategies: ['all'] });
+                    }
+                  }}
                 />
                 <span>All strategies</span>
               </label>
@@ -139,6 +149,59 @@ export function ReplayConfigSheet() {
                   <span>{s.label}</span>
                 </label>
               ))}
+            </div>
+          </details>
+
+          <details className="rd-card" open>
+            <summary>
+              <span className="rd-card-caret">›</span>
+              <span className="rd-card-info">
+                <span className="rd-card-title">Instruments</span>
+                <span className="rd-card-desc">Indices and stocks scanned during replay.</span>
+              </span>
+              <span className="rd-card-meta">{allInstruments ? 'ALL' : `${draft.instruments.length}`}</span>
+            </summary>
+            <div className="rd-card-body">
+              <label className="rd-opt">
+                <input
+                  type="checkbox"
+                  checked={allInstruments}
+                  onChange={() => {
+                    if (!allInstruments) {
+                      setDraft({ instruments: [] });
+                    }
+                  }}
+                />
+                <span>All instruments (Full Universe)</span>
+              </label>
+              <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                <div style={{ fontSize: '10px', color: 'var(--k-dim)', padding: '4px 0 2px', textTransform: 'uppercase' }}>
+                  Indices
+                </div>
+                {CORE_INDICES.map((inst) => (
+                  <label className="rd-opt" key={inst.id}>
+                    <input
+                      type="checkbox"
+                      checked={allInstruments || draft.instruments.includes(inst.id)}
+                      onChange={() => toggleInstrument(inst.id)}
+                    />
+                    <span>{inst.id} <span style={{ color: 'var(--k-dim)', fontSize: '11px' }}>({inst.label})</span></span>
+                  </label>
+                ))}
+                <div style={{ fontSize: '10px', color: 'var(--k-dim)', padding: '6px 0 2px', textTransform: 'uppercase' }}>
+                  Stocks
+                </div>
+                {CORE_STOCKS.map((inst) => (
+                  <label className="rd-opt" key={inst.id}>
+                    <input
+                      type="checkbox"
+                      checked={allInstruments || draft.instruments.includes(inst.id)}
+                      onChange={() => toggleInstrument(inst.id)}
+                    />
+                    <span>{inst.id}</span>
+                  </label>
+                ))}
+              </div>
             </div>
           </details>
 

@@ -619,10 +619,16 @@ def test_emit_recorded_signal_strategy_filtering():
     assert len(simulation_runner._stats.events) == 0
 
     # When filtered for adaptive_edge, maps cleanly to adaptive_edge
+    # Should NOT emit supertrend signals when filtered strictly for adaptive_edge
     simulation_runner._config = SimConfig(date="2026-09-07", strategies=["adaptive_edge"])
     simulation_runner._emit_recorded_signal(rec)
+    assert len(simulation_runner._stats.events) == 0
+
+    # When filtered for supertrend, emits cleanly as supertrend
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["supertrend"])
+    simulation_runner._emit_recorded_signal(rec)
     assert len(simulation_runner._stats.events) == 1
-    assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
+    assert simulation_runner._stats.events[0].strategy == "supertrend"
 
 
 def test_evaluate_bar_skips_synthetic_ae_when_recorded_present():

@@ -248,6 +248,10 @@ export interface ReplayUiPrefs {
 }
 
 export interface ReplayDraftPrefs {
+  date?: string;
+  endDate?: string;
+  startTime?: string;
+  endTime?: string;
   strategies?: string[];
   moneyness?: string[];
   speed?: number;
@@ -267,6 +271,18 @@ export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Pa
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const out: Partial<ReplayDraft> = {};
+    if (typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
+      out.date = parsed.date;
+    }
+    if (typeof parsed.endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.endDate)) {
+      out.endDate = parsed.endDate;
+    }
+    if (typeof parsed.startTime === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(parsed.startTime)) {
+      out.startTime = parsed.startTime;
+    }
+    if (typeof parsed.endTime === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(parsed.endTime)) {
+      out.endTime = parsed.endTime;
+    }
     if (Array.isArray(parsed.strategies) && parsed.strategies.length) {
       out.strategies = parsed.strategies.filter((s): s is string => typeof s === 'string');
     }
@@ -289,42 +305,42 @@ export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Pa
   }
 }
 
-let persistDraftTimer: ReturnType<typeof setTimeout> | null = null;
 export function persistDraft(draft: ReplayDraft) {
-  if (persistDraftTimer) clearTimeout(persistDraftTimer);
-  persistDraftTimer = setTimeout(() => {
-    try {
-      const payload: ReplayDraftPrefs = {
-        strategies: draft.strategies,
-        moneyness: draft.moneyness,
-        speed: draft.speed,
-        resolution: draft.resolution,
-        lots: draft.lots,
-        frictionMode: draft.frictionMode,
-        indexSpreadPct: draft.indexSpreadPct,
-        stockSpreadPct: draft.stockSpreadPct,
-        slippagePct: draft.slippagePct,
-        instruments: draft.instruments,
-      };
-      safeStorage()?.setItem(REPLAY_DRAFT_KEY, JSON.stringify(payload));
-    } catch {
-      /* quota */
-    }
-  }, 250);
+  try {
+    const payload: ReplayDraftPrefs = {
+      date: draft.date,
+      endDate: draft.endDate,
+      startTime: draft.startTime,
+      endTime: draft.endTime,
+      strategies: draft.strategies,
+      moneyness: draft.moneyness,
+      speed: draft.speed,
+      resolution: draft.resolution,
+      lots: draft.lots,
+      frictionMode: draft.frictionMode,
+      indexSpreadPct: draft.indexSpreadPct,
+      stockSpreadPct: draft.stockSpreadPct,
+      slippagePct: draft.slippagePct,
+      instruments: draft.instruments,
+    };
+    safeStorage()?.setItem(REPLAY_DRAFT_KEY, JSON.stringify(payload));
+  } catch {
+    /* quota */
+  }
 }
 
 function initialDraft(): ReplayDraft {
   const d = getLastMarketWorkingDay();
   const saved = loadDraftPrefs();
   return {
-    date: d,
-    endDate: d,
+    date: saved.date ?? d,
+    endDate: saved.endDate ?? saved.date ?? d,
     // Market open. 09:00 is pre-open and has no candles, so it opened every
     // replay on a dead stretch the user had to sit through.
-    startTime: '09:15:00',
+    startTime: saved.startTime ?? '09:15:00',
     // NFO continuous close since the Closing Auction Session began on
     // 2026-08-03. 15:30 truncated every derivatives replay by ten minutes.
-    endTime: '15:40:00',
+    endTime: saved.endTime ?? '15:40:00',
     speed: saved.speed ?? 5,
     resolution: saved.resolution ?? '5m',
     strategies: saved.strategies ?? ['all'],
@@ -438,6 +454,8 @@ export interface ReplayStore {
   resetDraft(): void;
   toggleStrategy(id: string): void;
   toggleMoneyness(id: string): void;
+  toggleInstrument(symbol: string): void;
+  setInstruments(symbols: string[]): void;
 
   setStatus(status: ReplayStatus): void;
   applyFrame(frame: ReplayFrame): void;
@@ -602,6 +620,25 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       return { draft };
     }),
 
+  toggleInstrument: (symbol) =>
+    set((s) => {
+      const sym = symbol.toUpperCase().trim();
+      if (!sym) return s;
+      const cur = s.draft.instruments;
+      const next = cur.includes(sym) ? cur.filter((x) => x !== sym) : [...cur, sym];
+      const draft = { ...s.draft, instruments: next };
+      persistDraft(draft);
+      return { draft };
+    }),
+
+  setInstruments: (symbols) =>
+    set((s) => {
+      const next = Array.from(new Set(symbols.map((x) => x.toUpperCase().trim()).filter(Boolean)));
+      const draft = { ...s.draft, instruments: next };
+      persistDraft(draft);
+      return { draft };
+    }),
+
   setStatus: (status) =>
     set((s) => {
       // Preserve array identity when the ledger did not change, so table
@@ -721,24 +758,67 @@ export function matchMoneynessFilter(contractOrSymbol: string | undefined | null
   return filterMoneyness.some((m) => text.includes(m.toUpperCase()));
 }
 
+export const INDEX_ALIAS_MAP: Record<string, string[]> = {
+  NIFTY: ['NIFTY', 'NIFTY 50', 'NSE:NIFTY 50', 'NIFTY50'],
+  BANKNIFTY: ['BANKNIFTY', 'NIFTY BANK', 'NSE:NIFTY BANK', 'BANK NIFTY'],
+  FINNIFTY: ['FINNIFTY', 'NIFTY FIN SERVICE', 'NSE:NIFTY FIN SERVICE'],
+  MIDCPNIFTY: ['MIDCPNIFTY', 'NIFTY MID SELECT', 'NSE:NIFTY MID SELECT'],
+  SENSEX: ['SENSEX', 'BSE:SENSEX'],
+  BANKEX: ['BANKEX', 'BSE:BANKEX'],
+};
+
+export function matchInstrumentFilter(
+  instrumentOrSymbol: string | undefined | null,
+  filterInstruments: readonly string[],
+): boolean {
+  if (!filterInstruments.length) return true;
+  if (!instrumentOrSymbol) return false;
+
+  const raw = instrumentOrSymbol.toUpperCase().replace(/^(NSE|BSE):/, '').trim();
+
+  return filterInstruments.some((filter) => {
+    const f = filter.toUpperCase().replace(/^(NSE|BSE):/, '').trim();
+    if (!f) return false;
+
+    const aliases = INDEX_ALIAS_MAP[f] ?? [f];
+    for (const alias of aliases) {
+      const a = alias.toUpperCase().replace(/^(NSE|BSE):/, '').trim();
+      if (raw === a) return true;
+      if (raw.startsWith(a)) {
+        const remainder = raw.slice(a.length);
+        if (remainder === '' || /^\d/.test(remainder)) return true;
+      }
+    }
+    return false;
+  });
+}
+
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
   const strats = useReplayStore((s) => s.draft.strategies);
+  const instruments = useReplayStore((s) => s.draft.instruments);
 
   return useMemo(() => {
-    if (!strats.length || strats.includes('all') || strats.includes('*')) return events;
-    return events.filter((ev) => matchStrategyFilter(ev.strategy, strats));
-  }, [events, strats]);
+    return events.filter((ev) => {
+      if (!matchStrategyFilter(ev.strategy, strats)) return false;
+      if (!instruments.length) return true;
+      return matchInstrumentFilter(ev.instrument, instruments) || matchInstrumentFilter(ev.contract, instruments);
+    });
+  }, [events, strats, instruments]);
 }
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
   const strats = useReplayStore((s) => s.draft.strategies);
+  const instruments = useReplayStore((s) => s.draft.instruments);
 
   return useMemo(() => {
-    if (!strats.length || strats.includes('all') || strats.includes('*')) return trades;
-    return trades.filter((t) => matchStrategyFilter(t.strategy, strats));
-  }, [trades, strats]);
+    return trades.filter((t) => {
+      if (!matchStrategyFilter(t.strategy, strats)) return false;
+      if (!instruments.length) return true;
+      return matchInstrumentFilter(t.underlying, instruments) || matchInstrumentFilter(t.symbol, instruments);
+    });
+  }, [trades, strats, instruments]);
 }
 export const useReplayClock = () => useReplayStore((s) => s.status.current_time_iso);
 export const useReplayPct = () => useReplayStore((s) => s.status.progress_pct);

@@ -56,3 +56,24 @@ export const MONEYNESS_LEGS = [
   { id: 'OTM1', label: 'OTM1', hint: 'One strike out of the money' },
   { id: 'OTM2', label: 'OTM2', hint: 'Two strikes out of the money' },
 ] as const;
+
+export const CORE_INDICES = [
+  { id: 'NIFTY', label: 'Nifty 50' },
+  { id: 'BANKNIFTY', label: 'Bank Nifty' },
+  { id: 'SENSEX', label: 'Sensex' },
+  { id: 'FINNIFTY', label: 'Fin Nifty' },
+  { id: 'MIDCPNIFTY', label: 'Midcap Nifty' },
+] as const;
+
+export const CORE_STOCKS = [
+  { id: 'RELIANCE', label: 'Reliance' },
+  { id: 'TCS', label: 'TCS' },
+  { id: 'INFY', label: 'Infosys' },
+  { id: 'HDFCBANK', label: 'HDFC Bank' },
+  { id: 'ICICIBANK', label: 'ICICI Bank' },
+  { id: 'SBIN', label: 'SBI' },
+  { id: 'BHARTIARTL', label: 'Bharti Airtel' },
+  { id: 'BAJAJFINSV', label: 'Bajaj Finserv' },
+  { id: 'BAJFINANCE', label: 'Bajaj Finance' },
+  { id: 'LT', label: 'L&T' },
+] as const;

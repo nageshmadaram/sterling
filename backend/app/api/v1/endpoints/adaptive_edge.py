@@ -230,6 +230,18 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
     legs = list(artifact.get("legs") or [])
     existing_dates = set(l.get("session_date") for l in legs if l.get("session_date"))
 
+    settings = _load_settings()
+    allowed_tapes = set(settings.symbols)
+    if settings.scan_stocks:
+        for st in settings.scan_stocks:
+            allowed_tapes.add(st)
+            allowed_tapes.add(st.upper())
+    for idx in settings.scan_indices:
+        if idx in INDEX_TO_TAPE:
+            allowed_tapes.add(INDEX_TO_TAPE[idx])
+        allowed_tapes.add(idx)
+        allowed_tapes.add(idx.upper())
+
     # 1. Merge recorded signals from system DB
     try:
         raw_sig = db.get_config("kite_engine_signals_default")
@@ -245,6 +257,8 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
                     continue
                 u = r.get("underlying", "")
                 tape = INDEX_TO_TAPE.get(u, u)
+                if allowed_tapes and tape not in allowed_tapes and u not in allowed_tapes and u.upper() not in allowed_tapes:
+                    continue
                 spot = float(r.get("spot") or r.get("underlying_spot") or 0.0)
                 sl = float(r.get("stop_loss") or (spot * 0.99))
                 side = "SELL" if r.get("direction") in ("short", "BEARISH") else "BUY"

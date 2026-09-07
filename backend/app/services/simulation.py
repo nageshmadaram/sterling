@@ -399,8 +399,18 @@ def _option_contract(
     extrinsic = max(0.05, spot * 0.02 - abs(strike - atm) * 0.35)
     premium = round(intrinsic + extrinsic, 2)
 
+    expiry_tag = "26AUG"
+    if config and getattr(config, "date", None):
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(config.date, "%Y-%m-%d")
+            expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
+        except Exception:
+            pass
+
     return {
         "contract": f"{symbol.upper()}26AUG{int(strike)}{opt_type}",
+        "contract": f"{symbol.upper()}{expiry_tag}{int(strike)}{opt_type}",
         "strike": float(strike),
         "opt_type": opt_type,
         "lot_size": lot_size,
@@ -718,8 +728,14 @@ class SimulationRunner:
                 last_close = float(last_bar.get("close", 0.0))
             elif hasattr(self, "_candles") and self._candles:
                 played_idx = getattr(self, "_bars_played", 0)
+                from app.services.ohlcv_store import INDEX_ALIASES
+                sym_targets = {sym, sym.upper()}
+                for k, v in INDEX_ALIASES.items():
+                    if sym.upper() in (k.upper(), v.upper()):
+                        sym_targets.add(k.upper())
+                        sym_targets.add(v.upper())
                 for b in reversed(self._candles[:played_idx]):
-                    if b.get("symbol") == sym:
+                    if b.get("symbol", "").upper() in sym_targets:
                         last_close = float(b.get("close", 0.0))
                         break
 
@@ -897,7 +913,7 @@ class SimulationRunner:
                 pass
         self._state = SimState.IDLE
         self._task = None
-        self._close_all_open("stopped")
+        self._open_by_symbol = {}
         # The ledger survives for review, but it is now explicitly a FINISHED
         # session. Without this flag an idle runner handed every client a
         # completed session's signals and trades, which the dock rendered as
@@ -1023,13 +1039,7 @@ class SimulationRunner:
         strat_raw = rec.get("strategy", "supertrend").lower()
 
         if not allow_all:
-            if "adaptive_edge" in cfg_strats and "supertrend" not in cfg_strats:
-                # User specifically requested Adaptive Edge: map recorded spot scan to Adaptive Edge
-                strat_to_emit = "adaptive_edge"
-            elif "supertrend" in cfg_strats and "adaptive_edge" not in cfg_strats:
-                # User specifically requested SuperTrend: map recorded spot scan to SuperTrend
-                strat_to_emit = "supertrend"
-            elif strat_raw in cfg_strats:
+            if strat_raw in cfg_strats:
                 strat_to_emit = strat_raw
             else:
                 return
@@ -1051,6 +1061,11 @@ class SimulationRunner:
             for inst in allowed_insts:
                 if inst in INDEX_ALIASES:
                     expanded.add(INDEX_ALIASES[inst])
+                if inst.upper() in INDEX_ALIASES:
+                    expanded.add(INDEX_ALIASES[inst.upper()])
+                for k, v in INDEX_ALIASES.items():
+                    if inst.upper() == v.upper():
+                        expanded.add(k)
             if sym not in expanded and sym.upper() not in expanded:
                 return
 
@@ -1309,6 +1324,10 @@ class SimulationRunner:
         for rec in self._recorded_signals:
             if rec.get("underlying") and rec["underlying"] not in instruments:
                 instruments.append(rec["underlying"])
+        if not cfg.instruments:
+            for rec in self._recorded_signals:
+                if rec.get("underlying") and rec["underlying"] not in instruments:
+                    instruments.append(rec["underlying"])
 
         self._status_message = f"⚡ Fetching historical candles for {cfg.date} from Zerodha Kite API..."
         warmup_start = start_epoch - 5 * 86400
@@ -1684,11 +1703,36 @@ class SimulationRunner:
         sim_date = cfg.date if cfg else "2026-08-28"
 
         # Return events specifically triggered for adaptive_edge or spot scans consumed by AE
+        allowed_syms = None
+        if cfg and cfg.instruments:
+            from app.services.ohlcv_store import INDEX_ALIASES
+            allowed_syms = set(cfg.instruments)
+            for inst in list(allowed_syms):
+                if inst in INDEX_ALIASES:
+                    allowed_syms.add(INDEX_ALIASES[inst])
+                if inst.upper() in INDEX_ALIASES:
+                    allowed_syms.add(INDEX_ALIASES[inst.upper()])
+                for k, v in INDEX_ALIASES.items():
+                    if inst.upper() == v.upper():
+                        allowed_syms.add(k)
+
         has_pure_ae = any(ev.strategy == "adaptive_edge" for ev in self._stats.events)
         if has_pure_ae:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "spot_scan")]
         else:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
+
+        if allowed_syms:
+            ae_events = [ev for ev in ae_events if ev.instrument in allowed_syms or ev.instrument.upper() in allowed_syms]
+
+        expiry_tag = "26AUG"
+        if sim_date:
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(sim_date, "%Y-%m-%d")
+                expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
+            except Exception:
+                pass
 
         signals = []
         for i, ev in enumerate(ae_events):
@@ -1765,6 +1809,7 @@ class SimulationRunner:
                 current_ltp = round(max(0.05, premium_est + spot_move * delta_mult), 2)
 
                 opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}26SEP{int(strike)}{opt_type}"
+                opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}"
                 legs.append({
                     "moneyness": moneyness,
                     "option_type": opt_type,
@@ -2255,6 +2300,21 @@ class SimulationRunner:
         # Keep last 60 bars per instrument
         if len(self._bar_history[sym]) > 60:
             self._bar_history[sym] = self._bar_history[sym][-60:]
+
+        if self._config and self._config.instruments:
+            from app.services.ohlcv_store import INDEX_ALIASES
+            allowed_insts = set(self._config.instruments)
+            expanded = set(allowed_insts)
+            for inst in allowed_insts:
+                if inst in INDEX_ALIASES:
+                    expanded.add(INDEX_ALIASES[inst])
+                if inst.upper() in INDEX_ALIASES:
+                    expanded.add(INDEX_ALIASES[inst.upper()])
+                for k, v in INDEX_ALIASES.items():
+                    if inst.upper() == v.upper():
+                        expanded.add(k)
+            if sym not in expanded and sym.upper() not in expanded:
+                return
 
         # Do not let the session boundary itself fire a signal.
         #
