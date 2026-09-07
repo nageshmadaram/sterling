@@ -1,0 +1,370 @@
+{
+  "lake": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "engine_timeframe": "scanner._fetch_candles -> get_candles(inst, \"1H\", 320)",
+  "timeframes_swept": [
+    60
+  ],
+  "note_45min": "45 minutes is a resample only; Kite serves 1/3/5/10/15/30/60 and day.",
+  "bars": "native broker bars where the lake holds them, otherwise minute bars resampled session-anchored to 09:15 IST",
+  "bar_source_per_timeframe": {
+    "60": "native"
+  },
+  "sample_span_per_timeframe": {
+    "60": "2026-01-01..2026-09-04"
+  },
+  "universe": "universe.json indices plus F&O-eligible equities",
+  "holdout": "last 30% of each series' bars",
+  "coverage": "spot minute 2026-02-13..2026-08-14; futures minute 2026-07-01..2026-09-04, so confluence cells rest on ~6 weeks",
+  "results": {
+    "60": {
+      "timeframe_minutes": 60,
+      "bar_source": "native",
+      "sample_span": "2026-01-01..2026-09-04",
+      "spot_series": 210,
+      "paired_for_confluence": 208,
+      "windows": {
+        "in_sample": [
+          {
+            "horizon_bars": 1,
+            "horizon_minutes": 60,
+            "base_rate_bps": 0.3,
+            "spot_only_long": {
+              "n": 3392,
+              "mean_bps": 8.1,
+              "alpha_bps": 7.8,
+              "hit_rate": 0.5153
+            },
+            "spot_only_short": {
+              "n": 3847,
+              "mean_bps": 6.7,
+              "alpha_bps": 7.0,
+              "hit_rate": 0.5311
+            },
+            "confluence_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -0.3,
+              "hit_rate": 0.0
+            },
+            "confluence_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 0.3,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -0.3,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 0.3,
+              "hit_rate": 0.0
+            }
+          },
+          {
+            "horizon_bars": 3,
+            "horizon_minutes": 180,
+            "base_rate_bps": 0.8,
+            "spot_only_long": {
+              "n": 3392,
+              "mean_bps": 5.6,
+              "alpha_bps": 4.8,
+              "hit_rate": 0.49
+            },
+            "spot_only_short": {
+              "n": 3847,
+              "mean_bps": 14.2,
+              "alpha_bps": 15.0,
+              "hit_rate": 0.5412
+            },
+            "confluence_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -0.8,
+              "hit_rate": 0.0
+            },
+            "confluence_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 0.8,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -0.8,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 0.8,
+              "hit_rate": 0.0
+            }
+          },
+          {
+            "horizon_bars": 7,
+            "horizon_minutes": 420,
+            "base_rate_bps": 1.6,
+            "spot_only_long": {
+              "n": 3392,
+              "mean_bps": -13.8,
+              "alpha_bps": -15.4,
+              "hit_rate": 0.4693
+            },
+            "spot_only_short": {
+              "n": 3847,
+              "mean_bps": -2.8,
+              "alpha_bps": -1.3,
+              "hit_rate": 0.489
+            },
+            "confluence_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -1.6,
+              "hit_rate": 0.0
+            },
+            "confluence_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 1.6,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -1.6,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 1.6,
+              "hit_rate": 0.0
+            }
+          },
+          {
+            "horizon_bars": 14,
+            "horizon_minutes": 840,
+            "base_rate_bps": 2.5,
+            "spot_only_long": {
+              "n": 3392,
+              "mean_bps": -0.7,
+              "alpha_bps": -3.2,
+              "hit_rate": 0.485
+            },
+            "spot_only_short": {
+              "n": 3847,
+              "mean_bps": -5.5,
+              "alpha_bps": -3.0,
+              "hit_rate": 0.5082
+            },
+            "confluence_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -2.5,
+              "hit_rate": 0.0
+            },
+            "confluence_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 2.5,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_long": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": -2.5,
+              "hit_rate": 0.0
+            },
+            "confluence_strict_short": {
+              "n": 0,
+              "mean_bps": 0.0,
+              "alpha_bps": 2.5,
+              "hit_rate": 0.0
+            }
+          }
+        ],
+        "holdout": [
+          {
+            "horizon_bars": 1,
+            "horizon_minutes": 60,
+            "base_rate_bps": 0.0,
+            "spot_only_long": {
+              "n": 1494,
+              "mean_bps": -0.2,
+              "alpha_bps": -0.2,
+              "hit_rate": 0.4317
+            },
+            "spot_only_short": {
+              "n": 1610,
+              "mean_bps": -2.1,
+              "alpha_bps": -2.1,
+              "hit_rate": 0.4888
+            },
+            "confluence_long": {
+              "n": 458,
+              "mean_bps": -1.8,
+              "alpha_bps": -1.8,
+              "hit_rate": 0.3952
+            },
+            "confluence_short": {
+              "n": 531,
+              "mean_bps": 2.8,
+              "alpha_bps": 2.8,
+              "hit_rate": 0.5179
+            },
+            "confluence_strict_long": {
+              "n": 169,
+              "mean_bps": 3.2,
+              "alpha_bps": 3.2,
+              "hit_rate": 0.4024
+            },
+            "confluence_strict_short": {
+              "n": 186,
+              "mean_bps": 12.6,
+              "alpha_bps": 12.6,
+              "hit_rate": 0.6075
+            }
+          },
+          {
+            "horizon_bars": 3,
+            "horizon_minutes": 180,
+            "base_rate_bps": 0.4,
+            "spot_only_long": {
+              "n": 1487,
+              "mean_bps": 0.6,
+              "alpha_bps": 0.2,
+              "hit_rate": 0.4506
+            },
+            "spot_only_short": {
+              "n": 1603,
+              "mean_bps": -2.4,
+              "alpha_bps": -2.0,
+              "hit_rate": 0.4716
+            },
+            "confluence_long": {
+              "n": 451,
+              "mean_bps": -6.4,
+              "alpha_bps": -6.8,
+              "hit_rate": 0.4191
+            },
+            "confluence_short": {
+              "n": 524,
+              "mean_bps": 1.6,
+              "alpha_bps": 2.0,
+              "hit_rate": 0.4828
+            },
+            "confluence_strict_long": {
+              "n": 168,
+              "mean_bps": -11.2,
+              "alpha_bps": -11.6,
+              "hit_rate": 0.4048
+            },
+            "confluence_strict_short": {
+              "n": 184,
+              "mean_bps": 11.3,
+              "alpha_bps": 11.7,
+              "hit_rate": 0.5217
+            }
+          },
+          {
+            "horizon_bars": 7,
+            "horizon_minutes": 420,
+            "base_rate_bps": 2.0,
+            "spot_only_long": {
+              "n": 1463,
+              "mean_bps": 4.1,
+              "alpha_bps": 2.2,
+              "hit_rate": 0.473
+            },
+            "spot_only_short": {
+              "n": 1590,
+              "mean_bps": -7.5,
+              "alpha_bps": -5.6,
+              "hit_rate": 0.478
+            },
+            "confluence_long": {
+              "n": 432,
+              "mean_bps": -21.7,
+              "alpha_bps": -23.7,
+              "hit_rate": 0.3796
+            },
+            "confluence_short": {
+              "n": 516,
+              "mean_bps": -6.8,
+              "alpha_bps": -4.9,
+              "hit_rate": 0.4826
+            },
+            "confluence_strict_long": {
+              "n": 159,
+              "mean_bps": -14.4,
+              "alpha_bps": -16.3,
+              "hit_rate": 0.3774
+            },
+            "confluence_strict_short": {
+              "n": 181,
+              "mean_bps": -1.5,
+              "alpha_bps": 0.5,
+              "hit_rate": 0.4862
+            }
+          },
+          {
+            "horizon_bars": 14,
+            "horizon_minutes": 840,
+            "base_rate_bps": 3.9,
+            "spot_only_long": {
+              "n": 1434,
+              "mean_bps": -0.8,
+              "alpha_bps": -4.7,
+              "hit_rate": 0.4735
+            },
+            "spot_only_short": {
+              "n": 1569,
+              "mean_bps": -14.2,
+              "alpha_bps": -10.3,
+              "hit_rate": 0.4742
+            },
+            "confluence_long": {
+              "n": 406,
+              "mean_bps": -26.0,
+              "alpha_bps": -29.9,
+              "hit_rate": 0.436
+            },
+            "confluence_short": {
+              "n": 501,
+              "mean_bps": 4.7,
+              "alpha_bps": 8.6,
+              "hit_rate": 0.509
+            },
+            "confluence_strict_long": {
+              "n": 148,
+              "mean_bps": -13.2,
+              "alpha_bps": -17.1,
+              "hit_rate": 0.4527
+            },
+            "confluence_strict_short": {
+              "n": 173,
+              "mean_bps": 4.0,
+              "alpha_bps": 7.9,
+              "hit_rate": 0.5087
+            }
+          }
+        ]
+      }
+    }
+  },
+  "holdout_cells_with_positive_alpha": 10,
+  "holdout_cells_counted": 24,
+  "verdict": "POSITIVE_ALPHA_SOMEWHERE",
+  "caveats": [
+    "Six months of intraday is a fraction of the 2018-2026 daily span. Evidence here is weaker in both directions.",
+    "Confluence rests on ~6 weeks of overlap. Those cells are a hint.",
+    "Measures the UNDERLYING's move \u2014 an upper bound on a long-premium CE/PE position, never an estimate of one.",
+    "Many cells means multiple testing: a scattering of positives is what noise produces. Consistency across timeframes is the thing to look for."
+  ]
+}

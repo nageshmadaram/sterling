@@ -86,11 +86,18 @@ MIN_INTRADAY_BARS = 150
 MIN_INTRADAY_HOLDOUT_BARS = 80
 
 
-def _load(path: Path) -> Dict[str, Any] | None:
+def _load(path: Path, *, min_rows: int | None = None) -> Dict[str, Any] | None:
+    """Read one bar file. ``min_rows`` defaults to this module's daily floor.
+
+    The floor is the CALLER's business, not the loader's: 400 bars is generous for
+    a daily series and rejects every 1H futures contract, which only lives about
+    three months. Baking it in here silently emptied the confluence cells of an
+    intraday sweep.
+    """
     table = pq.read_table(path)
     meta = {k.decode(): v.decode() for k, v in (table.schema.metadata or {}).items()}
     scale = float(meta.get("price_scale") or 1)
-    if table.num_rows < MIN_BARS or scale <= 0:
+    if table.num_rows < (MIN_BARS if min_rows is None else min_rows) or scale <= 0:
         return None
     import numpy as _np
     # numpy throughout. A six-month minute series is ~48,000 rows and the timeframe

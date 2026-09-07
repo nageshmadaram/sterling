@@ -53,6 +53,12 @@ WINDOWS = ("in_sample", "holdout")
 #: meaningful number of signals. Below this the "alpha" is one or two trades.
 MIN_BARS = 250
 
+#: The CONFIRMING series gets a lower floor. A futures contract lives about three
+#: months, so at 1H it carries ~250-450 bars and at 30m ~500-900 — and confluence
+#: only needs its trend state at the signal bar, plus its own warmup. Holding it to
+#: the spot floor is what emptied every confluence cell in the first native run.
+MIN_DERIV_BARS = 120
+
 
 _DAY_MS = 86_400_000
 _IST_OFFSET_MS = int(5.5 * 3_600_000)
@@ -109,16 +115,19 @@ def _engine_universe(lake: Path) -> Tuple[set, Dict[str, str]]:
     return wanted, names
 
 
-def _minute_series(lake: Path, wanted: set) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Load only the universe's minute series.
+def _series_for(lake: Path, wanted: set, interval: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Load only the universe's series at one stored interval.
 
     Filenames are ``<token>__<TRADINGSYMBOL>.parquet``, so the symbol is known
     without opening the file. Deciding AFTER a full parse meant reading all 12,246
     minute series — 231 million rows — to keep about 350 of them, which is why an
     earlier run never finished.
     """
+    root = lake / "bars" / f"interval={interval}"
+    if not root.exists():
+        return {}, {}
     spot, fut = {}, {}
-    for p in sorted((lake / "bars" / "interval=minute").rglob("*.parquet")):
+    for p in sorted(root.rglob("*.parquet")):
         text = str(p)
         is_fut = "-FUT" in text
         is_spot = ("segment=NSE" in text or "segment=INDICES" in text
@@ -128,11 +137,25 @@ def _minute_series(lake: Path, wanted: set) -> Tuple[Dict[str, Any], Dict[str, A
         symbol = p.stem.split("__", 1)[-1]
         if not is_fut and symbol not in wanted:
             continue
-        s = _load(p)
+        s = _load(p, min_rows=MIN_DERIV_BARS if is_fut else MIN_BARS)
         if not s:
             continue
         (fut if is_fut else spot)[s["symbol"]] = s
     return spot, fut
+
+
+def _source_for(lake: Path, wanted: set, tf: int):
+    """Native bars at this timeframe when the lake holds them, else minute+resample.
+
+    Native and resampled are the same bars arithmetically, but the native pulls
+    cover a different span than the stored minute series, so which one was used is
+    reported per timeframe rather than assumed.
+    """
+    spot, fut = _series_for(lake, wanted, f"{tf}minute")
+    if spot:
+        return spot, fut, "native"
+    spot, fut = _series_for(lake, wanted, "minute")
+    return spot, fut, "resampled_from_minute"
 
 
 def _regime(s, cfg):
@@ -143,21 +166,22 @@ def _regime(s, cfg):
     return o, r, longs, shorts
 
 
-def _sweep_one(tf: int, spot_min, fut_min, names, cfg) -> Dict[str, Any]:
+def _sweep_one(tf: int, spot_min, fut_min, names, cfg, source: str) -> Dict[str, Any]:
     acc = {(w, m, s, h): [] for w in WINDOWS for m in MODES
            for s in ("long", "short") for h in HORIZONS}
     base = {(w, h): [] for w in WINDOWS for h in HORIZONS}
 
+    native = source == "native"
     spot = {}
     for sym, s in spot_min.items():
-        b = resample(s, tf)
+        b = s if native else resample(s, tf)
         if len(b["ts_ms"]) >= MIN_BARS:
             spot[sym] = b
     fut_for_spot: Dict[str, Any] = {}
     for fsym, spot_sym in names.items():
         if fsym in fut_min and spot_sym in spot and spot_sym not in fut_for_spot:
-            b = resample(fut_min[fsym], tf)
-            if len(b["ts_ms"]) >= MIN_BARS:
+            b = fut_min[fsym] if native else resample(fut_min[fsym], tf)
+            if len(b["ts_ms"]) >= MIN_DERIV_BARS:
                 fut_for_spot[spot_sym] = b
 
     paired = 0
@@ -233,16 +257,23 @@ def _sweep_one(tf: int, spot_min, fut_min, names, cfg) -> Dict[str, Any]:
                     }
             rows.append(row)
         windows[w] = rows
-    return {"timeframe_minutes": tf, "spot_series": len(spot),
-            "paired_for_confluence": paired, "windows": windows}
+    span = ""
+    if spot:
+        any_s = next(iter(spot.values()))
+        span = (f"{str(np.datetime64(int(any_s['ts_ms'][0]), 'ms'))[:10]}"
+                f"..{str(np.datetime64(int(any_s['ts_ms'][-1]), 'ms'))[:10]}")
+    return {"timeframe_minutes": tf, "bar_source": source, "sample_span": span,
+            "spot_series": len(spot), "paired_for_confluence": paired,
+            "windows": windows}
 
 
 def audit(lake: Path, timeframes) -> Dict[str, Any]:
     cfg = SterlingKiteEngineConfig()
     wanted, names = _engine_universe(lake)
-    spot_min, fut_min = _minute_series(lake, wanted)
-    results = {str(tf): _sweep_one(tf, spot_min, fut_min, names, cfg)
-               for tf in timeframes}
+    results = {}
+    for tf in timeframes:
+        spot_s, fut_s, source = _source_for(lake, wanted, tf)
+        results[str(tf)] = _sweep_one(tf, spot_s, fut_s, names, cfg, source)
 
     cells = pos = 0
     for tf, rep in results.items():
@@ -259,7 +290,10 @@ def audit(lake: Path, timeframes) -> Dict[str, Any]:
         "timeframes_swept": list(timeframes),
         "note_45min": "45 minutes is a resample only; Kite serves 1/3/5/10/15/30/60 "
                       "and day.",
-        "bars": "session-anchored to 09:15 IST, never clock-aligned",
+        "bars": "native broker bars where the lake holds them, otherwise minute "
+                "bars resampled session-anchored to 09:15 IST",
+        "bar_source_per_timeframe": {tf: r["bar_source"] for tf, r in results.items()},
+        "sample_span_per_timeframe": {tf: r["sample_span"] for tf, r in results.items()},
         "universe": "universe.json indices plus F&O-eligible equities",
         "holdout": f"last {int(HOLDOUT_FRACTION*100)}% of each series' bars",
         "coverage": "spot minute 2026-02-13..2026-08-14; futures minute "
