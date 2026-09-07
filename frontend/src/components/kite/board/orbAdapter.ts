@@ -180,6 +180,9 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
       ...(entry.autoBlock
         ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock }]
         : []),
+      ...(entry.deltaSource === 'assumed'
+        ? [{ label: 'Δ ASSUMED', tone: 'amber' as const, hint: 'Delta is 0.50 by default — the premium stop rests on it.' }]
+        : []),
       ...(entry.quoteAgeS != null && entry.quoteAgeS > 15
         ? [{ label: 'STALE', tone: 'dim' as const, hint: `Quote is ${Math.round(entry.quoteAgeS)}s old` }]
         : []),

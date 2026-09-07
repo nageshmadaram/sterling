@@ -227,7 +227,7 @@ async def test_a_tag_mapped_to_a_foreign_order_trips_the_kill_switch(harness):
     }])
     out = await _run(harness, client)
     assert client.placed == []
-    assert out["executed"] == []
+    assert out["executed"][0]["reason"] == "unexpected broker order"
     assert any("unexpected broker order" in r for r in harness["rec"].kill)
 
 
@@ -239,7 +239,7 @@ async def test_a_tag_mapped_to_a_foreign_symbol_trips_the_kill_switch(harness):
     }])
     out = await _run(harness, client)
     assert client.placed == []
-    assert out["executed"] == []
+    assert out["executed"][0]["reason"] == "unexpected broker order"
     assert any("unexpected broker order" in r for r in harness["rec"].kill)
 
 
@@ -251,7 +251,7 @@ async def test_a_tag_mapped_to_a_sell_trips_the_kill_switch(harness):
     }])
     out = await _run(harness, client)
     assert client.placed == []
-    assert out["executed"] == []
+    assert out["executed"][0]["reason"] == "unexpected broker order"
     assert any("unexpected broker order" in r for r in harness["rec"].kill)
 
 

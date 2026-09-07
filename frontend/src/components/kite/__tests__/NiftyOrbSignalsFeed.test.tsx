@@ -111,9 +111,10 @@ describe('ORB feed — tradable setups', () => {
     expect(document.querySelector('.sb-row')?.textContent).toMatch(/24000/);
     expect(screen.getByText('CE · LONG')).toBeInTheDocument();
     expect(screen.getByText('NFO')).toBeInTheDocument();
-    ['LTP', 'Entry (Δpts)', 'SL', 'Target', 'Qty', 'At risk'].forEach((label) => {
+    ['LTP', 'Entry ₹', 'SL', 'Target', 'Qty', 'At risk'].forEach((label) => {
       expect(screen.getByText(label), label).toBeInTheDocument();
     });
+    expect(screen.queryByText('Entry (Δpts)')).not.toBeInTheDocument();
     expect(screen.queryByText('TSL')).not.toBeInTheDocument();
     expect(screen.queryByText('Leg (Δ)')).not.toBeInTheDocument();
   });
