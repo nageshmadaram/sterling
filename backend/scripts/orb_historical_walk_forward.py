@@ -4,12 +4,19 @@
 Usage:
     python backend/scripts/orb_historical_walk_forward.py corpus.json
 
-Corpus JSON:
+Corpus JSON (either shape):
     {
       "bars": [ {timestamp, symbol, option_type, expiry, strike, open, high,
                  low, close, bid, ask, volume, open_interest, lot_size}, ... ],
       "signals": [ {"entry_index": 0, "risk_points": 2, "target_r": 2, "lots": 1}, ... ]
     }
+    or engine-labeled:
+    {
+      "underlying_bars": [ {timestamp, open, high, low, close, volume}, ... ],
+      "option_bars":    [ same option schema as bars above ]
+    }
+
+    Underlying without option_bars is refused — no invented premium.
 
 Exit codes:
     0  folds produced (still NOT unattended-live eligible)

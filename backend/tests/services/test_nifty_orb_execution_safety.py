@@ -44,3 +44,10 @@ def test_market_open_uses_the_nse_holiday_calendar():
     assert _market_open(session) is True
     assert _market_open(holiday) is False
     assert _market_open(saturday) is False
+
+
+def test_arm_does_not_invent_a_half_delta():
+    import inspect
+    from app.services import nifty_orb_execution
+    src = inspect.getsource(nifty_orb_execution.execute_scan)
+    assert "or 0.5" not in src
