@@ -139,6 +139,20 @@ describe('ORB feed — tradable setups', () => {
     expect(screen.queryByText(/No tradable ORB setup right now/)).not.toBeInTheDocument();
   });
 
+  it('keeps a past fire on the board instead of pretending the session never printed', () => {
+    show({
+      rows: [
+        entry({ underlying: 'NIFTY', state: 'ENDED', reason: 'ORB high break' }),
+        entry({ underlying: 'SBIN', id: 'SBIN', state: 'WATCHING', reason: 'outside entry window' }),
+      ],
+    });
+    expect(screen.queryByText('Waiting for entry window')).not.toBeInTheDocument();
+    expect(screen.getByText('PAST')).toBeInTheDocument();
+    expect(screen.getByText((_t, el) => /^0 tradable · 1 past · 1 scanned$/
+      .test((el?.textContent ?? '').replace(/\s+/g, ' ').trim()))).toBeTruthy();
+    expect(screen.getByRole('button', { name: /1 not signalling/ })).toBeInTheDocument();
+  });
+
   it('promotes an errored underlying to the board instead of burying it', () => {
     // An underlying that could not be evaluated is a call to action; only rows
     // that were evaluated and simply had no setup belong in the disclosure.

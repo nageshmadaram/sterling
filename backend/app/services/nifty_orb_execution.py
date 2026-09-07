@@ -229,15 +229,39 @@ async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,An
                 live_safety.set_kill_switch(True,f"ORB tag mapped to unexpected broker order {oid}")
                 executed.append({"status":"blocked","symbol":symbol,"reason":"unexpected broker order","order_id":oid});continue
         else:
+            intent=None
+            is_live=getattr(client,"_is_paper",True) is False
+            if is_live:
+                from app.services.kite_engine import order_journal
+                from app.services.kite_engine.execution_lifecycle import account_id as _account_id
+                try:
+                    intent=order_journal.reserve(
+                        uid=uid,account_id=_account_id(client),strategy_id="nifty-orb",
+                        generation_id="auto-v1",signal_id=fingerprint or key,exchange=exchange,
+                        symbol=symbol,side="BUY",quantity=quantity,payload={"ticket_fingerprint":fingerprint},
+                    )
+                    if not order_journal.claim_submission(intent.intent_key):
+                        executed.append({"status":"blocked","symbol":symbol,"reason":"durable entry already reserved"});continue
+                except Exception as exc:
+                    executed.append({"status":"blocked","symbol":symbol,"reason":f"order journal: {exc}"});continue
             try:r=await client.place_order_option(symbol,"buy",quantity,exchange=exchange,tag=idem)
             except Exception as exc:
+                if intent is not None:
+                    order_journal.submission_uncertain(intent.intent_key,type(exc).__name__)
                 executed.append({"status":"error","symbol":symbol,"error":str(exc)});continue
             oid=str((r or {}).get("order_id") or (r or {}).get("orderId") or "")
             if not oid:
+                if intent is not None:
+                    order_journal.submission_uncertain(intent.intent_key,"missing_order_id")
                 live_safety.set_kill_switch(True,"ORB submission outcome unknown; reconcile broker state")
                 executed.append({"status":"blocked","symbol":symbol,"reason":"submission outcome unknown"});continue
+            if intent is not None:
+                order_journal.acknowledge(intent.intent_key,oid)
             live_safety.record_idempotency(idem,oid)
-        filled,fill_price,status=await _resolve_fill(client,oid)
+        if str(oid).startswith("PAPER-") or getattr(client,"_is_paper",False) is True:
+            filled,fill_price,status=quantity,quote["ask"],"COMPLETE"
+        else:
+            filled,fill_price,status=await _resolve_fill(client,oid)
         if filled<=0:
             if status not in {"CANCELLED","REJECTED","EXPIRED"}:
                 _,_,_,safe=await _cancel_and_reconcile(client,oid,quantity)

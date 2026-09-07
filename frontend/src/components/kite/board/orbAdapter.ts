@@ -47,6 +47,7 @@ function originOf(entry: OrbFeedEntry): BoardOrigin | undefined {
  * somebody sees it.
  */
 function status(entry: OrbFeedEntry): BoardStatus {
+  if (entry.state === 'ENDED') return 'ended';
   if (entry.state === 'ERROR' || entry.state === 'SIGNAL_UNRESOLVED') return 'error';
   if (entry.state === 'SIGNAL') return 'armed';
   return 'watching';
@@ -177,6 +178,9 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
     score: null,
     origin: originOf(entry),
     flags: [
+      ...(entry.state === 'ENDED'
+        ? [{ label: 'PAST', tone: 'dim' as const, hint: 'Generated earlier — kept on the board like SuperTrend history. Not a live ticket.' }]
+        : []),
       ...(entry.autoBlock
         ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock }]
         : []),

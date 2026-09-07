@@ -197,6 +197,18 @@ async def test_a_complete_fill_is_executed_protected_and_counted(harness):
 
 
 @pytest.mark.asyncio
+async def test_a_paper_order_id_is_treated_as_a_complete_fill(harness):
+    """Kite paper returns PAPER-* and has no fill history. Resolving against
+    the broker would look unfilled and trip the kill switch."""
+    client = FakeClient(order_id="PAPER-1", fill={"filled": 0, "status": "OPEN", "average_price": 0.0})
+    out = await _run(harness, client)
+    assert out["executed"][0]["status"] == "executed"
+    assert out["executed"][0]["quantity"] == 75
+    assert harness["store"]["u1"]["count"] == 1
+    assert harness["rec"].kill == []
+
+
+@pytest.mark.asyncio
 async def test_the_order_carries_the_idempotency_tag_and_records_it(harness):
     client = FakeClient()
     await _run(harness, client)
