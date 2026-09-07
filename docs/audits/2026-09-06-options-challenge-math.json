@@ -1,0 +1,179 @@
+{
+  "classification": "HYPOTHETICAL_COMPOUNDING_ARITHMETIC_NOT_MARKET_RESULTS",
+  "initial_inr": 100000,
+  "target_inr": 2000000,
+  "profit_percent_required": 1900,
+  "assumptions": [
+    "Every trade returns exactly the specified net R, including costs.",
+    "Fractional equity sizing with no lot, liquidity, or cash constraints.",
+    "Immediate reinvestment and no losses beyond the specified stop.",
+    "No win probability or achievable trading frequency is asserted."
+  ],
+  "daily_net_growth": {
+    "20": 0.16158634964154228,
+    "21": 0.15333058538933925,
+    "22": 0.1458762736386001
+  },
+  "per_trade_net_growth": {
+    "60": 0.05119632341097809,
+    "100": 0.030410557911252488,
+    "200": 0.01509140372246897
+  },
+  "scenarios": [
+    {
+      "trades": 60,
+      "equity_risk_fraction": 0.01,
+      "net_win_r": 2.0,
+      "net_loss_r": -1,
+      "all_wins_ending_inr": 328103.07883654145,
+      "target_possible_under_assumptions": false,
+      "minimum_wins": null,
+      "required_win_fraction": null,
+      "ending_at_minimum_wins_inr": null
+    },
+    {
+      "trades": 100,
+      "equity_risk_fraction": 0.01,
+      "net_win_r": 2.0,
+      "net_loss_r": -1,
+      "all_wins_ending_inr": 724464.6118252348,
+      "target_possible_under_assumptions": false,
+      "minimum_wins": null,
+      "required_win_fraction": null,
+      "ending_at_minimum_wins_inr": null
+    },
+    {
+      "trades": 200,
+      "equity_risk_fraction": 0.01,
+      "net_win_r": 2.0,
+      "net_loss_r": -1,
+      "all_wins_ending_inr": 5248489.737870881,
+      "target_possible_under_assumptions": true,
+      "minimum_wins": 168,
+      "required_win_fraction": 0.84,
+      "ending_at_minimum_wins_inr": 2019087.2350436412
+    },
+    {
+      "trades": 60,
+      "equity_risk_fraction": 0.05,
+      "net_win_r": 2.0,
+      "net_loss_r": -1,
+      "all_wins_ending_inr": 30448163.954141956,
+      "target_possible_under_assumptions": true,
+      "minimum_wins": 42,
+      "required_win_fraction": 0.7,
+      "ending_at_minimum_wins_inr": 2175292.546887166
+    }
+  ],
+  "ten_consecutive_loss_drawdown": {
+    "0.01": 0.09561792499119559,
+    "0.05": 0.4012630607616213,
+    "0.1": 0.6513215599
+  },
+  "rare_large_payoff_scenarios": [
+    {
+      "gross_option_multiple_on_winner": 100,
+      "premium_allocation_fraction": 0.01,
+      "attempts": 60,
+      "win_account_multiplier": 1.99,
+      "loss_account_multiplier": 0.99,
+      "minimum_wins_for_20x": 6,
+      "ending_at_minimum_wins_inr": 3609266.634376785,
+      "same_wins_with_0_15_percent_sale_stt_only_inr": 3592974.0470611975,
+      "arithmetic_breakeven_win_probability": 0.01,
+      "log_growth_breakeven_win_probability": 0.014394947212097744,
+      "assumptions": "Full premium lost on every loser; exact stated multiple realized on every winner; costs ignored except in explicitly named sale-STT-only sensitivity; lot constraints, spreads, depth, latency and loss breakers ignored."
+    },
+    {
+      "gross_option_multiple_on_winner": 200,
+      "premium_allocation_fraction": 0.01,
+      "attempts": 60,
+      "win_account_multiplier": 2.99,
+      "loss_account_multiplier": 0.99,
+      "minimum_wins_for_20x": 4,
+      "ending_at_minimum_wins_inr": 4552559.711894953,
+      "same_wins_with_0_15_percent_sale_stt_only_inr": 4534316.049224805,
+      "arithmetic_breakeven_win_probability": 0.005,
+      "log_growth_breakeven_win_probability": 0.009092662757562884,
+      "assumptions": "Full premium lost on every loser; exact stated multiple realized on every winner; costs ignored except in explicitly named sale-STT-only sensitivity; lot constraints, spreads, depth, latency and loss breakers ignored."
+    },
+    {
+      "gross_option_multiple_on_winner": 500,
+      "premium_allocation_fraction": 0.01,
+      "attempts": 60,
+      "win_account_multiplier": 5.99,
+      "loss_account_multiplier": 0.99,
+      "minimum_wins_for_20x": 2,
+      "ending_at_minimum_wins_inr": 2003064.4877711206,
+      "same_wins_with_0_15_percent_sale_stt_only_inr": 1998051.6067632977,
+      "arithmetic_breakeven_win_probability": 0.002,
+      "log_growth_breakeven_win_probability": 0.005583080257304445,
+      "assumptions": "Full premium lost on every loser; exact stated multiple realized on every winner; costs ignored except in explicitly named sale-STT-only sensitivity; lot constraints, spreads, depth, latency and loss breakers ignored."
+    }
+  ],
+  "two_x_option_premium_scenarios": [
+    {
+      "classification": "GROSS_BINARY_ARITHMETIC_NOT_MARKET_RESULTS",
+      "premium_target_multiple": 2,
+      "premium_stop_loss_fraction": 0.2,
+      "account_premium_allocation_fraction": 0.05,
+      "planned_account_stop_loss_fraction_before_costs": 0.010000000000000002,
+      "trades": 60,
+      "account_target_multiple": 2,
+      "win_account_multiplier": 1.05,
+      "loss_account_multiplier": 0.99,
+      "target_possible_within_trade_count": true,
+      "minimum_wins": 23,
+      "all_wins_ending_inr": 1867918.5894122995,
+      "ending_at_minimum_wins_inr": 211765.9245742692,
+      "arithmetic_breakeven_win_probability": 0.16666666666666669,
+      "log_growth_breakeven_win_probability": 0.1708064317873618,
+      "illustrative_60_trade_endings_inr": {
+        "20": 177498.12318193613,
+        "22": 199665.0145985967,
+        "23": 211765.9245742692,
+        "24": 224600.22303331582,
+        "30": 319694.238866158
+      },
+      "assumptions": [
+        "Every winner exits at exactly 2x premium; every loser exits at exactly 0.8x.",
+        "No time exits, signal exits, fees, spreads, slippage, gaps or partial fills.",
+        "Fractional position sizing with immediate reinvestment; no lot/depth constraints.",
+        "No daily or campaign loss breaker; feasible outcome sequences are not asserted.",
+        "Neither a win rate nor the stated number of trades has been observed."
+      ]
+    },
+    {
+      "classification": "GROSS_BINARY_ARITHMETIC_NOT_MARKET_RESULTS",
+      "premium_target_multiple": 2,
+      "premium_stop_loss_fraction": 0.2,
+      "account_premium_allocation_fraction": 0.05,
+      "planned_account_stop_loss_fraction_before_costs": 0.010000000000000002,
+      "trades": 60,
+      "account_target_multiple": 20,
+      "win_account_multiplier": 1.05,
+      "loss_account_multiplier": 0.99,
+      "target_possible_within_trade_count": false,
+      "minimum_wins": null,
+      "all_wins_ending_inr": 1867918.5894122995,
+      "ending_at_minimum_wins_inr": null,
+      "arithmetic_breakeven_win_probability": 0.16666666666666669,
+      "log_growth_breakeven_win_probability": 0.1708064317873618,
+      "illustrative_60_trade_endings_inr": {
+        "20": 177498.12318193613,
+        "22": 199665.0145985967,
+        "23": 211765.9245742692,
+        "24": 224600.22303331582,
+        "30": 319694.238866158
+      },
+      "assumptions": [
+        "Every winner exits at exactly 2x premium; every loser exits at exactly 0.8x.",
+        "No time exits, signal exits, fees, spreads, slippage, gaps or partial fills.",
+        "Fractional position sizing with immediate reinvestment; no lot/depth constraints.",
+        "No daily or campaign loss breaker; feasible outcome sequences are not asserted.",
+        "Neither a win rate nor the stated number of trades has been observed."
+      ]
+    }
+  ],
+  "measured_strategy_performance": null
+}

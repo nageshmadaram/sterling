@@ -1,0 +1,244 @@
+{
+  "lake": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "manifest_sha256": "d45dedae6d89a4968f6855767c2c15a8d69ed9b2719d1a3378648ba83cd35138",
+  "lake_id": {
+    "lake_id": "a7234900-8ff2-43db-a2b6-2bb310f2cea3",
+    "label": "Pendrive",
+    "created_at": "2026-08-12T22:13:46+00:00",
+    "schema_version": 1
+  },
+  "total_symbols_with_bars": 12246,
+  "total_bar_rows": 231143717,
+  "bars_by_exchange_segment": [
+    {
+      "exchange": "BSE",
+      "segment": "BSE",
+      "symbols": 7672,
+      "rows": 114550249,
+      "first_ts": "2026-02-13T03:45:00+00:00",
+      "last_ts": "2026-08-14T09:59:00+00:00"
+    },
+    {
+      "exchange": "NSE",
+      "segment": "NSE",
+      "symbols": 4354,
+      "rows": 106866704,
+      "first_ts": "2026-02-13T03:45:00+00:00",
+      "last_ts": "2026-08-14T09:59:00+00:00"
+    },
+    {
+      "exchange": "NSE",
+      "segment": "INDICES",
+      "symbols": 135,
+      "rows": 5796498,
+      "first_ts": "2026-02-13T03:45:00+00:00",
+      "last_ts": "2026-08-13T09:59:00+00:00"
+    },
+    {
+      "exchange": "BSE",
+      "segment": "INDICES",
+      "symbols": 65,
+      "rows": 2901431,
+      "first_ts": "2026-02-13T03:45:00+00:00",
+      "last_ts": "2026-08-13T09:59:00+00:00"
+    },
+    {
+      "exchange": "GLOBAL",
+      "segment": "INDICES",
+      "symbols": 12,
+      "rows": 582521,
+      "first_ts": "2026-02-13T01:30:00+00:00",
+      "last_ts": "2026-08-13T18:29:00+00:00"
+    },
+    {
+      "exchange": "MCX",
+      "segment": "INDICES",
+      "symbols": 7,
+      "rows": 297769,
+      "first_ts": "2026-02-13T03:45:00+00:00",
+      "last_ts": "2026-08-13T09:59:00+00:00"
+    },
+    {
+      "exchange": "NSEIX",
+      "segment": "INDICES",
+      "symbols": 1,
+      "rows": 148545,
+      "first_ts": "2026-02-12T18:30:00+00:00",
+      "last_ts": "2026-08-13T18:29:00+00:00"
+    }
+  ],
+  "instrument_master_by_segment": [
+    {
+      "exchange": "NFO",
+      "segment": "NFO-OPT",
+      "instrument_type": "PE",
+      "instruments": 17964
+    },
+    {
+      "exchange": "NFO",
+      "segment": "NFO-OPT",
+      "instrument_type": "CE",
+      "instruments": 17881
+    },
+    {
+      "exchange": "NCO",
+      "segment": "NCO-OPT",
+      "instrument_type": "CE",
+      "instruments": 13946
+    },
+    {
+      "exchange": "NCO",
+      "segment": "NCO-OPT",
+      "instrument_type": "PE",
+      "instruments": 13946
+    },
+    {
+      "exchange": "BSE",
+      "segment": "BSE",
+      "instrument_type": "EQ",
+      "instruments": 12736
+    },
+    {
+      "exchange": "NSE",
+      "segment": "NSE",
+      "instrument_type": "EQ",
+      "instruments": 9911
+    },
+    {
+      "exchange": "MCX",
+      "segment": "MCX-OPT",
+      "instrument_type": "CE",
+      "instruments": 8068
+    },
+    {
+      "exchange": "MCX",
+      "segment": "MCX-OPT",
+      "instrument_type": "PE",
+      "instruments": 8068
+    },
+    {
+      "exchange": "CDS",
+      "segment": "CDS-OPT",
+      "instrument_type": "CE",
+      "instruments": 3830
+    },
+    {
+      "exchange": "CDS",
+      "segment": "CDS-OPT",
+      "instrument_type": "PE",
+      "instruments": 3830
+    },
+    {
+      "exchange": "BFO",
+      "segment": "BFO-OPT",
+      "instrument_type": "CE",
+      "instruments": 2266
+    },
+    {
+      "exchange": "BFO",
+      "segment": "BFO-OPT",
+      "instrument_type": "PE",
+      "instruments": 2266
+    },
+    {
+      "exchange": "NFO",
+      "segment": "NFO-FUT",
+      "instrument_type": "FUT",
+      "instruments": 640
+    },
+    {
+      "exchange": "MCX",
+      "segment": "MCX-FUT",
+      "instrument_type": "FUT",
+      "instruments": 151
+    },
+    {
+      "exchange": "NCO",
+      "segment": "NCO-FUT",
+      "instrument_type": "FUT",
+      "instruments": 147
+    },
+    {
+      "exchange": "CDS",
+      "segment": "CDS-FUT",
+      "instrument_type": "FUT",
+      "instruments": 141
+    },
+    {
+      "exchange": "NSE",
+      "segment": "INDICES",
+      "instrument_type": "EQ",
+      "instruments": 136
+    },
+    {
+      "exchange": "BSE",
+      "segment": "INDICES",
+      "instrument_type": "EQ",
+      "instruments": 73
+    },
+    {
+      "exchange": "NCO",
+      "segment": "NCO",
+      "instrument_type": "EQ",
+      "instruments": 28
+    },
+    {
+      "exchange": "BFO",
+      "segment": "BFO-FUT",
+      "instrument_type": "FUT",
+      "instruments": 12
+    },
+    {
+      "exchange": "GLOBAL",
+      "segment": "INDICES",
+      "instrument_type": "EQ",
+      "instruments": 12
+    },
+    {
+      "exchange": "MCX",
+      "segment": "INDICES",
+      "instrument_type": "EQ",
+      "instruments": 11
+    },
+    {
+      "exchange": "NSEIX",
+      "segment": "INDICES",
+      "instrument_type": "EQ",
+      "instruments": 1
+    }
+  ],
+  "derivative_bars": [],
+  "derivative_bar_rows": 0,
+  "derivative_master_expiries": [
+    {
+      "segment": "BFO-FUT",
+      "earliest_expiry": "2026-08-27",
+      "latest_expiry": "2026-10-29",
+      "instruments": 12,
+      "master_snapshot": "2026-08-14T11:27:07+00:00"
+    },
+    {
+      "segment": "BFO-OPT",
+      "earliest_expiry": "2026-08-13",
+      "latest_expiry": "2031-06-26",
+      "instruments": 4532,
+      "master_snapshot": "2026-08-14T11:27:07+00:00"
+    },
+    {
+      "segment": "NFO-FUT",
+      "earliest_expiry": "2026-08-25",
+      "latest_expiry": "2026-10-27",
+      "instruments": 640,
+      "master_snapshot": "2026-08-14T11:27:07+00:00"
+    },
+    {
+      "segment": "NFO-OPT",
+      "earliest_expiry": "2026-08-18",
+      "latest_expiry": "2031-06-24",
+      "instruments": 35845,
+      "master_snapshot": "2026-08-14T11:27:08+00:00"
+    }
+  ],
+  "executable_contract_dataset_present": false,
+  "verdict": "NO_EXECUTABLE_CONTRACT_HISTORY"
+}

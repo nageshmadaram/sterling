@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-09-06T18:12:40.621742+00:00",
+  "scope": "Observed cash/index minute timestamps and OHLC integrity around CAS implementation",
+  "policy_version": "nse-2026-09-07-v1",
+  "cas_effective_date": "2026-08-03",
+  "lake_root": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake",
+  "manifest_sha256": "d45dedae6d89a4968f6855767c2c15a8d69ed9b2719d1a3378648ba83cd35138",
+  "manifest_inventory_not_full_file_verification": {
+    "symbols": 12246,
+    "rows": 231143717,
+    "last_utc": "2026-08-14T09:59:00+00:00",
+    "derivative_bar_symbols": 0
+  },
+  "code_sha256": {
+    "backend/study/kite_cas_realdata_audit.py": "85fa7e68a66fc6b4ab1720697b17aff62cbd036f84b52868a9f732eb6b1ba533",
+    "backend/app/services/kite_engine/market_hours.py": "290afd705308a93f56aebc1eab2e284775e791c7062ccda28c995c93efa4b33a"
+  },
+  "sources": [
+    "https://www.nseindia.com/static/products-services/closing-auction-session",
+    "https://www.sebi.gov.in/legal/circulars/jan-2026/introduction-of-closing-auction-session-cas-in-the-equity-cash-segment-and-certain-modifications-in-the-pre-open-auction-session_99122.html"
+  ],
+  "datasets": [
+    {
+      "instrument": "NIFTY 50",
+      "instrument_token": 256265,
+      "path": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake/bars/interval=minute/exchange=NSE/segment=INDICES/256265__NIFTY_50.parquet",
+      "sha256": "3067c0f8831180012a7dda93e5f7760140aa77b5b12287d015a9f7f1e073889d",
+      "manifest_sha256_matches": true,
+      "bars": 45750,
+      "manifest_rows_match": true,
+      "first_utc": "2026-02-13T03:45:00+00:00",
+      "last_utc": "2026-08-13T09:59:00+00:00",
+      "invalid_ohlc_bars": 0,
+      "nonincreasing_timestamps": 0,
+      "session_days_checked": 122,
+      "session_boundary_failures": [],
+      "post_cas_bars": 3375,
+      "post_cas_session_phases": {
+        "continuous": 3375
+      },
+      "post_cas_index_rows_at_or_after_1515_blocked_for_new_cash_signals": 135,
+      "transition_and_post_cas_days": [
+        {
+          "date": "2026-07-31",
+          "bars": 375,
+          "first_ist": "2026-07-31T09:15:00+05:30",
+          "last_ist": "2026-07-31T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-07-31T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-03",
+          "bars": 375,
+          "first_ist": "2026-08-03T09:15:00+05:30",
+          "last_ist": "2026-08-03T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-03T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-04",
+          "bars": 375,
+          "first_ist": "2026-08-04T09:15:00+05:30",
+          "last_ist": "2026-08-04T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-04T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-05",
+          "bars": 375,
+          "first_ist": "2026-08-05T09:15:00+05:30",
+          "last_ist": "2026-08-05T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-05T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-06",
+          "bars": 375,
+          "first_ist": "2026-08-06T09:15:00+05:30",
+          "last_ist": "2026-08-06T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-06T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-07",
+          "bars": 375,
+          "first_ist": "2026-08-07T09:15:00+05:30",
+          "last_ist": "2026-08-07T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-07T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-10",
+          "bars": 375,
+          "first_ist": "2026-08-10T09:15:00+05:30",
+          "last_ist": "2026-08-10T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-10T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-11",
+          "bars": 375,
+          "first_ist": "2026-08-11T09:15:00+05:30",
+          "last_ist": "2026-08-11T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-11T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-12",
+          "bars": 375,
+          "first_ist": "2026-08-12T09:15:00+05:30",
+          "last_ist": "2026-08-12T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-12T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-13",
+          "bars": 375,
+          "first_ist": "2026-08-13T09:15:00+05:30",
+          "last_ist": "2026-08-13T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-08-13T15:30:00+05:30",
+          "expected_minute_rows": 375
+        }
+      ]
+    },
+    {
+      "instrument": "SBIN",
+      "instrument_token": 779521,
+      "path": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake/bars/interval=minute/exchange=NSE/segment=NSE/779521__SBIN.parquet",
+      "sha256": "11f9c638fbb12675e529f0bb54908c54ba391112780b0d4152d38f405e492b68",
+      "manifest_sha256_matches": true,
+      "bars": 45615,
+      "manifest_rows_match": true,
+      "first_utc": "2026-02-13T03:45:00+00:00",
+      "last_utc": "2026-08-13T09:44:00+00:00",
+      "invalid_ohlc_bars": 0,
+      "nonincreasing_timestamps": 0,
+      "session_days_checked": 122,
+      "session_boundary_failures": [],
+      "post_cas_bars": 3240,
+      "post_cas_session_phases": {
+        "continuous": 3240
+      },
+      "post_cas_index_rows_at_or_after_1515_blocked_for_new_cash_signals": 0,
+      "transition_and_post_cas_days": [
+        {
+          "date": "2026-07-31",
+          "bars": 375,
+          "first_ist": "2026-07-31T09:15:00+05:30",
+          "last_ist": "2026-07-31T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-07-31T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-03",
+          "bars": 360,
+          "first_ist": "2026-08-03T09:15:00+05:30",
+          "last_ist": "2026-08-03T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-03T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-04",
+          "bars": 360,
+          "first_ist": "2026-08-04T09:15:00+05:30",
+          "last_ist": "2026-08-04T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-04T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-05",
+          "bars": 360,
+          "first_ist": "2026-08-05T09:15:00+05:30",
+          "last_ist": "2026-08-05T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-05T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-06",
+          "bars": 360,
+          "first_ist": "2026-08-06T09:15:00+05:30",
+          "last_ist": "2026-08-06T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-06T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-07",
+          "bars": 360,
+          "first_ist": "2026-08-07T09:15:00+05:30",
+          "last_ist": "2026-08-07T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-07T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-10",
+          "bars": 360,
+          "first_ist": "2026-08-10T09:15:00+05:30",
+          "last_ist": "2026-08-10T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-10T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-11",
+          "bars": 360,
+          "first_ist": "2026-08-11T09:15:00+05:30",
+          "last_ist": "2026-08-11T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-11T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-12",
+          "bars": 360,
+          "first_ist": "2026-08-12T09:15:00+05:30",
+          "last_ist": "2026-08-12T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-12T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-13",
+          "bars": 360,
+          "first_ist": "2026-08-13T09:15:00+05:30",
+          "last_ist": "2026-08-13T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-13T15:15:00+05:30",
+          "expected_minute_rows": 360
+        }
+      ]
+    },
+    {
+      "instrument": "LT",
+      "instrument_token": 2939649,
+      "path": "/run/media/nageshmadaram/3f36ac07-fdbe-48c1-9514-ecf65c6619b0/SterlingLake/bars/interval=minute/exchange=NSE/segment=NSE/2939649__LT.parquet",
+      "sha256": "16a711f6050416a6cc22198525a5f5a9922810bff1a9187f84acac3040b53e53",
+      "manifest_sha256_matches": true,
+      "bars": 45615,
+      "manifest_rows_match": true,
+      "first_utc": "2026-02-13T03:45:00+00:00",
+      "last_utc": "2026-08-13T09:44:00+00:00",
+      "invalid_ohlc_bars": 0,
+      "nonincreasing_timestamps": 0,
+      "session_days_checked": 122,
+      "session_boundary_failures": [],
+      "post_cas_bars": 3240,
+      "post_cas_session_phases": {
+        "continuous": 3240
+      },
+      "post_cas_index_rows_at_or_after_1515_blocked_for_new_cash_signals": 0,
+      "transition_and_post_cas_days": [
+        {
+          "date": "2026-07-31",
+          "bars": 375,
+          "first_ist": "2026-07-31T09:15:00+05:30",
+          "last_ist": "2026-07-31T15:29:00+05:30",
+          "expected_continuous_close_ist": "2026-07-31T15:30:00+05:30",
+          "expected_minute_rows": 375
+        },
+        {
+          "date": "2026-08-03",
+          "bars": 360,
+          "first_ist": "2026-08-03T09:15:00+05:30",
+          "last_ist": "2026-08-03T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-03T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-04",
+          "bars": 360,
+          "first_ist": "2026-08-04T09:15:00+05:30",
+          "last_ist": "2026-08-04T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-04T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-05",
+          "bars": 360,
+          "first_ist": "2026-08-05T09:15:00+05:30",
+          "last_ist": "2026-08-05T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-05T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-06",
+          "bars": 360,
+          "first_ist": "2026-08-06T09:15:00+05:30",
+          "last_ist": "2026-08-06T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-06T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-07",
+          "bars": 360,
+          "first_ist": "2026-08-07T09:15:00+05:30",
+          "last_ist": "2026-08-07T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-07T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-10",
+          "bars": 360,
+          "first_ist": "2026-08-10T09:15:00+05:30",
+          "last_ist": "2026-08-10T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-10T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-11",
+          "bars": 360,
+          "first_ist": "2026-08-11T09:15:00+05:30",
+          "last_ist": "2026-08-11T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-11T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-12",
+          "bars": 360,
+          "first_ist": "2026-08-12T09:15:00+05:30",
+          "last_ist": "2026-08-12T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-12T15:15:00+05:30",
+          "expected_minute_rows": 360
+        },
+        {
+          "date": "2026-08-13",
+          "bars": 360,
+          "first_ist": "2026-08-13T09:15:00+05:30",
+          "last_ist": "2026-08-13T15:14:00+05:30",
+          "expected_continuous_close_ist": "2026-08-13T15:15:00+05:30",
+          "expected_minute_rows": 360
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Existing lake parquet and acquisition manifest; no independent exchange certification.",
+    "Manifest inventory counts are metadata, not a full lake data-quality audit.",
+    "Selected observations end August 13, 2026; they contain no September 4 recorded signals.",
+    "NIFTY 50 is an index, not an executable contract or a CAS-eligible cash stock.",
+    "Cash minute bars do not establish auction fills, derivative liquidity, bid/ask or profitability.",
+    "No derivative bar symbols in this manifest; lake ticks directory is empty.",
+    "September 7 pre-open rules are future to these data and cannot be empirically validated here."
+  ],
+  "selected_total_bars": 136980,
+  "selected_post_cas_bars": 9855,
+  "observed_session_validation_passed": true,
+  "live_readiness": "NOT_ESTABLISHED_BY_CASH_SESSION_DATA"
+}
