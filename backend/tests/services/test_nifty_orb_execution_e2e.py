@@ -280,7 +280,7 @@ async def test_a_submission_with_no_order_id_trips_the_kill_switch(harness):
     """An order may have reached the exchange, so the outcome is unknown."""
     client = FakeClient(order_id="")
     out = await _run(harness, client)
-    assert out["executed"] == []
+    assert out["executed"][0]["reason"] == "submission outcome unknown"
     assert any("submission outcome unknown" in r for r in harness["rec"].kill)
 
 

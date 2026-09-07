@@ -245,51 +245,43 @@ def test_evaluate_bar_atm_imbalance_single_trade_window():
 
 
 def test_evaluate_bar_nifty_orb_window_and_constraints():
-    """Verify Nifty ORB only trades between 09:30-12:00 with 15m range formed, max 2 trades/day."""
-    from datetime import datetime, timezone, timedelta
+    """Replay ORB uses the live engine, not a 4-bar clone."""
+    from datetime import timezone, timedelta
+    from tests.engines.test_nifty_orb_options import orb_session
+
     simulation_runner._bar_history = {}
     simulation_runner._last_fired = {}
     simulation_runner._active_until_bar = {}
-    simulation_runner._config = SimConfig(date="2026-08-28", strategy="nifty_orb", strategies=["nifty_orb"])
+    simulation_runner._in_session_bars = {}
+    simulation_runner._config = SimConfig(date="2026-08-18", strategy="nifty_orb", strategies=["nifty_orb"])
     simulation_runner._stats.signals_fired = 0
     simulation_runner._stats.events = []
     simulation_runner._stats.trades = []
 
-    tz_ist = timezone(timedelta(hours=5, minutes=30))
-
-    # Feed 3 opening range bars (09:15, 09:20, 09:25) -> High = 24100, Low = 24000
-    for idx, minute in enumerate([15, 20, 25]):
-        t = datetime(2026, 8, 28, 9, minute, 0, tzinfo=tz_ist)
+    session = orb_session("LONG")
+    for bar_i, b in enumerate(session):
         bar = {
             "symbol": "NIFTY",
-            "open": 24010 + idx * 10,
-            "high": 24100,
-            "low": 24000,
-            "close": 24050,
-            "volume": 20000,
-            "time": int(t.timestamp()),
+            "open": b.open, "high": b.high, "low": b.low, "close": b.close,
+            "volume": b.volume,
+            "time": int(b.timestamp.timestamp()),
         }
-        simulation_runner._evaluate_bar(bar, t)
+        simulation_runner._evaluate_bar(bar, b.timestamp)
+        if bar_i < 3:
+            orb_so_far = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
+            assert orb_so_far == []
 
-    orb_events_pre = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
-    assert len(orb_events_pre) == 0  # No trades during opening range window
-
-    # Bar at 09:30:00 breaking out above OR high (24100 + 0.15*ATR) with positive VWAP slope
-    t_break = datetime(2026, 8, 28, 9, 30, 0, tzinfo=tz_ist)
-    bar_break = {
-        "symbol": "NIFTY",
-        "open": 24090,
-        "high": 24180,
-        "low": 24080,
-        "close": 24150,
-        "volume": 80000,
-        "time": int(t_break.timestamp()),
-    }
-    simulation_runner._evaluate_bar(bar_break, t_break)
-
-    orb_events_post = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
-    assert len(orb_events_post) == 1
-    assert orb_events_post[0].direction == "BULLISH"
+    orb_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
+    assert orb_events
+    assert orb_events[0].direction == "BULLISH"
+    scan = simulation_runner.get_nifty_orb_signals_response()
+    assert scan["signals"]
+    row = scan["signals"][0]
+    assert row["status"] == "signal"
+    assert row["signal"]["direction"] == "LONG"
+    assert row["ticket_fingerprint"]
+    assert row["auto_block"].startswith("replay")
+    assert row["trade"]["contract"]["option_type"] == "CE"
 
 
 def test_evaluate_bar_bear_to_bearish_short_only():
