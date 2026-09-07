@@ -88,6 +88,7 @@ def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
                         "entry_sl": float(r.get("entry_sl") or 0.0),
                         "target": float(r.get("target") or 0.0) if r.get("target") is not None else None,
                         "raw_row": r,
+                        "strategy": "supertrend",
                         "strategy": r.get("strategy") or "supertrend",
                         "is_spot_scan": True,
                         "source": r.get("source", "spot"),
@@ -904,6 +905,10 @@ class SimulationRunner:
             await self.stop()
         
         reset_all_engine_signals()
+        if config.strategy != "all" and (config.strategies == ["all"] or not config.strategies):
+            config.strategies = [s.strip() for s in config.strategy.split(",") if s.strip()]
+        elif config.strategies != ["all"] and config.strategy == "all":
+            config.strategy = ",".join(config.strategies)
         self._config = config
         self._speed = config.speed
         self._state = SimState.LOADING
@@ -980,6 +985,9 @@ class SimulationRunner:
 
     def set_speed(self, speed: float) -> SimStatus:
         self._speed = max(0.5, min(speed, 5000.0))
+        if self._config:
+            self._config.speed = self._speed
+        self._publish_state()
         return self.status
 
     def step_bars(self, count: int) -> SimStatus:

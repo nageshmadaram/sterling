@@ -65,15 +65,22 @@ async def test_pause_and_resume():
 
 
 def test_set_speed():
+    from app.services.simulation import SimConfig
+    simulation_runner._config = SimConfig(date="2026-09-07", speed=1.0)
     status = simulation_runner.set_speed(15.0)
     assert simulation_runner._speed == 15.0
+    assert status.config is not None
+    assert status.config.speed == 15.0
+    assert simulation_runner._config.speed == 15.0
 
     # Bounds check
-    simulation_runner.set_speed(6000.0)
+    status = simulation_runner.set_speed(6000.0)
     assert simulation_runner._speed == 5000.0
+    assert status.config.speed == 5000.0
 
-    simulation_runner.set_speed(0.1)
+    status = simulation_runner.set_speed(0.1)
     assert simulation_runner._speed == 0.5
+    assert status.config.speed == 0.5
 
 
 @pytest.mark.asyncio
@@ -124,7 +131,10 @@ async def test_simulation_default_instruments_never_fabricate_missing_warmup(mon
         resolution="5m",
     )
     await simulation_runner.start(config)
-    await asyncio.sleep(1.5)
+    for _ in range(50):
+        if simulation_runner.status.state == SimState.IDLE and "KOTAKBANK" in simulation_runner._bar_history:
+            break
+        await asyncio.sleep(0.1)
 
     # Verify high-liquidity stock symbols are present in simulation
     assert "KOTAKBANK" in simulation_runner._bar_history

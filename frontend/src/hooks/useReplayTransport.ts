@@ -244,6 +244,12 @@ export function useReplayTransport(): ReplayTransport {
   const setSpeed = useCallback(async (speed: number) => {
     const store = useReplayStore.getState();
     store.setDraft({ speed });
+    if (store.status.config) {
+      store.setStatus({
+        ...store.status,
+        config: { ...store.status.config, speed },
+      });
+    }
     if (store.status.state === 'idle') return;
     try {
       store.setStatus(await call('/speed', { speed }));

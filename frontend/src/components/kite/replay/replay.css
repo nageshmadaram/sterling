@@ -1073,42 +1073,54 @@
   border-bottom: 1px solid var(--k-border);
   font-size: var(--rd-fs-data);
   font-weight: 700;
-}
-/* Cards side by side: the dock is short and wide, so width is the axis with
-   room to spare. Each card scrolls on its own if it is taller than the dock;
-   the row scrolls sideways when the cards outrun the width. Below `md` the
-   dock is too narrow for columns, so it falls back to a stack. */
+/* Cards grid: max 3 or 4 tiles per row with smooth vertical scrolling.
+   Wide views (xl) display 4 columns; medium views (lg) display 3 columns;
+   compact views adapt to 2 columns or 1 column. */
 .rd-sheet-body {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior: contain;
-  padding: 12px;
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 10px;
-}
-.rd-sheet-body > .rd-card {
-  flex: 0 0 clamp(230px, 24%, 300px);
-  max-height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-/* Only the narrowest bucket stacks. `md` (700px+) still fits two or three
-   columns and scrolls sideways for the rest, which beats a column that the
-   dock's height cannot show. */
-.replay-dock[data-width="sm"] .rd-sheet-body {
-  flex-direction: column;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
 }
-.replay-dock[data-width="sm"] .rd-sheet-body > .rd-card {
-  flex: 0 0 auto;
+.rd-sheet-body > .rd-card {
+  min-width: 0;
+  width: 100%;
   max-height: none;
   overflow-y: visible;
+}
+.replay-dock[data-width="xl"] .rd-sheet-body {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.replay-dock[data-width="lg"] .rd-sheet-body {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.replay-dock[data-width="md"] .rd-sheet-body {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.replay-dock[data-width="sm"] .rd-sheet-body {
+  grid-template-columns: 1fr;
+}
+@media (max-width: 1200px) {
+  .rd-sheet-body {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 850px) {
+  .rd-sheet-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 550px) {
+  .rd-sheet-body {
+    grid-template-columns: 1fr;
+  }
 }
 .rd-sheet-foot {
   display: flex;

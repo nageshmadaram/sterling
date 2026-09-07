@@ -33,13 +33,7 @@ export function ReplayPopover({
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   useFocusTrap(ref, open, { onEscape: close });
 
-  // Measure after paint so the popover's real size is known, then flip if it
-  // would leave the viewport.
-  useLayoutEffect(() => {
-    if (!open) {
-      setPos(null);
-      return;
-    }
+  const updatePosition = useCallback(() => {
     const anchor = anchorRef.current;
     const node = ref.current;
     if (!anchor || !node) return;
@@ -54,7 +48,17 @@ export function ReplayPopover({
     let left = align === 'end' ? a.right - n.width : a.left;
     left = Math.max(8, Math.min(window.innerWidth - n.width - 8, left));
     setPos({ top, left });
-  }, [open, align, anchorRef]);
+  }, [align, anchorRef]);
+
+  // Measure after paint so the popover's real size is known, then flip if it
+  // would leave the viewport.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    updatePosition();
+  }, [open, updatePosition]);
 
   useEffect(() => {
     if (!open) return;
@@ -64,18 +68,22 @@ export function ReplayPopover({
       if (anchorRef.current?.contains(t)) return;
       close();
     };
-    const onScrollOrResize = () => close();
+    const onResize = () => updatePosition();
+    const onScroll = (e: Event) => {
+      const t = e.target as Node | null;
+      // Scrolling inside the popover itself (e.g. scrollable instruments list) must NOT close it
+      if (t && ref.current && (ref.current === t || ref.current.contains(t))) return;
+      updatePosition();
+    };
     document.addEventListener('mousedown', onDown);
-    window.addEventListener('resize', onScrollOrResize);
-    // Any scroll of an ancestor moves the anchor out from under us; closing is
-    // more honest than tracking it to a stale position.
-    window.addEventListener('scroll', onScrollOrResize, true);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      window.removeEventListener('resize', onScrollOrResize);
-      window.removeEventListener('scroll', onScrollOrResize, true);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, close, anchorRef]);
+  }, [open, close, anchorRef, updatePosition]);
 
   if (!open) return null;
 

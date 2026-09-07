@@ -51,11 +51,8 @@ export function ReplayConfigSheet() {
   const echoMismatch =
     frictionSupported && echo?.friction_mode != null && echo.friction_mode !== draft.frictionMode;
 
-  /* Lives INSIDE the dock and lays its cards out horizontally.
-     A vertical drawer fought the dock's height: on a ~300px docked replay the
-     cards had nowhere to go. Across the dock's width there is plenty of room,
-     so the cards become columns and the panel scrolls sideways if they run out
-     of it. */
+  /* Lives INSIDE the dock and lays its cards out in a responsive grid
+     showing max 3 to 4 tiles per row with smooth vertical scrolling. */
   return (
     <>
       <div className="rd-sheet-scrim" onMouseDown={() => setOpen(false)} />

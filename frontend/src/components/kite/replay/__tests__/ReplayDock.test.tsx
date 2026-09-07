@@ -138,6 +138,20 @@ describe('transport', () => {
     });
     expect(screen.getByText('5×').closest('button')).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('updates the active speed immediately when a speed pill is clicked while running', async () => {
+    setupDock({
+      status: makeStatus({ state: 'running', config: { speed: 5, date: '2026-09-07' } as any }),
+    });
+    await renderDock();
+    expect(screen.getByText('5×').closest('button')).toHaveAttribute('aria-pressed', 'true');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '10×' }));
+    });
+    expect(screen.getByText('10×').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    expect(useReplayStore.getState().status.config?.speed).toBe(10);
+  });
 });
 
 /* ── Timeline ───────────────────────────────────────────────────────────── */
@@ -380,6 +394,22 @@ describe('configuration', () => {
       useReplayStore.getState().setDraft({ endTime: '08:00:00' });
     });
     expect(screen.getByTestId('replay-apply-start')).toBeDisabled();
+  });
+
+  it('does not close the filter popover when scrolling inside the popover', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-filters-trigger');
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const dialog = screen.getByRole('dialog', { name: 'Filter strategies, instruments and legs' });
+    expect(dialog).toBeTruthy();
+
+    await act(async () => {
+      const scrollable = dialog.querySelector('div') || dialog;
+      fireEvent.scroll(scrollable);
+    });
+    expect(screen.getByRole('dialog', { name: 'Filter strategies, instruments and legs' })).toBeTruthy();
   });
 });
 

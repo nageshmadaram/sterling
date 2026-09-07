@@ -106,7 +106,7 @@ export function primeStore(over: Partial<ReturnType<typeof useReplayStore.getSta
 
 /** A fetch stub that returns the given status for every replay call. */
 export function stubFetch(status: ReplayStatus = makeStatus()) {
-  const fn = vi.fn().mockImplementation((url: string) => {
+  const fn = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     if (String(url).includes('available-dates')) {
       return Promise.resolve({
         ok: true,
@@ -121,6 +121,21 @@ export function stubFetch(status: ReplayStatus = makeStatus()) {
             holidays_filtered: false,
           }),
       });
+    }
+    if (String(url).includes('/speed')) {
+      let reqSpeed: number | undefined;
+      try {
+        if (init && typeof init.body === 'string') {
+          reqSpeed = JSON.parse(init.body).speed;
+        }
+      } catch {}
+      const updatedStatus = {
+        ...status,
+        config: status.config
+          ? { ...status.config, speed: reqSpeed ?? status.config.speed }
+          : undefined,
+      };
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(updatedStatus) });
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(status) });
   });
