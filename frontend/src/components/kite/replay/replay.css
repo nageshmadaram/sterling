@@ -1073,6 +1073,7 @@
   border-bottom: 1px solid var(--k-border);
   font-size: var(--rd-fs-data);
   font-weight: 700;
+}
 /* Cards grid: max 3 or 4 tiles per row with smooth vertical scrolling.
    Wide views (xl) display 4 columns; medium views (lg) display 3 columns;
    compact views adapt to 2 columns or 1 column. */
