@@ -13,10 +13,9 @@ import {
 import { useReplayStream } from '../../../hooks/useReplayStream';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { FOOTER_HEIGHT } from '../layoutConstants';
-import { Segmented } from './primitives/Segmented';
 import { ReplayConfigSheet } from './ReplayConfigPanel';
-import { ReplayFilterChips, ReplayFilters } from './ReplayFilters';
-import { ReplayMetricsStrip } from './ReplayMetricsStrip';
+import { ReplayFilters } from './ReplayFilters';
+import { ReplayMetricsCard } from './ReplayMetricsStrip';
 import { ReplaySessionPicker } from './ReplaySessionPicker';
 import { ReplayShellBar, ReplayWindowControls } from './ReplayShellBar';
 import { ReplayShortcuts } from './ReplayShortcuts';
@@ -28,6 +27,7 @@ import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
 import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
+import { fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
 import { useReplaySignalToasts } from './useReplaySignalToasts';
@@ -37,21 +37,19 @@ import './replay.css';
 type WidthBucket = 'xl' | 'lg' | 'md' | 'sm';
 
 /**
- * The replay dock shell.
+ * The replay dock shell — redesigned.
  *
- * It owns four things and renders no data of its own: which mode it is in and
- * the geometry that implies, its height, the portals for the modes that need
- * them, and the keyboard scope.
+ * Layout:
+ * 1. Clean header: "Replay" on left, window controls on right
+ * 2. Action bar: metrics summary, session picker, filters, config gear
+ * 3. Scrollable body: split tables (signals + trades)
+ * 4. Fixed bottom player bar: transport + timeline + clock + detail report
  */
 export function ReplayDock() {
   const open = useReplayStore((s) => s.open);
   const mode = useReplayStore((s) => s.mode);
   const height = useReplayStore((s) => s.height);
-  // True once the dock has taken the host pane over — either its own `expanded`
-  // mode, or a workspace focus (half / maximised / fullscreen) it drives.
   const ownsHostPane = useReplayHostHidden();
-  const tab = useReplayStore((s) => s.tab);
-  const setTab = useReplayStore((s) => s.setTab);
   const setHeight = useReplayStore((s) => s.setHeight);
   const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
   const state = useReplayState();
@@ -63,31 +61,21 @@ export function ReplayDock() {
   const draft = useReplayStore((s) => s.draft);
   const historical = useReplayIsHistorical();
   const clearSession = useReplayStore((s) => s.clearSession);
+  const setSummaryOpen = useReplayStore((s) => s.setSummaryOpen);
+  const clock = useReplayStore((s) => s.status.current_time_iso);
+  const pct = useReplayStore((s) => s.status.progress_pct);
+  const speed = useReplayStore((s) => s.status.config?.speed ?? s.draft.speed);
 
   const transport = useReplayTransport();
   const rootRef = useRef<HTMLElement>(null);
   const [bucket, setBucket] = useState<WidthBucket>('xl');
   const [dragging, setDragging] = useState(false);
 
-  // Keep the store in step with the runner whenever the dock is mounted; the
-  // hook itself decides whether to stream, poll slowly, or stop entirely.
   useReplayStream(true);
   useReplayShortcuts(rootRef, transport);
   const announcement = useReplayAnnouncer();
   useReplaySignalToasts();
 
-  /**
-   * Keep the keyboard alive across a mode change.
-   *
-   * Changing mode unmounts the focused control (the button you just pressed, or
-   * a portal the dock moved out of), so focus falls back to `<body>` — and the
-   * shortcut handler's ownership check then rejects everything, including the
-   * next Escape. Observed: Escape stepped fullscreen -> overlay -> docked and
-   * then went dead, so the dock could not be closed from the keyboard.
-   *
-   * Only reclaims focus that was actually lost to the body, so a deliberate
-   * click into another pane is left alone.
-   */
   useEffect(() => {
     if (!open) return;
     const active = document.activeElement;
@@ -96,9 +84,6 @@ export function ReplayDock() {
     rootRef.current?.focus({ preventScroll: true });
   }, [mode, open]);
 
-  /* ── Width buckets ─────────────────────────────────────────────────────
-     Measured from the dock, never the viewport: it is a pane inside a
-     resizable workspace, so the window's width says nothing about its own. */
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -110,10 +95,6 @@ export function ReplayDock() {
     return () => ro.disconnect();
   }, [open]);
 
-  /* ── Resize ────────────────────────────────────────────────────────────
-     Pointer capture rather than window listeners, so an unmount mid-drag
-     cannot leak a handler, and localStorage is written once on release
-     rather than on every move. */
   const maxHeight = useCallback(() => {
     if (typeof window === 'undefined') return 900;
     const ceiling = mode === 'overlay' ? window.innerHeight - FOOTER_HEIGHT - 80 : window.innerHeight - 160;
@@ -193,24 +174,8 @@ export function ReplayDock() {
     const date = cfg?.date ?? draft.date;
     const s = cfg?.start_time ?? draft.startTime;
     const e = cfg?.end_time ?? draft.endTime;
-    if (tab === 'trades') {
-      exportCsv(replayCsvName('trades', date, s, e), trades, tradeCsvColumns(tradesHaveFriction(trades)));
-    } else {
-      exportCsv(replayCsvName('signals', date, s, e), events, SIGNAL_CSV_COLUMNS);
-    }
-  }, [tab, trades, events, cfg, draft]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.key === 'e' || e.key === 'E') && useReplayStore.getState().open) {
-        const el = document.activeElement as HTMLElement | null;
-        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-        if (rootRef.current?.contains(el)) exportCurrent();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [exportCurrent]);
+    exportCsv(replayCsvName('signals', date, s, e), events, SIGNAL_CSV_COLUMNS);
+  }, [events, cfg, draft]);
 
   const overlays = (
     <>
@@ -223,6 +188,9 @@ export function ReplayDock() {
   if (!open) return overlays;
 
   const resizable = mode === 'docked' || mode === 'overlay';
+  const active = state === 'running' || state === 'paused';
+  const hasResults = events.length > 0 || trades.length > 0;
+  const showDetailedReport = (state === 'idle' && hasResults) || historical;
 
   const shell = (
     <section
@@ -235,9 +203,6 @@ export function ReplayDock() {
       data-width={bucket}
       className="replay-dock kw-pane"
       aria-label="Market replay"
-      /* While the dock owns the host pane there is nothing else in it, so a
-         stored pixel height would leave dead space below — which is exactly
-         what "half screen" looked like. Fill the pane instead. */
       style={ownsHostPane && mode === 'docked' ? geometry.expanded : geometry[mode]}
     >
       {resizable && (
@@ -257,132 +222,122 @@ export function ReplayDock() {
         />
       )}
 
-      {/* TWO bands, not four. Identity, transport and the timeline share one
-          row; the numbers share a row with the view controls. The dock used to
-          stack shell + rail + metrics + view for 136px before any data. */}
-      <div className="rd-bar rd-bar-cmd">
+      {/* ── Row 1: Clean header — "Replay" left, window controls right ── */}
+      <div className="rd-clean-header">
         <ReplayShellBar />
-        <ReplayTransport />
-        <ReplayTimeline />
         <ReplayWindowControls />
       </div>
 
-      <div className="rd-bar rd-bar-meta">
-        <ReplayMetricsStrip />
-        <div className="rd-viewbar">
-        <Segmented
-          idPrefix="replay"
-          label="Replay view"
-          value={tab}
-          onChange={setTab}
-          items={[
-            { id: 'split', label: 'Split', icon: <Icons.Split size={12} /> },
-            { id: 'signals', label: 'Signals', icon: <Icons.Signal size={12} />, count: events.length },
-            { id: 'trades', label: 'Trades', icon: <Icons.Trades size={12} />, count: trades.length },
-          ]}
-        />
-        <ReplayFilterChips />
-        <div className="rd-viewbar-right">
-          <ReplaySessionPicker widthBucket={bucket} />
-          <ReplayFilters />
-          <button
-            type="button"
-            className="rd-btn"
-            disabled={state !== 'idle'}
-            onClick={() => setConfigOpen(true)}
-            title={state === 'idle' ? 'Configure the replay (C)' : 'Stop the replay to change its configuration'}
-            data-testid="replay-configure"
-          >
-            <Icons.Config size={13} />
-          </button>
-        </div>
-        </div>
+      {/* ── Row 2: Action bar — session picker, filters, config ──────── */}
+      <div className="rd-action-bar">
+        <ReplaySessionPicker widthBucket={bucket} />
+        <span className="rd-bar-sep" aria-hidden="true" />
+        <ReplayFilters />
+        <button
+          type="button"
+          className="rd-btn"
+          disabled={state !== 'idle'}
+          onClick={() => setConfigOpen(true)}
+          title={state === 'idle' ? 'Configure the replay (C)' : 'Stop the replay to change its configuration'}
+          data-testid="replay-configure"
+        >
+          <Icons.Config size={13} />
+        </button>
       </div>
 
-      {/* The runner keeps a finished session's ledger so it can be reviewed.
-          Saying so is the difference between "here is your last run" and the
-          dock appearing to show trades before you pressed play. */}
-      {historical && !errorMsg && (
-        <div className="rd-session-note" data-testid="replay-historical-note">
-          <Icons.Alert size={13} />
-          <span>
-            Showing the <strong>finished</strong> session
-            {cfg?.date ? ` from ${cfg.date}` : ''} — {events.length} signals, {trades.length} trades.
-            Nothing is replaying now.
-          </span>
-          <span className="rd-error-strip-actions">
-            <button type="button" className="rd-btn rd-btn-sm" onClick={() => void clearSession()}>
-              Clear results
-            </button>
-          </span>
-        </div>
-      )}
+      {/* ── Scrollable body ──────────────────────────────────────────── */}
+      <div className="rd-scroll-content">
+        {/* Historical session note */}
+        {historical && !errorMsg && (
+          <div className="rd-session-note" data-testid="replay-historical-note">
+            <Icons.Alert size={13} />
+            <span>
+              Showing the <strong>finished</strong> session
+              {cfg?.date ? ` from ${cfg.date}` : ''} — {events.length} signals, {trades.length} trades.
+            </span>
+            <span className="rd-error-strip-actions">
+              <button type="button" className="rd-btn rd-btn-sm" onClick={() => void clearSession()}>
+                Clear results
+              </button>
+            </span>
+          </div>
+        )}
 
-      {errorMsg && (
-        <div className="rd-error-strip" role="alert">
-          <Icons.Alert size={14} />
-          <span>{errorMsg}</span>
-          <span className="rd-error-strip-actions">
-            <button type="button" className="rd-btn rd-btn-sm" onClick={() => void transport.start()}>
-              Retry
-            </button>
-            <button type="button" className="rd-btn rd-btn-sm" data-variant="ghost" onClick={() => setError(null)}>
-              Dismiss
-            </button>
-          </span>
-        </div>
-      )}
+        {/* Error strip */}
+        {errorMsg && (
+          <div className="rd-error-strip" role="alert">
+            <Icons.Alert size={14} />
+            <span>{errorMsg}</span>
+            <span className="rd-error-strip-actions">
+              <button type="button" className="rd-btn rd-btn-sm" onClick={() => void transport.start()}>
+                Retry
+              </button>
+              <button type="button" className="rd-btn rd-btn-sm" data-variant="ghost" onClick={() => setError(null)}>
+                Dismiss
+              </button>
+            </span>
+          </div>
+        )}
 
-      <div className="rd-content">
-        {/* Only the active panel is mounted. Keeping all three alive is what
-            made a status frame re-render two tables that nobody was looking at. */}
-        <div
-          className="rd-panel"
-          role="tabpanel"
-          id={`replay-panel-${tab}`}
-          aria-labelledby={`replay-tab-${tab}`}
-          key={tab}
-        >
-          {tab === 'split' && (
+        {/* Metrics card */}
+        <ReplayMetricsCard />
+
+        {/* Tables — split view by default, scrollable */}
+        {hasResults && (
+          <div className="rd-tables-area">
             <div className="rd-split">
-              <div className="rd-pane">
-                <div className="rd-pane-head">
+              <div className="rd-table-section">
+                <div className="rd-table-section-head">
                   <Icons.Signal size={12} /> Signals
                   <span className="rd-seg-count">{events.length}</span>
                 </div>
                 <ReplaySignalsTable />
               </div>
-              <div className="rd-pane">
-                <div className="rd-pane-head">
+              <div className="rd-table-section">
+                <div className="rd-table-section-head">
                   <Icons.Trades size={12} /> Trades
                   <span className="rd-seg-count">{trades.length}</span>
                 </div>
                 <ReplayTradesTable />
               </div>
             </div>
-          )}
-          {tab === 'signals' && (
-            <div className="rd-pane" style={{ margin: 8, borderRadius: 6 }}>
-              <div className="rd-pane-head">
-                <Icons.Signal size={12} /> Signals
-                <span className="rd-seg-count">{events.length}</span>
-              </div>
-              <ReplaySignalsTable />
-            </div>
-          )}
-          {tab === 'trades' && (
-            <div className="rd-pane" style={{ margin: 8, borderRadius: 6 }}>
-              <div className="rd-pane-head">
-                <Icons.Trades size={12} /> Trades
-                <span className="rd-seg-count">{trades.length}</span>
-              </div>
-              <ReplayTradesTable />
-            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Fixed bottom player bar ──────────────────────────────── */}
+      <div className="rd-player-bar" data-testid="replay-player-bar">
+        <ReplayTransport />
+        <ReplayTimeline />
+        <div className="rd-player-bar-info">
+          <span className="rd-player-bar-clock" data-state={state}>
+            {fmtTime(clock)} IST
+          </span>
+          <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
+          {active && (
+            <span style={{ fontSize: 'var(--rd-fs-label)', color: 'var(--k-dim)' }}>
+              {speed}×
+            </span>
           )}
         </div>
-
-        <ReplayConfigSheet />
+        {showDetailedReport && (
+          <div className="rd-player-bar-detail">
+            <button
+              type="button"
+              className="rd-btn"
+              data-variant="report"
+              onClick={() => setSummaryOpen(true)}
+              data-testid="replay-detailed-report"
+            >
+              <Icons.Export size={12} />
+              Detailed Report
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Config sheet overlay (opened by the gear icon) */}
+      <ReplayConfigSheet />
 
       <div aria-live="polite" aria-atomic="true" className="rd-sr-only" data-testid="replay-live">
         {announcement}

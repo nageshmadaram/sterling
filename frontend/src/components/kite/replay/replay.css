@@ -1743,3 +1743,301 @@ kbd.rd-kbd {
 .rd-split .rd-table [data-col="out"],
 .rd-split .rd-table [data-col="size"],
 .rd-split .rd-table [data-col="slip"] { display: none; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Replay Dock Redesign — Fixed Player Bar, Unified Settings, Clean Metrics
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Fixed bottom player bar (matches SettingsDraftBar pattern) ───────── */
+
+.rd-player-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--k-bg);
+  border-top: 1px solid var(--k-border);
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.12), 0 -1px 4px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  min-height: 52px;
+}
+
+.rd-player-bar .rd-transport {
+  flex-shrink: 0;
+}
+
+.rd-player-bar .rd-timeline-wrap {
+  flex: 1;
+  min-width: 80px;
+}
+
+.rd-player-bar-clock {
+  font-size: var(--rd-fs-data);
+  font-family: var(--rd-font-mono);
+  color: var(--k-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 56px;
+  text-align: right;
+}
+
+.rd-player-bar-clock[data-state="running"] {
+  color: var(--k-cyan);
+}
+
+.rd-player-bar-clock[data-state="paused"] {
+  color: var(--k-amber-2);
+}
+
+.rd-player-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.rd-player-bar-pct {
+  font-size: var(--rd-fs-label);
+  font-family: var(--rd-font-mono);
+  color: var(--k-dim);
+  min-width: 28px;
+  text-align: right;
+}
+
+.rd-player-bar-detail {
+  margin-left: auto;
+}
+
+.rd-player-bar .rd-btn[data-variant="report"] {
+  background: var(--k-surface-warm);
+  color: var(--k-brand);
+  border: 1px solid var(--k-border-strong-2);
+  font-weight: 700;
+  gap: 6px;
+}
+
+.rd-player-bar .rd-btn[data-variant="report"]:hover {
+  background: var(--k-tint-warm-2);
+}
+
+/* ── Scrollable content area ─────────────────────────────────────────── */
+
+.rd-scroll-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+}
+
+/* ── Compact metrics card ────────────────────────────────────────────── */
+
+.rd-metrics-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  background: var(--k-border);
+  border: 1px solid var(--k-border);
+  border-radius: 9px;
+  overflow: hidden;
+  margin: 12px 12px 0;
+}
+
+.rd-metrics-card .rd-kpi {
+  background: var(--k-bg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rd-metrics-card .rd-kpi-label {
+  font-size: var(--rd-fs-label);
+  color: var(--k-dim);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.rd-metrics-card .rd-kpi-value {
+  font-size: 15px;
+  font-weight: 750;
+  font-family: var(--rd-font-mono);
+  color: var(--k-text);
+  letter-spacing: -0.02em;
+}
+
+.rd-metrics-card .rd-kpi-value[data-tone="profit"] {
+  color: var(--k-green);
+}
+
+.rd-metrics-card .rd-kpi-value[data-tone="loss"] {
+  color: var(--k-red-brick);
+}
+
+.rd-metrics-card .rd-kpi-value[data-tone="dim"] {
+  color: var(--k-dim);
+}
+
+.rd-metrics-card .rd-kpi-sub {
+  font-size: var(--rd-fs-micro);
+  color: var(--k-dim);
+}
+
+/* ── Unified settings panel (config-page style) ──────────────────────── */
+
+.rd-settings-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.rd-settings-card {
+  background: var(--k-bg);
+  border: 1px solid var(--k-border);
+  border-radius: 9px;
+  margin-bottom: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+  overflow: hidden;
+}
+
+.rd-settings-card > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  user-select: none;
+  font-size: var(--rd-fs-body);
+  border-left: 2px solid transparent;
+  transition: border-color var(--rd-dur-fast) var(--rd-ease-out);
+}
+
+.rd-settings-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rd-settings-card[open] > summary {
+  border-left-color: var(--k-brand);
+  border-bottom: 1px solid var(--k-border);
+}
+
+.rd-settings-card .rd-card-caret {
+  transition: transform var(--rd-dur-fast) var(--rd-ease-out);
+}
+
+.rd-settings-card[open] .rd-card-caret {
+  transform: rotate(90deg);
+}
+
+.rd-settings-card .rd-card-body {
+  padding: 12px 14px;
+  animation: rd-card-open var(--rd-dur-base) var(--rd-ease-out);
+}
+
+@keyframes rd-card-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.rd-settings-card .rd-card-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--k-text);
+}
+
+.rd-settings-card .rd-card-desc {
+  font-size: var(--rd-fs-label);
+  color: var(--k-dim);
+  margin-top: 1px;
+}
+
+.rd-settings-card .rd-card-meta {
+  margin-left: auto;
+  font-size: var(--rd-fs-label);
+  font-weight: 700;
+  color: var(--k-dim);
+  font-family: var(--rd-font-mono);
+  white-space: nowrap;
+}
+
+/* ── Section tables (no tabs — scroll layout) ────────────────────────── */
+
+.rd-tables-area {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.rd-table-section {
+  background: var(--k-bg);
+  border: 1px solid var(--k-border);
+  border-radius: 9px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.025);
+}
+
+.rd-table-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--k-text);
+  border-bottom: 1px solid var(--k-border);
+  background: var(--k-surface-sunken-2);
+}
+
+.rd-table-section-head .rd-seg-count {
+  font-size: var(--rd-fs-label);
+  color: var(--k-dim);
+  font-weight: 600;
+}
+
+/* ── Clean header bar ────────────────────────────────────────────────── */
+
+.rd-clean-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 16px;
+  min-height: 36px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--k-border);
+  background: var(--k-bg);
+}
+
+.rd-clean-header .rd-shell-title {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--k-text);
+  letter-spacing: -0.01em;
+}
+
+/* ── Action bar (session picker, filters, config) ──────────────────── */
+
+.rd-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  min-height: var(--rd-h-shell);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--k-border);
+  background: var(--k-bg);
+}
+
+.rd-bar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--k-border);
+  flex-shrink: 0;
+}

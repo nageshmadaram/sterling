@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { ReplaySessionPolicy, useReplaySessionPolicy, useReplayState, useReplayStore } from '../../../hooks/useReplayStore';
 import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
 import { ReplayPopover } from './primitives/ReplayPopover';
-import { fmtSessionDate, fmtTime } from './replayFormat';
+import { fmtSessionDate, fmtSmartDate, fmtTime } from './replayFormat';
 import { useAvailableDates, verdictForDate } from './useAvailableDates';
 import * as Icons from './ReplayIcons';
 
@@ -64,10 +64,10 @@ export function ReplaySessionPicker({ widthBucket }: { widthBucket: string }) {
 
   const label =
     widthBucket === 'sm'
-      ? fmtSessionDate(draft.date, true)
+      ? fmtSmartDate(draft.date)
       : widthBucket === 'lg' || widthBucket === 'md'
-        ? fmtSessionDate(draft.date, true)
-        : `${fmtSessionDate(draft.date)} · ${fmtTime(draft.startTime, 5)}–${fmtTime(draft.endTime, 5)}`;
+        ? fmtSmartDate(draft.date)
+        : `${fmtSmartDate(draft.date)} · ${fmtTime(draft.startTime, 5)}–${fmtTime(draft.endTime, 5)}`;
 
   const applyPreset = (date: string) => setDraft({ date, endDate: date });
 
@@ -107,7 +107,7 @@ export function ReplaySessionPicker({ widthBucket }: { widthBucket: string }) {
                 onChange={() => applyPreset(p.date)}
               />
               <span>{p.label}</span>
-              <span className="rd-opt-hint">{fmtSessionDate(p.date, true)}</span>
+                <span className="rd-opt-hint">{fmtSmartDate(p.date)}</span>
             </label>
           ))}
         </div>

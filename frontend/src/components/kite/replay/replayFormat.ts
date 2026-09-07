@@ -114,6 +114,32 @@ export function fmtSessionDate(iso: string | null | undefined, short = false): s
   return short ? day : `${WEEKDAYS[dt.getUTCDay()]} ${day} ${y}`;
 }
 
+/**
+ * Smart date: "Today" / "Yesterday" / short date like "4 Sep".
+ *
+ * If the user picked today there is no reason to echo "Mon 8 Sep 2026" —
+ * they know what day it is.
+ */
+export function fmtSmartDate(iso: string | null | undefined): string {
+  if (!iso) return ABSENT;
+  const now = new Date();
+  const todayIso = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+  if (iso === todayIso) return 'Today';
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayIso = [
+    yesterday.getFullYear(),
+    String(yesterday.getMonth() + 1).padStart(2, '0'),
+    String(yesterday.getDate()).padStart(2, '0'),
+  ].join('-');
+  if (iso === yesterdayIso) return 'Yesterday';
+  return fmtSessionDate(iso, true);
+}
+
 /** Minutes past midnight, for placing a time on the session timeline. */
 export function timeToMinutes(time: string | null | undefined): number {
   if (!time) return 0;
