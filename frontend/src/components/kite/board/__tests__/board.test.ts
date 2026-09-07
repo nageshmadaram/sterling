@@ -212,6 +212,7 @@ describe('ORB adapter', () => {
     expect(orbToBoard(entry({ state: 'SIGNAL' })).status).toBe('armed');
     expect(orbToBoard(entry({ state: 'WATCHING' })).status).toBe('watching');
     expect(orbToBoard(entry({ state: 'ERROR' })).status).toBe('error');
+    expect(orbToBoard(entry({ state: 'ENDED' })).status).toBe('ended');
   });
 
   it('builds a quote key only when there is a contract to quote', () => {

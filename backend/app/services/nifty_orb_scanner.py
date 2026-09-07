@@ -384,6 +384,56 @@ async def _option_contracts(uid: str, underlying: str, direction: str, cfg: Stra
     return await _truedata_option_contracts(underlying, direction, cfg)
 
 
+def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: datetime) -> list:
+    """First fire of each direction today, reconstructed from completed bars.
+
+    SuperTrend keeps past transitions by replaying lookback. ORB was live-bar
+    only, so a 10:35 breakout vanished at 12:01. Walking today's entry-window
+    bars recovers those fires without a second strategy.
+    """
+    from app.engines.nifty_orb_options import _as_ist
+    fires = []
+    last = "NONE"
+    as_of_ist = _as_ist(as_of)
+    interval = max(1, int(cfg.interval_minutes))
+    for i, bar in enumerate(bars):
+        ts = _as_ist(bar.timestamp)
+        if ts.date() != as_of_ist.date():
+            continue
+        clock = ts.strftime("%H:%M")
+        if clock < cfg.entry_start or clock > cfg.entry_end:
+            continue
+        try:
+            sig = generate_signal(bars[: i + 1], cfg, as_of=ts + timedelta(minutes=interval))
+        except ValueError:
+            continue
+        if sig.direction in ("LONG", "SHORT") and sig.direction != last:
+            fires.append(sig)
+        last = sig.direction
+    return fires
+
+
+def _history_rows(symbol: str, bars: list[Bar], local: StrategyConfig, cfg: StrategyConfig, now: datetime, *, live_ts: str | None) -> list[dict[str, Any]]:
+    history = []
+    try:
+        for sig in session_fire_transitions(bars, local, as_of=now):
+            payload = sig.to_dict()
+            if payload.get("timestamp") == live_ts:
+                continue
+            history.append({
+                "underlying": symbol,
+                "status": "ended",
+                "signal": payload,
+                "spot": bars[-1].close,
+                "trade": None,
+                "data_source": cfg.data_source,
+                "interval_minutes": cfg.interval_minutes,
+            })
+    except Exception:
+        return []
+    return history
+
+
 async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None = None) -> dict[str, Any]:
     cfg = cfg or get_config()
     symbol = _canonical(underlying)
@@ -405,6 +455,7 @@ async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None 
         "trade": None,
     }
     if signal.direction == "NONE":
+        result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(signal.to_dict().get("timestamp") if signal else None))
         return result
     try:
         contracts = await _option_contracts(uid, symbol, signal.direction, cfg)
@@ -440,6 +491,7 @@ async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None 
     except (ValueError, RuntimeError) as exc:
         result["status"] = "signal_unresolved"
         result["trade_error"] = str(exc)
+    result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(result.get("signal") or {}).get("timestamp"))
     return result
 
 
@@ -451,12 +503,29 @@ async def scan_user(uid: str, cfg: StrategyConfig | None = None) -> dict[str, An
     results = await asyncio.gather(*(scan_underlying(uid, s, cfg) for s in universe), return_exceptions=True)
     rows = []
     for symbol, result in zip(universe, results):
-        rows.append({"underlying": symbol, "status": "error", "signal": None, "trade": None, "error": str(result)} if isinstance(result, Exception) else result)
-    rows.sort(key=lambda r: (r.get("status") not in {"signal", "signal_unresolved"}, r["underlying"]))
+        if isinstance(result, Exception):
+            rows.append({"underlying": symbol, "status": "error", "signal": None, "trade": None, "error": str(result)})
+            continue
+        extra = result.pop("history", None) or []
+        rows.append(result)
+        rows.extend(extra)
+    rows.sort(key=lambda r: (
+        r.get("status") not in {"signal", "signal_unresolved"},
+        r.get("status") != "ended",
+        str(r.get("underlying") or ""),
+    ))
+    from app.services.nifty_orb_lifecycle import remember_fired_signals
+    rows = remember_fired_signals(uid, rows)
+    rows.sort(key=lambda r: (
+        r.get("status") not in {"signal", "signal_unresolved"},
+        r.get("status") != "ended",
+        str(r.get("underlying") or ""),
+    ))
     return {
         "enabled": True,
         "universe": universe,
         "signals": rows,
         "signal_count": sum(1 for r in rows if r.get("status") in {"signal", "signal_unresolved"}),
+        "retained_count": sum(1 for r in rows if r.get("status") == "ended"),
         "data_source": cfg.data_source,
     }

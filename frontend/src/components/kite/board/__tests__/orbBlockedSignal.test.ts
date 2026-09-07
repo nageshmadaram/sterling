@@ -46,6 +46,12 @@ describe('a blocked ORB signal', () => {
   it('still calls a fillable signal armed', () => {
     expect(orbToBoard({ ...base, state: 'SIGNAL' }).status).toBe('armed');
   });
+
+  it('maps a retained fire to ended, not to a live armed ticket', () => {
+    const past = orbToBoard({ ...base, state: 'ENDED', optionSymbol: 'NIFTY26AUG25000CE', optionType: 'CE' });
+    expect(past.status).toBe('ended');
+    expect(past.flags.some((f) => f.label === 'PAST')).toBe(true);
+  });
 });
 
 describe('the averaging basis', () => {

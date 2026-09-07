@@ -198,7 +198,11 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
     () => promoted.filter((s) => ACTIONABLE.includes(s.status)),
     [promoted],
   );
-  const blocked = promoted.length - tradable.length;
+  const ended = React.useMemo(
+    () => promoted.filter((s) => s.status === 'ended'),
+    [promoted],
+  );
+  const blocked = promoted.length - tradable.length - ended.length;
   const view = useBoardView(promoted, {
     endedByDefault: true,
     storageKey: 'orb-ticket-v2',
@@ -240,7 +244,7 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
   const promotedIds = new Set(promoted.map((s) => s.id));
   const quiet = signals.filter((s) => !promotedIds.has(s.id));
   const failed = signals.filter((s) => s.state === 'ERROR');
-  const waiting = tradable.length === 0 && blocked === 0;
+  const waiting = tradable.length === 0 && blocked === 0 && ended.length === 0;
   const showQuiet = quietOverride ?? false;
   const quietGroups = groupQuiet(quiet);
 
@@ -268,7 +272,8 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
         <span style={{ marginLeft: 'auto', fontSize: 10, color: k.dim }}>
           <b style={{ color: tradable.length ? k.green : k.dim }}>{tradable.length}</b> tradable
           {blocked > 0 && <> · <b style={{ color: k.red }}>{blocked}</b> blocked</>}
-          {' '}· {signals.length} scanned
+          {ended.length > 0 && <> · <b style={{ color: k.text }}>{ended.length}</b> past</>}
+          {' '}· {signals.filter((s) => s.state !== 'ENDED').length} scanned
         </span>
       </div>
 

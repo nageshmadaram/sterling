@@ -75,6 +75,127 @@ def attach_ticket(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+# Fired tickets linger like SuperTrend: a setup that printed at 10:15 must still
+# be on the board at 15:40, not vanish the moment the live scan goes quiet.
+_SIGNAL_RETENTION_MS = 15 * 24 * 60 * 60 * 1000
+_FIRED_STATUSES = frozenset({"signal", "signal_unresolved"})
+_KEEP_STATUSES = frozenset({"signal", "signal_unresolved", "ended"})
+_STORE_CAP = 200
+
+
+def fired_row_key(row: dict[str, Any]) -> str | None:
+    """Identity of a generated fire: one row per underlying/bar/direction."""
+    signal = row.get("signal") or {}
+    und = row.get("underlying") or row.get("symbol")
+    ts = signal.get("timestamp")
+    direction = signal.get("direction")
+    if und and ts and direction and direction != "NONE":
+        return f"{und}|{ts}|{direction}"
+    fp = row.get("ticket_fingerprint")
+    return str(fp) if fp else None
+
+
+def _row_ts_ms(row: dict[str, Any]) -> int:
+    signal = row.get("signal") or {}
+    ts = signal.get("timestamp") or row.get("timestamp")
+    if isinstance(ts, (int, float)):
+        x = float(ts)
+        return int(x if x > 10_000_000_000 else x * 1000)
+    if isinstance(ts, str) and ts:
+        try:
+            return int(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            return 0
+    return 0
+
+
+def load_fired_signals(uid: str) -> list[dict[str, Any]]:
+    import json
+    from app.services import db
+    try:
+        raw = db.get_config(f"nifty_orb_signals:{uid}")
+    except Exception:
+        return []
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return []
+    rows = payload.get("rows") if isinstance(payload, dict) else payload
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def save_fired_signals(uid: str, rows: list[dict[str, Any]]) -> None:
+    import json
+    from app.services import db
+    fired = [r for r in rows if r.get("status") in _KEEP_STATUSES and fired_row_key(r)]
+    fired.sort(key=_row_ts_ms, reverse=True)
+    fired = fired[:_STORE_CAP]
+    db.set_config(
+        f"nifty_orb_signals:{uid}",
+        json.dumps({"rows": fired, "saved_ms": int(datetime.now(IST).timestamp() * 1000)}, separators=(",", ":")),
+    )
+
+
+def merge_retained_signals(
+    live: list[dict[str, Any]],
+    prior: list[dict[str, Any]],
+    *,
+    now_ms: int,
+) -> list[dict[str, Any]]:
+    """Keep past fires on the board after the live scan goes quiet.
+
+    Auto still only places ``status=signal``. Ended copies are a record, not a
+    ticket — they must never look live.
+    """
+    live_keys: dict[str, dict[str, Any]] = {}
+    for row in live:
+        key = fired_row_key(row)
+        if key and row.get("status") in _FIRED_STATUSES | {"ended"}:
+            live_keys[key] = row
+    out = list(live)
+    seen = set(live_keys)
+    for old in prior:
+        key = fired_row_key(old)
+        if not key:
+            continue
+        ts = _row_ts_ms(old)
+        if ts and now_ms - ts > _SIGNAL_RETENTION_MS:
+            continue
+        if key in live_keys:
+            live_row = live_keys[key]
+            if not live_row.get("trade") and old.get("trade"):
+                live_row["trade"] = old["trade"]
+                live_row["ticket"] = old.get("ticket")
+                live_row["ticket_fingerprint"] = old.get("ticket_fingerprint")
+                live_row["exchange"] = old.get("exchange")
+                live_row["lot_size"] = old.get("lot_size")
+            continue
+        retained = dict(old)
+        if retained.get("status") in _FIRED_STATUSES:
+            retained["status"] = "ended"
+            retained.pop("auto_block", None)
+            signal = dict(retained.get("signal") or {})
+            signal.setdefault("reason", "past signal")
+            retained["signal"] = signal
+        seen.add(key)
+        out.append(retained)
+    return out
+
+
+def remember_fired_signals(uid: str, live: list[dict[str, Any]], *, now_ms: int | None = None) -> list[dict[str, Any]]:
+    """Load history, merge this scan, persist the fired subset, return the board."""
+    now = now_ms if now_ms is not None else int(datetime.now(IST).timestamp() * 1000)
+    prior = load_fired_signals(uid)
+    merged = merge_retained_signals(live, prior, now_ms=now)
+    try:
+        save_fired_signals(uid, merged)
+    except Exception as exc:
+        log.warning("ORB signal history did not persist: %s", exc)
+    return merged
+
+
 def manual_mode_response() -> dict[str, Any]:
     """Auto is off: show signals only; user places the same ticket."""
     return {
