@@ -330,8 +330,8 @@ async def list_signals(
     before_decision_id: Optional[str] = None, limit: int = 50,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_navigator_signals_response()
 
     limit = max(1, min(limit, 200))

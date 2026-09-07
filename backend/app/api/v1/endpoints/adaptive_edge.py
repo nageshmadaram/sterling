@@ -382,8 +382,8 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
 
 @router.get("/snapshot")
 def get_snapshot() -> dict[str, Any]:
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_adaptive_edge_snapshot()
 
     gate = evaluate_execution_gate()

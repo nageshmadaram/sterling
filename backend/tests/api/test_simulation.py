@@ -818,3 +818,38 @@ def test_kite_signals_synced_with_simulation_events():
     assert row["option_type"] == "PE"
     assert len(row["legs"]) > 0
     assert "26SEP" in row["legs"][0]["option_symbol"] or row["legs"][0]["option_symbol"] == "NIFTY2690823800PE"
+
+
+def test_has_session_view_lifecycle():
+    """Verify that has_session_view is True during replay AND while finished session is reviewed, but False when cleared."""
+    from app.services.simulation import SimState, SimSignalEvent
+
+    # 1. Initially idle and empty -> False
+    simulation_runner.clear()
+    assert simulation_runner.has_session_view is False
+
+    # 2. Running -> True
+    simulation_runner._state = SimState.RUNNING
+    assert simulation_runner.has_session_view is True
+
+    # 3. Finished session (state is IDLE, but _session_complete is True and events present) -> True
+    simulation_runner._state = SimState.IDLE
+    simulation_runner._session_complete = True
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="09:15:00",
+            timestamp_ms=1788800100000,
+            strategy="adaptive_edge",
+            instrument="NIFTY",
+            direction="BEARISH",
+            strength="STRONG",
+            entry=57.97,
+            stop=43.5,
+            target=86.9,
+        )
+    ]
+    assert simulation_runner.has_session_view is True
+
+    # 4. User clears session -> False
+    simulation_runner.clear()
+    assert simulation_runner.has_session_view is False

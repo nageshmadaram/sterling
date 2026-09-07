@@ -88,7 +88,6 @@ def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
                         "entry_sl": float(r.get("entry_sl") or 0.0),
                         "target": float(r.get("target") or 0.0) if r.get("target") is not None else None,
                         "raw_row": r,
-                        "strategy": "supertrend",
                         "strategy": r.get("strategy") or "supertrend",
                         "is_spot_scan": True,
                         "source": r.get("source", "spot"),
@@ -786,6 +785,11 @@ class SimulationRunner:
         if self._current_sim_epoch > 0:
             return int(self._current_sim_epoch * 1000)
         return int(time.time() * 1000)
+
+    @property
+    def has_session_view(self) -> bool:
+        """True if a simulation is running/paused, or if a finished session is being reviewed."""
+        return self._state != SimState.IDLE or bool(self._session_complete and (self._stats.events or self._stats.trades))
 
     @property
     def status(self) -> SimStatus:

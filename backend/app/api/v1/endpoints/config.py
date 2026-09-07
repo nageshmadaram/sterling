@@ -93,8 +93,8 @@ async def update_nifty_orb_options_config(body: NiftyOrbConfigRequest) -> dict:
 
 @router.post("/nifty-orb-options/snapshot")
 async def nifty_orb_options_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_nifty_orb_signals_response()
     from app.services.nifty_orb_options import snapshot
     try:
@@ -104,8 +104,8 @@ async def nifty_orb_options_snapshot(user: UserContext = Depends(get_current_use
 
 @router.post("/nifty-orb-options/scan")
 async def nifty_orb_options_scan(user: UserContext = Depends(get_current_user)) -> dict:
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_nifty_orb_signals_response()
     from app.services.nifty_orb_scanner import scan_user
     try:
@@ -237,8 +237,8 @@ async def atm_premium_imbalance_snapshot(user: UserContext = Depends(get_current
     taking it from the body would let any caller resolve instruments against
     another user's broker credentials and rate limit.
     """
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_atm_imbalance_snapshot()
 
     from app.services.atm_premium_imbalance import snapshot
@@ -420,8 +420,8 @@ async def update_gamma_move_config(body: dict = Body(...)) -> dict:
 @router.get("/gamma-move/snapshot")
 async def gamma_move_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
     """Config, what the scan found, and every reason nothing is armed."""
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_gamma_move_snapshot()
 
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
@@ -688,8 +688,8 @@ async def update_adaptive_edge_config(body: dict = Body(...)) -> dict:
 @router.get("/adaptive-edge/snapshot")
 async def adaptive_edge_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
     """Config, what the scan found, and every reason nothing is armed."""
-    from app.services.simulation import simulation_runner, SimState
-    if simulation_runner.status.state != SimState.IDLE:
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
         return simulation_runner.get_adaptive_edge_snapshot()
 
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
