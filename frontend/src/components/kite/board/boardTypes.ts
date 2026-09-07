@@ -236,6 +236,13 @@ export interface BoardSignal {
    */
   flags?: BoardOrigin[];
   /**
+   * Stable id of the Manual board ticket and the Auto order.
+   *
+   * ORB stamps this so an operator can see the two paths are the same trade.
+   * Other engines leave it unset.
+   */
+  ticketFingerprint?: string | null;
+  /**
    * The underlying's own price, for the signal header.
    *
    * A parent row names an idea about an instrument, so it shows that

@@ -130,6 +130,22 @@ def test_preview_auto_refusal_matches_execute_scan_reasons():
     thin["trade"] = {**row["trade"], "contract": {**row["trade"]["contract"], "volume": 10, "open_interest": 50_000}}
     assert life.preview_auto_refusal(thin, cfg, now=now) == "option liquidity below configured minimum"
 
+    resize = dict(row)
+    resize["trade"] = {
+        **row["trade"],
+        "quantity": 150,
+        "contract": {**row["trade"]["contract"], "ask": 40.0, "lot_size": 75},
+    }
+    assert life.preview_auto_refusal(resize, cfg, now=now) == "live premium would change the ticket quantity"
+
+    rich = dict(row)
+    rich["trade"] = {
+        **row["trade"],
+        "quantity": 75,
+        "contract": {**row["trade"]["contract"], "ask": 500.0, "lot_size": 75},
+    }
+    assert life.preview_auto_refusal(rich, cfg, now=now) == "one option lot exceeds conservative premium risk budget"
+
 
 def test_untagged_kite_positions_are_not_orb_positions(monkeypatch):
     """Empty vehicle used to match every leftover kite row."""

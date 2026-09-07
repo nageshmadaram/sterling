@@ -184,6 +184,7 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
         ? [{ label: 'STALE', tone: 'dim' as const, hint: `Quote is ${Math.round(entry.quoteAgeS)}s old` }]
         : []),
     ],
+    ticketFingerprint: entry.ticketFingerprint ?? null,
     delta: entry.delta,
     reason: entry.autoBlock ?? entry.reason ?? null,
     quoteAgeS: entry.quoteAgeS ?? null,

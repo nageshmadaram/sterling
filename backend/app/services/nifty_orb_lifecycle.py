@@ -99,7 +99,12 @@ def preview_auto_refusal(
     would emit. Broker-only gates (drift, live quote, contract search) stay on
     the order path — they cannot be previewed honestly from the scan snapshot.
     """
-    from app.services.nifty_orb_execution import _entry_window_open, _market_open, _parse_timestamp
+    from app.services.nifty_orb_execution import (
+        _conservative_quantity,
+        _entry_window_open,
+        _market_open,
+        _parse_timestamp,
+    )
 
     if row.get("status") != "signal":
         return None
@@ -127,8 +132,17 @@ def preview_auto_refusal(
     dte = (expiry - now.astimezone(IST).date()).days
     if dte < cfg.expiry_dte_min or dte > cfg.expiry_dte_max or (cfg.avoid_expiry_day and dte == 0):
         return "contract outside configured expiry policy"
-    if int(plan.get("quantity") or 0) <= 0:
+    requested = int(plan.get("quantity") or 0)
+    lot = int(contract.get("lot_size") or 0)
+    ask = float(contract.get("ask") or 0)
+    if requested <= 0:
         return "one option lot exceeds conservative premium risk budget"
+    if ask > 0 and lot > 0:
+        sized = _conservative_quantity(requested, lot, ask, float(cfg.max_risk_inr))
+        if sized <= 0:
+            return "one option lot exceeds conservative premium risk budget"
+        if sized != requested:
+            return "live premium would change the ticket quantity"
     vol = float(contract.get("volume") or 0)
     oi = float(contract.get("open_interest") or 0)
     # 0/0 is the OptionContract default, not a measurement. A positive print
