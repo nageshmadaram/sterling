@@ -83,7 +83,9 @@ export function QuoteDetail({ sym, q, expiry, spotName, spotPx, instrumentName, 
         <>
           <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
              <button onClick={onBuy} style={{ flex: 1, background: 'var(--k-blue)', color: 'var(--k-on-accent)', border: 'none', borderRadius: 3, height: 32, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>BUY</button>
-             <button onClick={onSell} style={{ flex: 1, background: 'var(--k-orange)', color: 'var(--k-on-accent)', border: 'none', borderRadius: 3, height: 32, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>SELL</button>
+             {onSell && (
+               <button onClick={onSell} style={{ flex: 1, background: 'var(--k-orange)', color: 'var(--k-on-accent)', border: 'none', borderRadius: 3, height: 32, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>SELL</button>
+             )}
              <button style={{ background: 'transparent', color: t.dim, border: `1px solid ${t.border}`, borderRadius: 3, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Chart"><Icons.Chart /></button>
              <button style={{ background: 'transparent', color: t.dim, border: `1px solid ${t.border}`, borderRadius: 3, width: 32, height: 32, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="More"><Icons.More /></button>
           </div>

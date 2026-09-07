@@ -37,6 +37,7 @@ vi.mock('../AdaptiveEdgePositionCalculator', () => ({
 }));
 
 import { NiftyOrbSignalsFeed } from '../NiftyOrbSignalsFeed';
+import { useOrderWindowStore } from '../../../store/useOrderWindowStore';
 
 const entry = (over: Partial<OrbFeedEntry> = {}): OrbFeedEntry => ({
   id: over.underlying ?? 'r1', strategy: 'ORB', underlying: 'NIFTY', direction: 'long', state: 'SIGNAL',
@@ -110,16 +111,16 @@ describe('ORB feed — tradable setups', () => {
     expect(document.querySelector('.sb-row')?.textContent).toMatch(/24000/);
     expect(screen.getByText('CE · LONG')).toBeInTheDocument();
     expect(screen.getByText('NFO')).toBeInTheDocument();
-    // Ticket columns: qty and risk visible. SuperTrend's TSL is not an ORB field.
-    ['LTP', 'Entry (Δpts)', 'SL', 'Target', 'Qty', 'At risk', 'Exc.', 'Leg (Δ)', 'Time', 'Status'].forEach((label) => {
+    ['LTP', 'Entry (Δpts)', 'SL', 'Target', 'Qty', 'At risk'].forEach((label) => {
       expect(screen.getByText(label), label).toBeInTheDocument();
     });
     expect(screen.queryByText('TSL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Leg (Δ)')).not.toBeInTheDocument();
   });
 
-  it('shows the signal time and marks a stale quote', () => {
+  it('marks a stale quote on the row without a SuperTrend time column', () => {
     show({ rows: [entry({ quoteAgeS: 42 })] });
-    expect(screen.getByText(/· stale/)).toBeInTheDocument();
+    expect(screen.getByText('STALE')).toBeInTheDocument();
   });
 
   it('keeps candidates that did not fire out of the way', () => {
@@ -186,6 +187,7 @@ describe('ORB feed — Manual / Auto is one ticket', () => {
 
   it('surfaces an Auto refusal on a Manual row', () => {
     show({ rows: [entry({ autoBlock: 'daily trade limit reached', reason: 'daily trade limit reached' })] });
+    expect(screen.getByText('AUTO BLOCK')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /NIFTY CE Armed/ }));
     expect(screen.getByText('daily trade limit reached')).toBeInTheDocument();
   });
@@ -204,14 +206,26 @@ describe('ORB feed — expanded setup', () => {
     expect(screen.getByTestId('sizing')).toHaveTextContent('sizing NIFTY26AUG24000CE @ 18 sl 14 on NFO lots 2 hideTsl true');
   });
 
-  it('shows the same order ticket SuperTrend shows', () => {
-    // The expanded row mounts the shared BoardTicket, which is the same
-    // calculator and the same QuoteDetail SuperTrend's legs use — Buy and
-    // Sell included. The boards used to differ here most of all.
+  it('row Buy opens the scan ticket, not a blank 1-lot window', () => {
+    useOrderWindowStore.setState({ isOpen: false, options: null });
     show({ rows: [entry()] });
+    fireEvent.click(screen.getByTitle('Buy'));
+    const opts = useOrderWindowStore.getState().options;
+    expect(opts?.symbol).toBe('NIFTY26AUG24000CE');
+    expect(opts?.initialSide).toBe('BUY');
+    expect(opts?.initialQty).toBe(150);
+    expect(opts?.tag).toBe('ORB');
+    expect(opts?.initialSlPct).toBeCloseTo(((14 - 18) / 18) * 100, 1);
+    expect(opts?.initialTgtPct).toBeCloseTo(((26 - 18) / 18) * 100, 1);
+  });
+
+  it('shows a Buy ticket without a Sell-to-open', () => {
+    show({ rows: [entry()] });
+    expect(screen.getByTitle('Buy')).toBeInTheDocument();
+    expect(screen.queryByTitle('Sell')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /NIFTY CE Armed/ }));
     expect(screen.getByRole('button', { name: 'BUY' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'SELL' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'SELL' })).not.toBeInTheDocument();
   });
 
   it('keeps ORB’s own evidence alongside the shared ticket', () => {

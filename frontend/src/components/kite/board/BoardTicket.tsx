@@ -73,15 +73,19 @@ export function BoardTicket({ signal, tag }: {
   }, [strike, expiry, optionType, spot, quote, lotSize]);
 
   const ended = signal.status === 'ended';
+  const orb = signal.engine === 'orb';
+  // ORB Manual must open the scan ticket: qty and SL from the plan, priced
+  // off the plan entry so a live premium move cannot silently resize the GTT.
+  const planPx = (orb ? signal.levels.entry : null) || live || 0;
   const raiseOrder = (side: 'BUY' | 'SELL') => openOrderWindow({
     symbol,
     exchange,
     initialSide: side,
     lotSize: lotSize || 1,
     initialQty: signal.sizing.quantity ?? undefined,
-    lastPrice: live || 0,
-    initialSlPct: bracketPct(live, signal.levels.stop),
-    initialTgtPct: bracketPct(live, signal.levels.target),
+    lastPrice: planPx,
+    initialSlPct: bracketPct(orb ? (signal.levels.entry ?? live) : live, signal.levels.stop),
+    initialTgtPct: bracketPct(orb ? (signal.levels.entry ?? live) : live, signal.levels.target),
     tag,
   });
 
@@ -117,7 +121,7 @@ export function BoardTicket({ signal, tag }: {
         // A closed position has nothing to buy. Selling stays available,
         // because a leg can end on the board while the broker still holds it.
         onBuy={ended ? undefined : () => raiseOrder('BUY')}
-        onSell={() => raiseOrder('SELL')}
+        onSell={orb ? undefined : () => raiseOrder('SELL')}
       />
     </>
   );

@@ -420,12 +420,16 @@ async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None 
         result["lot_size"] = option.lot_size
         from app.services.nifty_orb_lifecycle import attach_ticket, preview_auto_refusal
         attach_ticket(result)
+        filled_today = 0
+        state_block = None
         try:
             from app.services.nifty_orb_execution import _state
             filled_today = int(_state(uid).get("count", 0))
         except Exception:
-            filled_today = 0
-        auto_block = preview_auto_refusal(
+            # Auto fail-closes when trade-state is down. Do not preview a clean
+            # ticket that Auto would never place.
+            state_block = "trade state unavailable"
+        auto_block = state_block or preview_auto_refusal(
             result, cfg, now=now, filled_today=filled_today, max_trades=cfg.max_trades_per_day,
         )
         if auto_block:

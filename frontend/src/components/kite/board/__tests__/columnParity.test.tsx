@@ -171,7 +171,12 @@ describe('expanded-row parity across engines', () => {
     const container = expand(boards[name]);
     const labels = [...container.querySelectorAll('button')].map((b) => b.textContent!.trim());
     expect(labels, `${name} has no BUY`).toContain('BUY');
-    expect(labels, `${name} has no SELL`).toContain('SELL');
+    if (name === 'orb') {
+      // Long-options-only: closing a held option is Positions, not this row.
+      expect(labels, `${name} must not offer Sell-to-open`).not.toContain('SELL');
+    } else {
+      expect(labels, `${name} has no SELL`).toContain('SELL');
+    }
   });
 
   it('offers sizing on every board', () => {

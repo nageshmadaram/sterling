@@ -176,6 +176,14 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
     },
     score: null,
     origin: originOf(entry),
+    flags: [
+      ...(entry.autoBlock
+        ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock }]
+        : []),
+      ...(entry.quoteAgeS != null && entry.quoteAgeS > 15
+        ? [{ label: 'STALE', tone: 'dim' as const, hint: `Quote is ${Math.round(entry.quoteAgeS)}s old` }]
+        : []),
+    ],
     delta: entry.delta,
     reason: entry.autoBlock ?? entry.reason ?? null,
     quoteAgeS: entry.quoteAgeS ?? null,
