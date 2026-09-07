@@ -92,15 +92,16 @@ def _load(path: Path) -> Dict[str, Any] | None:
     scale = float(meta.get("price_scale") or 1)
     if table.num_rows < MIN_BARS or scale <= 0:
         return None
-    cols = table.to_pydict()
-    return {
-        "symbol": meta.get("tradingsymbol", path.stem),
-        "ts_ms": [int(t.timestamp() * 1000) for t in cols["ts"]],
-        "open": [v / scale for v in cols["open"]],
-        "high": [v / scale for v in cols["high"]],
-        "low": [v / scale for v in cols["low"]],
-        "close": [v / scale for v in cols["close"]],
-    }
+    import numpy as _np
+    # numpy throughout. A six-month minute series is ~48,000 rows and the timeframe
+    # sweep loads hundreds of them; per-row Python arithmetic here was the runtime.
+    # Callers index these like sequences, which numpy arrays support.
+    ts = table.column("ts").to_numpy(zero_copy_only=False).astype("datetime64[ms]")
+    out = {"symbol": meta.get("tradingsymbol", path.stem),
+           "ts_ms": ts.astype("int64")}
+    for f in ("open", "high", "low", "close"):
+        out[f] = table.column(f).to_numpy(zero_copy_only=False).astype(float) / scale
+    return out
 
 
 def _resample(series: Dict[str, Any], minutes: int) -> Dict[str, Any]:
