@@ -234,7 +234,8 @@ async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,An
                 executed.append({"status":"error","symbol":symbol,"error":str(exc)});continue
             oid=str((r or {}).get("order_id") or (r or {}).get("orderId") or "")
             if not oid:
-                live_safety.set_kill_switch(True,"ORB submission outcome unknown; reconcile broker state");continue
+                live_safety.set_kill_switch(True,"ORB submission outcome unknown; reconcile broker state")
+                executed.append({"status":"blocked","symbol":symbol,"reason":"submission outcome unknown"});continue
             live_safety.record_idempotency(idem,oid)
         filled,fill_price,status=await _resolve_fill(client,oid)
         if filled<=0:

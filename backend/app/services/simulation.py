@@ -324,6 +324,54 @@ def _pick_moneyness(config: Optional["SimConfig"]) -> str:
     return "ATM"
 
 
+def _live_orb_direction(history: List[Dict], bar_dt) -> Optional[str]:
+    """LONG/SHORT from the live ORB engine, or None.
+
+    Replay used to clone ORB with a 4-bar VWAP test the production engine
+    would never fire. Same tickets require the same ``generate_signal``.
+    """
+    from dataclasses import replace
+    from datetime import timezone, timedelta
+    from app.engines.nifty_orb_options import Bar, StrategyConfig, generate_signal
+    from app.services.nifty_orb_options import get_config
+
+    ist = bar_dt.tzinfo or timezone(timedelta(hours=5, minutes=30))
+    bars = []
+    for b in history:
+        ts = datetime.fromtimestamp(int(b["time"]), tz=ist)
+        bars.append(Bar(
+            timestamp=ts,
+            open=float(b["open"]),
+            high=float(b["high"]),
+            low=float(b["low"]),
+            close=float(b["close"]),
+            volume=float(b.get("volume") or 0),
+        ))
+    try:
+        cfg = replace(get_config(), enabled=True)
+    except Exception:
+        cfg = StrategyConfig()
+    try:
+        sig = generate_signal(bars, cfg)
+    except ValueError:
+        return None
+    return sig.direction if sig.direction in ("LONG", "SHORT") else None
+
+
+def _expiry_from_synthetic_contract(name: str) -> str:
+    """Last Thursday of the month encoded in ``NIFTY26AUG25000CE``."""
+    import calendar
+    import re
+    from datetime import date
+    m = re.search(r"(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)", name or "", re.I)
+    if not m:
+        return ""
+    months = "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split()
+    year, month = 2000 + int(m.group(1)), months.index(m.group(2).upper()) + 1
+    thursdays = [w[calendar.THURSDAY] for w in calendar.monthcalendar(year, month) if w[calendar.THURSDAY]]
+    return date(year, month, thursdays[-1]).isoformat()
+
+
 def _option_contract(
     symbol: str,
     spot: float,
@@ -2121,27 +2169,60 @@ class SimulationRunner:
         }
 
     def get_nifty_orb_signals_response(self) -> Dict[str, Any]:
-        """Return signals formatted for /api/v1/nifty-orb-options/scan during simulation."""
-        now_ms = int(time.time() * 1000)
+        """Scan-shaped tickets the live board already knows how to render.
+
+        The previous payload had no nested ``signal``/``trade``, so the adapter
+        classified every replay row as ``scan failed``.
+        """
+        from app.services.nifty_orb_lifecycle import attach_ticket
+        from datetime import datetime, timezone, timedelta
+
+        ist = timezone(timedelta(hours=5, minutes=30))
         signals = []
         for ev in self._stats.events:
-            ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
-            signals.append({
-                "symbol": ev.instrument,
-                "kind": "INDEX" if "NIFTY" in ev.instrument else "EQUITY",
-                "direction": ev.direction,
-                "regime": "ORB_EXPANSION",
-                "confidence": 0.88,
-                "timestamp_ms": ev_ms,
-                "or_high": round(ev.entry * 1.005, 2),
-                "or_low": round(ev.entry * 0.995, 2),
-                "vwap": round(ev.entry * 0.998, 2),
-                "atr": round(ev.entry * 0.01, 2),
-            })
-        return {
-            "count": len(signals),
-            "signals": signals,
-        }
+            if getattr(ev, "strategy", None) != "nifty_orb":
+                continue
+            direction = "LONG" if ev.direction in ("BULLISH", "LONG") else "SHORT"
+            opt = ev.opt_type or ("CE" if direction == "LONG" else "PE")
+            ts = datetime.fromtimestamp((ev.timestamp_ms or 0) / 1000, tz=ist)
+            leg = _option_contract(ev.instrument, float(ev.spot or ev.entry or 0), ev.direction, self._config)
+            symbol = ev.contract or leg["contract"]
+            qty = int(leg["lot_size"] or 0)
+            premium = float(ev.premium_entry or leg["premium"] or 0)
+            row: Dict[str, Any] = {
+                "status": "signal" if symbol and premium > 0 else "signal_unresolved",
+                "underlying": ev.instrument,
+                "spot": ev.spot or ev.entry,
+                "signal": {
+                    "direction": direction,
+                    "timestamp": ts.isoformat(),
+                    "reason": "replay",
+                },
+                "exchange": "NFO",
+                "lot_size": qty,
+                "auto_block": "replay — Auto does not place from simulation",
+            }
+            if symbol and premium > 0:
+                row["trade"] = {
+                    "quantity": qty,
+                    "entry_premium": premium,
+                    "stop_premium": ev.premium_sl,
+                    "target_premium": ev.premium_target,
+                    "underlying_entry": ev.spot or ev.entry,
+                    "max_loss_inr": round(premium * qty, 2),
+                    "contract": {
+                        "symbol": symbol,
+                        "option_type": opt,
+                        "strike": ev.strike or leg["strike"],
+                        "expiry": _expiry_from_synthetic_contract(symbol),
+                        "lot_size": qty,
+                        "ltp": premium,
+                        "ask": premium,
+                    },
+                }
+                attach_ticket(row)
+            signals.append(row)
+        return {"count": len(signals), "signals": signals}
 
     def _evaluate_bar(self, bar: Dict, bar_dt):
         """Evaluate strategy signals on every replay bar.
@@ -2404,40 +2485,25 @@ class SimulationRunner:
                         "strength": "STRONG",
                     })
 
-        # 7. Nifty ORB Options: Canonical Opening Range Breakout (09:30-12:00, max 2/day)
+        # 7. Nifty ORB — live engine, not a replay-local clone.
         orb_trades_today = sum(
             1 for ev in self._stats.events
             if ev.strategy == "nifty_orb" and ev.instrument == sym
         )
         if orb_trades_today < 2 and "09:30:00" <= bar_time_str <= "12:00:00":
-            or_bars = [b for b in session_bars if datetime.fromtimestamp(b["time"], tz=ist).strftime("%H:%M:%S") < "09:30:00"]
-            if len(or_bars) >= 3:
-                or_high = max(float(b["high"]) for b in or_bars)
-                or_low = min(float(b["low"]) for b in or_bars)
-                cum_pv = sum(float(b["close"]) * max(1.0, float(b.get("volume", 0))) for b in session_bars)
-                cum_v = sum(max(1.0, float(b.get("volume", 0))) for b in session_bars)
-                cur_vwap = cum_pv / cum_v if cum_v > 0 else close
-
-                prev_sb = session_bars[:-1]
-                prev_pv = sum(float(b["close"]) * max(1.0, float(b.get("volume", 0))) for b in prev_sb)
-                prev_v = sum(max(1.0, float(b.get("volume", 0))) for b in prev_sb)
-                prev_vwap = prev_pv / prev_v if prev_v > 0 else cur_vwap
-                vwap_slope = cur_vwap - prev_vwap
-
-                min_breakout = 0.15 * atr
-
-                if close > or_high + min_breakout and prev_close <= or_high and close > cur_vwap and vwap_slope > 0:
-                    signals_to_fire.append({
-                        "strategy": "nifty_orb",
-                        "direction": "BULLISH",
-                        "strength": "STRONG",
-                    })
-                elif close < or_low - min_breakout and prev_close >= or_low and close < cur_vwap and vwap_slope < 0:
-                    signals_to_fire.append({
-                        "strategy": "nifty_orb",
-                        "direction": "BEARISH",
-                        "strength": "STRONG",
-                    })
+            live = _live_orb_direction(history, bar_dt)
+            if live == "LONG":
+                signals_to_fire.append({
+                    "strategy": "nifty_orb",
+                    "direction": "BULLISH",
+                    "strength": "STRONG",
+                })
+            elif live == "SHORT":
+                signals_to_fire.append({
+                    "strategy": "nifty_orb",
+                    "direction": "BEARISH",
+                    "strength": "STRONG",
+                })
 
         # Track recent signals per (symbol, strategy) to prevent flood
         if not hasattr(self, '_last_fired'):
