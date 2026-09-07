@@ -249,7 +249,11 @@ async def execute_scan(uid:str,*,scan:dict[str,Any],max_trades:int)->dict[str,An
                 live_safety.set_kill_switch(True,"ORB partial-fill remainder state remains uncertain")
                 executed.append({"status":"critical_unknown_position","symbol":symbol,"order_id":oid,"quantity":actual});continue
         try:
-            armed=await protection.arm_position(client,uid,symbol=symbol,exchange=exchange,token=int(instrument.get("instrument_token") or 0),qty=actual,lot_size=lot,entry_premium=fill_price or quote["ask"],stop_premium=float(plan.get("stop_premium") or 0),order_id=oid,stop_mode=universal.stop_mode,direction="long",signal_direction="long" if direction=="LONG" else "short",vehicle="otm_options",underlying=underlying,exit_mode=universal.exit_mode,entry_spot=spot,entry_delta=float(abs(contract.get("delta") or 0.5)),strike=float(contract.get("strike") or 0),expiry=str(instrument.get("expiry") or "")[:10],target_premium=float(plan.get("target_premium") or 0))
+            raw_delta=plan.get("delta")
+            if raw_delta is None:
+                raw_delta=contract.get("delta")
+            entry_delta=float(abs(raw_delta)) if raw_delta is not None else 0.0
+            armed=await protection.arm_position(client,uid,symbol=symbol,exchange=exchange,token=int(instrument.get("instrument_token") or 0),qty=actual,lot_size=lot,entry_premium=fill_price or quote["ask"],stop_premium=float(plan.get("stop_premium") or 0),order_id=oid,stop_mode=universal.stop_mode,direction="long",signal_direction="long" if direction=="LONG" else "short",vehicle="otm_options",underlying=underlying,exit_mode=universal.exit_mode,entry_spot=spot,entry_delta=entry_delta,strike=float(contract.get("strike") or 0),expiry=str(instrument.get("expiry") or "")[:10],target_premium=float(plan.get("target_premium") or 0))
             if not armed.protected:raise RuntimeError(armed.describe())
         except Exception as exc:
             closed,note=await _sell_and_verify(client,symbol,exchange,actual)

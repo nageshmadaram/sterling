@@ -144,28 +144,28 @@ async def _kite_options(uid:str,direction:str)->list[OptionContract]:
     return out
 
 async def snapshot(uid:str)->dict[str,Any]:
+    """Same tickets Auto uses. Not a NIFTY-only second planner.
+
+    Kept so anything still posting ``/snapshot`` cannot silently diverge from
+    ``scan_user``. The universe is the payload; ``signal``/``plan`` are the
+    NIFTY row when one exists, for older callers.
+    """
+    from app.services.nifty_orb_scanner import scan_user
     cfg=get_config()
-    if not cfg.enabled:return {"enabled":False,"signal":None,"plan":None,"data_source":cfg.data_source}
-    if cfg.data_source=="kite":
-        bars=await _kite_bars(uid,f"{cfg.interval_minutes}m"); signal=generate_signal(bars,cfg,as_of=datetime.now(_IST)); contracts=await _kite_options(uid,signal.direction) if signal.direction!="NONE" else []
-    else:
-        from app.services.market_data.truedata import TrueDataHistoricalClient
-        from app.services.providers.truedata.orb_provider import TrueDataOrbProvider
-        client=TrueDataHistoricalClient(settings.truedata_username,settings.truedata_password,timeout=settings.truedata_timeout_seconds)
-        try:
-            provider=TrueDataOrbProvider(client); bars=await provider.bars("NIFTY 50",cfg); signal=generate_signal(bars,cfg,as_of=datetime.now(_IST)); contracts=await provider.option_chain("NIFTY",cfg.expiry_selection,cfg) if signal.direction!="NONE" else []
-        finally: await client.aclose()
-    plan=None
-    if signal.direction!="NONE":
-        option=select_option(bars[-1].close,signal.direction,contracts,cfg); plan=build_trade_plan(signal,option,cfg,spot=bars[-1].close)
-    payload={"enabled":True,"data_source":cfg.data_source,"execution_broker":cfg.execution_broker,"signal":signal.to_dict(),"plan":plan.to_dict() if plan else None}
-    if plan is not None:
-        from app.services.nifty_orb_lifecycle import attach_ticket
-        row={"status":"signal","trade":payload["plan"],"signal":payload["signal"]}
-        attach_ticket(row)
-        payload["ticket"]=row.get("ticket")
-        payload["ticket_fingerprint"]=row.get("ticket_fingerprint")
-    return payload
+    if not cfg.enabled:
+        return {"enabled":False,"signal":None,"plan":None,"signals":[],"data_source":cfg.data_source}
+    scan=await scan_user(uid, cfg)
+    rows=list(scan.get("signals") or [])
+    nifty=next((r for r in rows if str(r.get("underlying") or "").upper() in {"NIFTY","NIFTY 50"} and r.get("status")=="signal"), None)
+    if nifty is None:
+        nifty=next((r for r in rows if r.get("status")=="signal"), None)
+    out={"enabled":True,"data_source":cfg.data_source,"execution_broker":cfg.execution_broker,"signals":rows,"signal":None,"plan":None}
+    if nifty is not None:
+        out["signal"]=nifty.get("signal")
+        out["plan"]=nifty.get("trade")
+        out["ticket"]=nifty.get("ticket")
+        out["ticket_fingerprint"]=nifty.get("ticket_fingerprint")
+    return out
 
 def _trade_state(uid:str)->dict:
     from app.services import db

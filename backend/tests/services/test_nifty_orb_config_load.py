@@ -151,6 +151,29 @@ async def test_execute_manual_returns_the_same_ticket_without_placing(monkeypatc
     assert placed == []
 
 
+@pytest.mark.asyncio
+async def test_snapshot_is_scan_user_not_a_nifty_only_planner(monkeypatch, db):
+    async def fake_scan(uid, cfg=None):
+        return {
+            "signals": [{
+                "status": "signal",
+                "underlying": "BANKNIFTY",
+                "trade": {"quantity": 75, "contract": {"symbol": "BANKNIFTY26AUG50000CE"}},
+                "signal": {"direction": "LONG"},
+                "ticket": {"symbol": "BANKNIFTY26AUG50000CE", "quantity": 75},
+                "ticket_fingerprint": "fp-1",
+            }],
+        }
+
+    monkeypatch.setattr(service, "get_config", lambda: StrategyConfig(enabled=True))
+    monkeypatch.setattr("app.services.nifty_orb_scanner.scan_user", fake_scan)
+    out = await service.snapshot("u1")
+    assert out["enabled"] is True
+    assert out["signals"][0]["underlying"] == "BANKNIFTY"
+    assert out["ticket_fingerprint"] == "fp-1"
+    assert out["plan"]["contract"]["symbol"] == "BANKNIFTY26AUG50000CE"
+
+
 def test_the_kite_expiry_rule_is_the_engine_rule():
     """Guards against a third local reimplementation of weekly-vs-monthly."""
     import inspect

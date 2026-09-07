@@ -276,7 +276,7 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
         <WaitingPanel groups={quietGroups} windowLabel={windowLabel} />
       ) : (
         <>
-          <BoardFilters view={view} columns={ORB_COLUMNS} />
+          <BoardFilters view={view} columns={ORB_COLUMNS} columnLabels={ORB_COLUMN_LABELS} />
           <SignalBoard
             renderTrade={rowActions.renderTrade}
             renderChart={rowActions.renderChart}

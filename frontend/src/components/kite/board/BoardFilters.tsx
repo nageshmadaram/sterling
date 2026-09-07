@@ -179,22 +179,28 @@ export function ColumnsMenu({ items, onShowAll }: {
 }
 
 /** The shared board's columns, expressed as choices for {@link ColumnsMenu}. */
-function ColumnPicker({ view, available }: { view: BoardView; available: readonly ColumnId[] }) {
+function ColumnPicker({ view, available, columnLabels }: {
+  view: BoardView;
+  available: readonly ColumnId[];
+  columnLabels?: Partial<Record<ColumnId, string>>;
+}) {
   const items = COLUMNS
     .filter((c) => available.includes(c.id) && !LOCKED.includes(c.id))
     .map((c) => ({
       id: c.id,
-      label: c.label,
+      label: columnLabels?.[c.id] ?? c.label,
       on: !view.hidden.has(c.id),
       toggle: () => view.toggleColumn(c.id),
     }));
   return <ColumnsMenu items={items} onShowAll={view.showAllColumns} />;
 }
 
-export function BoardFilters({ view, columns, children }: {
+export function BoardFilters({ view, columns, columnLabels, children }: {
   view: BoardView;
   /** The columns this board asks for, so the picker offers only those. */
   columns?: readonly ColumnId[];
+  /** Per-engine heading names — ORB says Entry ₹, SuperTrend keeps Entry (Δpts). */
+  columnLabels?: Partial<Record<ColumnId, string>>;
   children?: React.ReactNode;
 }) {
   const { counts } = view;
@@ -248,7 +254,7 @@ export function BoardFilters({ view, columns, children }: {
         />
       )}
 
-      {columns && <ColumnPicker view={view} available={columns} />}
+      {columns && <ColumnPicker view={view} available={columns} columnLabels={columnLabels} />}
 
       {children}
 
