@@ -1549,19 +1549,43 @@ class SimulationRunner:
         now_ms = int(time.time() * 1000)
         cfg_lots = max(1, self._config.lots) if self._config else 1
         cfg_money = (self._config.moneyness if self._config and self._config.moneyness else "ATM").upper()
+        sim_date = self._config.date if self._config and self._config.date else "2026-08-28"
+        expiry_tag = "26AUG"
+        if sim_date:
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(sim_date, "%Y-%m-%d")
+                expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
+            except Exception:
+                pass
 
-        kite_events = [
-            ev for ev in self._stats.events
-            if ev.strategy in ("supertrend", "trend_following", "kite", "supertrend_pullback")
-        ]
-        if not kite_events and (self._config and self._config.strategy in ("supertrend", "all")):
-            kite_events = [
-                ev for ev in self._stats.events
-                if ev.strategy not in ("adaptive_edge", "vcp", "atm_imbalance", "bear_to_bearish", "gamma_move", "nifty_orb")
-            ]
+        cfg_strats = [s.strip().lower() for s in (self._config.strategies if self._config and self._config.strategies else (self._config.strategy.split(",") if self._config and self._config.strategy else ["all"]))]
+        allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
 
-        recorded_map_exact = {(r["underlying"].upper(), r["timestamp_ms"]): r.get("raw_row") for r in getattr(self, "_recorded_signals", []) if r.get("raw_row")}
-        recorded_map_sym = {r["underlying"].upper(): r.get("raw_row") for r in getattr(self, "_recorded_signals", []) if r.get("raw_row")}
+        if allow_all:
+            kite_events = list(self._stats.events)
+        else:
+            kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in cfg_strats]
+            if not kite_events:
+                kite_events = list(self._stats.events)
+
+        from app.services.ohlcv_store import INDEX_ALIASES
+        recorded_map_exact = {}
+        recorded_map_sym = {}
+        for r in getattr(self, "_recorded_signals", []):
+            raw_row = r.get("raw_row")
+            if not raw_row:
+                continue
+            u = r["underlying"].upper()
+            aliases = {u}
+            if u in INDEX_ALIASES:
+                aliases.add(INDEX_ALIASES[u].upper())
+            for k, v in INDEX_ALIASES.items():
+                if u == v.upper():
+                    aliases.add(k.upper())
+            for a in aliases:
+                recorded_map_exact[(a, r["timestamp_ms"])] = raw_row
+                recorded_map_sym[a] = raw_row
 
         rows = []
         for i, ev in enumerate(kite_events):
@@ -1603,9 +1627,9 @@ class SimulationRunner:
                 legs.append({
                     "moneyness": m_type,
                     "option_type": opt_type,
-                    "option_symbol": f"{ev.instrument}26AUG{int(s_val)}{opt_type}",
+                    "option_symbol": ev.contract if (m_type == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(s_val)}{opt_type}",
                     "strike": s_val,
-                    "expiry": "2026-08-28",
+                    "expiry": sim_date,
                     "premium_spot": round(ev.entry * 0.02, 2),
                     "premium_sl": round(ev.entry * 0.015, 2),
                     "entry_sl": round(ev.entry * 0.01, 2),

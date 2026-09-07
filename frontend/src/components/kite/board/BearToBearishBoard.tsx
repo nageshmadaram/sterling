@@ -45,7 +45,7 @@ export function BearToBearishBoard({
 
   const data = snapshot.data;
   const signals = React.useMemo(() => bearToBearishToBoard(data), [data]);
-  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'bear_to_bearish' });
+  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'bear_to_bearish', nowMs });
 
   const columns = BOARD_COLUMNS;
 

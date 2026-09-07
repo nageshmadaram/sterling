@@ -80,7 +80,7 @@ export function OiWallFlowBoard({ nowMs, onOpenDetail }: {
   React.useEffect(() => { setPollMs(open ? 3000 : 0); }, [open]);
 
   const signals = React.useMemo(() => oiWallFlowToBoard(data), [data]);
-  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'oi_wall_flow' });
+  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'oi_wall_flow', nowMs });
   const [openId, setOpenId] = React.useState<string | null>(null);
 
   if (snapshot.isLoading && !data) return <p style={note}>Loading OI Wall Flow…</p>;

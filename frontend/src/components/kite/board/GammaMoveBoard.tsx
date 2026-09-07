@@ -98,7 +98,7 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
   React.useEffect(() => { setPollMs(open ? 3000 : 0); }, [open]);
 
   const signals = React.useMemo(() => gammaMoveToBoard(data), [data]);
-  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'gamma_move' });
+  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'gamma_move', nowMs });
   const [openId, setOpenId] = React.useState<string | null>(null);
 
   if (snapshot.isLoading && !data) return <p style={note}>Loading Gamma Move…</p>;

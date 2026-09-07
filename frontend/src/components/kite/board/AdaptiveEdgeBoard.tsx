@@ -31,7 +31,7 @@ export function AdaptiveEdgeBoard({ nowMs, onOpenDetail, onOpenChart }: {
     [snapshot.data],
   );
 
-  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'adaptive_edge' });
+  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'adaptive_edge', nowMs });
   const [openId, setOpenId] = React.useState<string | null>(null);
   const [sort, setSort] = React.useState(DEFAULT_SORT);
   // Which signals are showing their contracts. Separate from openId, which is

@@ -15,6 +15,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { sessionDayKey, type BoardSignal } from './boardTypes';
 import { DEFAULT_HIDDEN_COLUMNS, type ColumnId } from './SignalBoard';
+import { useEffectiveNowMs } from '../../../hooks/useReplayStore';
 
 export interface BoardView {
   query: string;
@@ -166,6 +167,9 @@ export function useBoardView(
     });
   }, [storageKey, defaults]);
 
+  const effectiveSimNow = useEffectiveNowMs();
+  const effectiveNow = nowMs ?? effectiveSimNow;
+
   return useMemo(() => {
     const all = [...signals];
     const ended = all.filter((s) => s.status === 'ended').length;
@@ -174,7 +178,7 @@ export function useBoardView(
       const key = `${s.underlying}:${s.direction}`;
       perUnderlying.set(key, (perUnderlying.get(key) ?? 0) + 1);
     }
-    const todayKey = sessionDayKey(nowMs ?? Date.now());
+    const todayKey = sessionDayKey(effectiveNow);
     const hasOlderOrOther = all.some((s) => {
       const k = sessionDayKey(s.atMs);
       return k !== todayKey && k !== 'unknown';
@@ -201,5 +205,5 @@ export function useBoardView(
       counts: { total: all.length, shown: visible.length, ended },
       hidden, toggleColumn, showAllColumns, resetColumns,
     };
-  }, [signals, query, showEnded, todayOnly, bestOnly, hidden, toggleColumn, showAllColumns, resetColumns, nowMs]);
+  }, [signals, query, showEnded, todayOnly, bestOnly, hidden, toggleColumn, showAllColumns, resetColumns, effectiveNow]);
 }

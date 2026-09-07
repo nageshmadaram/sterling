@@ -3,7 +3,6 @@ import { useReplayStore } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { useFocusTrap } from './primitives/useFocusTrap';
 import { fmtSessionDate, fmtTime } from './replayFormat';
-import { MONEYNESS_LEGS, REPLAY_STRATEGIES } from './replayStrategies';
 import { CORE_INDICES, CORE_STOCKS, MONEYNESS_LEGS, REPLAY_STRATEGIES } from './replayStrategies';
 import { useAvailableDates, verdictForDate } from './useAvailableDates';
 import * as Icons from './ReplayIcons';
@@ -125,7 +124,6 @@ export function ReplayConfigSheet() {
                 <input
                   type="checkbox"
                   checked={allStrategies}
-                  onChange={() => setDraft({ strategies: ['all'] })}
                   onChange={() => {
                     if (allStrategies) {
                       setDraft({ strategies: [REPLAY_STRATEGIES[0].id] });

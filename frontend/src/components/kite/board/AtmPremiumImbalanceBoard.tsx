@@ -130,7 +130,7 @@ export function AtmPremiumImbalanceBoard({ nowMs, onOpenDetail, onOpenChart }: {
   );
   // One session, one row: hiding it once it ends would leave the board blank at
   // exactly the moment there is a result to read.
-  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'atm_premium_imbalance' });
+  const view = useBoardView(signals, { endedByDefault: true, storageKey: 'atm_premium_imbalance', nowMs });
   const [openId, setOpenId] = React.useState<string | null>(null);
 
   if (snapshot.isLoading && !snapshot.data) {

@@ -23,6 +23,7 @@ export function useEngineBacktest() {
 import { useReplayStore } from './useReplayStore';
 
 export function useEngineSignals() {
+  const isSimActive = useReplayStore((s) => s.status.state !== 'idle');
   return useQuery<SignalsResponse>({
     queryKey: ['kite-engine-signals'],
     queryFn: () => api.get<SignalsResponse>(`${E}/signals`),
@@ -30,6 +31,7 @@ export function useEngineSignals() {
       if (useReplayStore.getState().status.state !== 'idle') return 300;
       return query.state.data?.scanning ? 2_000 : 15_000;
     },
+    staleTime: isSimActive ? 0 : 5_000,
   });
 }
 

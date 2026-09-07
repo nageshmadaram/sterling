@@ -1,18 +1,14 @@
 import React, { useRef, useState } from 'react';
 import { useReplayState, useReplayStore } from '../../../hooks/useReplayStore';
 import { ReplayPopover } from './primitives/ReplayPopover';
-import { MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
 import { CORE_INDICES, CORE_STOCKS, MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
 import * as Icons from './ReplayIcons';
 
 /**
- * Strategy and option-leg filters.
  * Strategy, instrument and option-leg filters.
  *
  * Real checkboxes inside labels, not `☑`/`☐` glyphs inside buttons, so keyboard
  * operation and screen-reader semantics come for free. Active narrowings also
- * surface as dismissible chips in the view bar — the previous trigger said
- * "STRAT (2)", which tells you a count but not which two.
  * surface as dismissible chips in the view bar.
  */
 export function ReplayFilters() {
@@ -44,7 +40,6 @@ export function ReplayFilters() {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        title={locked ? 'Stop the replay to change filters' : 'Filter strategies and option legs'}
         title={locked ? 'Stop the replay to change filters' : 'Filter strategies, instruments and option legs'}
         data-testid="replay-filters-trigger"
       >
@@ -57,10 +52,8 @@ export function ReplayFilters() {
       <ReplayPopover
         open={open}
         onOpenChange={setOpen}
-        label="Filter strategies and legs"
         label="Filter strategies, instruments and legs"
         anchorRef={anchor}
-        width={280}
         width={300}
       >
         <div className="rd-pop-section">

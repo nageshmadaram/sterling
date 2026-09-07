@@ -4,7 +4,7 @@ Tests for Market Replay Simulation endpoints and service.
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from app.services.simulation import simulation_runner, SimState, SimConfig, SimStatus
+from app.services.simulation import simulation_runner, SimState, SimConfig, SimStatus, SimSignalEvent
 
 
 @pytest.fixture(autouse=True)
@@ -750,5 +750,35 @@ def test_settle_open_positions_alias_handling():
     assert "NIFTY 50" not in simulation_runner._open_by_symbol
 
 
+def test_kite_signals_synced_with_simulation_events():
+    """Verify that get_kite_signals_response returns rows matching events fired during simulation."""
+    simulation_runner._config = SimConfig(date="2026-09-08", strategies=["adaptive_edge"])
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="09:15:00",
+            timestamp_ms=1788800100000,
+            strategy="adaptive_edge",
+            instrument="NIFTY",
+            direction="BEARISH",
+            strength="STRONG",
+            entry=57.97,
+            stop=43.5,
+            target=86.9,
+            contract="NIFTY2690823800PE",
+            spot=23800.0,
+            strike=23800.0,
+            opt_type="PE",
+            premium_entry=57.97,
+            premium_sl=43.5,
+            premium_target=86.9,
+        )
+    ]
 
-
+    res = simulation_runner.get_kite_signals_response()
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    assert row["underlying"] == "NIFTY"
+    assert row["direction"] == "short"
+    assert row["option_type"] == "PE"
+    assert len(row["legs"]) > 0
+    assert "26SEP" in row["legs"][0]["option_symbol"] or row["legs"][0]["option_symbol"] == "NIFTY2690823800PE"

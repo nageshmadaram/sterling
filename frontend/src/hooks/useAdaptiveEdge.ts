@@ -18,6 +18,7 @@ export function useAdaptiveEdgeSnapshot() {
     queryKey: ['adaptive-edge-snapshot'],
     queryFn: () => api.get<AdaptiveEdgeSnapshot>(`${ROOT}/snapshot`),
     refetchInterval: isSimActive ? 300 : 5000,
+    staleTime: isSimActive ? 0 : 5000,
   });
 }
 

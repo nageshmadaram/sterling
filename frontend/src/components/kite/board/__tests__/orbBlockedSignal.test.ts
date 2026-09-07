@@ -50,7 +50,7 @@ describe('a blocked ORB signal', () => {
   it('maps a retained fire to ended, not to a live armed ticket', () => {
     const past = orbToBoard({ ...base, state: 'ENDED', optionSymbol: 'NIFTY26AUG25000CE', optionType: 'CE' });
     expect(past.status).toBe('ended');
-    expect(past.flags.some((f) => f.label === 'PAST')).toBe(true);
+    expect(past.flags?.some((f) => f.label === 'PAST')).toBe(true);
   });
 });
 
