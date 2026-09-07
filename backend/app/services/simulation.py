@@ -152,10 +152,6 @@ class SimSignalEvent(BaseModel):
     spot: Optional[float] = None
     strike: Optional[float] = None
     opt_type: Optional[str] = None
-    contract: Optional[str] = None
-    opt_type: Optional[str] = None
-    strike: Optional[float] = None
-    spot: Optional[float] = None
     premium_entry: Optional[float] = None
     premium_sl: Optional[float] = None
     premium_target: Optional[float] = None
@@ -409,7 +405,6 @@ def _option_contract(
             pass
 
     return {
-        "contract": f"{symbol.upper()}26AUG{int(strike)}{opt_type}",
         "contract": f"{symbol.upper()}{expiry_tag}{int(strike)}{opt_type}",
         "strike": float(strike),
         "opt_type": opt_type,
@@ -611,65 +606,73 @@ class SimulationRunner:
         when it has been held too long — never from a bar the replay clock has
         not reached yet.
         """
-        sym = bar.get("symbol")
-        book = self._open_by_symbol.get(sym)
-        if not book:
-            from app.services.ohlcv_store import INDEX_ALIASES
-            alias = INDEX_ALIASES.get(sym) or INDEX_ALIASES.get(sym.upper() if sym else "")
-            if alias and alias in self._open_by_symbol:
-                book = self._open_by_symbol[alias]
-                sym = alias
-        if not book:
+        sym = bar.get("symbol", "")
+        sym_u = sym.upper()
+        from app.services.ohlcv_store import INDEX_ALIASES
+        candidate_keys = [sym, sym_u]
+        if sym_u in INDEX_ALIASES:
+            candidate_keys.append(INDEX_ALIASES[sym_u])
+        for k, v in INDEX_ALIASES.items():
+            if sym_u == v.upper() and k not in candidate_keys:
+                candidate_keys.append(k)
+
+        matching_keys = list(dict.fromkeys(k for k in candidate_keys if k in self._open_by_symbol))
+        if not matching_keys:
             return
 
         high = float(bar["high"])
         low = float(bar["low"])
         close = float(bar["close"])
-        still_open: List[SimTradeEvent] = []
 
-        for trade in book:
-            trade.bars_held += 1
-            bullish = trade.opt_type == "CE"
-            stop = trade.spot_stop
-            target = trade.spot_target
-
-            exit_spot: Optional[float] = None
-            if stop is not None and target is not None:
-                if bullish:
-                    # Stop first: the pessimistic read when one bar spans both,
-                    # because a bar's high and low carry no ordering.
-                    if low <= stop:
-                        exit_spot = stop
-                    elif high >= target:
-                        exit_spot = target
-                else:
-                    if high >= stop:
-                        exit_spot = stop
-                    elif low <= target:
-                        exit_spot = target
-
-            timed_out = exit_spot is None and trade.bars_held >= self.MAX_HOLD_BARS
-            if timed_out:
-                exit_spot = close
-
-            if exit_spot is None:
-                # Still open — mark it to this bar so unrealised P&L moves.
-                mark = self._premium_for_spot(trade, close)
-                trade.pnl_usd = round((mark - trade.entry_price) * trade.quantity, 2)
-                trade.pnl_pct = round(
-                    ((mark - trade.entry_price) / trade.entry_price) * 100.0, 2
-                ) if trade.entry_price > 0 else 0.0
-                trade.duration_mins = trade.bars_held * self._bar_minutes()
-                still_open.append(trade)
-                self._publish("trade", trade.model_dump())
+        for k in matching_keys:
+            book = self._open_by_symbol.get(k)
+            if not book:
                 continue
+            still_open: List[SimTradeEvent] = []
 
-            self._close_position(trade, exit_spot, bar_dt)
+            for trade in book:
+                trade.bars_held += 1
+                bullish = trade.opt_type == "CE"
+                stop = trade.spot_stop
+                target = trade.spot_target
 
-        if still_open:
-            self._open_by_symbol[sym] = still_open
-        else:
-            self._open_by_symbol.pop(sym, None)
+                exit_spot: Optional[float] = None
+                if stop is not None and target is not None:
+                    if bullish:
+                        # Stop first: the pessimistic read when one bar spans both,
+                        # because a bar's high and low carry no ordering.
+                        if low <= stop:
+                            exit_spot = stop
+                        elif high >= target:
+                            exit_spot = target
+                    else:
+                        if high >= stop:
+                            exit_spot = stop
+                        elif low <= target:
+                            exit_spot = target
+
+                timed_out = exit_spot is None and trade.bars_held >= self.MAX_HOLD_BARS
+                if timed_out:
+                    exit_spot = close
+
+                if exit_spot is None:
+                    # Still open — mark it to this bar so unrealised P&L moves.
+                    mark = self._premium_for_spot(trade, close)
+                    trade.pnl_usd = round((mark - trade.entry_price) * trade.quantity, 2)
+                    trade.pnl_pct = round(
+                        ((mark - trade.entry_price) / trade.entry_price) * 100.0, 2
+                    ) if trade.entry_price > 0 else 0.0
+                    trade.duration_mins = trade.bars_held * self._bar_minutes()
+                    still_open.append(trade)
+                    self._publish("trade", trade.model_dump())
+                    continue
+
+                self._close_position(trade, exit_spot, bar_dt)
+
+            if still_open:
+                self._open_by_symbol[k] = still_open
+            else:
+                self._open_by_symbol.pop(k, None)
 
     def _bar_minutes(self) -> int:
         from app.services.ohlcv_store import RESOLUTION_SECONDS
@@ -707,6 +710,10 @@ class SimulationRunner:
         # Release main's re-entry suppression as soon as the position is really
         # closed. It used to be set to a horizon guessed from future bars.
         self._active_until_bar.pop((trade.underlying, trade.strategy), None)
+        from app.services.ohlcv_store import INDEX_ALIASES
+        alias = INDEX_ALIASES.get(trade.underlying) or INDEX_ALIASES.get(trade.underlying.upper() if trade.underlying else "")
+        if alias:
+            self._active_until_bar.pop((alias, trade.strategy), None)
 
         self._recompute_totals()
         self._publish("trade", trade.model_dump())
@@ -723,19 +730,27 @@ class SimulationRunner:
             log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
         for sym, book in list(self._open_by_symbol.items()):
             last_close = None
-            if hasattr(self, "_bar_history") and self._bar_history.get(sym):
-                last_bar = self._bar_history[sym][-1]
-                last_close = float(last_bar.get("close", 0.0))
-            elif hasattr(self, "_candles") and self._candles:
+            sym_u = sym.upper()
+            from app.services.ohlcv_store import INDEX_ALIASES
+            target_syms = {sym, sym_u}
+            if sym_u in INDEX_ALIASES:
+                target_syms.add(INDEX_ALIASES[sym_u])
+                target_syms.add(INDEX_ALIASES[sym_u].upper())
+            for k, v in INDEX_ALIASES.items():
+                if sym_u == v.upper():
+                    target_syms.add(k)
+                    target_syms.add(k.upper())
+
+            if hasattr(self, "_bar_history"):
+                for s in target_syms:
+                    if self._bar_history.get(s):
+                        last_close = float(self._bar_history[s][-1].get("close", 0.0))
+                        break
+
+            if last_close is None and hasattr(self, "_candles") and self._candles:
                 played_idx = getattr(self, "_bars_played", 0)
-                from app.services.ohlcv_store import INDEX_ALIASES
-                sym_targets = {sym, sym.upper()}
-                for k, v in INDEX_ALIASES.items():
-                    if sym.upper() in (k.upper(), v.upper()):
-                        sym_targets.add(k.upper())
-                        sym_targets.add(v.upper())
                 for b in reversed(self._candles[:played_idx]):
-                    if b.get("symbol", "").upper() in sym_targets:
+                    if b.get("symbol", "").upper() in target_syms:
                         last_close = float(b.get("close", 0.0))
                         break
 
@@ -934,6 +949,11 @@ class SimulationRunner:
         self._current_time_iso = ""
         self._progress = 0.0
         self._bars_played = 0
+        self._candles = []
+        self._bar_history = {}
+        self._in_session_bars = {}
+        self._last_fired = {}
+        self._active_until_bar = {}
         self._publish_state()
         return self.status
 
@@ -1072,8 +1092,9 @@ class SimulationRunner:
         raw = rec.get("raw_row", {})
         direction = rec["direction"]
         # Align spot with current replay candle price at this simulation timestamp
+        raw_spot = float(rec.get("spot") or raw.get("spot") or 0.0)
         current_candle_spot = None
-        if hasattr(self, "_candles") and self._candles:
+        if raw_spot <= 0 and hasattr(self, "_candles") and self._candles:
             curr_epoch = int(rec["timestamp_ms"] / 1000)
             from app.services.ohlcv_store import INDEX_ALIASES
             target_syms = {sym, sym.upper()}
@@ -1096,7 +1117,7 @@ class SimulationRunner:
                         current_candle_spot = float(b.get("close", 0.0))
                         break
 
-        spot = current_candle_spot if (current_candle_spot and current_candle_spot > 0) else float(rec.get("spot") or raw.get("spot") or 1000.0)
+        spot = raw_spot if raw_spot > 0 else (current_candle_spot if (current_candle_spot and current_candle_spot > 0) else 1000.0)
 
         # Sanity check: ensure stop and target are underlying spot levels, not option premiums!
         raw_sl = float(rec.get("stop_loss") or raw.get("stop_loss") or 0.0)
@@ -1321,9 +1342,6 @@ class SimulationRunner:
         else:
             instruments = list(cfg.instruments)
 
-        for rec in self._recorded_signals:
-            if rec.get("underlying") and rec["underlying"] not in instruments:
-                instruments.append(rec["underlying"])
         if not cfg.instruments:
             for rec in self._recorded_signals:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
@@ -1455,13 +1473,6 @@ class SimulationRunner:
                     if rec_id not in self._emitted_recorded_keys and curr_sim_ms >= rec["timestamp_ms"]:
                         self._emitted_recorded_keys.add(rec_id)
                         self._emit_recorded_signal(rec)
-
-                # Process bars up to current simulated timestamp
-                while bar_idx < len(all_bars) and self._current_sim_epoch >= all_bars[bar_idx]["time"]:
-                    bar = all_bars[bar_idx]
-                    self._bars_played = bar_idx + 1
-                    self._evaluate_bar(bar, datetime.fromtimestamp(bar["time"], tz=ist))
-                    bar_idx += 1
 
                 # Advance simulated clock by speed * dt
                 self._current_sim_epoch += self._speed * dt
@@ -2279,6 +2290,7 @@ class SimulationRunner:
         # THIS bar, and it must do so before a new signal is considered.
         self._settle_open_positions(bar, bar_dt)
 
+        cfg = self._config
         import random
         from datetime import datetime, timezone, timedelta
 
@@ -2372,11 +2384,27 @@ class SimulationRunner:
         signals_to_fire = []
         bar_time_str = bar_dt.strftime("%H:%M:%S")
 
+        recorded_list = getattr(self, "_recorded_signals", [])
+        from app.services.ohlcv_store import INDEX_ALIASES
+        sym_u = sym.upper()
+        sym_aliases = {sym, sym_u}
+        if sym_u in INDEX_ALIASES:
+            sym_aliases.add(INDEX_ALIASES[sym_u])
+            sym_aliases.add(INDEX_ALIASES[sym_u].upper())
+        for k, v in INDEX_ALIASES.items():
+            if sym_u == v.upper():
+                sym_aliases.add(k)
+                sym_aliases.add(k.upper())
+
         # 1. SuperTrend: Canonical Triple SuperTrend Alignment (regime.py)
         # Fast (10, 1.0), Mid (14, 2.0), Slow (21, 3.0).
-        # When recorded signals exist for this historical session, ground truth signals are replayed
+        # When recorded signals exist for this symbol, ground truth signals are replayed
         # automatically at their recorded timestamps; synthetic evaluation is skipped.
-        has_recorded_st = any(r.get("strategy", "supertrend") == "supertrend" for r in getattr(self, "_recorded_signals", []))
+        has_recorded_st = any(
+            r.get("underlying", "").upper() in sym_aliases
+            and r.get("strategy", "supertrend") == "supertrend"
+            for r in recorded_list
+        )
         if not has_recorded_st and len(history) >= 25:
             h_arr = np.array([float(b["high"]) for b in history], dtype=np.float64)
             l_arr = np.array([float(b["low"]) for b in history], dtype=np.float64)
@@ -2439,9 +2467,13 @@ class SimulationRunner:
 
         # 3. Adaptive Edge: Canonical Mean Reversion with Candlestick Reversal Confirmation
         # 3. Adaptive Edge: Canonical Multi-Horizon Value Area & Order Flow Pipeline
-        has_recorded = bool(getattr(self, "_recorded_signals", []))
-        is_ae_symbol = _is_index(sym) or (bool(self._config and self._config.instruments and sym in self._config.instruments))
-        if not has_recorded and is_ae_symbol and len(history) >= 15:
+        has_recorded_ae = any(
+            r.get("underlying", "").upper() in sym_aliases
+            and r.get("strategy") == "adaptive_edge"
+            for r in recorded_list
+        )
+        is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
+        if not has_recorded_ae and is_ae_symbol and len(history) >= 15:
             body = abs(close - opens)
             lower_wick = min(opens, close) - low
             upper_wick = high - max(opens, close)
@@ -2459,7 +2491,7 @@ class SimulationRunner:
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
-        if not has_recorded and is_ae_symbol and len(history) >= 20:
+        if not has_recorded_ae and is_ae_symbol and len(history) >= 20:
             from app.services.adaptive_edge_strategy import decide_from_candles
             from app.services.adaptive_edge import get_config as get_ae_config
             c_input = [
@@ -2568,12 +2600,6 @@ class SimulationRunner:
         # Track recent signals per (symbol, strategy) to prevent flood
         if not hasattr(self, '_last_fired'):
             self._last_fired: Dict[Tuple[str, str], Tuple[str, int]] = {}
-        # Fan-out to SSE subscribers. Bounded, and `_publish` drops FRAMES
-        # under back-pressure but never a signal, trade or state change: a
-        # dropped frame costs a progress tick, a dropped signal corrupts the
-        # ledger the client is accumulating.
-        self._subscribers: "List[asyncio.Queue[SimEvent]]" = []
-        self._last_frame_at: float = 0.0
         if not hasattr(self, '_active_until_bar'):
             self._active_until_bar: Dict[Tuple[str, str], int] = {}
 

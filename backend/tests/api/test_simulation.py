@@ -676,4 +676,79 @@ def test_status_since_preserves_closed_trades_under_delta_polling():
     assert st.stats.trades[0].exit_price == 120
 
 
+def test_subscribers_not_dropped_by_evaluate_bar():
+    """Verify that an active SSE subscriber queue is retained across _evaluate_bar calls."""
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    q = asyncio.Queue(maxsize=100)
+    simulation_runner._subscribers = [q]
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["all"])
+
+    bar = {
+        "symbol": "NIFTY",
+        "open": 24000.0,
+        "high": 24050.0,
+        "low": 23950.0,
+        "close": 24010.0,
+        "volume": 50000,
+    }
+    simulation_runner._evaluate_bar(bar, datetime(2026, 9, 7, 9, 20, tzinfo=ist))
+
+    assert q in simulation_runner._subscribers
+    assert len(simulation_runner._subscribers) == 1
+    simulation_runner._subscribers.clear()
+
+
+def test_settle_open_positions_alias_handling():
+    """Verify that an open position recorded under 'NIFTY 50' settles against a bar with symbol 'NIFTY'."""
+    from datetime import datetime, timezone, timedelta
+    from app.services.simulation import SimTradeEvent
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["all"], friction_mode="ideal")
+    trade = SimTradeEvent(
+        trade_id="TRD-ALIAS-1",
+        entry_time_iso="09:15:00",
+        exit_time_iso="OPEN",
+        timestamp_ms=1788752700000,
+        strategy="supertrend",
+        symbol="NIFTY2690823800PE",
+        underlying="NIFTY 50",
+        direction="BUY",
+        opt_type="PE",
+        strike=23800.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        exit_price=None,
+        stop_loss=75.0,
+        target_price=150.0,
+        status="OPEN",
+        pnl_usd=0.0,
+        pnl_pct=0.0,
+        duration_mins=0,
+        spot_entry=23800.0,
+        spot_stop=23850.0,
+        spot_target=23700.0,
+        bars_held=0,
+    )
+
+    simulation_runner._open_by_symbol = {"NIFTY 50": [trade]}
+    simulation_runner._stats.trades = [trade]
+
+    # Bar arrives with symbol "NIFTY", hitting target 23700
+    dt_bar = datetime(2026, 9, 7, 9, 30, tzinfo=ist)
+    bar = {"symbol": "NIFTY", "open": 23750.0, "high": 23760.0, "low": 23690.0, "close": 23700.0}
+    simulation_runner._settle_open_positions(bar, dt_bar)
+
+    assert trade.status == "WIN"
+    assert trade.exit_price is not None
+    assert trade.exit_time_iso == "09:30:00"
+    assert trade.pnl_usd > 0
+    assert "NIFTY 50" not in simulation_runner._open_by_symbol
+
+
+
 
