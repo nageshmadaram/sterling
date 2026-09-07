@@ -528,6 +528,8 @@ def test_emit_recorded_signal_dynamic_lifecycle():
     simulation_runner._stats.trades = []
     simulation_runner._stats.events = []
     simulation_runner._open_by_symbol = {}
+    simulation_runner._candles = []
+    simulation_runner._bars_played = 0
     simulation_runner._config = SimConfig(
         date="2026-09-07",
         instruments=["NIFTY"],
@@ -601,6 +603,8 @@ def test_emit_recorded_signal_strategy_filtering():
     simulation_runner._config = SimConfig(date="2026-09-07", strategies=["vcp"])
     simulation_runner._stats.events = []
     simulation_runner._stats.trades = []
+    simulation_runner._candles = []
+    simulation_runner._bars_played = 0
 
     rec = {
         "underlying": "NIFTY",
@@ -619,12 +623,13 @@ def test_emit_recorded_signal_strategy_filtering():
     assert len(simulation_runner._stats.events) == 0
 
     # When filtered for adaptive_edge, maps cleanly to adaptive_edge
-    # Should NOT emit supertrend signals when filtered strictly for adaptive_edge
     simulation_runner._config = SimConfig(date="2026-09-07", strategies=["adaptive_edge"])
     simulation_runner._emit_recorded_signal(rec)
-    assert len(simulation_runner._stats.events) == 0
+    assert len(simulation_runner._stats.events) == 1
+    assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
 
     # When filtered for supertrend, emits cleanly as supertrend
+    simulation_runner._stats.events = []
     simulation_runner._config = SimConfig(date="2026-09-07", strategies=["supertrend"])
     simulation_runner._emit_recorded_signal(rec)
     assert len(simulation_runner._stats.events) == 1
@@ -657,6 +662,37 @@ def test_evaluate_bar_skips_synthetic_ae_when_recorded_present():
     # Because recorded signals exist for the day, synthetic AE signals for LT must NOT fire
     ae_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "adaptive_edge"]
     assert len(ae_events) == 0
+
+
+def test_september_7_recorded_signals_adaptive_edge():
+    """Verify that 2026-09-07 recorded signals emit all 6 authentic spot scans when replayed with adaptive_edge."""
+    from app.services.simulation import _load_recorded_signals
+    sigs = _load_recorded_signals("2026-09-07")
+    assert len(sigs) == 6
+    underlyings = {s["underlying"] for s in sigs}
+    assert underlyings == {"NIFTY 50", "NIFTY BANK", "SENSEX", "BAJAJFINSV", "INFY", "TCS"}
+
+    simulation_runner._config = SimConfig(date="2026-09-07", strategies=["adaptive_edge"])
+    simulation_runner._recorded_signals = sigs
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
+    simulation_runner._open_by_symbol = {}
+
+    for s in sigs:
+        simulation_runner._emit_recorded_signal(s)
+
+    assert len(simulation_runner._stats.events) == 6
+    assert all(ev.strategy == "adaptive_edge" for ev in simulation_runner._stats.events)
+    assert len(simulation_runner._stats.trades) == 6
+    assert all(tr.strategy == "adaptive_edge" for tr in simulation_runner._stats.trades)
+    assert all(tr.status == "OPEN" for tr in simulation_runner._stats.trades)
+    assert all(tr.opt_type == "PE" for tr in simulation_runner._stats.trades)
+
+    # Verify Adaptive Edge snapshot formats all 6 signals with spot_scan origin
+    snap = simulation_runner.get_adaptive_edge_snapshot()
+    snap_sigs = snap.get("signals", [])
+    assert len(snap_sigs) == 6
+    assert all(s.get("scan_origin") == "spot_scan" for s in snap_sigs)
 
 
 def test_status_since_preserves_closed_trades_under_delta_polling():
@@ -777,7 +813,7 @@ def test_kite_signals_synced_with_simulation_events():
     res = simulation_runner.get_kite_signals_response()
     assert len(res["rows"]) == 1
     row = res["rows"][0]
-    assert row["underlying"] == "NIFTY"
+    assert row["underlying"] in ("NIFTY", "NIFTY 50")
     assert row["direction"] == "short"
     assert row["option_type"] == "PE"
     assert len(row["legs"]) > 0

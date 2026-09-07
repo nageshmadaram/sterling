@@ -11,6 +11,15 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 
 _DB_PATH = os.environ.get("STERLING_DB_PATH", "sterling_paper.db")
+def _resolve_default_db_path() -> str:
+    env_path = os.environ.get("STERLING_DB_PATH")
+    if env_path:
+        return env_path
+    if os.path.exists("backend/sterling_paper.db") and not os.path.exists("app"):
+        return "backend/sterling_paper.db"
+    return "sterling_paper.db"
+
+_DB_PATH = _resolve_default_db_path()
 
 SUPPORTED_RESOLUTIONS = ["5m", "15m", "30m", "1h", "2h", "4h"]
 

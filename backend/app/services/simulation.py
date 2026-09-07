@@ -89,6 +89,9 @@ def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
                         "target": float(r.get("target") or 0.0) if r.get("target") is not None else None,
                         "raw_row": r,
                         "strategy": "supertrend",
+                        "strategy": r.get("strategy") or "supertrend",
+                        "is_spot_scan": True,
+                        "source": r.get("source", "spot"),
                     })
         except Exception as err:
             log.warning("Failed parsing %s: %s", key, err)
@@ -1057,10 +1060,17 @@ class SimulationRunner:
         cfg_strats = [s.lower() for s in (self._config.strategies if self._config and self._config.strategies else [self._config.strategy if self._config else "all"])]
         allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
         strat_raw = rec.get("strategy", "supertrend").lower()
+        is_spot = rec.get("is_spot_scan", False) or rec.get("source") == "spot" or strat_raw in ("supertrend", "spot_scan")
 
         if not allow_all:
             if strat_raw in cfg_strats:
                 strat_to_emit = strat_raw
+            elif is_spot and "adaptive_edge" in cfg_strats:
+                strat_to_emit = "adaptive_edge"
+            elif is_spot and "bear_to_bearish" in cfg_strats and rec.get("direction") in ("BEARISH", "SHORT", "SELL"):
+                strat_to_emit = "bear_to_bearish"
+            elif is_spot and "supertrend" in cfg_strats:
+                strat_to_emit = "supertrend"
             else:
                 return
         else:
@@ -1094,7 +1104,7 @@ class SimulationRunner:
         # Align spot with current replay candle price at this simulation timestamp
         raw_spot = float(rec.get("spot") or raw.get("spot") or 0.0)
         current_candle_spot = None
-        if raw_spot <= 0 and hasattr(self, "_candles") and self._candles:
+        if hasattr(self, "_candles") and self._candles:
             curr_epoch = int(rec["timestamp_ms"] / 1000)
             from app.services.ohlcv_store import INDEX_ALIASES
             target_syms = {sym, sym.upper()}
@@ -1117,36 +1127,25 @@ class SimulationRunner:
                         current_candle_spot = float(b.get("close", 0.0))
                         break
 
-        spot = raw_spot if raw_spot > 0 else (current_candle_spot if (current_candle_spot and current_candle_spot > 0) else 1000.0)
+        spot = current_candle_spot if (current_candle_spot and current_candle_spot > 0) else (raw_spot if raw_spot > 0 else 1000.0)
 
-        # Sanity check: ensure stop and target are underlying spot levels, not option premiums!
+        # Align stop and target with current replay candle price
         raw_sl = float(rec.get("stop_loss") or raw.get("stop_loss") or 0.0)
-        valid_sl = False
-        if raw_sl >= spot * 0.50:
-            if direction in ("BEARISH", "SHORT") and raw_sl > spot:
-                valid_sl = True
-            elif direction in ("BULLISH", "LONG", "BUY") and raw_sl < spot:
-                valid_sl = True
-
-        if valid_sl:
-            stop = raw_sl
+        raw_base_spot = raw_spot if raw_spot > 0 else spot
+        if raw_sl > 0 and abs(raw_sl - raw_base_spot) > 0.0005 * raw_base_spot:
+            stop_dist = abs(raw_sl - raw_base_spot)
         else:
             min_dist = max(0.005 * spot, 50.0 if "NIFTY" in sym.upper() else (100.0 if "SENSEX" in sym.upper() else 5.0))
-            stop = round(spot + min_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot - min_dist, 2)
+            stop_dist = min_dist
 
-        stop_dist = abs(spot - stop)
-        raw_tgt = rec.get("target") or raw.get("target")
-        valid_tgt = False
-        if raw_tgt and float(raw_tgt) >= spot * 0.50:
-            if direction in ("BEARISH", "SHORT") and float(raw_tgt) < spot:
-                valid_tgt = True
-            elif direction in ("BULLISH", "LONG", "BUY") and float(raw_tgt) > spot:
-                valid_tgt = True
-
-        if valid_tgt:
-            target = float(raw_tgt)
+        raw_tgt = float(rec.get("target") or raw.get("target") or 0.0)
+        if raw_tgt > 0 and abs(raw_tgt - raw_base_spot) > 0.0005 * raw_base_spot:
+            tgt_dist = abs(raw_tgt - raw_base_spot)
         else:
-            target = round(spot - 2.0 * stop_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot + 2.0 * stop_dist, 2)
+            tgt_dist = 2.0 * stop_dist
+
+        stop = round(spot + stop_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot - stop_dist, 2)
+        target = round(spot - tgt_dist, 2) if direction in ("BEARISH", "SHORT") else round(spot + tgt_dist, 2)
 
         cfg_lots = max(1, self._config.lots) if self._config else 1
         opt_type = "PE" if direction in ("BEARISH", "SHORT") else "CE"
@@ -1174,7 +1173,12 @@ class SimulationRunner:
             stop_prem = float(selected_leg.get("entry_sl") or selected_leg.get("premium_sl") or round(entry_prem * 0.75, 2))
             if stop_prem <= 0 or stop_prem >= entry_prem:
                 stop_prem = round(entry_prem * 0.75, 2)
+            raw_prem_sl = float(selected_leg.get("premium_sl") or 0.0)
+            raw_entry_sl = float(selected_leg.get("entry_sl") or 0.0)
+            stop_prem = raw_prem_sl if (0 < raw_prem_sl < entry_prem) else (raw_entry_sl if (0 < raw_entry_sl < entry_prem) else round(entry_prem * 0.75, 2))
             tgt_prem = float(selected_leg.get("premium_target") or round(entry_prem * 1.5, 2))
+            if tgt_prem <= entry_prem:
+                tgt_prem = round(entry_prem * 1.5, 2)
             opt_symbol = selected_leg.get("option_symbol") or f"{sym}26SEP{int(strike)}{opt_type}"
         else:
             step = 100.0 if any(k in sym.upper() for k in ("SENSEX", "BANKNIFTY")) else (50.0 if "NIFTY" in sym.upper() else 20.0)
@@ -1756,9 +1760,31 @@ class SimulationRunner:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "spot_scan")]
         else:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
+        ae_events = [
+            ev for ev in self._stats.events
+            if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")
+        ]
 
         if allowed_syms:
             ae_events = [ev for ev in ae_events if ev.instrument in allowed_syms or ev.instrument.upper() in allowed_syms]
+
+        from app.services.ohlcv_store import INDEX_ALIASES
+        recorded_map_exact = {}
+        recorded_map_sym = {}
+        for r in getattr(self, "_recorded_signals", []):
+            raw_row = r.get("raw_row")
+            if not raw_row:
+                continue
+            u = r["underlying"].upper()
+            aliases = {u}
+            if u in INDEX_ALIASES:
+                aliases.add(INDEX_ALIASES[u].upper())
+            for k, v in INDEX_ALIASES.items():
+                if u == v.upper():
+                    aliases.add(k.upper())
+            for a in aliases:
+                recorded_map_exact[(a, r["timestamp_ms"])] = raw_row
+                recorded_map_sym[a] = raw_row
 
         expiry_tag = "26AUG"
         if sim_date:
@@ -1822,44 +1848,75 @@ class SimulationRunner:
             lot_size = 10 if "SENSEX" in inst_u else (15 if "NIFTY" in inst_u else (250 if "BANK" in inst_u else 500))
 
             # Generate option ladder legs (ITM1, ATM, OTM1)
+            raw_rec = recorded_map_exact.get((inst_u, ev.timestamp_ms)) or recorded_map_sym.get(inst_u)
+            raw_legs = raw_rec.get("legs", []) if raw_rec else []
             legs = []
             ladder_defs = [
                 ("ITM1", atm_strike - step if is_long else atm_strike + step),
                 ("ATM", atm_strike),
                 ("OTM1", atm_strike + step if is_long else atm_strike - step),
             ]
+            if raw_legs:
+                for leg in raw_legs:
+                    m_ness = leg.get("moneyness", "ATM")
+                    strike = float(leg.get("strike") or atm_strike)
+                    l_size = int(leg.get("lot_size") or lot_size)
+                    prem_spot = float(leg.get("premium_spot") or max(5.0, round(spot_val * 0.02, 2)))
+                    prem_sl = float(leg.get("premium_sl") or leg.get("entry_sl") or round(max(2.0, prem_spot * 0.7), 2))
+                    spot_move = (curr_spot - spot_val) if is_long else (spot_val - curr_spot)
+                    delta_mult = 0.60 if m_ness == "ITM1" else (0.40 if m_ness == "OTM1" else 0.50)
+                    current_ltp = round(max(0.05, prem_spot + spot_move * delta_mult), 2)
+                    legs.append({
+                        "moneyness": m_ness,
+                        "option_type": leg.get("option_type") or opt_type,
+                        "option_symbol": leg.get("option_symbol") or f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}",
+                        "strike": strike,
+                        "expiry": leg.get("expiry") or sim_date,
+                        "lot_size": l_size,
+                        "token": leg.get("token") or (10000 + (int(strike) % 10000)),
+                        "exchange": exch,
+                        "entry_premium": prem_spot,
+                        "stop_premium": prem_sl,
+                        "trail_premium": prem_sl,
+                        "ltp": current_ltp,
+                        "resolution_reason": None,
+                    })
+            else:
+                ladder_defs = [
+                    ("ITM1", atm_strike - step if is_long else atm_strike + step),
+                    ("ATM", atm_strike),
+                    ("OTM1", atm_strike + step if is_long else atm_strike - step),
+                ]
+                for moneyness, strike in ladder_defs:
+                    mult = 0.02 if moneyness == "ATM" else (0.03 if moneyness == "ITM1" else 0.012)
+                    if moneyness == "ATM" and ev.premium_entry:
+                        premium_est = float(ev.premium_entry)
+                        sl_est = float(ev.premium_sl) if ev.premium_sl else round(max(2.0, premium_est * 0.7), 2)
+                    else:
+                        premium_est = max(5.0, round(spot_val * mult, 2))
+                        sl_est = round(max(2.0, premium_est * 0.7), 2)
 
-            for moneyness, strike in ladder_defs:
-                mult = 0.02 if moneyness == "ATM" else (0.03 if moneyness == "ITM1" else 0.012)
-                if moneyness == "ATM" and ev.premium_entry:
-                    premium_est = float(ev.premium_entry)
-                    sl_est = float(ev.premium_sl) if ev.premium_sl else round(max(2.0, premium_est * 0.7), 2)
-                else:
-                    premium_est = max(5.0, round(spot_val * mult, 2))
-                    sl_est = round(max(2.0, premium_est * 0.7), 2)
+                    # Dynamically calculate option LTP based on current spot movement
+                    spot_move = (curr_spot - spot_val) if is_long else (spot_val - curr_spot)
+                    delta_mult = 0.60 if moneyness == "ITM1" else (0.40 if moneyness == "OTM1" else 0.50)
+                    current_ltp = round(max(0.05, premium_est + spot_move * delta_mult), 2)
 
-                # Dynamically calculate option LTP based on current spot movement
-                spot_move = (curr_spot - spot_val) if is_long else (spot_val - curr_spot)
-                delta_mult = 0.60 if moneyness == "ITM1" else (0.40 if moneyness == "OTM1" else 0.50)
-                current_ltp = round(max(0.05, premium_est + spot_move * delta_mult), 2)
-
-                opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}26SEP{int(strike)}{opt_type}"
-                opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}"
-                legs.append({
-                    "moneyness": moneyness,
-                    "option_type": opt_type,
-                    "option_symbol": opt_sym,
-                    "strike": strike,
-                    "expiry": sim_date,
-                    "lot_size": lot_size,
-                    "token": 10000 + (int(strike) % 10000),
-                    "exchange": exch,
-                    "entry_premium": premium_est,
-                    "stop_premium": sl_est,
-                    "trail_premium": sl_est,
-                    "ltp": current_ltp,
-                    "resolution_reason": None,
-                })
+                    opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}"
+                    legs.append({
+                        "moneyness": moneyness,
+                        "option_type": opt_type,
+                        "option_symbol": opt_sym,
+                        "strike": strike,
+                        "expiry": sim_date,
+                        "lot_size": lot_size,
+                        "token": 10000 + (int(strike) % 10000),
+                        "exchange": exch,
+                        "entry_premium": premium_est,
+                        "stop_premium": sl_est,
+                        "trail_premium": sl_est,
+                        "ltp": current_ltp,
+                        "resolution_reason": None,
+                    })
 
             entry_iso = f"{sim_date}T{ev.time_iso}+05:30" if ev.time_iso else None
             sig_id = f"ae_sim_{ev.instrument}_{ev.time_iso.replace(':', '')}_{i}"
@@ -1882,7 +1939,7 @@ class SimulationRunner:
                 "cvd": 1500.0 if is_long else -1500.0,
                 "scanned": True,
                 "skip_reason": None,
-                "scan_origin": "adaptive_edge" if ev.strategy == "adaptive_edge" else "spot_scan",
+                "scan_origin": "spot_scan" if (raw_rec or ev.strategy in ("supertrend", "spot_scan")) else "adaptive_edge",
                 "flattened": False,
                 "quantity": 1,
                 "overlays": ["REPLAY", ev.strength],
@@ -2422,11 +2479,11 @@ class SimulationRunner:
 
         # 1. SuperTrend: Canonical Triple SuperTrend Alignment (regime.py)
         # Fast (10, 1.0), Mid (14, 2.0), Slow (21, 3.0).
-        # When recorded signals exist for this symbol, ground truth signals are replayed
+        # When recorded signals exist for this session, ground truth signals are replayed
         # automatically at their recorded timestamps; synthetic evaluation is skipped.
-        has_recorded_st = any(
+        has_recorded_today = bool(recorded_list)
+        has_recorded_st = has_recorded_today or any(
             r.get("underlying", "").upper() in sym_aliases
-            and r.get("strategy", "supertrend") == "supertrend"
             for r in recorded_list
         )
         if not has_recorded_st and len(history) >= 25:
@@ -2489,11 +2546,11 @@ class SimulationRunner:
                         "strength": "STRONG",
                     })
 
-        # 3. Adaptive Edge: Canonical Mean Reversion with Candlestick Reversal Confirmation
         # 3. Adaptive Edge: Canonical Multi-Horizon Value Area & Order Flow Pipeline
-        has_recorded_ae = any(
+        # When recorded signals exist for this session, authentic spot scans are replayed
+        # automatically at their recorded timestamps; synthetic fallback heuristics are skipped.
+        has_recorded_ae = has_recorded_today or any(
             r.get("underlying", "").upper() in sym_aliases
-            and r.get("strategy") == "adaptive_edge"
             for r in recorded_list
         )
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
