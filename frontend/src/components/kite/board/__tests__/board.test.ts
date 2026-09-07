@@ -225,6 +225,11 @@ describe('ORB adapter', () => {
     expect(s.flags?.[0]?.hint).toBe('daily trade limit reached');
     expect(s.reason).toBe('daily trade limit reached');
   });
+
+  it('keeps the ticket fingerprint on the board signal', () => {
+    const s = orbToBoard(entry({ ticketFingerprint: 'LONG|ts|NIFTY26AUG24100CE' }));
+    expect(s.ticketFingerprint).toBe('LONG|ts|NIFTY26AUG24100CE');
+  });
 });
 
 describe('shared vocabulary', () => {

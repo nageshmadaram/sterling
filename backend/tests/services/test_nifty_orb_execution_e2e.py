@@ -232,6 +232,30 @@ async def test_a_tag_mapped_to_a_foreign_order_trips_the_kill_switch(harness):
 
 
 @pytest.mark.asyncio
+async def test_a_tag_mapped_to_a_foreign_symbol_trips_the_kill_switch(harness):
+    client = FakeClient(existing=[{
+        "order_id": "ALIEN", "tag": IDEM_TAG, "tradingsymbol": "BANKNIFTY26AUG50000CE",
+        "transaction_type": "BUY", "status": "COMPLETE",
+    }])
+    out = await _run(harness, client)
+    assert client.placed == []
+    assert out["executed"] == []
+    assert any("unexpected broker order" in r for r in harness["rec"].kill)
+
+
+@pytest.mark.asyncio
+async def test_a_tag_mapped_to_a_sell_trips_the_kill_switch(harness):
+    client = FakeClient(existing=[{
+        "order_id": "ALIEN", "tag": IDEM_TAG, "tradingsymbol": SYMBOL,
+        "transaction_type": "SELL", "status": "COMPLETE",
+    }])
+    out = await _run(harness, client)
+    assert client.placed == []
+    assert out["executed"] == []
+    assert any("unexpected broker order" in r for r in harness["rec"].kill)
+
+
+@pytest.mark.asyncio
 async def test_the_same_signal_is_not_executed_twice_in_one_scan(harness):
     """Two rows on the same underlying: the second is skipped, not stacked."""
     client = FakeClient()
@@ -349,6 +373,18 @@ async def test_a_broker_lot_size_disagreeing_with_the_plan_is_refused(harness):
     client = FakeClient()
     out = await _run(harness, client)
     assert out["executed"][0]["reason"] == "broker contract lot size mismatch"
+    assert client.placed == []
+
+
+@pytest.mark.asyncio
+async def test_a_broker_expiry_disagreeing_with_the_plan_is_refused(harness):
+    harness["patch"](execution, "_find_contract", _async((
+        "NFO",
+        {"instrument_type": "CE", "strike": 25000.0, "expiry": "2026-09-03", "lot_size": 75, "instrument_token": 1},
+    )))
+    client = FakeClient()
+    out = await _run(harness, client)
+    assert out["executed"][0]["reason"] == "broker contract expiry mismatch"
     assert client.placed == []
 
 

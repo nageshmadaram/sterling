@@ -45,7 +45,10 @@ def main(argv: list[str]) -> int:
     for fill in fills:
         if fill.get("status") not in {None, "executed"}:
             continue
-        fp = fill.get("ticket_fingerprint") or ticket_fingerprint(fill.get("plan") or fill, fill.get("signal") or {})
+        fp = fill.get("ticket_fingerprint")
+        if not fp:
+            mismatches.append({"reason": "fill missing ticket_fingerprint"})
+            continue
         board_ticket = by_fp.get(fp)
         fill_ticket = fill.get("ticket") or ticket_fields(fill.get("plan") or fill)
         if board_ticket is None:
