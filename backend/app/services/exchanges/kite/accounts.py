@@ -201,9 +201,15 @@ def _delete_db(account_id: str) -> None:
 
 def _load_from_db() -> List[_Account]:
     from app.services import db
-    if not db._available:
+    if not getattr(db, "_available", False):
+        try:
+            db.init()
+        except Exception:
+            pass
+    if not getattr(db, "_available", False):
         return []
     try:
+
         with db._conn() as c:
             rows = c.execute("SELECT * FROM kite_accounts").fetchall()
         out = []

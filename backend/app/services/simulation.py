@@ -21,16 +21,18 @@ log = get_logger(__name__)
 KITE_TOKENS: Dict[str, int] = {
     "NIFTY": 256265,
     "NIFTY 50": 256265,
-    "BANKNIFTY": 260101,
-    "NIFTY BANK": 260101,
-    "FINNIFTY": 257001,
-    "NIFTY FIN SERVICE": 257001,
-    "MIDCPNIFTY": 288001,
+    "BANKNIFTY": 260105,
+    "NIFTY BANK": 260105,
+    "FINNIFTY": 257801,
+    "NIFTY FIN SERVICE": 257801,
+    "MIDCPNIFTY": 288009,
+    "NIFTY MID SELECT": 288009,
     "SENSEX": 265,
+    "BANKEX": 274441,
     "RELIANCE": 738561,
     "TATASTEEL": 895745,
     "HDFCBANK": 341249,
-    "ICICIBANK": 12705,
+    "ICICIBANK": 1270529,
     "LT": 2939649,
     "SBIN": 779521,
     "TCS": 2953217,
@@ -41,8 +43,9 @@ KITE_TOKENS: Dict[str, int] = {
     "BAJFINANCE": 81153,
     "ADANIENT": 6401,
     "ADANIPORTS": 3861249,
-    "BAJAJFINSV": 4267265,
+    "BAJAJFINSV": 4268801,
 }
+
 
 
 def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
@@ -940,12 +943,21 @@ class SimulationRunner:
         cfg_strats = [s.lower() for s in (self._config.strategies if self._config and self._config.strategies else [self._config.strategy if self._config else "all"])]
         allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
         strat = rec.get("strategy", "supertrend").lower()
-        if not allow_all and strat not in cfg_strats:
+        is_ae_matching = "adaptive_edge" in cfg_strats and strat in ("supertrend", "spot_scan")
+        if not allow_all and strat not in cfg_strats and not is_ae_matching:
             return
 
         sym = rec["underlying"]
-        if self._config and self._config.instruments and sym not in self._config.instruments:
-            return
+        if self._config and self._config.instruments:
+            allowed_insts = set(self._config.instruments)
+            from app.services.ohlcv_store import INDEX_ALIASES
+            expanded = set(allowed_insts)
+            for inst in allowed_insts:
+                if inst in INDEX_ALIASES:
+                    expanded.add(INDEX_ALIASES[inst])
+            if sym not in expanded and sym.upper() not in expanded:
+                return
+
 
         raw = rec.get("raw_row", {})
         direction = rec["direction"]
@@ -994,7 +1006,7 @@ class SimulationRunner:
         event = SimSignalEvent(
             time_iso=rec["time_iso"],
             timestamp_ms=rec["timestamp_ms"],
-            strategy="supertrend",
+            strategy=rec.get("strategy", "supertrend"),
             instrument=sym,
             direction=direction,
             strength="STRONG",
@@ -1193,7 +1205,7 @@ class SimulationRunner:
 
         self._status_message = f"⚡ Fetching historical candles for {cfg.date} from Zerodha Kite API..."
         warmup_start = start_epoch - 5 * 86400
-        await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch)
+        await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch, session_start=start_epoch)
 
         # Pre-seed indicator history with pre-session bars so indicators are ready at 09:15 AM
         self._bar_history = {}
@@ -1557,8 +1569,8 @@ class SimulationRunner:
         cfg = self._config
         sim_date = cfg.date if cfg else "2026-08-28"
 
-        # Only return events specifically triggered for adaptive_edge
-        ae_events = [ev for ev in self._stats.events if ev.strategy == "adaptive_edge"]
+        # Return events specifically triggered for adaptive_edge or spot scans consumed by AE
+        ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
 
         signals = []
         for i, ev in enumerate(ae_events):
@@ -1570,18 +1582,20 @@ class SimulationRunner:
 
             # Determine strike step and ATM strike based on underlying instrument and price
             inst_u = ev.instrument.upper()
+            spot_val = float(ev.spot) if (ev.spot and ev.spot > 0) else float(ev.entry)
+
             if "SENSEX" in inst_u or "BANKNIFTY" in inst_u:
                 step = 100.0
             elif "NIFTY" in inst_u:
                 step = 50.0
-            elif ev.entry > 1000:
+            elif spot_val > 1000:
                 step = 20.0
-            elif ev.entry > 500:
+            elif spot_val > 500:
                 step = 10.0
             else:
                 step = 5.0
 
-            atm_strike = round(ev.entry / step) * step
+            atm_strike = ev.strike if (ev.strike and ev.strike > 0) else round(spot_val / step) * step
             exch = "BSE" if "SENSEX" in inst_u else "NSE"
             lot_size = 10 if "SENSEX" in inst_u else (15 if "NIFTY" in inst_u else (250 if "BANK" in inst_u else 500))
 
@@ -1595,12 +1609,18 @@ class SimulationRunner:
 
             for moneyness, strike in ladder_defs:
                 mult = 0.02 if moneyness == "ATM" else (0.03 if moneyness == "ITM1" else 0.012)
-                premium_est = max(5.0, round(ev.entry * mult, 2))
-                sl_est = round(max(2.0, premium_est * 0.7), 2)
+                if moneyness == "ATM" and ev.premium_entry:
+                    premium_est = float(ev.premium_entry)
+                    sl_est = float(ev.premium_sl) if ev.premium_sl else round(max(2.0, premium_est * 0.7), 2)
+                else:
+                    premium_est = max(5.0, round(spot_val * mult, 2))
+                    sl_est = round(max(2.0, premium_est * 0.7), 2)
+
+                opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}26SEP{int(strike)}{opt_type}"
                 legs.append({
                     "moneyness": moneyness,
                     "option_type": opt_type,
-                    "option_symbol": f"{ev.instrument}26AUG{int(strike)}{opt_type}",
+                    "option_symbol": opt_sym,
                     "strike": strike,
                     "expiry": sim_date,
                     "lot_size": lot_size,
@@ -1622,15 +1642,15 @@ class SimulationRunner:
                 "tape_symbol": ev.instrument,
                 "side": side,
                 "option_type": opt_type,
-                "spot_entry": ev.entry,
+                "spot_entry": spot_val,
                 "spot_exit": None,
-                "spot_sl": ev.stop,
-                "spot_tsl": ev.stop,
+                "spot_sl": round(spot_val * 1.01, 2) if not is_long else round(spot_val * 0.99, 2),
+                "spot_tsl": round(spot_val * 1.01, 2) if not is_long else round(spot_val * 0.99, 2),
                 "entry_time": entry_iso,
                 "exit_time": None,
                 "score": 88.0 if ev.strength == "STRONG" else 72.0,
-                "poc": round(ev.entry * 0.999, 2),
-                "vwap": round(ev.entry * 1.001, 2),
+                "poc": round(spot_val * 0.999, 2),
+                "vwap": round(spot_val * 1.001, 2),
                 "cvd": 1500.0 if is_long else -1500.0,
                 "scanned": True,
                 "skip_reason": None,
@@ -1638,7 +1658,8 @@ class SimulationRunner:
                 "flattened": False,
                 "quantity": 1,
                 "overlays": ["REPLAY", ev.strength],
-                "thesis": f"{ev.direction} {ev.strategy} at {ev.entry}",
+                "thesis": f"{ev.direction} {ev.strategy} at {spot_val}",
+
                 "entry_mode": "SCALP",
                 "current_mode": "SCALP",
                 "peak_mode": "SCALP",
@@ -2362,26 +2383,36 @@ async def _hydrate_missing_candles(
     resolution: str,
     start_epoch: int,
     end_epoch: int,
+    session_start: Optional[int] = None,
 ) -> None:
     """Fetch missing historical candles for selected replay date range from Zerodha Kite API."""
     from app.services import ohlcv_store
+    from app.services.ohlcv_store import INDEX_ALIASES
+
+    check_start = session_start if session_start is not None else start_epoch
 
     for sym in instruments:
-        existing = ohlcv_store.get_candles(sym, resolution, limit=5000, since=start_epoch)
-        in_range = [c for c in existing if start_epoch <= c["time"] <= end_epoch]
-        if len(in_range) >= 5:
+        existing = ohlcv_store.get_candles(sym, resolution, limit=5000, since=check_start)
+        in_range = [c for c in existing if check_start <= c["time"] <= end_epoch]
+        if len(in_range) >= 15:
             continue  # Already cached locally
 
-        log.info("Missing local candles for Sterling Kite token %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, end_epoch)
+        log.info("Missing local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, end_epoch)
 
         try:
             from app.services.exchanges.kite import accounts as kite_accounts
             from app.services.exchanges.kite.client import KiteClient
 
             token = KITE_TOKENS.get(sym.upper())
+            if not token and sym.upper() in INDEX_ALIASES:
+                token = KITE_TOKENS.get(INDEX_ALIASES[sym.upper()])
+
             if token:
-                accounts = kite_accounts.list_accounts("default")
-                zerodha_acct = next((a for a in accounts if a.is_active and getattr(a, "access_token", None)), None)
+                kite_accounts.bootstrap()
+                zerodha_acct = kite_accounts.get_active("default") or next(
+                    (a for a in kite_accounts._accounts.values() if a.is_active and a.access_token),
+                    None,
+                )
                 if zerodha_acct and zerodha_acct.access_token:
                     kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
                     try:
@@ -2410,8 +2441,12 @@ async def _hydrate_missing_candles(
                         if parsed_candles:
                             written = ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
                             log.info("Hydrated %d real historical candles for %s from Zerodha Kite", written, sym)
+                            alias = INDEX_ALIASES.get(sym.upper())
+                            if alias and alias != sym.upper():
+                                ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
         except Exception as exc:
             log.warning("Failed to fetch Zerodha Kite historical candles for %s: %s", sym, exc)
+
 
 
 def reset_all_engine_signals() -> None:

@@ -78,6 +78,19 @@ def upsert_candles(symbol: str, resolution: str, candles: List[Dict]) -> int:
         return 0
 
 
+INDEX_ALIASES: Dict[str, str] = {
+    "NIFTY": "NIFTY 50",
+    "NIFTY 50": "NIFTY",
+    "BANKNIFTY": "NIFTY BANK",
+    "NIFTY BANK": "BANKNIFTY",
+    "FINNIFTY": "NIFTY FIN SERVICE",
+    "NIFTY FIN SERVICE": "FINNIFTY",
+    "MIDCPNIFTY": "NIFTY MID SELECT",
+    "NIFTY MID SELECT": "MIDCPNIFTY",
+}
+
+
+
 def get_candles(
     symbol: str,
     resolution: str,
@@ -85,6 +98,7 @@ def get_candles(
     since: Optional[int] = None,
 ) -> List[Dict]:
     """Return up to `limit` stored candles in chronological order."""
+    sym_u = symbol.upper()
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -93,15 +107,31 @@ def get_candles(
                 "SELECT time, open, high, low, close, volume "
                 "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
                 "ORDER BY time DESC LIMIT ?",
-                (symbol.upper(), resolution, since, limit),
+                (sym_u, resolution, since, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 "SELECT time, open, high, low, close, volume "
                 "FROM ohlcv WHERE symbol=? AND resolution=? "
                 "ORDER BY time DESC LIMIT ?",
-                (symbol.upper(), resolution, limit),
+                (sym_u, resolution, limit),
             ).fetchall()
+        if not rows and sym_u in INDEX_ALIASES:
+            alias = INDEX_ALIASES[sym_u]
+            if since is not None:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, since, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, limit),
+                ).fetchall()
         conn.close()
         result = [dict(r) for r in rows]
         result.reverse()
@@ -113,12 +143,18 @@ def get_candles(
 
 def get_latest_time(symbol: str, resolution: str) -> Optional[int]:
     """Unix timestamp (seconds) of the newest stored candle, or None."""
+    sym_u = symbol.upper()
     try:
         conn = sqlite3.connect(_DB_PATH)
         row = conn.execute(
             "SELECT MAX(time) FROM ohlcv WHERE symbol=? AND resolution=?",
-            (symbol.upper(), resolution),
+            (sym_u, resolution),
         ).fetchone()
+        if (not row or row[0] is None) and sym_u in INDEX_ALIASES:
+            row = conn.execute(
+                "SELECT MAX(time) FROM ohlcv WHERE symbol=? AND resolution=?",
+                (INDEX_ALIASES[sym_u], resolution),
+            ).fetchone()
         conn.close()
         return int(row[0]) if row and row[0] is not None else None
     except Exception:
@@ -126,12 +162,18 @@ def get_latest_time(symbol: str, resolution: str) -> Optional[int]:
 
 
 def get_earliest_time(symbol: str, resolution: str) -> Optional[int]:
+    sym_u = symbol.upper()
     try:
         conn = sqlite3.connect(_DB_PATH)
         row = conn.execute(
             "SELECT MIN(time) FROM ohlcv WHERE symbol=? AND resolution=?",
-            (symbol.upper(), resolution),
+            (sym_u, resolution),
         ).fetchone()
+        if (not row or row[0] is None) and sym_u in INDEX_ALIASES:
+            row = conn.execute(
+                "SELECT MIN(time) FROM ohlcv WHERE symbol=? AND resolution=?",
+                (INDEX_ALIASES[sym_u], resolution),
+            ).fetchone()
         conn.close()
         return int(row[0]) if row and row[0] is not None else None
     except Exception:
@@ -147,13 +189,20 @@ def get_symbol_coverage(symbol: str, resolution: str) -> Optional[Dict]:
     request. When only one series is needed, use this instead: same numbers,
     index-served, effectively instant.
     """
+    sym_u = symbol.upper()
     try:
         conn = sqlite3.connect(_DB_PATH)
         row = conn.execute(
             "SELECT COUNT(*), MIN(time), MAX(time) FROM ohlcv "
             "WHERE symbol = ? AND resolution = ?",
-            (symbol, resolution),
+            (sym_u, resolution),
         ).fetchone()
+        if (not row or not row[0]) and sym_u in INDEX_ALIASES:
+            row = conn.execute(
+                "SELECT COUNT(*), MIN(time), MAX(time) FROM ohlcv "
+                "WHERE symbol = ? AND resolution = ?",
+                (INDEX_ALIASES[sym_u], resolution),
+            ).fetchone()
         conn.close()
     except Exception:
         return None
