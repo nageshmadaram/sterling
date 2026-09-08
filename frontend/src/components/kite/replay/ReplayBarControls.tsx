@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useReplaySessionPolicy,
   useReplayState,
@@ -31,6 +31,14 @@ export function ReplaySessionDropdown() {
   const presets = useMemo(() => getDynamicMarketPresets(), []);
 
   const isRange = Boolean(draft.endDate && draft.endDate !== draft.date);
+  const [isRangeMode, setIsRangeMode] = useState<boolean>(isRange);
+
+  useEffect(() => {
+    if (open) {
+      setIsRangeMode(isRange);
+    }
+  }, [open, isRange]);
+
   const activePreset = !isRange ? presets.find((p) => p.date === draft.date) : undefined;
   const displayLabel = isRange
     ? `${fmtSmartDate(draft.date)} – ${fmtSmartDate(draft.endDate)}`
@@ -60,79 +68,141 @@ export function ReplaySessionDropdown() {
         onOpenChange={setOpen}
         label="Select session date"
         anchorRef={anchor}
-        width={240}
+        width={256}
         align="start"
       >
         <div className="rd-drop-menu" role="listbox" aria-label="Session date presets">
           <div className="rd-drop-header">Session date</div>
-          {presets.map((p) => {
-            const selected = !isRange && draft.date === p.date;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                className="rd-drop-option"
-                data-selected={selected}
-                onClick={() => {
-                  setDraft({ date: p.date, endDate: p.date });
-                  setOpen(false);
-                }}
-              >
-                <span className="rd-drop-check">{selected ? '✓' : ''}</span>
-                <span className="rd-drop-option-text">
-                  <span className="rd-drop-option-title">{p.label}</span>
-                  <span className="rd-drop-option-hint">{fmtSmartDate(p.date)}</span>
-                </span>
-              </button>
-            );
-          })}
-          <div className="rd-drop-sep" />
-          <div className="rd-drop-custom-row" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span className="rd-drop-custom-label">From:</span>
-              <input
-                type="date"
-                className="rd-drop-date-input"
-                value={draft.date}
-                onChange={(e) => {
-                  if (e.target.value) {
-                    const newDate = e.target.value;
-                    const newEndDate = draft.endDate && draft.endDate < newDate ? newDate : (draft.endDate ?? newDate);
-                    setDraft({ date: newDate, endDate: newEndDate });
-                  }
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span className="rd-drop-custom-label">To:</span>
-              <input
-                type="date"
-                className="rd-drop-date-input"
-                value={draft.endDate ?? draft.date}
-                min={draft.date}
-                onChange={(e) => {
-                  if (e.target.value) {
-                    const to = e.target.value;
-                    setDraft({ endDate: to < draft.date ? draft.date : to });
-                  }
-                }}
-              />
-            </div>
-            {isRange && (
-              <button
-                type="button"
-                className="rd-btn rd-btn-sm"
-                data-variant="ghost"
-                style={{ fontSize: '10px', padding: '2px 6px', alignSelf: 'flex-start' }}
-                onClick={() => setDraft({ endDate: draft.date })}
-                data-testid="replay-session-single-day"
-              >
-                Reset to single day
-              </button>
-            )}
+
+          {/* Mode Selector: Single Day vs Date Range */}
+          <div className="rd-drop-mode-bar" role="tablist" aria-label="Date selection mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!isRangeMode}
+              className="rd-drop-mode-btn"
+              data-active={!isRangeMode}
+              onClick={() => {
+                setIsRangeMode(false);
+                if (draft.endDate && draft.endDate !== draft.date) {
+                  setDraft({ endDate: draft.date });
+                }
+              }}
+              data-testid="replay-session-single-day"
+            >
+              Single Day
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isRangeMode}
+              className="rd-drop-mode-btn"
+              data-active={isRangeMode}
+              onClick={() => {
+                setIsRangeMode(true);
+              }}
+              data-testid="replay-session-date-range"
+            >
+              Date Range
+            </button>
           </div>
+
+          {!isRangeMode ? (
+            <>
+              {presets.map((p) => {
+                const selected = !isRange && draft.date === p.date;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className="rd-drop-option"
+                    data-selected={selected}
+                    onClick={() => {
+                      setDraft({ date: p.date, endDate: p.date });
+                      setIsRangeMode(false);
+                      setOpen(false);
+                    }}
+                  >
+                    <span className="rd-drop-check">{selected ? '✓' : ''}</span>
+                    <span className="rd-drop-option-text">
+                      <span className="rd-drop-option-title">{p.label}</span>
+                      <span className="rd-drop-option-hint">{fmtSmartDate(p.date)}</span>
+                    </span>
+                  </button>
+                );
+              })}
+              <div className="rd-drop-sep" />
+              <div className="rd-drop-custom-row" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span className="rd-drop-custom-label">Date:</span>
+                  <input
+                    type="date"
+                    className="rd-drop-date-input"
+                    value={draft.date}
+                    data-testid="replay-session-date-input"
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        const newDate = e.target.value;
+                        setDraft({ date: newDate, endDate: newDate });
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rd-drop-custom-row" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span className="rd-drop-custom-label">From:</span>
+                <input
+                  type="date"
+                  className="rd-drop-date-input"
+                  value={draft.date}
+                  data-testid="replay-session-from-input"
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const newDate = e.target.value;
+                      const newEndDate = draft.endDate && draft.endDate < newDate ? newDate : (draft.endDate ?? newDate);
+                      setDraft({ date: newDate, endDate: newEndDate });
+                    }
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span className="rd-drop-custom-label">To:</span>
+                <input
+                  type="date"
+                  className="rd-drop-date-input"
+                  value={draft.endDate ?? draft.date}
+                  min={draft.date}
+                  data-testid="replay-session-to-input"
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const to = e.target.value;
+                      setDraft({ endDate: to < draft.date ? draft.date : to });
+                    }
+                  }}
+                />
+              </div>
+              {isRange && (
+                <button
+                  type="button"
+                  className="rd-btn rd-btn-sm"
+                  data-variant="ghost"
+                  style={{ fontSize: '10px', padding: '2px 6px', alignSelf: 'flex-start' }}
+                  onClick={() => {
+                    setDraft({ endDate: draft.date });
+                    setIsRangeMode(false);
+                  }}
+                  data-testid="replay-session-reset-single-day"
+                >
+                  Reset to single day
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </ReplayPopover>
     </>
@@ -302,7 +372,6 @@ export function ReplayStrategyDropdown() {
         onOpenChange={setOpen}
         label="Select strategies"
         anchorRef={anchor}
-        width={240}
         width={260}
         align="start"
       >

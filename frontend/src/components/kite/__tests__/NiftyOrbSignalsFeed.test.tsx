@@ -161,7 +161,6 @@ describe('ORB feed — tradable setups', () => {
           state: 'ENDED',
           reason: 'ORB high break · volume below confirmation threshold',
           optionSymbol: null,
-          trade_plan: null as never,
         }),
       ],
     });

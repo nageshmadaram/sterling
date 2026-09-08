@@ -736,6 +736,39 @@ describe('configuration', () => {
     expect(useReplayStore.getState().draft.endDate).toBe('2026-09-01');
   });
 
+  it('allows picking a single day with only one input field', async () => {
+    useReplayStore.getState().setDraft({ date: '2026-09-01', endDate: '2026-09-01' });
+    await renderDock();
+    const trigger = screen.getByTestId('replay-session-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const singleDateInput = screen.getByTestId('replay-session-date-input');
+    expect(singleDateInput).toBeTruthy();
+    expect(screen.queryByTestId('replay-session-to-input')).toBeNull();
+    await act(async () => {
+      fireEvent.change(singleDateInput, { target: { value: '2026-07-15' } });
+    });
+    expect(useReplayStore.getState().draft.date).toBe('2026-07-15');
+    expect(useReplayStore.getState().draft.endDate).toBe('2026-07-15');
+  });
+
+  it('allows switching between single day and date range mode', async () => {
+    useReplayStore.getState().setDraft({ date: '2026-09-01', endDate: '2026-09-01' });
+    await renderDock();
+    const trigger = screen.getByTestId('replay-session-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const rangeModeBtn = screen.getByTestId('replay-session-date-range');
+    await act(async () => { fireEvent.click(rangeModeBtn); });
+    const fromInput = screen.getByTestId('replay-session-from-input');
+    const toInput = screen.getByTestId('replay-session-to-input');
+    expect(fromInput).toBeTruthy();
+    expect(toInput).toBeTruthy();
+    await act(async () => {
+      fireEvent.change(toInput, { target: { value: '2026-09-10' } });
+    });
+    expect(useReplayStore.getState().draft.date).toBe('2026-09-01');
+    expect(useReplayStore.getState().draft.endDate).toBe('2026-09-10');
+  });
+
   it('supports typing custom lot size', async () => {
     await renderDock();
     const trigger = screen.getByTestId('replay-sizing-trigger');
