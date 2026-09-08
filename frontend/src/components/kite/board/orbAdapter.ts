@@ -181,6 +181,9 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
       ...(entry.state === 'ENDED'
         ? [{ label: 'PAST', tone: 'dim' as const, hint: 'Generated earlier — kept on the board like SuperTrend history. Not a live ticket.' }]
         : []),
+      ...(entry.state === 'ENDED' && (entry.reason || '').includes(' · ')
+        ? [{ label: 'UNCONFIRMED', tone: 'amber' as const, hint: entry.reason }]
+        : []),
       ...(entry.autoBlock
         ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock }]
         : []),

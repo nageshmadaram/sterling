@@ -7,7 +7,18 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.engines.nifty_orb_options import Bar, OptionContract, StrategyConfig, build_trade_plan, generate_signal, is_monthly_expiry, opening_range, select_option
+from app.engines.nifty_orb_options import (
+    Bar,
+    OptionContract,
+    Signal,
+    StrategyConfig,
+    atr as _atr,
+    build_trade_plan,
+    generate_signal,
+    is_monthly_expiry,
+    opening_range,
+    select_option,
+)
 from app.services.nifty_orb_options import _bar, get_config
 from app.services.providers.truedata.orb_provider import TrueDataOrbProvider
 
@@ -404,31 +415,84 @@ async def _option_contracts(uid: str, underlying: str, direction: str, cfg: Stra
     return await _truedata_option_contracts(underlying, direction, cfg)
 
 
-def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: datetime, since: datetime | None = None) -> list:
-    """First fire of each direction per session, reconstructed from completed bars.
+def _structure_side(bar: Bar, or_high: float, or_low: float, atr_value: float, cfg: StrategyConfig) -> str | None:
+    """Opening-range break, the event ORB is named for.
 
-    SuperTrend keeps past transitions by replaying lookback. Restricting the
-    walk to *today* dropped yesterday's 10:35 the moment the clock crossed
-    midnight, which is why the overnight board showed 18 identical waiting
-    rows instead of the signals that had already printed.
+    Confirmations (VWAP, slope, volume, regime) decide whether Auto may place.
+    They must not decide whether the break is *shown* — SuperTrend still prints
+    a flip that later failed ADX, and a 10:35 ORB print that later sat RANGE
+    was vanishing from the board entirely.
+    """
+    if atr_value <= 0:
+        return None
+    threshold = cfg.min_breakout_atr * atr_value
+    long_break = bar.close - or_high
+    short_break = or_low - bar.close
+    if long_break >= threshold and long_break >= short_break:
+        return "LONG"
+    if short_break >= threshold:
+        return "SHORT"
+    return None
+
+
+def _unconfirmed_fire(side: str, probe: Signal, bar: Bar, or_high: float, or_low: float) -> Signal:
+    distance = max(bar.close - or_high, or_low - bar.close, 0.0)
+    tag = "ORB high break" if side == "LONG" else "ORB low break"
+    reason = probe.reason or "unconfirmed"
+    if not reason.startswith("ORB "):
+        reason = f"{tag} · {reason}"
+    return Signal(
+        side,  # type: ignore[arg-type]
+        probe.regime,
+        bar.timestamp,
+        or_high,
+        or_low,
+        probe.vwap,
+        probe.atr,
+        distance,
+        probe.volume_ratio,
+        0.0,
+        reason,
+        probe.vwap_basis,
+        probe.volume_confirmed,
+    )
+
+
+def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: datetime, since: datetime | None = None) -> list:
+    """First opening-range break of each direction per session.
+
+    SuperTrend keeps every flip on the board. ORB was live-bar-only *and*
+    confirmation-only, so a real 10:35 break that sat RANGE at 10:40 left the
+    dock empty. Auto still only places a fully confirmed ``generate_signal``;
+    this list is the record of what printed.
     """
     from app.engines.nifty_orb_options import _as_ist
-    fires = []
-    seen: set[str] = set()
+    fires: list[Signal] = []
+    confirmed: dict[str, Signal] = {}
+    structure: dict[str, Signal] = {}
     current_day = None
     or_high = or_low = None
     as_of_ist = _as_ist(as_of)
     cutoff = _as_ist(since) if since is not None else as_of_ist - timedelta(days=_HISTORY_SESSIONS)
     interval = max(1, int(cfg.interval_minutes))
+
+    def flush() -> None:
+        for side in ("LONG", "SHORT"):
+            row = confirmed.get(side) or structure.get(side)
+            if row:
+                fires.append(row)
+
     for i, bar in enumerate(bars):
         ts = _as_ist(bar.timestamp)
         if ts < cutoff:
             continue
         if ts.date() != current_day:
+            flush()
             current_day = ts.date()
-            seen = set()
+            confirmed = {}
+            structure = {}
             or_high = or_low = None
-        if len(seen) == 2:
+        if len(confirmed) == 2:
             continue
         clock = ts.strftime("%H:%M")
         if clock < cfg.entry_start or clock > cfg.entry_end:
@@ -438,29 +502,42 @@ def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: dat
                 or_high, or_low = opening_range(bars[: i + 1], cfg.opening_range_minutes)
             except ValueError:
                 continue
-        if or_low is not None and or_low < bar.close < or_high:
+        atr_value = _atr(bars[: i + 1], cfg.atr_period)
+        side = _structure_side(bar, or_high, or_low, atr_value, cfg)
+        if side is None and or_low is not None and or_low < bar.close < or_high:
             continue
         try:
             sig = generate_signal(bars[: i + 1], cfg, as_of=ts + timedelta(minutes=interval))
         except ValueError:
-            continue
-        if sig.direction in ("LONG", "SHORT") and sig.direction not in seen:
-            fires.append(sig)
-            seen.add(sig.direction)
+            sig = None
+        if side and side not in structure:
+            if sig is not None and sig.direction == side:
+                structure[side] = sig
+            elif sig is not None:
+                structure[side] = _unconfirmed_fire(side, sig, bar, or_high, or_low)
+        if sig is not None and sig.direction in ("LONG", "SHORT") and sig.direction not in confirmed:
+            confirmed[sig.direction] = sig
+            structure.setdefault(sig.direction, sig)
+    flush()
     return fires
 
 
 def _history_rows(symbol: str, bars: list[Bar], local: StrategyConfig, cfg: StrategyConfig, now: datetime, *, live_ts: str | None, since: datetime | None = None) -> list[dict[str, Any]]:
+    from app.engines.nifty_orb_options import _as_ist
     history = []
+    closes = {_as_ist(b.timestamp): b.close for b in bars}
     for sig in session_fire_transitions(bars, local, as_of=now, since=since):
         payload = sig.to_dict()
         if payload.get("timestamp") == live_ts:
             continue
+        ts = sig.timestamp
+        close = closes.get(_as_ist(ts), bars[-1].close) if ts else bars[-1].close
+        payload["spot"] = close
         history.append({
             "underlying": symbol,
             "status": "ended",
             "signal": payload,
-            "spot": bars[-1].close,
+            "spot": close,
             "trade": None,
             "data_source": cfg.data_source,
             "interval_minutes": cfg.interval_minutes,
