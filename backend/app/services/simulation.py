@@ -122,6 +122,7 @@ class SimConfig(BaseModel):
     instruments: List[str] = []        # empty = all watchlist
     strategy: str = "all"              # "all" or specific strategy name
     strategies: List[str] = ["all"]    # list of selected strategies
+    adaptive_source: str = "both"      # "both", "ae_model", "spot_scan"
     lots: int = 1                      # number of option/futures lots
     moneyness: str = "ATM"             # "ATM", "ITM1", "ITM2", "OTM1", "OTM2", "ALL"
     # ── Execution friction ────────────────────────────────────────────────
@@ -159,6 +160,7 @@ class SimSignalEvent(BaseModel):
     premium_entry: Optional[float] = None
     premium_sl: Optional[float] = None
     premium_target: Optional[float] = None
+    scan_origin: Optional[str] = None
 
 
 class SimTradeEvent(BaseModel):
@@ -205,6 +207,7 @@ class SimTradeEvent(BaseModel):
     #: spot_stop itself tightens.
     spot_initial_risk: Optional[float] = None
     bars_held: int = 0
+    scan_origin: Optional[str] = None
 
 
 class SimStats(BaseModel):
@@ -1292,11 +1295,17 @@ class SimulationRunner:
         allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
         strat_raw = rec.get("strategy", "supertrend").lower()
         is_spot = rec.get("is_spot_scan", False) or rec.get("source") == "spot" or strat_raw in ("supertrend", "spot_scan")
+        adaptive_src = (self._config.adaptive_source if self._config and hasattr(self._config, "adaptive_source") else "both") or "both"
+        adaptive_src = str(adaptive_src).lower()
 
         if not allow_all:
             if strat_raw in cfg_strats:
+                if (strat_raw == "adaptive_edge" or is_spot) and adaptive_src in ("ae_model", "ae") and "adaptive_edge" in cfg_strats and len(cfg_strats) == 1:
+                    return
                 strat_to_emit = strat_raw
             elif is_spot and "adaptive_edge" in cfg_strats:
+                if adaptive_src in ("ae_model", "ae"):
+                    return
                 strat_to_emit = "adaptive_edge"
             elif is_spot and "bear_to_bearish" in cfg_strats and rec.get("direction") in ("BEARISH", "SHORT", "SELL"):
                 strat_to_emit = "bear_to_bearish"
@@ -1306,6 +1315,8 @@ class SimulationRunner:
                 return
         else:
             strat_to_emit = rec.get("strategy", "supertrend")
+            if is_spot and adaptive_src in ("ae_model", "ae") and strat_to_emit == "adaptive_edge":
+                return
 
         sym = rec["underlying"]
         from app.services.ohlcv_store import INDEX_ALIASES
@@ -1453,6 +1464,7 @@ class SimulationRunner:
             premium_entry=entry_prem,
             premium_sl=stop_prem,
             premium_target=tgt_prem,
+            scan_origin="spot_scan",
         )
         self._stats.signals_fired += 1
         self._stats.events.append(event)
@@ -1497,6 +1509,7 @@ class SimulationRunner:
             spot_hwm=spot,
             spot_initial_risk=abs(spot - stop) if stop is not None else None,
             bars_held=0,
+            scan_origin="spot_scan",
         )
         self._stats.trades_entered += 1
         self._stats.trades.append(trade)
@@ -1837,6 +1850,9 @@ class SimulationRunner:
 
             # If this event matches an authentic recorded signal with full live contract legs, use it
             raw_rec = recorded_map_exact.get((ev.instrument.upper(), ev.timestamp_ms)) or recorded_map_sym.get(ev.instrument.upper())
+            raw_rec = recorded_map_exact.get((ev.instrument.upper(), ev.timestamp_ms))
+            if not raw_rec and not ev.contract:
+                raw_rec = recorded_map_sym.get(ev.instrument.upper())
             if raw_rec:
                 row_copy = dict(raw_rec)
                 row_copy["is_active"] = True
@@ -2167,6 +2183,7 @@ class SimulationRunner:
                 "scanned": True,
                 "skip_reason": None,
                 "scan_origin": "spot_scan" if (raw_rec or ev.strategy in ("supertrend", "spot_scan")) else "adaptive_edge",
+                "scan_origin": getattr(ev, "scan_origin", None) or ("spot_scan" if (raw_rec or not _is_index(ev.instrument) or ev.strategy in ("supertrend", "spot_scan")) else "adaptive_edge"),
                 "flattened": False,
                 "quantity": 1,
                 "overlays": ["REPLAY", ev.strength],
@@ -2188,6 +2205,15 @@ class SimulationRunner:
 
         default_sym = ae_events[0].instrument if ae_events else "NIFTY-I"
         all_syms = list(dict.fromkeys([ev.instrument for ev in ae_events])) or ["NIFTY-I"]
+        adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
+        adaptive_src = str(adaptive_src).lower()
+        if adaptive_src in ("ae_model", "ae"):
+            signals = [s for s in signals if s.get("scan_origin") == "adaptive_edge"]
+        elif adaptive_src in ("spot_scan", "spot"):
+            signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+
+        default_sym = signals[0].get("underlying", "NIFTY-I") if signals else (ae_events[0].instrument if ae_events else "NIFTY-I")
+        all_syms = list(dict.fromkeys([s.get("underlying", "NIFTY-I") for s in signals])) or [default_sym]
 
         sim_legs = []
         for s in signals:
@@ -2785,8 +2811,12 @@ class SimulationRunner:
             r.get("underlying", "").upper() in sym_aliases
             for r in today_recorded
         )
+        adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
+        adaptive_src = str(adaptive_src).lower()
+        skip_ae_model = adaptive_src in ("spot_scan", "spot")
+
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
-        if not has_recorded_ae and is_ae_symbol and len(history) >= 15:
+        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 15:
             body = abs(close - opens)
             lower_wick = min(opens, close) - low
             upper_wick = high - max(opens, close)
@@ -2804,7 +2834,7 @@ class SimulationRunner:
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
-        if not has_recorded_ae and is_ae_symbol and len(history) >= 20:
+        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 20:
             from app.services.adaptive_edge_strategy import decide_from_candles
             from app.services.adaptive_edge import get_config as get_ae_config
             c_input = [
@@ -2935,6 +2965,8 @@ class SimulationRunner:
             strategy = sdef["strategy"]
             if not allow_all and strategy.lower() not in cfg_strats:
                 continue
+            if strategy.lower() == "adaptive_edge" and skip_ae_model:
+                continue
             direction = sdef["direction"]
             strength = sdef["strength"]
 
@@ -2980,6 +3012,7 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
+                scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)
@@ -3032,6 +3065,7 @@ class SimulationRunner:
                     spot_hwm=round(close, 2),
                     spot_initial_risk=abs(close - stop) if stop is not None else None,
                     bars_held=0,
+                    scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
                 )
                 self._stats.trades_entered += 1
                 self._stats.trades.append(trade)

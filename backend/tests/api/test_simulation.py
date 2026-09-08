@@ -866,3 +866,82 @@ def test_has_session_view_lifecycle():
     # 4. User clears session -> False
     simulation_runner.clear()
     assert simulation_runner.has_session_view is False
+
+
+def test_simulation_adaptive_source_filtering():
+    """Verify adaptive_source option ('both', 'ae_model', 'spot_scan') controls AE signals and trades."""
+    stock_spot_sig = {
+        "underlying": "RELIANCE",
+        "direction": "BEARISH",
+        "time_iso": "10:00:00",
+        "timestamp_ms": 1788752700000,
+        "spot": 3000.0,
+        "stop_loss": 3050.0,
+        "strategy": "supertrend",
+        "is_spot_scan": True,
+        "source": "spot",
+        "raw_row": {
+            "underlying": "RELIANCE",
+            "direction": "SHORT",
+            "spot": 3000.0,
+            "scan_origin": "spot_scan",
+        },
+    }
+
+    # 1. Mode: ae_model -> spot scan signals are skipped
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-07",
+        strategies=["adaptive_edge"],
+        adaptive_source="ae_model",
+    )
+    simulation_runner._emit_recorded_signal(stock_spot_sig)
+    assert len(simulation_runner._stats.events) == 0
+    assert len(simulation_runner._stats.trades) == 0
+
+    # 2. Mode: spot_scan -> spot scan signals ARE emitted
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-07",
+        strategies=["adaptive_edge"],
+        adaptive_source="spot_scan",
+    )
+    simulation_runner._emit_recorded_signal(stock_spot_sig)
+    assert len(simulation_runner._stats.events) == 1
+    assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
+    assert len(simulation_runner._stats.trades) == 1
+
+    snap_spot = simulation_runner.get_adaptive_edge_snapshot()
+    assert len(snap_spot["signals"]) == 1
+    assert snap_spot["signals"][0]["scan_origin"] == "spot_scan"
+
+    # In spot_scan mode, synthetic/candle AE model evaluation is skipped
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t0 = datetime(2026, 9, 7, 10, 0, 0, tzinfo=ist)
+    for i in range(25):
+        bar = {
+            "symbol": "NIFTY 50",
+            "open": 24000.0 - i * 10,
+            "high": 24005.0 - i * 10,
+            "low": 23980.0 - i * 10,
+            "close": 23995.0 - i * 10,
+            "volume": 50000,
+        }
+        simulation_runner._evaluate_bar(bar, t0 + timedelta(minutes=5 * i))
+    assert len(simulation_runner._stats.events) == 0
+
+    # 3. Mode: both -> spot scan signals are emitted
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-07",
+        strategies=["adaptive_edge"],
+        adaptive_source="both",
+    )
+    simulation_runner._emit_recorded_signal(stock_spot_sig)
+    assert len(simulation_runner._stats.events) == 1
+    assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
+    assert len(simulation_runner._stats.trades) == 1
+

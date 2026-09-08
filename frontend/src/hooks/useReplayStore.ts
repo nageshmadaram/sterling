@@ -179,6 +179,7 @@ export interface ReplayDraft {
   speed: number;
   resolution: string;
   strategies: string[];
+  adaptiveSource: 'both' | 'ae_model' | 'spot_scan';
   moneyness: string[];
   lots: number;
   frictionMode: 'realistic' | 'ideal';
@@ -259,6 +260,7 @@ export interface ReplayDraftPrefs {
   startTime?: string;
   endTime?: string;
   strategies?: string[];
+  adaptiveSource?: 'both' | 'ae_model' | 'spot_scan';
   moneyness?: string[];
   speed?: number;
   resolution?: string;
@@ -292,6 +294,9 @@ export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Pa
     if (Array.isArray(parsed.strategies) && parsed.strategies.length) {
       out.strategies = parsed.strategies.filter((s): s is string => typeof s === 'string');
     }
+    if (parsed.adaptiveSource === 'both' || parsed.adaptiveSource === 'ae_model' || parsed.adaptiveSource === 'spot_scan') {
+      out.adaptiveSource = parsed.adaptiveSource;
+    }
     if (Array.isArray(parsed.moneyness) && parsed.moneyness.length) {
       out.moneyness = parsed.moneyness.filter((m): m is string => typeof m === 'string');
     }
@@ -319,6 +324,7 @@ export function persistDraft(draft: ReplayDraft) {
       startTime: draft.startTime,
       endTime: draft.endTime,
       strategies: draft.strategies,
+      adaptiveSource: draft.adaptiveSource,
       moneyness: draft.moneyness,
       speed: draft.speed,
       resolution: draft.resolution,
@@ -350,6 +356,7 @@ function initialDraft(): ReplayDraft {
     speed: saved.speed ?? 5,
     resolution: saved.resolution ?? '5m',
     strategies: saved.strategies ?? ['all'],
+    adaptiveSource: saved.adaptiveSource ?? 'both',
     moneyness: saved.moneyness ?? ['ATM'],
     lots: saved.lots ?? 1,
     frictionMode: saved.frictionMode ?? 'realistic',

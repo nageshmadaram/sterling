@@ -92,6 +92,7 @@ export function draftToConfig(draft: ReplayDraft) {
     index_spread_pct: draft.indexSpreadPct,
     stock_spread_pct: draft.stockSpreadPct,
     slippage_pct: draft.slippagePct,
+    adaptive_source: draft.adaptiveSource ?? 'both',
   };
 }
 

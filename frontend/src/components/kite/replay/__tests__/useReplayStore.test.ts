@@ -11,6 +11,7 @@ import {
   matchStrategyFilter,
   useReplayStore,
 } from '../../../../hooks/useReplayStore';
+import { draftToConfig } from '../../../../hooks/useReplayTransport';
 import { makeSignal, makeStatus, makeTrade, primeStore } from './testUtils';
 
 beforeEach(() => {
@@ -363,6 +364,27 @@ describe('draft preferences persistence', () => {
 
     s().setInstruments(['SENSEX', 'INFY', 'TCS']);
     expect(s().draft.instruments).toEqual(['SENSEX', 'INFY', 'TCS']);
+  });
+
+  it('handles adaptiveSource persistence and draftToConfig translation', () => {
+    const s = () => useReplayStore.getState();
+    expect(s().draft.adaptiveSource).toBe('both');
+
+    s().setDraft({ adaptiveSource: 'ae_model' });
+    expect(s().draft.adaptiveSource).toBe('ae_model');
+
+    const cfg = draftToConfig(s().draft);
+    expect(cfg.adaptive_source).toBe('ae_model');
+
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        strategies: ['adaptive_edge'],
+        adaptiveSource: 'spot_scan',
+      }),
+    );
+    const loaded = loadDraftPrefs(localStorage);
+    expect(loaded.adaptiveSource).toBe('spot_scan');
   });
 });
 

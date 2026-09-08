@@ -182,10 +182,10 @@ export function orbToBoard(entry: OrbFeedEntry): BoardSignal {
         ? [{ label: 'PAST', tone: 'dim' as const, hint: 'Generated earlier — kept on the board like SuperTrend history. Not a live ticket.' }]
         : []),
       ...(entry.state === 'ENDED' && (entry.reason || '').includes(' · ')
-        ? [{ label: 'UNCONFIRMED', tone: 'amber' as const, hint: entry.reason }]
+        ? [{ label: 'UNCONFIRMED', tone: 'amber' as const, hint: entry.reason || '' }]
         : []),
       ...(entry.autoBlock
-        ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock }]
+        ? [{ label: 'AUTO BLOCK', tone: 'amber' as const, hint: entry.autoBlock || '' }]
         : []),
       ...(entry.deltaSource === 'assumed'
         ? [{ label: 'Δ ASSUMED', tone: 'amber' as const, hint: 'Delta is 0.50 by default — the premium stop rests on it.' }]

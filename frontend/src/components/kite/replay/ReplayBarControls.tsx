@@ -268,10 +268,14 @@ export function ReplayStrategyDropdown() {
 
   const allStrategies = draft.strategies.includes('all') || draft.strategies.length >= REPLAY_STRATEGIES.length;
   const count = allStrategies ? REPLAY_STRATEGIES.length : draft.strategies.length;
+  const adaptiveSource = draft.adaptiveSource ?? 'both';
+  const aeSuffix = adaptiveSource === 'both' ? 'Both' : adaptiveSource === 'ae_model' ? 'AE' : 'Spot';
   const displayLabel = allStrategies
     ? 'All'
     : count === 1
-      ? strategyLabel(draft.strategies[0])
+      ? (draft.strategies[0] === 'adaptive_edge'
+          ? `Adaptive Edge (${aeSuffix})`
+          : strategyLabel(draft.strategies[0]))
       : `${count} active`;
 
   return (
@@ -299,6 +303,7 @@ export function ReplayStrategyDropdown() {
         label="Select strategies"
         anchorRef={anchor}
         width={240}
+        width={260}
         align="start"
       >
         <div className="rd-drop-menu" role="dialog" aria-label="Strategy selection">
@@ -315,18 +320,68 @@ export function ReplayStrategyDropdown() {
           </div>
           {REPLAY_STRATEGIES.map((s) => {
             const active = allStrategies || draft.strategies.includes(s.id);
+            const isAe = s.id === 'adaptive_edge';
             return (
-              <label className="rd-drop-check-row" key={s.id}>
-                <input
-                  type="checkbox"
-                  checked={active}
-                  onChange={() => toggleStrategy(s.id)}
-                />
-                <span style={{ color: s.tone, display: 'inline-flex' }}>
-                  <span className="rd-dot-tone" />
-                </span>
-                <span className="rd-drop-check-label">{s.label}</span>
-              </label>
+              <div key={s.id} className="rd-drop-strategy-item">
+                <label className="rd-drop-check-row">
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={() => toggleStrategy(s.id)}
+                  />
+                  <span style={{ color: s.tone, display: 'inline-flex' }}>
+                    <span className="rd-dot-tone" />
+                  </span>
+                  <span className="rd-drop-check-label">{s.label}</span>
+                </label>
+                {isAe && active && (
+                  <div
+                    className="rd-drop-sub-pills"
+                    style={{
+                      display: 'flex',
+                      gap: '4px',
+                      padding: '2px 0 6px 28px',
+                    }}
+                    role="group"
+                    aria-label="Adaptive Edge Source"
+                  >
+                    {[
+                      { id: 'both', label: 'Both' },
+                      { id: 'ae_model', label: 'AE Model' },
+                      { id: 'spot_scan', label: 'Spot Scan' },
+                    ].map((opt) => {
+                      const sel = (draft.adaptiveSource ?? 'both') === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className="rd-btn rd-btn-sm"
+                          data-active={sel}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDraft({ adaptiveSource: opt.id as 'both' | 'ae_model' | 'spot_scan' });
+                          }}
+                          style={{
+                            fontSize: '10.5px',
+                            padding: '2px 7px',
+                            height: '22px',
+                            lineHeight: '18px',
+                            borderRadius: '4px',
+                            border: `1px solid ${sel ? 'var(--k-cyan)' : 'var(--k-border)'}`,
+                            background: sel ? 'rgba(0, 180, 216, 0.16)' : 'transparent',
+                            color: sel ? 'var(--k-cyan)' : 'var(--k-dim)',
+                            fontWeight: sel ? 700 : 500,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
