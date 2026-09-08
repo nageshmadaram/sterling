@@ -271,11 +271,15 @@ export function useReplayTransport(): ReplayTransport {
     const store = useReplayStore.getState();
     if (store.status.state === 'idle') return;
     try {
-      store.setStatus(await call('/seek', body));
+      const status = await call('/seek', body);
+      store.setStatus(status);
+      queryClient?.invalidateQueries({ queryKey: ['kite-engine-signals'] });
+      queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-snapshot'] });
+      queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-positions'] });
     } catch (err: any) {
       fail(err?.api?.code ?? 'seek_failed', err?.api?.message || 'Could not move the replay position.');
     }
-  }, [fail]);
+  }, [fail, queryClient]);
 
   return useMemo<ReplayTransport>(() => ({
     start, stop, pause, resume, toggle, setSpeed,

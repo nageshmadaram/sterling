@@ -15,6 +15,7 @@ from app.services.simulation import (
     SimTradeEvent,
     SimulationRunner,
     _apply_friction,
+    _lot_size,
     _option_contract,
     _pick_moneyness,
     _strike_step,
@@ -579,4 +580,80 @@ def test_seek_warms_bar_history_for_indicator_continuity():
     assert runner._in_session_bars["NIFTY"] == 66
     # Most recent bar in history is bar 65
     assert runner._bar_history["NIFTY"][-1]["close"] == 24000.0 + 65
+
+
+def test_lot_size_resolution():
+    assert _lot_size("NIFTY") == 25
+    assert _lot_size("NIFTY 50") == 25
+    assert _lot_size("BANKNIFTY") == 15
+    assert _lot_size("NIFTY BANK") == 15
+    assert _lot_size("FINNIFTY") == 25
+    assert _lot_size("MIDCPNIFTY") == 50
+    assert _lot_size("SENSEX") == 10
+    assert _lot_size("RELIANCE") == 15
+
+
+def test_get_kite_signals_response_canonical_symbols_and_moneyness():
+    from app.services.simulation import SimSignalEvent
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-08-28", moneyness="ITM1,OTM1", lots=2)
+    ev = SimSignalEvent(
+        time_iso="10:00:00",
+        timestamp_ms=1756353000000,
+        strategy="supertrend",
+        instrument="NIFTY BANK",
+        direction="BUY",
+        strength="STRONG",
+        entry=51234.0,
+        stop=51000.0,
+        target=51500.0,
+        contract=None,
+    )
+    runner._stats.events = [ev]
+
+    resp = runner.get_kite_signals_response()
+    assert resp["rows"]
+    row = resp["rows"][0]
+    assert len(row["legs"]) == 2  # ITM1, OTM1
+    # Check that BANKNIFTY has 100 strike step, ATM is 51200
+    # For BUY (CE): ITM1 is 51100, OTM1 is 51300
+    leg_itm = row["legs"][0]
+    leg_otm = row["legs"][1]
+    assert leg_itm["moneyness"] == "ITM1"
+    assert leg_itm["strike"] == 51100.0
+    assert " " not in leg_itm["option_symbol"]
+    assert leg_itm["option_symbol"].startswith("BANKNIFTY")
+
+    assert leg_otm["moneyness"] == "OTM1"
+    assert leg_otm["strike"] == 51300.0
+    assert " " not in leg_otm["option_symbol"]
+    assert leg_otm["option_symbol"].startswith("BANKNIFTY")
+
+
+def test_get_adaptive_edge_snapshot_uses_canonical_symbols_and_lot_sizes():
+    from app.services.simulation import SimSignalEvent
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-08-28")
+    ev = SimSignalEvent(
+        time_iso="10:00:00",
+        timestamp_ms=1756353000000,
+        strategy="supertrend",
+        instrument="NIFTY 50",
+        direction="BUY",
+        strength="STRONG",
+        entry=24500.0,
+        stop=24400.0,
+        target=24700.0,
+    )
+    runner._stats.events = [ev]
+
+    snapshot = runner.get_adaptive_edge_snapshot()
+    assert snapshot["scan"]["signals"]
+    sig = snapshot["scan"]["signals"][0]
+    assert "legs" in sig
+    for leg in sig["legs"]:
+        assert " " not in leg["option_symbol"]
+        assert leg["option_symbol"].startswith("NIFTY")
+        assert leg["lot_size"] == 25
+
 

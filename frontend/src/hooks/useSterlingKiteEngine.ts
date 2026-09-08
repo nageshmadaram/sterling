@@ -28,7 +28,10 @@ export function useEngineSignals() {
     queryKey: ['kite-engine-signals'],
     queryFn: () => api.get<SignalsResponse>(`${E}/signals`),
     refetchInterval: (query) => {
-      if (useReplayStore.getState().status.state !== 'idle') return 300;
+      const st = useReplayStore.getState().status;
+      if (st.state !== 'idle') {
+        return st.state === 'running' ? 300 : 2_000;
+      }
       return query.state.data?.scanning ? 2_000 : 15_000;
     },
     staleTime: isSimActive ? 0 : 5_000,

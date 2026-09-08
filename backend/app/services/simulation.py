@@ -329,6 +329,25 @@ def _is_index(symbol: str) -> bool:
     return s in INDEX_SYMBOLS or _canonical_symbol(symbol) in INDEX_SYMBOLS
 
 
+INDEX_LOT_SIZES = {
+    "NIFTY": 25,
+    "BANKNIFTY": 15,
+    "FINNIFTY": 25,
+    "MIDCPNIFTY": 50,
+    "SENSEX": 10,
+    "BANKEX": 15,
+}
+
+
+def _lot_size(symbol: str) -> int:
+    canon = _canonical_symbol(symbol)
+    if canon in INDEX_LOT_SIZES:
+        return INDEX_LOT_SIZES[canon]
+    if _is_index(symbol):
+        return 25
+    return 15
+
+
 def _strike_step(symbol: str, spot: float) -> float:
     canon = _canonical_symbol(symbol)
     step = STRIKE_STEP.get(canon) or STRIKE_STEP.get(symbol.upper().strip())
@@ -424,7 +443,7 @@ def _option_contract(
     signed = offset if opt_type == "CE" else -offset
     strike = max(step, atm + signed * step)
 
-    lot_size = 25 if _is_index(symbol) else 15
+    lot_size = _lot_size(symbol)
     # Rough premium: ~2% of spot at ATM, decaying as the strike moves away.
     intrinsic = max(0.0, (spot - strike) if opt_type == "CE" else (strike - spot))
     extrinsic = max(0.05, spot * 0.02 - abs(strike - atm) * 0.35)
@@ -1736,27 +1755,27 @@ class SimulationRunner:
             regime_str = "BULL" if is_long else "BEAR"
             opt_type = "CE" if is_long else "PE"
             token_val = KITE_TOKENS.get(ev.instrument.upper(), 256265)
-            atm_strike = round(ev.entry / 50.0) * 50.0
+            step = _strike_step(ev.instrument, ev.entry)
+            atm_strike = round(ev.entry / step) * step
 
-            moneyness_types = ["ITM1", "ATM", "OTM1"] if cfg_money == "ALL" else [cfg_money]
+            if cfg_money == "ALL":
+                moneyness_types = ["ITM1", "ATM", "OTM1"]
+            else:
+                moneyness_types = [m.strip().upper() for m in cfg_money.split(",") if m.strip()]
+                if not moneyness_types:
+                    moneyness_types = ["ATM"]
             legs = []
 
+            canon_inst = _canonical_symbol(ev.instrument)
             for m_type in moneyness_types:
-                strike_offset = 0.0
-                if m_type == "ITM1":
-                    strike_offset = -50.0 if is_long else 50.0
-                elif m_type == "ITM2":
-                    strike_offset = -100.0 if is_long else 100.0
-                elif m_type == "OTM1":
-                    strike_offset = 50.0 if is_long else -50.0
-                elif m_type == "OTM2":
-                    strike_offset = 100.0 if is_long else -100.0
+                offset_val = MONEYNESS_OFFSET.get(m_type, 0)
+                signed_offset = offset_val if opt_type == "CE" else -offset_val
+                s_val = max(step, atm_strike + signed_offset * step)
 
-                s_val = atm_strike + strike_offset
                 legs.append({
                     "moneyness": m_type,
                     "option_type": opt_type,
-                    "option_symbol": ev.contract if (m_type == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(s_val)}{opt_type}",
+                    "option_symbol": ev.contract if (m_type == "ATM" and ev.contract) else f"{canon_inst}{expiry_tag}{int(s_val)}{opt_type}",
                     "strike": s_val,
                     "expiry": sim_date,
                     "premium_spot": round(ev.entry * 0.02, 2),
@@ -1957,7 +1976,8 @@ class SimulationRunner:
 
             atm_strike = ev.strike if (ev.strike and ev.strike > 0) else round(spot_val / step) * step
             exch = "BSE" if "SENSEX" in inst_u else "NSE"
-            lot_size = 10 if "SENSEX" in inst_u else (15 if "NIFTY" in inst_u else (250 if "BANK" in inst_u else 500))
+            lot_size = _lot_size(inst_u)
+            canon_inst = _canonical_symbol(inst_u)
 
             # Generate option ladder legs (ITM1, ATM, OTM1)
             raw_rec = recorded_map_exact.get((inst_u, ev.timestamp_ms)) or recorded_map_sym.get(inst_u)
@@ -1981,7 +2001,7 @@ class SimulationRunner:
                     legs.append({
                         "moneyness": m_ness,
                         "option_type": leg.get("option_type") or opt_type,
-                        "option_symbol": leg.get("option_symbol") or f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}",
+                        "option_symbol": leg.get("option_symbol") or f"{canon_inst}{expiry_tag}{int(strike)}{opt_type}",
                         "strike": strike,
                         "expiry": leg.get("expiry") or sim_date,
                         "lot_size": l_size,
@@ -2013,7 +2033,7 @@ class SimulationRunner:
                     delta_mult = 0.60 if moneyness == "ITM1" else (0.40 if moneyness == "OTM1" else 0.50)
                     current_ltp = round(max(0.05, premium_est + spot_move * delta_mult), 2)
 
-                    opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{ev.instrument}{expiry_tag}{int(strike)}{opt_type}"
+                    opt_sym = ev.contract if (moneyness == "ATM" and ev.contract) else f"{canon_inst}{expiry_tag}{int(strike)}{opt_type}"
                     legs.append({
                         "moneyness": moneyness,
                         "option_type": opt_type,
