@@ -353,40 +353,43 @@ def run_unified_backtest(
             if direction == "LONG":
                 adverse = max(0.0, entry_price - bar_low)
                 favorable = max(0.0, bar_high - entry_price)
-                current_trade["mae"] = max(current_trade["mae"], adverse)
-                current_trade["mfe"] = max(current_trade["mfe"], favorable)
+            else:  # SHORT
+                adverse = max(0.0, bar_high - entry_price)
+                favorable = max(0.0, entry_price - bar_low)
+            current_trade["mae"] = max(current_trade["mae"], adverse)
+            current_trade["mfe"] = max(current_trade["mfe"], favorable)
 
-                # Dynamic or manual trailing stop upgrade
-                if getattr(req, "dynamic_mode", True):
-                    # Step 1: Break-even lock at 1.0R
-                    sl_d = current_trade.get("sl_dist", curr_atr * 1.5)
-                    if current_trade["mfe"] >= sl_d * 1.0:
-                        be_price = (entry_price + sl_d * 0.15) if direction == "LONG" else (entry_price - sl_d * 0.15)
-                        if direction == "LONG" and be_price > tsl_price:
-                            current_trade["tsl_price"] = be_price
-                            tsl_price = be_price
-                        elif direction == "SHORT" and be_price < tsl_price:
-                            current_trade["tsl_price"] = be_price
-                            tsl_price = be_price
+            # Dynamic or manual trailing stop upgrade
+            if getattr(req, "dynamic_mode", True):
+                # Step 1: Break-even lock at 1.0R
+                sl_d = current_trade.get("sl_dist", curr_atr * 1.5)
+                if current_trade["mfe"] >= sl_d * 1.0:
+                    be_price = (entry_price + sl_d * 0.15) if direction == "LONG" else (entry_price - sl_d * 0.15)
+                    if direction == "LONG" and be_price > tsl_price:
+                        current_trade["tsl_price"] = be_price
+                        tsl_price = be_price
+                    elif direction == "SHORT" and be_price < tsl_price:
+                        current_trade["tsl_price"] = be_price
+                        tsl_price = be_price
 
-                    # Step 2: Dynamic ATR Trailing beyond 1.8R
-                    if current_trade["mfe"] >= sl_d * 1.8:
-                        if direction == "LONG":
-                            dyn_tsl = bar_close - (curr_atr * 0.8)
-                            if dyn_tsl > tsl_price:
-                                current_trade["tsl_price"] = dyn_tsl
-                                tsl_price = dyn_tsl
-                        else:
-                            dyn_tsl = bar_close + (curr_atr * 0.8)
-                            if dyn_tsl < tsl_price:
-                                current_trade["tsl_price"] = dyn_tsl
-                                tsl_price = dyn_tsl
+                # Step 2: Dynamic ATR Trailing beyond 1.8R
+                if current_trade["mfe"] >= sl_d * 1.8:
+                    if direction == "LONG":
+                        dyn_tsl = bar_close - (curr_atr * 0.8)
+                        if dyn_tsl > tsl_price:
+                            current_trade["tsl_price"] = dyn_tsl
+                            tsl_price = dyn_tsl
+                    else:
+                        dyn_tsl = bar_close + (curr_atr * 0.8)
+                        if dyn_tsl < tsl_price:
+                            current_trade["tsl_price"] = dyn_tsl
+                            tsl_price = dyn_tsl
 
-                elif req.trail_points and (bar_close - entry_price if direction == "LONG" else entry_price - bar_close) >= req.trail_points:
-                    new_tsl = (bar_close - req.trail_points) if direction == "LONG" else (bar_close + req.trail_points)
-                    if (direction == "LONG" and new_tsl > tsl_price) or (direction == "SHORT" and new_tsl < tsl_price):
-                        current_trade["tsl_price"] = new_tsl
-                        tsl_price = new_tsl
+            elif req.trail_points and (bar_close - entry_price if direction == "LONG" else entry_price - bar_close) >= req.trail_points:
+                new_tsl = (bar_close - req.trail_points) if direction == "LONG" else (bar_close + req.trail_points)
+                if (direction == "LONG" and new_tsl > tsl_price) or (direction == "SHORT" and new_tsl < tsl_price):
+                    current_trade["tsl_price"] = new_tsl
+                    tsl_price = new_tsl
 
             # Check exits
             exit_price = None

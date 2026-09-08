@@ -195,6 +195,15 @@ class SimTradeEvent(BaseModel):
     spot_entry: Optional[float] = None
     spot_stop: Optional[float] = None
     spot_target: Optional[float] = None
+    #: High-water-mark of the underlying spot (most favorable extreme seen since
+    #: entry). Used to ratchet the trailing stop: once the underlying moves far
+    #: enough in our favour the stop follows, locking in gains. Initialised to
+    #: spot_entry at trade creation; updated on every bar in _settle_open_positions.
+    spot_hwm: Optional[float] = None
+    #: The initial stop distance (|spot_entry − spot_stop|) at trade creation,
+    #: used as the fixed offset for the trailing ratchet. Preserved even as
+    #: spot_stop itself tightens.
+    spot_initial_risk: Optional[float] = None
     bars_held: int = 0
 
 
@@ -696,6 +705,7 @@ class SimulationRunner:
             for trade in book:
                 trade.bars_held += 1
                 bullish = trade.opt_type == "CE"
+
                 stop = trade.spot_stop
                 target = trade.spot_target
 
@@ -726,6 +736,31 @@ class SimulationRunner:
                         ((mark - trade.entry_price) / trade.entry_price) * 100.0, 2
                     ) if trade.entry_price > 0 else 0.0
                     trade.duration_mins = trade.bars_held * self._bar_minutes()
+
+                    # ── trailing stop ratchet (bar-close based) ────────────────
+                    # Update the high-water-mark from this bar's CLOSE (not the
+                    # intrabar extreme), then trail the stop toward price. Using
+                    # the close matches the live engine's SuperTrend trail — it
+                    # operates on completed bars, never on intrabar extremes — and
+                    # prevents the same bar's high/low from both creating a new HWM
+                    # and triggering the tightened stop (a lookahead artefact).
+                    if (trade.spot_hwm is not None and trade.spot_initial_risk is not None
+                            and trade.spot_initial_risk > 0 and trade.spot_stop is not None):
+                        if bullish:
+                            trade.spot_hwm = max(trade.spot_hwm, close)
+                            new_stop = trade.spot_hwm - trade.spot_initial_risk
+                            if new_stop > trade.spot_stop:
+                                trade.spot_stop = round(new_stop, 2)
+                        else:
+                            trade.spot_hwm = min(trade.spot_hwm, close)
+                            new_stop = trade.spot_hwm + trade.spot_initial_risk
+                            if new_stop < trade.spot_stop:
+                                trade.spot_stop = round(new_stop, 2)
+                        # Re-derive the premium stop so the UI's SL column tracks
+                        # the ratcheted level instead of showing the static entry stop.
+                        if trade.spot_entry is not None:
+                            trade.stop_loss = round(max(0.05, self._premium_for_spot(trade, trade.spot_stop)), 2)
+
                     still_open.append(trade)
                     self._publish("trade", trade.model_dump())
                     continue
@@ -1459,6 +1494,8 @@ class SimulationRunner:
             spot_entry=spot,
             spot_stop=stop,
             spot_target=target,
+            spot_hwm=spot,
+            spot_initial_risk=abs(spot - stop) if stop is not None else None,
             bars_held=0,
         )
         self._stats.trades_entered += 1
@@ -2992,6 +3029,8 @@ class SimulationRunner:
                     spot_entry=round(close, 2),
                     spot_stop=stop,
                     spot_target=target,
+                    spot_hwm=round(close, 2),
+                    spot_initial_risk=abs(close - stop) if stop is not None else None,
                     bars_held=0,
                 )
                 self._stats.trades_entered += 1

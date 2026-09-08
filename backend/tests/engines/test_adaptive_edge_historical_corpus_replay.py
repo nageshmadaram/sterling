@@ -93,6 +93,8 @@ def test_observational_baseline_telemetry_across_all_sessions():
             assert tel.authorized_quantity % 25 == 0  # Lot sizing constraint
             assert tel.exit_reason in (
                 "STOP_LOSS_TRIGGERED",
+                "TRAILING_STOP_TRIGGERED",
+                "PROFIT_LOCK_TRIGGERED",
                 "PROFIT_TARGET_REACHED",
                 "END_OF_SEQUENCE",
                 "SESSION_CUTOFF",

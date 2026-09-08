@@ -625,11 +625,24 @@ def run_strategy_semantics_pipeline(
             exit_fill_price = simulated_option_price
             break
 
-        # Check stop / profit target hit
-        if prot_decision.stop_price is not None and simulated_option_price <= prot_decision.stop_price:
-            exit_reason = "STOP_LOSS_TRIGGERED"
+        # Check stop / trail / profit-lock hit (ProtectionEngine evaluates all three)
+        if prot_decision.hit:
+            exit_reason = {
+                "PROTECTIVE_STOP": "STOP_LOSS_TRIGGERED",
+                "TRAILING_PROTECTION": "TRAILING_STOP_TRIGGERED",
+                "PROFIT_LOCK": "PROFIT_LOCK_TRIGGERED",
+            }.get(prot_decision.authority or "", "STOP_LOSS_TRIGGERED")
             exit_bar_index = curr_idx
-            exit_fill_price = prot_decision.stop_price
+            # Use the authority's own price for the fill: trail_price for a trail
+            # exit, lock_price for a lock exit, stop_price for a hard stop.
+            if prot_decision.authority == "TRAILING_PROTECTION" and prot_decision.trail_price is not None:
+                exit_fill_price = prot_decision.trail_price
+            elif prot_decision.authority == "PROFIT_LOCK" and prot_decision.lock_price is not None:
+                exit_fill_price = prot_decision.lock_price
+            elif prot_decision.stop_price is not None:
+                exit_fill_price = prot_decision.stop_price
+            else:
+                exit_fill_price = simulated_option_price
             break
 
         if simulated_option_price >= entry_fill_price + (market_decision.target_points * 0.5):
