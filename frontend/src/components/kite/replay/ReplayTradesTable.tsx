@@ -17,6 +17,7 @@ import {
   fmtInr,
   fmtInt,
   fmtPct,
+  fmtPnlBracket,
   fmtSessionDate,
   fmtSignedInr,
   fmtSignedPct,
@@ -36,6 +37,7 @@ interface TradeGroupSummary {
   tone?: string;
   rows: ReplayTrade[];
   pnl: number;
+  invested: number;
   wins: number;
   losses: number;
   open: number;
@@ -55,14 +57,19 @@ interface TradeGroupSummary {
 const TradeRow = memo(function TradeRow({
   t,
   hasFriction,
+  showInvested = true,
+  onToggleInvested,
   colSpanBase: _colSpanBase,
 }: {
   t: ReplayTrade;
   hasFriction: boolean;
+  showInvested?: boolean;
+  onToggleInvested?: () => void;
   colSpanBase?: number;
 }) {
   const open = t.status === 'OPEN';
   const win = t.status === 'WIN';
+  const invested = (t.entry_price || 0) * (t.quantity || 0);
 
   return (
     <tr
@@ -171,11 +178,42 @@ const TradeRow = memo(function TradeRow({
           {t.status}
         </span>
       </td>
-      <td data-align="right" className="rd-num rd-pnl" data-tone={t.pnl_usd >= 0 ? 'profit' : 'loss'}>
-        <span className={open ? 'rd-unrealised' : undefined} title={open ? 'Unrealised — the position is still open' : undefined}>
-          {open ? '~' : ''}{fmtSignedInr(t.pnl_usd)}
+      <td
+        data-align="right"
+        className="rd-num rd-pnl"
+        data-tone={open ? 'open' : t.pnl_usd >= 0 ? 'profit' : 'loss'}
+        onClick={onToggleInvested}
+        style={onToggleInvested ? { cursor: 'pointer' } : undefined}
+      >
+        {showInvested ? (
+          <span
+            className={`rd-invested-cell ${open ? 'rd-unrealised' : ''}`}
+            title={`Invested: ₹${fmtInt(Math.round(invested))} · P&L: ${fmtSignedInr(t.pnl_usd)}${open ? ' (Unrealised)' : ''} (Click to toggle)`}
+          >
+            <span className="rd-invested-amt">{fmtInt(Math.round(invested))}</span>
+            {' '}
+            <span
+              className="rd-invested-bracket"
+              data-tone={open ? 'open' : t.pnl_usd >= 0 ? 'profit' : 'loss'}
+            >
+              {fmtPnlBracket(t.pnl_usd, open)}
+            </span>
+          </span>
+        ) : (
+          <span
+            className={open ? 'rd-unrealised' : undefined}
+            title={open ? `Unrealised (${fmtSignedInr(t.pnl_usd)}) — the position is still open (Click to toggle)` : `P&L: ${fmtSignedInr(t.pnl_usd)} (Click to toggle)`}
+          >
+            {open ? '~' : ''}{fmtSignedInr(t.pnl_usd)}
+          </span>
+        )}
+        <span className="rd-sub">
+          {t.pnl_pct != null
+            ? fmtSignedPct(t.pnl_pct)
+            : invested > 0
+              ? fmtSignedPct((t.pnl_usd / invested) * 100)
+              : ABSENT}
         </span>
-        <span className="rd-sub">{fmtSignedPct(t.pnl_pct)}</span>
       </td>
     </tr>
   );
@@ -222,7 +260,21 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
   const [userInteractedGroup, setUserInteractedGroup] = useState(false);
   const [groupBy, setGroupBy] = useState<TradeGroupBy>(multiDay ? 'date' : 'none');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [showInvested, setShowInvested] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('sterling_replay_show_invested');
+      return saved !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('sterling_replay_show_invested', String(showInvested));
+    } catch {}
+  }, [showInvested]);
 
   useEffect(() => {
     if (!userInteractedGroup) {
@@ -262,6 +314,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
           tone,
           rows: [],
           pnl: 0,
+          invested: 0,
           wins: 0,
           losses: 0,
           open: 0,
@@ -282,6 +335,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       g.rows.push(t);
       const p = t.pnl_usd || 0;
       g.pnl += p;
+      g.invested += (t.entry_price || 0) * (t.quantity || 0);
       if (t.status === 'WIN') {
         g.wins += 1;
         if (p > 0) g.grossProfit += p;
@@ -361,6 +415,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
 
   const totalLots = trades.reduce((a, t) => a + (t.lots || 0), 0);
   const totalQty = trades.reduce((a, t) => a + (t.quantity || 0), 0);
+  const totalInvested = trades.reduce((a, t) => a + (t.entry_price || 0) * (t.quantity || 0), 0);
   const closed = trades.filter((t) => t.status !== 'OPEN').length;
   const cols = hasFriction ? 13 : 12;
   const slice = rows.slice(virtual.start, virtual.end);
@@ -390,7 +445,16 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
               <th data-align="right" data-col="sltgt">SL / Target</th>
               {hasFriction && <th data-align="right" data-col="slip">Slippage</th>}
               <th data-align="center">Status</th>
-              <th data-align="right">P&L</th>
+              <th data-align="right">
+                <button
+                  type="button"
+                  className="rd-th-toggle-btn"
+                  onClick={() => setShowInvested((s) => !s)}
+                  title="Click to toggle between Invested (P&L) and P&L only"
+                >
+                  {showInvested ? 'Invested (P&L)' : 'P&L'}
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -422,6 +486,14 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                           </button>
 
                           <div className="rd-group-pnl-stats" role="group" aria-label={`${g.label} P&L stats`}>
+                            <span
+                              className="rd-stat-pill rd-stat-pill-invested"
+                              title={`${g.label} Total Invested: ₹${fmtInt(Math.round(g.invested))}`}
+                            >
+                              <span className="rd-stat-pill-lbl">Invested</span>
+                              <span className="rd-stat-pill-val">₹{fmtInt(Math.round(g.invested))}</span>
+                            </span>
+
                             {g.winRate != null && (
                               <span
                                 className="rd-stat-pill"
@@ -492,15 +564,40 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                         data-align="right"
                         className="rd-num rd-pnl"
                         data-tone={g.pnl === 0 ? 'dim' : g.pnl > 0 ? 'profit' : 'loss'}
+                        onClick={() => setShowInvested((s) => !s)}
+                        style={{ cursor: 'pointer' }}
                       >
-                        <span title={`${g.label} Net Realised P&L: ${fmtSignedInr(g.pnl)}`}>
-                          {fmtSignedInr(g.pnl)}
-                        </span>
+                        {showInvested ? (
+                          <span
+                            className="rd-invested-cell"
+                            title={`${g.label} Total Invested: ₹${fmtInt(Math.round(g.invested))} · Net Realised P&L: ${fmtSignedInr(g.pnl)} (Click to toggle view)`}
+                          >
+                            <span className="rd-invested-amt">{fmtInt(Math.round(g.invested))}</span>
+                            {' '}
+                            <span
+                              className="rd-invested-bracket"
+                              data-tone={g.pnl === 0 ? 'dim' : g.pnl > 0 ? 'profit' : 'loss'}
+                            >
+                              {fmtPnlBracket(g.pnl)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span title={`${g.label} Net Realised P&L: ${fmtSignedInr(g.pnl)} (Click to toggle view)`}>
+                            {fmtSignedInr(g.pnl)}
+                          </span>
+                        )}
                       </td>
                     </tr>
                     {!collapsed[key] &&
                       g.rows.map((t) => (
-                        <TradeRow key={t.trade_id} t={t} hasFriction={hasFriction} colSpanBase={cols} />
+                        <TradeRow
+                          key={t.trade_id}
+                          t={t}
+                          hasFriction={hasFriction}
+                          showInvested={showInvested}
+                          onToggleInvested={() => setShowInvested((s) => !s)}
+                          colSpanBase={cols}
+                        />
                       ))}
                   </React.Fragment>
                 ))
@@ -508,7 +605,14 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                 <>
                   {virtual.padTop > 0 && <tr style={{ height: virtual.padTop }} aria-hidden="true"><td colSpan={cols} /></tr>}
                   {slice.map((t) => (
-                    <TradeRow key={t.trade_id} t={t} hasFriction={hasFriction} colSpanBase={cols} />
+                    <TradeRow
+                      key={t.trade_id}
+                      t={t}
+                      hasFriction={hasFriction}
+                      showInvested={showInvested}
+                      onToggleInvested={() => setShowInvested((s) => !s)}
+                      colSpanBase={cols}
+                    />
                   ))}
                   {virtual.padBottom > 0 && <tr style={{ height: virtual.padBottom }} aria-hidden="true"><td colSpan={cols} /></tr>}
                 </>
@@ -518,6 +622,10 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
             <tr>
               <td colSpan={6}>
                 Total · {trades.length} trades ({closed} closed, {trades.length - closed} open)
+                {' · '}
+                <span title={`Total Invested: ₹${fmtInt(Math.round(totalInvested))}`}>
+                  ₹{fmtInt(Math.round(totalInvested))} invested
+                </span>
               </td>
               <td data-align="right" className="rd-num">
                 {fmtInt(totalLots)}L<span className="rd-sub">{fmtInt(totalQty)} qty</span>
@@ -531,8 +639,30 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                 </td>
               )}
               <td data-align="center" className="rd-num">{wins}W / {losses}L</td>
-              <td data-align="right" className="rd-num rd-pnl" data-tone={pnl >= 0 ? 'profit' : 'loss'}>
-                {fmtSignedInr(pnl)}
+              <td
+                data-align="right"
+                className="rd-num rd-pnl"
+                data-tone={pnl >= 0 ? 'profit' : 'loss'}
+                onClick={() => setShowInvested((s) => !s)}
+                style={{ cursor: 'pointer' }}
+              >
+                {showInvested ? (
+                  <span
+                    className="rd-invested-cell"
+                    title={`Total Invested: ₹${fmtInt(Math.round(totalInvested))} · Net P&L: ${fmtSignedInr(pnl)} (Click to toggle view)`}
+                  >
+                    <span className="rd-invested-amt">{fmtInt(Math.round(totalInvested))}</span>
+                    {' '}
+                    <span
+                      className="rd-invested-bracket"
+                      data-tone={pnl === 0 ? 'dim' : pnl > 0 ? 'profit' : 'loss'}
+                    >
+                      {fmtPnlBracket(pnl)}
+                    </span>
+                  </span>
+                ) : (
+                  fmtSignedInr(pnl)
+                )}
                 {/* Gross vs net is only a distinction when friction was measured;
                     labelling a single number "net" otherwise is a claim. */}
                 <span className="rd-sub">{hasFriction ? 'net of friction' : 'no friction modelled'}</span>
@@ -559,6 +689,20 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
             {g === 'none' ? 'None' : g === 'date' ? 'Date' : g === 'strategy' ? 'Strategy' : 'Contract'}
           </button>
         ))}
+
+        <div className="rd-view-toggles" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            className="rd-btn rd-btn-sm"
+            data-variant={showInvested ? 'primary' : 'ghost'}
+            aria-pressed={showInvested}
+            onClick={() => setShowInvested((s) => !s)}
+            data-testid="replay-toggle-invested"
+            title="Toggle displaying Amount Invested and P&L in brackets"
+          >
+            Invested (P&L)
+          </button>
+        </div>
       </div>
     </>
   );

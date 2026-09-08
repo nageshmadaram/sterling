@@ -41,6 +41,17 @@ export function fmtSignedInr(v: number | null | undefined): string {
   return `+₹${INR.format(v)}`;
 }
 
+/** `(+125)` / `(−80)` / `(0)` / `(~+125)`. P&L in brackets alongside invested capital. */
+export function fmtPnlBracket(v: number | null | undefined, isOpen = false): string {
+  if (!isNum(v)) return ABSENT;
+  const prefix = isOpen ? '~' : '';
+  if (v === 0) return `(${prefix}0)`;
+  const sign = v < 0 ? MINUS : '+';
+  const abs = Math.abs(v);
+  const formatted = abs % 1 >= 0.01 ? INR.format(abs) : INT.format(abs);
+  return `(${prefix}${sign}${formatted})`;
+}
+
 /** `+2.4%` / `−1.0%`. */
 export function fmtSignedPct(v: number | null | undefined, dp = 1): string {
   if (!isNum(v)) return ABSENT;

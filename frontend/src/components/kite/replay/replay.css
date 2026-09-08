@@ -2579,3 +2579,75 @@ kbd.rd-kbd {
   font-size: 11px;
   font-family: inherit;
 }
+
+/* ── Amount Invested & Bracketed P&L ────────────────────────────────────── */
+
+.rd-invested-cell {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rd-invested-amt {
+  font-family: var(--rd-font-mono);
+  font-weight: 600;
+  color: var(--k-text);
+}
+
+.rd-invested-bracket {
+  font-family: var(--rd-font-mono);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.rd-invested-bracket[data-tone="profit"] {
+  color: var(--k-green);
+}
+
+.rd-invested-bracket[data-tone="loss"] {
+  color: var(--k-red-brick);
+}
+
+.rd-invested-bracket[data-tone="open"] {
+  color: var(--k-cyan, #0ea5e9);
+}
+
+.rd-invested-bracket[data-tone="dim"] {
+  color: var(--k-dim);
+}
+
+.rd-th-toggle-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: right;
+  transition: color var(--rd-dur-fast) var(--rd-ease-out);
+}
+
+.rd-th-toggle-btn:hover {
+  color: var(--k-brand);
+}
+
+.rd-stat-pill-invested {
+  border-color: color-mix(in srgb, var(--k-cyan, #0ea5e9) 30%, var(--k-border));
+  background: color-mix(in srgb, var(--k-cyan, #0ea5e9) 7%, var(--k-surface));
+}
+
+.rd-stat-pill-invested .rd-stat-pill-val {
+  color: var(--k-cyan, #0ea5e9);
+}
+
+.replay-dock[data-width="sm"] .rd-stat-pill-invested {
+  display: none;
+}

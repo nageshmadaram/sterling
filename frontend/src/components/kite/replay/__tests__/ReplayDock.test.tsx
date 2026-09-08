@@ -428,7 +428,7 @@ describe('trades table', () => {
       status: makeStatus({ stats: { ...DEFAULT_STATUS.stats, trades: [makeTrade({ status: 'OPEN', exit_price: null })] } }),
     });
     await renderDock();
-    expect(screen.getByText(/~\+₹1,000\.00/)).toBeTruthy();
+    expect(screen.getByText(/~[+]1,000/)).toBeTruthy();
   });
 
   it('says whether the total is net of friction', async () => {
@@ -518,7 +518,78 @@ describe('trades table', () => {
     expect(screen.getByText('50%')).toBeTruthy();
     expect(screen.getByText('4.00')).toBeTruthy();
     expect(screen.getAllByText('+₹750.00').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('+₹1,500.00').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('(+1,500)').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('10,000').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('toggles between Invested (P&L) and standard P&L view', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({ stats: { ...DEFAULT_STATUS.stats, trades: [makeTrade({ entry_price: 100, quantity: 50, pnl_usd: 1000 })] } }),
+    });
+    await renderDock();
+    // Initially shows invested amount and bracketed P&L: 5,000 (+1,000) in row and footer
+    expect(screen.getAllByText('5,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('(+1,000)').length).toBeGreaterThanOrEqual(1);
+
+    // Toggle view via toolbar button
+    const toggleBtn = screen.getByTestId('replay-toggle-invested');
+    fireEvent.click(toggleBtn);
+
+    // Now shows standard P&L
+    expect(screen.getAllByText('+₹1,000.00').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('consolidates table investment across trades, groups, and footer', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        config: {
+          date: '2026-08-03',
+          end_date: '2026-08-05',
+          start_time: '09:00:00',
+          end_time: '15:30:00',
+          speed: 5,
+          resolution: '5m',
+          instruments: [],
+        },
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [
+            makeTrade({
+              trade_id: 'TRD-1',
+              entry_time_iso: '2026-08-03T10:00:00',
+              timestamp_ms: Date.UTC(2026, 7, 3, 4, 30, 0),
+              entry_price: 120,
+              quantity: 100,
+              pnl_usd: 125,
+            }),
+            makeTrade({
+              trade_id: 'TRD-2',
+              entry_time_iso: '2026-08-03T12:00:00',
+              timestamp_ms: Date.UTC(2026, 7, 3, 6, 30, 0),
+              entry_price: 80,
+              quantity: 50,
+              pnl_usd: -25,
+            }),
+          ],
+        },
+      }),
+    });
+    await renderDock();
+
+    // Row 1: 120 * 100 = 12,000 (+125)
+    expect(screen.getByText('12,000')).toBeTruthy();
+    expect(screen.getByText('(+125)')).toBeTruthy();
+
+    // Row 2: 80 * 50 = 4,000 (−25)
+    expect(screen.getByText('4,000')).toBeTruthy();
+    expect(screen.getByText('(−25)')).toBeTruthy();
+
+    // Group consolidated investment: 12,000 + 4,000 = 16,000 (+100)
+    expect(screen.getAllByText('16,000').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('(+100)').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('₹16,000 invested')).toBeTruthy();
   });
 
   it('formats trade contract names using InstrumentLabel', async () => {

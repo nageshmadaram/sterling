@@ -8,6 +8,7 @@ import {
   fmtInr,
   fmtLots,
   fmtPct,
+  fmtPnlBracket,
   fmtSessionDate,
   fmtSignedInr,
   fmtSignedPct,
@@ -25,6 +26,7 @@ describe('absent values', () => {
   it.each([undefined, null, NaN, Infinity])('renders %s as an em dash', (v) => {
     expect(fmtInr(v as number)).toBe(ABSENT);
     expect(fmtSignedInr(v as number)).toBe(ABSENT);
+    expect(fmtPnlBracket(v as number)).toBe(ABSENT);
     expect(fmtPct(v as number)).toBe(ABSENT);
     expect(fmtLots(v as number)).toBe(ABSENT);
     expect(fmtDuration(v as number)).toBe(ABSENT);
@@ -50,6 +52,33 @@ describe('money', () => {
     // U+002D does not align in tabular figures; U+2212 does.
     expect(fmtSignedInr(-312)).toContain('−');
     expect(fmtSignedInr(-312)).not.toContain('-');
+  });
+});
+
+describe('bracketed P&L', () => {
+  it('formats positive P&L with plus sign', () => {
+    expect(fmtPnlBracket(125)).toBe('(+125)');
+    expect(fmtPnlBracket(1250)).toBe('(+1,250)');
+  });
+
+  it('formats negative P&L with real minus sign', () => {
+    expect(fmtPnlBracket(-80)).toBe('(−80)');
+    expect(fmtPnlBracket(-1250)).toBe('(−1,250)');
+  });
+
+  it('formats zero without directional sign', () => {
+    expect(fmtPnlBracket(0)).toBe('(0)');
+  });
+
+  it('formats decimals when present', () => {
+    expect(fmtPnlBracket(125.5)).toBe('(+125.50)');
+    expect(fmtPnlBracket(-80.25)).toBe('(−80.25)');
+  });
+
+  it('prepends tilde for open positions', () => {
+    expect(fmtPnlBracket(125, true)).toBe('(~+125)');
+    expect(fmtPnlBracket(-80, true)).toBe('(~−80)');
+    expect(fmtPnlBracket(0, true)).toBe('(~0)');
   });
 });
 

@@ -53,6 +53,10 @@ export function tradeCsvColumns(hasFriction: boolean): readonly CsvColumn<Replay
     { header: 'Stop Loss', value: (r) => r.stop_loss },
     { header: 'Target', value: (r) => r.target_price },
     { header: 'Status', value: (r) => r.status },
+    {
+      header: 'Invested (INR)',
+      value: (r) => ((r.entry_price || 0) * (r.quantity || 0)) || 0,
+    },
     { header: 'PnL (INR)', value: (r) => r.pnl_usd },
     { header: 'PnL (%)', value: (r) => r.pnl_pct },
   ];
