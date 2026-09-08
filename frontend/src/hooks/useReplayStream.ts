@@ -260,6 +260,7 @@ export function useReplayStream(enabled: boolean): void {
               wins: d.wins ?? store.status.stats.wins,
               losses: d.losses ?? store.status.stats.losses,
               signals_fired: d.signals_fired ?? store.status.stats.signals_fired,
+              trades_entered: d.trades_entered ?? store.status.stats.trades_entered,
               slippage_total: d.slippage_total ?? store.status.stats.slippage_total,
             },
           });

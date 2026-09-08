@@ -99,12 +99,12 @@ export function ReplaySummaryModal() {
   const equity = useMemo(() => {
     const pts = [0];
     let acc = 0;
-    trades.forEach((t) => {
+    derived.closed.forEach((t) => {
       acc += t.pnl_usd || 0;
       pts.push(Number(acc.toFixed(2)));
     });
     return pts;
-  }, [trades]);
+  }, [derived.closed]);
 
   if (!open) return null;
 

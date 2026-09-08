@@ -558,6 +558,7 @@ class SimulationRunner:
             "wins": self._stats.wins,
             "losses": self._stats.losses,
             "signals_fired": self._stats.signals_fired,
+            "trades_entered": self._stats.trades_entered,
             "slippage_total": self._stats.slippage_total,
             "open_positions": sum(len(v) for v in self._open_by_symbol.values()),
             "unrealised_pnl": round(

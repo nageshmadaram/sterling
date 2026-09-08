@@ -12,8 +12,9 @@ import * as Icons from './ReplayIcons';
 
 function shiftTime(time: string, mins: number): string {
   const [h, m] = time.split(':').map(Number);
-  const t = h * 60 + m + mins;
-  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}:00`;
+  const t = (h || 0) * 60 + (m || 0) + mins;
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, t));
+  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}:00`;
 }
 
 const LOT_PRESETS = [1, 2, 5, 10, 25];
