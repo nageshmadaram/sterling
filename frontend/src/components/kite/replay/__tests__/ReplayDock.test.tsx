@@ -50,6 +50,21 @@ describe('mounting', () => {
     expect(within(dock).getByTestId('replay-transport')).toBeTruthy();
     expect(within(dock).getByTestId('replay-timeline')).toBeTruthy();
     expect(within(dock).getByTestId('replay-metrics')).toBeTruthy();
+    expect(within(dock).getByTestId('replay-player-bar-info')).toBeTruthy();
+  });
+
+  it('renders the session clock and progress percentage in the player bar', async () => {
+    setupDock({
+      status: makeStatus({
+        state: 'running',
+        current_time_iso: '2026-09-08T09:16:19.000Z',
+        progress_pct: 0,
+      }),
+    });
+    await renderDock();
+    const info = screen.getByTestId('replay-player-bar-info');
+    expect(within(info).getByText(/IST/)).toBeTruthy();
+    expect(within(info).getByText('0%')).toBeTruthy();
   });
 
   it.each(['docked', 'expanded', 'overlay', 'fullscreen'] as const)('renders in %s mode', async (mode) => {

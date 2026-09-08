@@ -31,6 +31,7 @@ import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
 import { SIGNAL_CSV_COLUMNS } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
+import { fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
 import { useReplaySignalToasts } from './useReplaySignalToasts';
@@ -172,6 +173,22 @@ function ReplayUnifiedTable() {
           <ReplayTradesTable />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Isolated clock & percentage display so per-bar ticks only re-render this sub-tree */
+function ReplayPlayerBarInfo() {
+  const state = useReplayState();
+  const clock = useReplayStore((s) => s.status.current_time_iso);
+  const pct = useReplayStore((s) => s.status.progress_pct);
+
+  return (
+    <div className="rd-player-bar-info" data-testid="replay-player-bar-info">
+      <span className="rd-player-bar-clock" data-state={state}>
+        {fmtTime(clock)} IST
+      </span>
+      <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
     </div>
   );
 }
@@ -393,6 +410,7 @@ export function ReplayDock() {
       <div className="rd-player-bar" data-testid="replay-player-bar">
         <ReplayTransport />
         <ReplayTimeline />
+        <ReplayPlayerBarInfo />
         {showDetailedReport && (
           <div className="rd-player-bar-detail">
             <button
