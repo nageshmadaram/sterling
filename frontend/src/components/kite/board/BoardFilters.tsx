@@ -254,9 +254,9 @@ export function BoardFilters({ view, columns, columnLabels, children }: {
         />
       )}
 
-      {columns && <ColumnPicker view={view} available={columns} columnLabels={columnLabels} />}
-
       {children}
+
+      {columns && <ColumnPicker view={view} available={columns} columnLabels={columnLabels} />}
 
       {counts.shown !== counts.total && (
         <span style={{ fontSize: 9, color: k.dim, whiteSpace: 'nowrap', marginLeft: 'auto' }}>
