@@ -118,6 +118,27 @@ def test_session_walk_recovers_yesterdays_fire_after_midnight():
     assert fires[0].direction == "LONG"
 
 
+def test_session_walk_keeps_an_or_break_that_failed_later_gates():
+    """A choppy RANGE break still printed. Hiding it is why the dock stayed empty."""
+    from tests.engines.test_nifty_orb_options import _opening_range_bars, _bar
+    from app.engines.nifty_orb_options import StrategyConfig, generate_signal
+    from app.services.nifty_orb_scanner import session_fire_transitions
+    rows = _opening_range_bars()
+    price = 24000.0
+    steps = [40, -30] * 11 + [42]
+    for index, step in enumerate(steps):
+        price += step
+        last = index == len(steps) - 1
+        rows.append(_bar(len(rows), price - step, price, 3000 if last else 1000))
+    probe = generate_signal(rows, StrategyConfig())
+    assert probe.direction == "NONE"
+    as_of = datetime(2026, 8, 18, 15, 40, tzinfo=IST)
+    fires = session_fire_transitions(rows, StrategyConfig(), as_of=as_of)
+    assert fires
+    assert fires[0].direction == "LONG"
+    assert fires[0].reason.startswith("ORB high break")
+
+
 def test_reconstructed_ended_row_reuses_the_stored_ticket():
     reconstructed = {
         "status": "ended",

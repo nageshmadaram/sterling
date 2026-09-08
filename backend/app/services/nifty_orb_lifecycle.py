@@ -83,7 +83,7 @@ _KEEP_STATUSES = frozenset({"signal", "signal_unresolved", "ended"})
 _STORE_CAP = 200
 # Bump when reconstruction rules change so the next scan rewalks lookback
 # instead of trusting a store filled by the old today-only walk.
-_REPLAY_VERSION = 2
+_REPLAY_VERSION = 3
 
 
 def fired_row_key(row: dict[str, Any]) -> str | None:

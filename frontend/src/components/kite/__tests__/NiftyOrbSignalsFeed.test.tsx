@@ -153,6 +153,22 @@ describe('ORB feed — tradable setups', () => {
     expect(screen.getByRole('button', { name: /1 not signalling/ })).toBeInTheDocument();
   });
 
+  it('marks an unconfirmed opening-range print so it is still visible', () => {
+    show({
+      rows: [
+        entry({
+          underlying: 'NIFTY',
+          state: 'ENDED',
+          reason: 'ORB high break · volume below confirmation threshold',
+          optionSymbol: null,
+          trade_plan: null as never,
+        }),
+      ],
+    });
+    expect(screen.getByText('PAST')).toBeInTheDocument();
+    expect(screen.getByText('UNCONFIRMED')).toBeInTheDocument();
+  });
+
   it('promotes an errored underlying to the board instead of burying it', () => {
     // An underlying that could not be evaluated is a call to action; only rows
     // that were evaluated and simply had no setup belong in the disclosure.
