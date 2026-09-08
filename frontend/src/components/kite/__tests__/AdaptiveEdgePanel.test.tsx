@@ -370,4 +370,48 @@ describe('AdaptiveEdgePanel', () => {
     fireEvent.click(screen.getByText('Older'));
     expect(screen.getByText(olderRow.instrument)).toBeInTheDocument();
   });
+
+  it('filters rows by source toggle (Both, AE Model, Spot Scan)', () => {
+    const aeRow = {
+      ...rowsFromSnapshot(snapshot)[0],
+      id: 'ae-signal-1',
+      instrument: 'NIFTY25AUG24400CE',
+      origin: 'adaptive_edge' as const,
+      open: true,
+    };
+    const spotRow = {
+      ...rowsFromSnapshot(snapshot)[1],
+      id: 'spot-signal-2',
+      instrument: 'NIFTY25AUG24500CE',
+      origin: 'spot_scan' as const,
+      open: true,
+    };
+
+    const { rerender } = render(<AdaptiveEdgePanel rows={[aeRow, spotRow]} />);
+
+    // Both visible initially
+    expect(screen.getByText('NIFTY25AUG24400CE')).toBeInTheDocument();
+    expect(screen.getByText('NIFTY25AUG24500CE')).toBeInTheDocument();
+
+    // Click AE Model toggle
+    fireEvent.click(screen.getByTestId('ae-table-source-ae'));
+    expect(screen.getByText('NIFTY25AUG24400CE')).toBeInTheDocument();
+    expect(screen.queryByText('NIFTY25AUG24500CE')).toBeNull();
+
+    // Click Spot Scan toggle
+    fireEvent.click(screen.getByTestId('ae-table-source-spot'));
+    expect(screen.queryByText('NIFTY25AUG24400CE')).toBeNull();
+    expect(screen.getByText('NIFTY25AUG24500CE')).toBeInTheDocument();
+
+    // Click Both toggle
+    fireEvent.click(screen.getByTestId('ae-table-source-all'));
+    expect(screen.getByText('NIFTY25AUG24400CE')).toBeInTheDocument();
+    expect(screen.getByText('NIFTY25AUG24500CE')).toBeInTheDocument();
+
+    // Controlled mode: fires callback
+    const onFilterChange = vi.fn();
+    rerender(<AdaptiveEdgePanel rows={[aeRow, spotRow]} sourceFilter="ae" onSourceFilterChange={onFilterChange} />);
+    fireEvent.click(screen.getByTestId('ae-table-source-spot'));
+    expect(onFilterChange).toHaveBeenCalledWith('spot');
+  });
 });

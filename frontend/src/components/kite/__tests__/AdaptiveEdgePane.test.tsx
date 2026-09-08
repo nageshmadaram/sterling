@@ -182,4 +182,32 @@ describe('AdaptiveEdgePane', () => {
     expect(events).toContain('connect');
     expect(events).toContain('adaptiveEdge');
   });
+
+  it('renders source filter tabs and allows switching between Both, AE Model, and Spot Scan', () => {
+    render(<AdaptiveEdgePane />);
+    const sourceFilterBar = screen.getByTestId('adaptive-edge-source-filter');
+    expect(sourceFilterBar).toBeInTheDocument();
+
+    const bothBtn = screen.getByTestId('ae-source-all');
+    const aeBtn = screen.getByTestId('ae-source-ae');
+    const spotBtn = screen.getByTestId('ae-source-spot');
+
+    expect(bothBtn).toBeInTheDocument();
+    expect(aeBtn).toBeInTheDocument();
+    expect(spotBtn).toBeInTheDocument();
+
+    // Default is 'all'
+    expect(bothBtn).toHaveAttribute('data-active', 'true');
+    expect(aeBtn).toHaveAttribute('data-active', 'false');
+
+    // Click AE Model
+    fireEvent.click(aeBtn);
+    expect(aeBtn).toHaveAttribute('data-active', 'true');
+    expect(bothBtn).toHaveAttribute('data-active', 'false');
+
+    // Click Spot Scan
+    fireEvent.click(spotBtn);
+    expect(spotBtn).toHaveAttribute('data-active', 'true');
+    expect(aeBtn).toHaveAttribute('data-active', 'false');
+  });
 });

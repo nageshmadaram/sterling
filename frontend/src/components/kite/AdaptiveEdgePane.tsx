@@ -80,6 +80,7 @@ export function AdaptiveEdgePane({
 
   const [viewMode, setViewMode] = useState<'signals' | 'dashboard' | 'charts'>('signals');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'ae' | 'spot'>('all');
   const [symbolFilter, setSymbolFilter] = useState<string>('ALL');
   const [inspectSymbol, setInspectSymbol] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -130,6 +131,12 @@ export function AdaptiveEdgePane({
       list = board;
     }
 
+    if (sourceFilter === 'ae') {
+      list = list.filter((r) => r.origin !== 'spot_scan');
+    } else if (sourceFilter === 'spot') {
+      list = list.filter((r) => r.origin === 'spot_scan');
+    }
+
     if (symbolFilter !== 'ALL') {
       list = list.filter((r) => {
         const u = r.underlying.toUpperCase();
@@ -153,7 +160,7 @@ export function AdaptiveEdgePane({
     }
 
     return list;
-  }, [board, history, statusFilter, symbolFilter, searchQuery]);
+  }, [board, history, statusFilter, sourceFilter, symbolFilter, searchQuery]);
 
   useEffect(() => {
     if (!visible.some((row) => row.id === selectedId)) {
@@ -210,6 +217,44 @@ export function AdaptiveEdgePane({
 
     return counts;
   }, [board, history, statusFilter]);
+
+  const sourceCounts = useMemo(() => {
+    let list: AdaptiveEdgeRow[] = [];
+    if (statusFilter === 'closed') {
+      const closedHistory = history.filter((row) => !row.open);
+      list = closedHistory.length ? closedHistory : board.filter((row) => !row.open);
+    } else if (statusFilter === 'open') {
+      list = board.filter((row) => row.open);
+    } else {
+      list = board;
+    }
+
+    if (symbolFilter !== 'ALL') {
+      list = list.filter((r) => {
+        const u = r.underlying.toUpperCase();
+        const sf = symbolFilter.toUpperCase();
+        if (sf === 'STOCKS') {
+          return !['NIFTY 50', 'NIFTY BANK', 'NIFTY FIN SERVICE', 'SENSEX', 'NIFTY', 'BANKNIFTY', 'FINNIFTY'].includes(u);
+        }
+        return u === sf || u.includes(sf) || sf.includes(u);
+      });
+    }
+
+    let ae = 0;
+    let spot = 0;
+    list.forEach((r) => {
+      if (r.origin === 'spot_scan') spot++;
+      else ae++;
+    });
+
+    return { all: list.length, ae, spot };
+  }, [board, history, statusFilter, symbolFilter]);
+
+  const sourceFilterItems = [
+    { id: 'all' as const, label: 'Both', count: sourceCounts.all },
+    { id: 'ae' as const, label: 'AE Model', count: sourceCounts.ae },
+    { id: 'spot' as const, label: 'Spot Scan', count: sourceCounts.spot },
+  ];
 
   const symbolFilterItems = [
     { id: 'ALL', label: 'All', count: symbolCounts.ALL },
@@ -577,6 +622,39 @@ export function AdaptiveEdgePane({
                 ))}
               </div>
 
+              {/* Source (AE vs Spot) Segmented Control */}
+              <div
+                style={{ display: 'flex', gap: 2, background: k.surfaceHover, padding: 2, borderRadius: 3 }}
+                data-testid="adaptive-edge-source-filter"
+                role="tablist"
+                aria-label="Signal source filter"
+              >
+                {sourceFilterItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={sourceFilter === item.id}
+                    onClick={() => setSourceFilter(item.id)}
+                    style={{
+                      border: 0,
+                      background: sourceFilter === item.id ? k.bg : 'transparent',
+                      color: sourceFilter === item.id ? k.text : k.dim,
+                      fontWeight: sourceFilter === item.id ? 600 : 400,
+                      borderRadius: 2,
+                      padding: '3px 8px',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                    data-testid={`ae-source-${item.id}`}
+                    data-active={sourceFilter === item.id}
+                  >
+                    {item.label} {item.count}
+                  </button>
+                ))}
+              </div>
+
               {/* Symbol Segmented Control */}
               <div style={{ display: 'flex', gap: 2, background: k.surfaceHover, padding: 2, borderRadius: 3, flexWrap: 'wrap' }}>
                 {symbolFilterItems.map((item) => (
@@ -616,6 +694,8 @@ export function AdaptiveEdgePane({
                 scanning={isScanning}
                 pendingSymbols={pendingSymbols}
                 isFetching={isFetching}
+                sourceFilter={sourceFilter}
+                onSourceFilterChange={setSourceFilter}
               />
             </div>
           </section>

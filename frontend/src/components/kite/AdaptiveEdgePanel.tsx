@@ -664,6 +664,8 @@ function StatCard({
   );
 }
 
+export type AdaptiveEdgeSourceFilter = 'all' | 'ae' | 'spot';
+
 export function AdaptiveEdgePanel({
   rows,
   quotes,
@@ -676,6 +678,8 @@ export function AdaptiveEdgePanel({
   scanningLabel,
   pendingSymbols = [],
   isFetching = false,
+  sourceFilter,
+  onSourceFilterChange,
 }: {
   rows: AdaptiveEdgeRow[];
   quotes?: Record<string, any>;
@@ -688,12 +692,21 @@ export function AdaptiveEdgePanel({
   scanningLabel?: string;
   pendingSymbols?: string[];
   isFetching?: boolean;
+  sourceFilter?: AdaptiveEdgeSourceFilter;
+  onSourceFilterChange?: (src: AdaptiveEdgeSourceFilter) => void;
 }) {
   const openOrderWindow = useOrderWindowStore((s) => s.openOrderWindow);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [internalSourceFilter, setInternalSourceFilter] = useState<AdaptiveEdgeSourceFilter>('all');
+
+  const activeSourceFilter = sourceFilter ?? internalSourceFilter;
+  const handleSourceChange = (src: AdaptiveEdgeSourceFilter) => {
+    if (onSourceFilterChange) onSourceFilterChange(src);
+    else setInternalSourceFilter(src);
+  };
 
   const toggleCol = (id: string) => {
     setHiddenCols((prev) => {
@@ -751,6 +764,12 @@ export function AdaptiveEdgePanel({
     groups: UnderlyingGroup[];
   }
 
+  const filteredRows = useMemo(() => {
+    if (activeSourceFilter === 'ae') return rows.filter((r) => r.origin !== 'spot_scan');
+    if (activeSourceFilter === 'spot') return rows.filter((r) => r.origin === 'spot_scan');
+    return rows;
+  }, [rows, activeSourceFilter]);
+
   const dayBuckets = useMemo<DayBucket[]>(() => {
     const isIndexSym = (sym: string) => {
       const s = sym.toUpperCase();
@@ -769,7 +788,7 @@ export function AdaptiveEdgePanel({
       Older: [],
     };
 
-    for (const r of rows) {
+    for (const r of filteredRows) {
       const rawTs = parseTimestampMs(
         r.entryTime ?? r.sessionDate ?? (r as any).session_date ?? r.observationTime ?? (r as any).timestamp_ms ?? (r as any).timestamp
       );
@@ -808,7 +827,7 @@ export function AdaptiveEdgePanel({
       });
     }
     return out;
-  }, [rows, todayKey, yesterdayKey, todayLabel, yesterdayLabel]);
+  }, [filteredRows, todayKey, yesterdayKey, todayLabel, yesterdayLabel]);
 
   const [userToggledDays, setUserToggledDays] = useState<Map<string, boolean>>(() => new Map());
   const toggleDay = (label: string) => {
@@ -1276,7 +1295,47 @@ export function AdaptiveEdgePanel({
 
   return (
     <div style={{ overflow: 'auto', minHeight: 0, height: '100%', background: k.bg, fontFamily: k.fontFamily }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '6px 12px', borderBottom: `1px solid ${k.border}`, background: k.surface }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 12px',
+          borderBottom: `1px solid ${k.border}`,
+          background: k.surface,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} data-testid="ae-table-source-toggle-group">
+          <span style={{ fontSize: 11, color: k.dim, fontWeight: 500 }}>Source:</span>
+          <div style={{ display: 'flex', gap: 2, background: k.bg, padding: 2, borderRadius: 3, border: `1px solid ${k.border}` }}>
+            {([
+              { id: 'all' as const, label: 'Both' },
+              { id: 'ae' as const, label: 'AE Model' },
+              { id: 'spot' as const, label: 'Spot Scan' },
+            ]).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleSourceChange(item.id)}
+                style={{
+                  border: 0,
+                  background: activeSourceFilter === item.id ? k.blue : 'transparent',
+                  color: activeSourceFilter === item.id ? '#ffffff' : k.dim,
+                  fontWeight: activeSourceFilter === item.id ? 600 : 400,
+                  borderRadius: 2,
+                  padding: '2px 8px',
+                  fontSize: 10.5,
+                  cursor: 'pointer',
+                  transition: 'all 0.12s ease',
+                }}
+                data-testid={`ae-table-source-${item.id}`}
+                data-active={activeSourceFilter === item.id}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <ColumnsMenu items={columnChoices} onShowAll={() => setHiddenCols(new Set())} />
       </div>
       <table style={{ width: '100%', minWidth: 920, borderCollapse: 'collapse', fontSize: 12, fontFamily: k.fontFamily }}>
