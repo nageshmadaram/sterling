@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { k, Icons } from '../../styles/kiteUI';
 import { useEngineActivity } from '../../hooks/useSterlingKiteEngine';
 import { useLiveSignalCount } from '../../store/useLiveSignalCount';
+import { useKitePositions } from '../../hooks/useKite';
 import { KiteFooterStatus } from './KiteFooterStatus';
 import { ReplayDock } from './replay/ReplayDock';
 import { ReplayFooterChip } from './replay/ReplayFooterChip';
@@ -261,9 +262,20 @@ function PresetDiagram({ preset }: { preset: WorkspacePresetId }) {
   );
 }
 
-export function KiteLayout({ activeNav, onNavClick: _onNavClick, sidebar, rightSidebar, bottomBar, centerTopBar, content, onBasketClick, basketCount = 0 }: KiteLayoutProps) {
+export function KiteLayout({ activeNav, onNavClick, sidebar, rightSidebar, bottomBar, centerTopBar, content, onBasketClick, basketCount = 0 }: KiteLayoutProps) {
   const { data: activity } = useEngineActivity();
   const queryClient = useQueryClient();
+  const positionsQuery = useKitePositions();
+  const netPositions = positionsQuery.data?.net ?? [];
+  const openPositions = useMemo(
+    () => netPositions.filter((p: any) => Number(p.quantity ?? 0) !== 0),
+    [netPositions],
+  );
+  const hasOpenPositions = openPositions.length > 0;
+  const totalPnl = useMemo(
+    () => netPositions.reduce((sum: number, p: any) => sum + Number(p.pnl ?? p.m2m ?? 0), 0),
+    [netPositions],
+  );
   // The footer's activity poll (10s) and the signals dock's own poll run on
   // independent timers — a scan can start right after the dock's last idle
   // (15s) tick, so the dock would sit on stale "no signals" data for up to
@@ -758,11 +770,6 @@ export function KiteLayout({ activeNav, onNavClick: _onNavClick, sidebar, rightS
 
       <footer style={{ position: 'relative', height: FOOTER_HEIGHT, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px', gap: 9, borderTop: '1px solid var(--k-border-strong-4)', background: 'color-mix(in srgb, var(--k-bg) 98%, transparent)', zIndex: 150 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {/* Broker state and every strategy, next to the watchlist end of the
-              footer. Clicking KITE opens the session panel either way — the
-              connected case is worth being able to check on purpose, not only
-              when something has broken. */}
-          <KiteFooterStatus onOpenSession={() => openSettingsSection('account')} />
           {onBasketClick && (
             <button type="button" className="kw-pane-control" onClick={onBasketClick} title="Basket" aria-label="Open basket" style={{ position: 'relative' }}>
               <Icons.Basket />
@@ -835,6 +842,44 @@ export function KiteLayout({ activeNav, onNavClick: _onNavClick, sidebar, rightS
           )}
           {!scanning && (activity?.last_scan_ms ?? 0) > 0 && <span style={{ opacity: .7 }}>· {fmtAgo(activity?.last_scan_ms ?? 0)}</span>}
           {!scanning && marketClosed ? <span style={{ opacity: .7 }}>· Market closed</span> : !scanning && autoScan && (activity?.next_scan_ms ?? 0) > 0 ? <span style={{ opacity: .7 }}>· Next Due {fmtNext(activity?.next_scan_ms ?? 0)}</span> : null}
+
+          {/* Total P&L when open positions exist */}
+          {hasOpenPositions && (
+            <>
+              <span style={{ width: 1, height: 14, background: 'var(--k-border)' }} />
+              <button
+                type="button"
+                onClick={() => onNavClick?.('positions')}
+                title={`Total P&L: ${totalPnl >= 0 ? '+' : '−'}₹${Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${netPositions.length} position${netPositions.length === 1 ? '' : 's'} (${openPositions.length} open). Click to view positions.`}
+                className="sb-tool"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  height: 20,
+                  padding: '0 6px',
+                  borderRadius: 4,
+                  background: totalPnl > 0 ? 'var(--k-tint-green, rgba(34, 197, 94, 0.1))' : totalPnl < 0 ? 'var(--k-tint-red, rgba(239, 68, 68, 0.1))' : 'var(--k-surface-hover)',
+                  border: `1px solid ${totalPnl > 0 ? 'rgba(34, 197, 94, 0.3)' : totalPnl < 0 ? 'rgba(239, 68, 68, 0.3)' : 'var(--k-border)'}`,
+                  color: totalPnl > 0 ? k.green : totalPnl < 0 ? k.red : 'var(--k-dim)',
+                  fontFamily: 'inherit',
+                  fontSize: 9.5,
+                  fontWeight: 800,
+                  letterSpacing: '.03em',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span style={{ fontSize: 8.5, color: 'var(--k-dim)', fontWeight: 700 }}>P&amp;L</span>
+                <span>{totalPnl >= 0 ? '+' : '−'}₹{Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              </button>
+            </>
+          )}
+
+          <span style={{ width: 1, height: 14, background: 'var(--k-border)' }} />
+
+          {/* Broker state and strategies (moved to right side) */}
+          <KiteFooterStatus onOpenSession={() => openSettingsSection('account')} />
         </div>
       </footer>
       {fullscreenWorkspace}
