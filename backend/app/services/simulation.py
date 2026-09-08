@@ -48,8 +48,8 @@ KITE_TOKENS: Dict[str, int] = {
 
 
 
-def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
-    """Load real recorded signals from kite_engine_signals or system stores for the given date (YYYY-MM-DD)."""
+def _load_recorded_signals(date_str: str, end_date_str: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load real recorded signals from kite_engine_signals or system stores for the given date (YYYY-MM-DD) or range."""
     from datetime import datetime, timezone, timedelta
     from app.services import db
     import json
@@ -76,7 +76,9 @@ def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
                 if not ts:
                     continue
                 dt = datetime.fromtimestamp(ts / 1000, ist)
-                if dt.strftime("%Y-%m-%d") == date_str:
+                sig_date = dt.strftime("%Y-%m-%d")
+                matches = (date_str <= sig_date <= end_date_str) if (end_date_str and end_date_str != date_str) else (sig_date == date_str)
+                if matches:
                     direction_str = str(r.get("direction", "short")).upper()
                     results.append({
                         "underlying": r.get("underlying", ""),
@@ -88,7 +90,6 @@ def _load_recorded_signals(date_str: str) -> List[Dict[str, Any]]:
                         "entry_sl": float(r.get("entry_sl") or 0.0),
                         "target": float(r.get("target") or 0.0) if r.get("target") is not None else None,
                         "raw_row": r,
-                        "strategy": "supertrend",
                         "strategy": r.get("strategy") or "supertrend",
                         "is_spot_scan": True,
                         "source": r.get("source", "spot"),
@@ -253,7 +254,7 @@ class SimCapabilities(BaseModel):
     absolute_seek: bool = True
     stream: bool = True
     delta_status: bool = True
-    multi_day: bool = False
+    multi_day: bool = True
     resolutions: List[str] = ["1m", "5m", "15m"]
 
 
@@ -443,6 +444,7 @@ def _option_contract(
     signed = offset if opt_type == "CE" else -offset
     strike = max(step, atm + signed * step)
 
+    lot_size = 25 if _is_index(symbol) else 15
     lot_size = _lot_size(symbol)
     # Rough premium: ~2% of spot at ATM, decaying as the strike moves away.
     intrinsic = max(0.0, (spot - strike) if opt_type == "CE" else (strike - spot))
@@ -663,13 +665,15 @@ class SimulationRunner:
         """
         sym = bar.get("symbol", "")
         sym_u = sym.upper()
+        canon = _canonical_symbol(sym)
         from app.services.ohlcv_store import INDEX_ALIASES
-        candidate_keys = [sym, sym_u]
-        if sym_u in INDEX_ALIASES:
-            candidate_keys.append(INDEX_ALIASES[sym_u])
-        for k, v in INDEX_ALIASES.items():
-            if sym_u == v.upper() and k not in candidate_keys:
-                candidate_keys.append(k)
+        candidate_keys = [sym, sym_u, canon]
+        for item in [sym_u, canon]:
+            if item in INDEX_ALIASES and INDEX_ALIASES[item] not in candidate_keys:
+                candidate_keys.append(INDEX_ALIASES[item])
+            for k, v in INDEX_ALIASES.items():
+                if item == v.upper() and k not in candidate_keys:
+                    candidate_keys.append(k)
 
         matching_keys = list(dict.fromkeys(k for k in candidate_keys if k in self._open_by_symbol))
         if not matching_keys:
@@ -765,11 +769,16 @@ class SimulationRunner:
 
         # Release main's re-entry suppression as soon as the position is really
         # closed. It used to be set to a horizon guessed from future bars.
+        canon_und = _canonical_symbol(trade.underlying)
         self._active_until_bar.pop((trade.underlying, trade.strategy), None)
+        self._active_until_bar.pop((canon_und, trade.strategy), None)
         from app.services.ohlcv_store import INDEX_ALIASES
         alias = INDEX_ALIASES.get(trade.underlying) or INDEX_ALIASES.get(trade.underlying.upper() if trade.underlying else "")
         if alias:
             self._active_until_bar.pop((alias, trade.strategy), None)
+        alias_canon = INDEX_ALIASES.get(canon_und)
+        if alias_canon:
+            self._active_until_bar.pop((alias_canon, trade.strategy), None)
 
         self._recompute_totals()
         self._publish("trade", trade.model_dump())
@@ -787,15 +796,17 @@ class SimulationRunner:
         for sym, book in list(self._open_by_symbol.items()):
             last_close = None
             sym_u = sym.upper()
+            canon = _canonical_symbol(sym)
             from app.services.ohlcv_store import INDEX_ALIASES
-            target_syms = {sym, sym_u}
-            if sym_u in INDEX_ALIASES:
-                target_syms.add(INDEX_ALIASES[sym_u])
-                target_syms.add(INDEX_ALIASES[sym_u].upper())
-            for k, v in INDEX_ALIASES.items():
-                if sym_u == v.upper():
-                    target_syms.add(k)
-                    target_syms.add(k.upper())
+            target_syms = {sym, sym_u, canon}
+            for item in [sym_u, canon]:
+                if item in INDEX_ALIASES:
+                    target_syms.add(INDEX_ALIASES[item])
+                    target_syms.add(INDEX_ALIASES[item].upper())
+                for k, v in INDEX_ALIASES.items():
+                    if item == v.upper():
+                        target_syms.add(k)
+                        target_syms.add(k.upper())
 
             if hasattr(self, "_bar_history"):
                 for s in target_syms:
@@ -1114,6 +1125,7 @@ class SimulationRunner:
         res_sec = RESOLUTION_SECONDS.get(res, 300)
         target = self._current_sim_epoch + (count * res_sec)
         target = max(float(self._start_epoch), min(float(self._end_epoch), target))
+        self._seek_requested_epoch = target
         if self._state == SimState.PAUSED:
             self._apply_seek(target)
         else:
@@ -1196,25 +1208,21 @@ class SimulationRunner:
     def jump_start(self) -> SimStatus:
         if self._start_epoch > 0:
             target = float(self._start_epoch)
+            self._stats = SimStats()
+            self._open_by_symbol.clear()
+            self._last_signal = None
+            self._last_fired.clear()
+            self._emitted_recorded_keys.clear()
             if self._state == SimState.PAUSED:
                 self._apply_seek(target)
-                self._stats = SimStats()
-                self._open_by_symbol.clear()
-                self._last_signal = None
-                self._last_fired.clear()
-                self._emitted_recorded_keys.clear()
                 self._publish_frame(force=True)
             else:
                 self._seek_requested_epoch = target
-                self._stats = SimStats()
-                self._open_by_symbol.clear()
-                self._last_signal = None
-                self._last_fired.clear()
-                self._emitted_recorded_keys.clear()
         return self.status
 
     def jump_end(self) -> SimStatus:
         if self._end_epoch > 0:
+            self._seek_requested_epoch = float(self._end_epoch)
             target = float(self._end_epoch)
             if self._state == SimState.PAUSED:
                 self._apply_seek(target)
@@ -1320,7 +1328,17 @@ class SimulationRunner:
 
         cfg_lots = max(1, self._config.lots) if self._config else 1
         opt_type = "PE" if direction in ("BEARISH", "SHORT") else "CE"
-        lot_size = 175 if sym == "LT" else (750 if sym == "SBIN" else (25 if "NIFTY" in sym else 15))
+        lot_size = _lot_size(sym)
+        canon_sym = _canonical_symbol(sym)
+
+        expiry_tag = "26AUG"
+        if self._config and getattr(self._config, "date", None):
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(self._config.date, "%Y-%m-%d")
+                expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
+            except Exception:
+                pass
 
         # Select matching leg based on moneyness preference
         cfg_moneyness = (self._config.moneyness if self._config and self._config.moneyness else "ATM").upper()
@@ -1350,14 +1368,15 @@ class SimulationRunner:
             tgt_prem = float(selected_leg.get("premium_target") or round(entry_prem * 1.5, 2))
             if tgt_prem <= entry_prem:
                 tgt_prem = round(entry_prem * 1.5, 2)
-            opt_symbol = selected_leg.get("option_symbol") or f"{sym}26SEP{int(strike)}{opt_type}"
+            opt_sym_raw = selected_leg.get("option_symbol")
+            opt_symbol = opt_sym_raw if (opt_sym_raw and " " not in opt_sym_raw) else f"{canon_sym}{expiry_tag}{int(strike)}{opt_type}"
         else:
-            step = 100.0 if any(k in sym.upper() for k in ("SENSEX", "BANKNIFTY")) else (50.0 if "NIFTY" in sym.upper() else 20.0)
+            step = _strike_step(sym, spot)
             strike = round(spot / step) * step
             entry_prem = round(spot * 0.02, 2)
             stop_prem = round(entry_prem * 0.75, 2)
             tgt_prem = round(entry_prem * 1.5, 2)
-            opt_symbol = f"{sym}26SEP{int(strike)}{opt_type}"
+            opt_symbol = f"{canon_sym}{expiry_tag}{int(strike)}{opt_type}"
 
         event = SimSignalEvent(
             time_iso=rec["time_iso"],
@@ -1443,32 +1462,27 @@ class SimulationRunner:
 
         try:
             day = datetime.strptime(cfg.date, "%Y-%m-%d")
+            end_day = datetime.strptime(cfg.end_date, "%Y-%m-%d") if (cfg.end_date and cfg.end_date >= cfg.date) else day
         except ValueError:
-            log.error("Invalid simulation date: %s", cfg.date)
+            log.error("Invalid simulation date range: %s to %s", cfg.date, cfg.end_date)
             self._status_message = f"Invalid session date: {cfg.date}"
             self._state = SimState.IDLE
             return
 
-        # The loop derives start/end from `cfg.date` alone, so a differing
-        # `end_date` would silently replay one day while the UI claimed a range.
-        # Refuse it out loud instead; `capabilities.multi_day` advertises this.
-        if cfg.end_date and cfg.end_date != cfg.date:
-            log.warning(
-                "Multi-day replay requested (%s..%s) but the runner replays a single session.",
-                cfg.date, cfg.end_date,
-            )
-            self._status_message = (
-                f"Multi-day ranges are not supported yet ({cfg.date} to {cfg.end_date}). "
-                "Replay one session at a time."
-            )
+        if cfg.end_date and cfg.end_date < cfg.date:
+            log.warning("Invalid date range requested: %s to %s", cfg.date, cfg.end_date)
+            self._status_message = f"Invalid date range: {cfg.date} to {cfg.end_date}"
             self._state = SimState.IDLE
             return
+
+        is_multi_day = bool(cfg.end_date and cfg.end_date != cfg.date)
+        range_label = f"{cfg.date} to {cfg.end_date}" if is_multi_day else cfg.date
 
         # Build start/end timestamps in IST
         start_parts = [int(x) for x in cfg.start_time.split(":")]
         end_parts = [int(x) for x in cfg.end_time.split(":")]
         start_dt = datetime(day.year, day.month, day.day, start_parts[0], start_parts[1], start_parts[2] if len(start_parts) > 2 else 0, tzinfo=ist)
-        end_dt = datetime(day.year, day.month, day.day, end_parts[0], end_parts[1], end_parts[2] if len(end_parts) > 2 else 0, tzinfo=ist)
+        end_dt = datetime(end_day.year, end_day.month, end_day.day, end_parts[0], end_parts[1], end_parts[2] if len(end_parts) > 2 else 0, tzinfo=ist)
         start_epoch = int(start_dt.timestamp())
         end_epoch = int(end_dt.timestamp())
 
@@ -1476,7 +1490,9 @@ class SimulationRunner:
         res_sec = RESOLUTION_SECONDS.get(res, 300)
 
         # Determine instruments (NSE Indian Markets only)
-        self._recorded_signals = _load_recorded_signals(cfg.date)
+        self._recorded_signals = (
+            _load_recorded_signals(cfg.date, cfg.end_date) if is_multi_day else _load_recorded_signals(cfg.date)
+        )
         self._emitted_recorded_keys = set()
 
         if not cfg.instruments:
@@ -1491,6 +1507,12 @@ class SimulationRunner:
                         rec_syms.append(core)
                 instruments = rec_syms
             else:
+                default_universe = [
+                    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
+                    "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
+                    "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
+                    "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
+                ]
                 try:
                     from app.services import db
                     import json
@@ -1499,21 +1521,11 @@ class SimulationRunner:
                         parsed_c = json.loads(raw_c)
                         stocks = parsed_c.get("scan_stocks", [])
                         indices = [s.replace(" 50", "").replace(" SERVICE", "").replace(" ", "") for s in parsed_c.get("scan_indices", [])]
-                        instruments = list(dict.fromkeys(indices + stocks))
+                        instruments = list(dict.fromkeys(indices + stocks + default_universe))
                     else:
-                        instruments = [
-                            "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
-                            "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
-                            "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
-                            "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
-                        ]
+                        instruments = default_universe
                 except Exception:
-                    instruments = [
-                        "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX",
-                        "HDFCBANK", "ICICIBANK", "SBIN", "RELIANCE", "BHARTIARTL",
-                        "AXISBANK", "KOTAKBANK", "INFY", "BAJFINANCE", "ADANIENT",
-                        "LT", "TCS", "BAJAJFINSV", "ADANIPORTS", "TATASTEEL",
-                    ]
+                    instruments = default_universe
         else:
             instruments = list(cfg.instruments)
 
@@ -1522,7 +1534,7 @@ class SimulationRunner:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
                     instruments.append(rec["underlying"])
 
-        self._status_message = f"⚡ Fetching historical candles for {cfg.date} from Zerodha Kite API..."
+        self._status_message = f"⚡ Fetching historical candles for {range_label} from Zerodha Kite API..."
         warmup_start = start_epoch - 5 * 86400
         await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch, session_start=start_epoch)
 
@@ -1537,17 +1549,21 @@ class SimulationRunner:
         # Fetch candles for each instrument from local store
         all_bars: List[Dict[str, Any]] = []
         for sym in instruments:
-            candles = ohlcv_get(sym, res, limit=5000, since=start_epoch)
+            candles = ohlcv_get(sym, res, limit=100000, since=start_epoch)
             for c in candles:
-                if start_epoch <= c["time"] <= end_epoch:
-                    all_bars.append({**c, "symbol": sym, "resolution": res})
+                c_time = c["time"]
+                if start_epoch <= c_time <= end_epoch:
+                    c_dt = datetime.fromtimestamp(c_time, tz=ist)
+                    c_time_str = c_dt.strftime("%H:%M:%S")
+                    if cfg.start_time <= c_time_str <= cfg.end_time:
+                        all_bars.append({**c, "symbol": sym, "resolution": res})
 
         # Sort by time
         all_bars.sort(key=lambda b: b["time"])
 
         if not all_bars:
-            log.warning("No candles available for simulation date %s", cfg.date)
-            self._status_message = f"No real candles available for {cfg.date}; acquire historical data before replay"
+            log.warning("No candles available for simulation date %s", range_label)
+            self._status_message = f"No real candles available for {range_label}; acquire historical data before replay"
             self._state = SimState.IDLE
             return
 
@@ -1555,8 +1571,8 @@ class SimulationRunner:
         self._bars_total = len(all_bars)
         self._state = SimState.RUNNING
         self._publish_state()
-        self._status_message = f"Playing {cfg.date} ({len(all_bars)} bars)..."
-        log.info("Simulation started: %s, %d bars, speed %.1fx", cfg.date, self._bars_total, self._speed)
+        self._status_message = f"Playing {range_label} ({len(all_bars)} bars)..."
+        log.info("Simulation started: %s, %d bars, speed %.1fx", range_label, self._bars_total, self._speed)
 
         self._start_epoch = start_epoch
         self._end_epoch = end_epoch
@@ -1596,14 +1612,16 @@ class SimulationRunner:
 
                 # Handle seek/rewind requests
                 if self._seek_requested_epoch is not None:
-                    bar_idx = self._apply_seek(self._seek_requested_epoch)
+                    target = self._seek_requested_epoch
+                    self._seek_requested_epoch = None
+                    bar_idx = self._apply_seek(target)
 
                 # Dynamic update tick interval (30ms for >=500x, 50ms for >=50x, 100ms otherwise)
                 dt = 0.03 if self._speed >= 500 else (0.05 if self._speed >= 50 else 0.1)
 
                 # Dynamic second-by-second clock & progress update
                 bar_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
-                self._current_time_iso = bar_dt.strftime("%H:%M:%S")
+                self._current_time_iso = bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi_day else bar_dt.strftime("%H:%M:%S")
                 self._progress = round(min(100.0, max(0.0, (self._current_sim_epoch - start_epoch) / total_sim_seconds * 100.0)), 1)
                 self._publish_frame()
 
@@ -1622,8 +1640,24 @@ class SimulationRunner:
                         self._emitted_recorded_keys.add(rec_id)
                         self._emit_recorded_signal(rec)
 
-                # Advance simulated clock by speed * dt
-                self._current_sim_epoch += self._speed * dt
+                # All bars played -> finish
+                if bar_idx >= len(all_bars):
+                    break
+
+                next_bar_time = float(all_bars[bar_idx]["time"])
+                gap = next_bar_time - self._current_sim_epoch
+
+                # If there is dead air (> 300s, e.g. overnight or weekend or pre-market)
+                if gap > max(300, res_sec):
+                    next_bar_dt = datetime.fromtimestamp(next_bar_time, tz=ist)
+                    # Day transition: close intraday positions at the end of each session
+                    if next_bar_dt.date() > bar_dt.date():
+                        self._close_all_open(f"session close {bar_dt.strftime('%Y-%m-%d')}")
+                    # Fast forward through dead air directly to next bar
+                    self._current_sim_epoch = next_bar_time
+                else:
+                    # Advance simulated clock by speed * dt
+                    self._current_sim_epoch += self._speed * dt
 
                 # Real-time sleep step
                 await asyncio.sleep(dt)

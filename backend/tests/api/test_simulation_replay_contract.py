@@ -250,7 +250,7 @@ def test_status_reports_capabilities():
     assert st.capabilities.friction is True
     assert st.capabilities.contract_on_signal is True
     assert st.capabilities.absolute_seek is True
-    assert st.capabilities.multi_day is False
+    assert st.capabilities.multi_day is True
 
 
 # ── Absolute seek ────────────────────────────────────────────────────────────
@@ -300,21 +300,46 @@ def test_seek_is_a_noop_while_idle():
 
 
 # ── Multi-day refusal ────────────────────────────────────────────────────────
+# ── Multi-day replays ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_multi_day_range_is_refused_out_loud():
-    """The loop derives start/end from `date` alone.
-
-    Accepting a differing `end_date` would replay one session while the UI
-    claimed a range — a silent wrong answer, which is worse than an error.
-    """
+async def test_inverted_date_range_is_refused():
+    """An end date before start date is refused immediately."""
     from app.services.simulation import SimState
     runner = SimulationRunner()
-    await runner.start(SimConfig(date="2026-09-03", end_date="2026-09-05", instruments=["NIFTY"]))
+    await runner.start(SimConfig(date="2026-09-05", end_date="2026-09-03", instruments=["NIFTY"]))
     if runner._task:
         await runner._task
     assert runner.status.state == SimState.IDLE
-    assert "Multi-day" in runner.status.status_message
+    assert "Invalid date range" in runner.status.status_message
+
+
+@pytest.mark.asyncio
+async def test_multi_day_range_replays_across_sessions(monkeypatch):
+    """The runner supports multi-day replays across sessions, closing positions at session end."""
+    from unittest.mock import AsyncMock
+    from app.services.simulation import SimState
+    import app.services.simulation as sim_mod
+    import app.services.ohlcv_store as ohlcv_store
+
+    # 2026-09-03 09:15, 09:20 and 2026-09-04 09:15, 09:20 IST
+    fake_bars = [
+        {"time": 1788407100, "open": 24000.0, "high": 24050.0, "low": 23950.0, "close": 24020.0, "volume": 100},
+        {"time": 1788407400, "open": 24020.0, "high": 24080.0, "low": 24010.0, "close": 24070.0, "volume": 100},
+        {"time": 1788493500, "open": 24100.0, "high": 24150.0, "low": 24090.0, "close": 24120.0, "volume": 100},
+        {"time": 1788493800, "open": 24120.0, "high": 24180.0, "low": 24110.0, "close": 24160.0, "volume": 100},
+    ]
+    monkeypatch.setattr(ohlcv_store, "get_candles", lambda *a, **kw: fake_bars)
+    monkeypatch.setattr(sim_mod, "_hydrate_missing_candles", AsyncMock())
+
+    runner = SimulationRunner()
+    await runner.start(SimConfig(date="2026-09-03", end_date="2026-09-04", speed=50000.0, instruments=["NIFTY"]))
+    assert runner.status.capabilities.multi_day is True
+    if runner._task:
+        await runner._task
+    assert runner.status.state == SimState.IDLE
+    assert runner.status.bars_played == 4
+    assert runner.status.session_complete is True
 
 
 # ── SSE fan-out ──────────────────────────────────────────────────────────────
@@ -655,5 +680,95 @@ def test_get_adaptive_edge_snapshot_uses_canonical_symbols_and_lot_sizes():
         assert " " not in leg["option_symbol"]
         assert leg["option_symbol"].startswith("NIFTY")
         assert leg["lot_size"] == 25
+
+
+def test_settle_open_positions_matches_canonical_and_aliased_bar_symbols():
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-08-28")
+
+    trade = SimTradeEvent(
+        trade_id="TRD-SETTLE-1",
+        entry_time_iso="09:20:00",
+        exit_time_iso="OPEN",
+        timestamp_ms=1756353000000,
+        strategy="supertrend",
+        symbol="NIFTY26AUG24500CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=24500.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        stop_loss=75.0,
+        target_price=150.0,
+        spot_entry=24500.0,
+        spot_stop=24400.0,
+        spot_target=24700.0,
+        status="OPEN",
+    )
+    # Book stored under canonical "NIFTY"
+    runner._open_by_symbol["NIFTY"] = [trade]
+    runner._stats.trades = [trade]
+
+    # Bar arrives with exchange-qualified symbol "NSE:NIFTY 50" that hits target
+    bar = {
+        "symbol": "NSE:NIFTY 50",
+        "open": 24600.0,
+        "high": 24750.0,
+        "low": 24590.0,
+        "close": 24720.0,
+        "time": 1756353300,
+    }
+    bar_dt = datetime.fromtimestamp(bar["time"], tz=ist)
+
+    runner._settle_open_positions(bar, bar_dt)
+
+    # Position should have closed as WIN because high 24750.0 >= target 24700.0
+    assert trade.status == "WIN"
+    assert trade.exit_price is not None
+    assert runner._open_by_symbol.get("NIFTY") is None
+
+
+def test_close_all_open_matches_canonical_bar_history():
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-08-28")
+    runner._current_sim_epoch = 1756375500  # 15:30:00 IST
+
+    trade = SimTradeEvent(
+        trade_id="TRD-SQUARE-1",
+        entry_time_iso="15:00:00",
+        exit_time_iso="OPEN",
+        timestamp_ms=1756373700000,
+        strategy="supertrend",
+        symbol="NIFTY26AUG24500CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=24500.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        stop_loss=75.0,
+        target_price=150.0,
+        spot_entry=24500.0,
+        status="OPEN",
+    )
+    runner._open_by_symbol["NIFTY"] = [trade]
+    runner._stats.trades = [trade]
+
+    # Bar history stored under exchange-qualified alias "NSE:NIFTY 50"
+    runner._bar_history = {
+        "NSE:NIFTY 50": [{"close": 24550.0, "time": 1756375500}]
+    }
+
+    runner._close_all_open("session close test")
+
+    assert trade.status in ("WIN", "LOSS")
+    assert trade.exit_price is not None
+    assert runner._open_by_symbol == {}
+
 
 

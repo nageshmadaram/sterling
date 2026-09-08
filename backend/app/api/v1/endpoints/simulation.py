@@ -35,6 +35,14 @@ class AvailableDatesResponse(BaseModel):
 
 @router.post("/start", response_model=SimStatus)
 async def start_sim(config: SimConfig, force: bool = Query(False)):
+    if config.end_date and config.end_date < config.date:
+        raise HTTPException(
+            400,
+            detail={
+                "code": "invalid_date_range",
+                "message": f"Start date ({config.date}) must precede or equal end date ({config.end_date}).",
+            },
+        )
     # Starting over a live replay used to happen silently, so the client could
     # not tell "your replay restarted" from "your replay was already running".
     if simulation_runner.status.state != SimState.IDLE and not force:

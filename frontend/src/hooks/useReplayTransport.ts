@@ -34,7 +34,9 @@ async function confirmStarted(): Promise<boolean> {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, START_CONFIRM_STEP_MS));
     const status = await syncReplayStatus();
-    if (status && status.state !== 'loading') return true;
+    if (!status) continue;
+    if (status.state === 'running' || status.state === 'paused') return true;
+    if (status.state === 'idle') return false;
   }
   return false;
 }
@@ -165,9 +167,10 @@ export function useReplayTransport(): ReplayTransport {
       queryClient?.invalidateQueries();
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
       if (!(await confirmStarted())) {
+        const msg = useReplayStore.getState().status.status_message;
         fail(
           'start_stalled',
-          'The replay was accepted but never started playing. Check that the engine is running.',
+          msg || 'The replay was accepted but never started playing. Check that the engine is running.',
           () => { void start(); },
         );
       }
@@ -188,9 +191,10 @@ export function useReplayTransport(): ReplayTransport {
           queryClient?.invalidateQueries();
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
           if (!(await confirmStarted())) {
+            const msg = useReplayStore.getState().status.status_message;
             fail(
               'start_stalled',
-              'The replay was accepted but never started playing. Check that the engine is running.',
+              msg || 'The replay was accepted but never started playing. Check that the engine is running.',
               () => { void start(); },
             );
           }

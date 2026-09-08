@@ -31,7 +31,7 @@ def _idle_runner():
 def test_status_publishes_capabilities():
     body = _client().get("/api/v1/simulation/status").json()
     assert body["capabilities"]["friction"] is True
-    assert body["capabilities"]["multi_day"] is False
+    assert body["capabilities"]["multi_day"] is True
     assert "5m" in body["capabilities"]["resolutions"]
 
 

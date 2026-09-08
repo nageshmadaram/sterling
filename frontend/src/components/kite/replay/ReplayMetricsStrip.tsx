@@ -67,8 +67,8 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
       <span className="rd-metric-sep" aria-hidden>·</span>
       <span className="rd-metric">
         <span className="rd-metric-label">Slippage</span>
-        <span className="rd-metric-value" data-tone={drag == null ? 'dim' : 'loss'}>
-          {drag == null ? ABSENT : fmtSignedInr(-drag)}
+        <span className="rd-metric-value" data-tone={drag == null || drag === 0 ? 'dim' : 'loss'}>
+          {drag == null ? ABSENT : drag === 0 ? '₹0.00' : fmtSignedInr(-drag)}
         </span>
       </span>
     </div>
