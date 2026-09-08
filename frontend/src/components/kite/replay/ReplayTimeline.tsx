@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useReplaySessionPolicy, useReplayState, useReplayStore } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { signalKey } from './replayColumns';
-import { fmtTime, isBullish, minutesToTime, timeToMinutes } from './replayFormat';
+import { fmtSessionDate, fmtTime, isBullish, makeScale, minutesToTime, type SessionScale, timeToMinutes } from './replayFormat';
 import { strategyLabel } from './replayStrategies';
 
 /* Fallbacks only. The real bounds come from the backend's versioned session
@@ -17,29 +17,8 @@ const CLUSTER_PX = 4;
 /** Hard cap on rendered dots; beyond it clustering widens to stay under. */
 const MAX_DOTS = 600;
 
-export type SessionScale = {
-  startMin: number;
-  endMin: number;
-  span: number;
-  pctFor(timeIso: string): number;
-  timeForPct(pct: number): string;
-};
-
-export function makeScale(startTime: string, endTime: string): SessionScale {
-  const startMin = timeToMinutes(startTime || '09:00:00');
-  const endMin = timeToMinutes(endTime || '15:40:00');
-  const span = Math.max(1, endMin - startMin);
-  return {
-    startMin,
-    endMin,
-    span,
-    pctFor: (timeIso) => {
-      const m = timeToMinutes(timeIso);
-      return Math.max(0, Math.min(100, ((m - startMin) / span) * 100));
-    },
-    timeForPct: (pct) => minutesToTime(startMin + (Math.max(0, Math.min(100, pct)) / 100) * span),
-  };
-}
+export type { SessionScale };
+export { makeScale };
 
 /**
  * The session timeline: progress readout AND scrubber.
@@ -56,6 +35,7 @@ export function ReplayTimeline() {
   const events = useReplayStore((s) => s.status.stats.events);
   const pct = useReplayStore((s) => s.status.progress_pct);
   const clock = useReplayStore((s) => s.status.current_time_iso);
+  const currentDate = useReplayStore((s) => s.status.current_date);
   const barsPlayed = useReplayStore((s) => s.status.bars_played);
   const barsTotal = useReplayStore((s) => s.status.bars_total);
   const cfg = useReplayStore((s) => s.status.config);
@@ -74,7 +54,10 @@ export function ReplayTimeline() {
   const scale = useMemo(() => makeScale(startTime, endTime), [startTime, endTime]);
 
   const disabled = state === 'idle' || state === 'error';
-  const shown = scrub ?? pct;
+  const multiDay = !!cfg?.end_date && cfg.end_date !== cfg?.date;
+  const sessionPct = clock ? scale.pctFor(clock) : 0;
+  const effectivePct = multiDay ? sessionPct : pct;
+  const shown = scrub ?? effectivePct;
 
   React.useEffect(() => {
     const el = trackRef.current;
@@ -265,7 +248,7 @@ export function ReplayTimeline() {
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(shown)}
-        aria-valuetext={`${clock ? fmtTime(clock) : fmtTime(startTime)} IST, bar ${barsPlayed} of ${barsTotal}`}
+        aria-valuetext={`${multiDay && (currentDate || (clock && clock.includes('T'))) ? `${fmtSessionDate(currentDate || clock.split('T')[0], true)} ` : ''}${clock ? fmtTime(clock) : fmtTime(startTime)} IST, bar ${barsPlayed} of ${barsTotal}`}
         aria-disabled={disabled}
         tabIndex={disabled ? -1 : 0}
         onPointerDown={onPointerDown}

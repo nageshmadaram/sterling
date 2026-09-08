@@ -267,6 +267,7 @@ class SimStatus(BaseModel):
     session_id: Optional[str] = None
     session_complete: bool = False
     current_time_iso: str = ""
+    current_date: Optional[str] = None
     progress_pct: float = 0.0
     bars_played: int = 0
     bars_total: int = 0
@@ -428,6 +429,7 @@ def _option_contract(
     spot: float,
     direction: str,
     config: Optional["SimConfig"] = None,
+    sim_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve the option leg a signal on `symbol` at `spot` would be taken through.
 
@@ -452,10 +454,11 @@ def _option_contract(
     premium = round(intrinsic + extrinsic, 2)
 
     expiry_tag = "26AUG"
-    if config and getattr(config, "date", None):
+    target_date = sim_date or (config.date if (config and getattr(config, "date", None)) else None)
+    if target_date:
         try:
             from datetime import datetime
-            dt = datetime.strptime(config.date, "%Y-%m-%d")
+            dt = datetime.strptime(target_date, "%Y-%m-%d")
             expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
         except Exception:
             pass
@@ -528,6 +531,7 @@ class SimulationRunner:
         self._speed: float = 1.0
         self._stats = SimStats()
         self._current_time_iso = ""
+        self._current_date = ""
         self._progress = 0.0
         self._bars_played = 0
         self._bars_total = 0
@@ -899,6 +903,7 @@ class SimulationRunner:
             state=self._state,
             config=self._config,
             current_time_iso=self._current_time_iso,
+            current_date=self._current_date or (self._current_time_iso.split("T")[0] if "T" in self._current_time_iso else (self._config.date if self._config else None)),
             progress_pct=self._progress,
             bars_played=self._bars_played,
             bars_total=self._bars_total,
@@ -1023,6 +1028,7 @@ class SimulationRunner:
         self._session_complete = False
         self._session_id = None
         self._current_time_iso = ""
+        self._current_date = ""
         self._progress = 0.0
         self._bars_played = 0
         self._candles = []
@@ -1108,7 +1114,12 @@ class SimulationRunner:
             ist = timezone(timedelta(hours=5, minutes=30))
 
         bar_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
-        self._current_time_iso = bar_dt.strftime("%H:%M:%S")
+        self._current_date = bar_dt.strftime("%Y-%m-%d")
+        self._current_time_iso = (
+            bar_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if getattr(self, "_is_multi_day", False)
+            else bar_dt.strftime("%H:%M:%S")
+        )
         total_sim_seconds = float(max(1, self._end_epoch - self._start_epoch))
         self._progress = round(
             min(100.0, max(0.0, (self._current_sim_epoch - self._start_epoch) / total_sim_seconds * 100.0)),
@@ -1185,7 +1196,8 @@ class SimulationRunner:
                     parts = [int(x) for x in time_part.split(":")]
                     while len(parts) < 3:
                         parts.append(0)
-                    base = datetime.fromtimestamp(self._start_epoch, tz=ist)
+                    base_epoch = self._current_sim_epoch if self._current_sim_epoch > 0 else self._start_epoch
+                    base = datetime.fromtimestamp(base_epoch, tz=ist)
                     target = datetime(
                         base.year, base.month, base.day,
                         parts[0], parts[1], parts[2], tzinfo=ist,
@@ -1332,13 +1344,11 @@ class SimulationRunner:
         canon_sym = _canonical_symbol(sym)
 
         expiry_tag = "26AUG"
-        if self._config and getattr(self._config, "date", None):
-            try:
-                from datetime import datetime
-                dt = datetime.strptime(self._config.date, "%Y-%m-%d")
-                expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
-            except Exception:
-                pass
+        try:
+            rec_dt = datetime.fromtimestamp(rec["timestamp_ms"] / 1000, tz=ist)
+            expiry_tag = f"{rec_dt.strftime('%y')}{rec_dt.strftime('%b').upper()}"
+        except Exception:
+            pass
 
         # Select matching leg based on moneyness preference
         cfg_moneyness = (self._config.moneyness if self._config and self._config.moneyness else "ATM").upper()
@@ -1475,7 +1485,8 @@ class SimulationRunner:
             self._state = SimState.IDLE
             return
 
-        is_multi_day = bool(cfg.end_date and cfg.end_date != cfg.date)
+        self._is_multi_day = bool(cfg.end_date and cfg.end_date != cfg.date)
+        is_multi_day = self._is_multi_day
         range_label = f"{cfg.date} to {cfg.end_date}" if is_multi_day else cfg.date
 
         # Build start/end timestamps in IST
@@ -1621,6 +1632,7 @@ class SimulationRunner:
 
                 # Dynamic second-by-second clock & progress update
                 bar_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
+                self._current_date = bar_dt.strftime("%Y-%m-%d")
                 self._current_time_iso = bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi_day else bar_dt.strftime("%H:%M:%S")
                 self._progress = round(min(100.0, max(0.0, (self._current_sim_epoch - start_epoch) / total_sim_seconds * 100.0)), 1)
                 self._publish_frame()
@@ -2647,10 +2659,15 @@ class SimulationRunner:
         # Fast (10, 1.0), Mid (14, 2.0), Slow (21, 3.0).
         # When recorded signals exist for this session, ground truth signals are replayed
         # automatically at their recorded timestamps; synthetic evaluation is skipped.
-        has_recorded_today = bool(recorded_list)
-        has_recorded_st = has_recorded_today or any(
+        bar_date_str = bar_dt.strftime("%Y-%m-%d")
+        today_recorded = [
+            r for r in recorded_list
+            if datetime.fromtimestamp(r["timestamp_ms"] / 1000, tz=ist).strftime("%Y-%m-%d") == bar_date_str
+        ]
+        has_recorded_today = bool(today_recorded)
+        has_recorded_st = has_recorded_today and any(
             r.get("underlying", "").upper() in sym_aliases
-            for r in recorded_list
+            for r in today_recorded
         )
         if not has_recorded_st and len(history) >= 25:
             h_arr = np.array([float(b["high"]) for b in history], dtype=np.float64)
@@ -2715,9 +2732,9 @@ class SimulationRunner:
         # 3. Adaptive Edge: Canonical Multi-Horizon Value Area & Order Flow Pipeline
         # When recorded signals exist for this session, authentic spot scans are replayed
         # automatically at their recorded timestamps; synthetic fallback heuristics are skipped.
-        has_recorded_ae = has_recorded_today or any(
+        has_recorded_ae = has_recorded_today and any(
             r.get("underlying", "").upper() in sym_aliases
-            for r in recorded_list
+            for r in today_recorded
         )
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
         if not has_recorded_ae and is_ae_symbol and len(history) >= 15:
@@ -2754,7 +2771,7 @@ class SimulationRunner:
             ]
             try:
                 ae_cfg = get_ae_config()
-                dec = decide_from_candles(sym, c_input, ae_cfg, expiry=cfg.date if cfg else "", spot=close)
+                dec = decide_from_candles(sym, c_input, ae_cfg, expiry=bar_dt.strftime("%Y-%m-%d"), spot=close)
                 if dec and dec.actionable:
                     signals_to_fire.append({
                         "strategy": "adaptive_edge",
@@ -2779,7 +2796,9 @@ class SimulationRunner:
         # 5. ATM Premium Imbalance: Canonical Opening Window Session Trade (max 1/day)
         is_open_window = "09:15:00" <= bar_time_str <= "09:30:00"
         atm_already_traded = any(
-            ev.strategy == "atm_imbalance" and ev.instrument == sym
+            ev.strategy == "atm_imbalance"
+            and ev.instrument == sym
+            and datetime.fromtimestamp(ev.timestamp_ms / 1000, tz=ist).date() == bar_dt.date()
             for ev in self._stats.events
         )
         if is_open_window and not atm_already_traded and len(history) >= 2:
@@ -2827,7 +2846,9 @@ class SimulationRunner:
         # 7. Nifty ORB — live engine, not a replay-local clone.
         orb_trades_today = sum(
             1 for ev in self._stats.events
-            if ev.strategy == "nifty_orb" and ev.instrument == sym
+            if ev.strategy == "nifty_orb"
+            and ev.instrument == sym
+            and datetime.fromtimestamp(ev.timestamp_ms / 1000, tz=ist).date() == bar_dt.date()
         )
         if orb_trades_today < 2 and "09:30:00" <= bar_time_str <= "12:00:00":
             live = _live_orb_direction(history, bar_dt)
@@ -2888,7 +2909,7 @@ class SimulationRunner:
                 stop = round(close + 1.5 * atr, 2)
                 target = round(close - 2.5 * atr, 2)
 
-            leg = _option_contract(sym, close, direction, self._config)
+            leg = _option_contract(sym, close, direction, self._config, sim_date=bar_dt.strftime("%Y-%m-%d"))
             event = SimSignalEvent(
                 time_iso=bar_dt.strftime("%H:%M:%S"),
                 timestamp_ms=int(bar_dt.timestamp() * 1000),

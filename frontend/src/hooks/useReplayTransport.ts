@@ -6,7 +6,7 @@ import {
   useReplayStore,
 } from './useReplayStore';
 import { pushReplayToast } from '../components/kite/replay/replayToastBus';
-import { ensureSeconds } from '../components/kite/replay/replayFormat';
+import { ensureSeconds, makeScale } from '../components/kite/replay/replayFormat';
 import { syncReplayStatus } from './useReplayStream';
 
 const API = '/api/v1/simulation';
@@ -293,6 +293,15 @@ export function useReplayTransport(): ReplayTransport {
     // per drag rather than one per pointer move.
     seekToPct: (pct) => {
       const { status } = useReplayStore.getState();
+      const multiDay = !!status.config?.end_date && status.config.end_date !== status.config?.date;
+      if (multiDay) {
+        const startTime = status.config?.start_time || '09:00:00';
+        const endTime = status.config?.end_time || '15:40:00';
+        const scale = makeScale(startTime, endTime);
+        const timeStr = scale.timeForPct(pct);
+        const curDate = status.current_date || (status.current_time_iso?.includes('T') ? status.current_time_iso.split('T')[0] : status.config?.date);
+        return seek({ to_time: curDate ? `${curDate}T${timeStr}` : timeStr });
+      }
       if (status.capabilities?.absolute_seek) return seek({ to_pct: pct });
       const target = Math.round((pct / 100) * Math.max(0, status.bars_total - 1));
       return seek({ bars_offset: target - status.bars_played });

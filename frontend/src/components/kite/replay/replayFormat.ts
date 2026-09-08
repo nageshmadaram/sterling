@@ -33,9 +33,10 @@ export function fmtInr(v: number | null | undefined): string {
   return v < 0 ? `${MINUS}₹${INR.format(Math.abs(v))}` : `₹${INR.format(v)}`;
 }
 
-/** `+₹1,248.50` / `−₹312.00`. Always signed, so a glance tells direction. */
+/** `+₹1,248.50` / `−₹312.00` / `₹0.00`. Always signed when non-zero, so a glance tells direction. */
 export function fmtSignedInr(v: number | null | undefined): string {
   if (!isNum(v)) return ABSENT;
+  if (v === 0) return '₹0.00';
   if (v < 0) return `${MINUS}₹${INR.format(Math.abs(v))}`;
   return `+₹${INR.format(v)}`;
 }
@@ -197,4 +198,28 @@ export function rewardRisk(
   const risk = Math.abs(entry - stop);
   if (risk < 1e-9) return null;
   return Math.abs(target - entry) / risk;
+}
+
+export type SessionScale = {
+  startMin: number;
+  endMin: number;
+  span: number;
+  pctFor(timeIso: string): number;
+  timeForPct(pct: number): string;
+};
+
+export function makeScale(startTime: string, endTime: string): SessionScale {
+  const startMin = timeToMinutes(startTime || '09:00:00');
+  const endMin = timeToMinutes(endTime || '15:40:00');
+  const span = Math.max(1, endMin - startMin);
+  return {
+    startMin,
+    endMin,
+    span,
+    pctFor: (timeIso) => {
+      const m = timeToMinutes(timeIso);
+      return Math.max(0, Math.min(100, ((m - startMin) / span) * 100));
+    },
+    timeForPct: (pct) => minutesToTime(startMin + (Math.max(0, Math.min(100, pct)) / 100) * span),
+  };
 }

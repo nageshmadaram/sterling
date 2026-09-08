@@ -142,6 +142,7 @@ export interface ReplayStatus {
   state: Exclude<ReplayState, 'error'>;
   config: ReplayConfigEcho | null;
   current_time_iso: string;
+  current_date?: string | null;
   progress_pct: number;
   bars_played: number;
   bars_total: number;
@@ -212,6 +213,7 @@ export const DEFAULT_STATUS: ReplayStatus = {
   state: 'idle',
   config: null,
   current_time_iso: '',
+  current_date: null,
   progress_pct: 0,
   bars_played: 0,
   bars_total: 0,

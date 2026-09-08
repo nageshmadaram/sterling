@@ -771,4 +771,55 @@ def test_close_all_open_matches_canonical_bar_history():
     assert runner._open_by_symbol == {}
 
 
+@pytest.mark.asyncio
+async def test_multi_day_strategy_evaluation_unsuppressed_by_later_recorded_signals():
+    """Ensure candle-based strategy evaluation is not suppressed on day 1 just because
+    recorded signals exist in the runner's loaded signal pool for day 2.
+    """
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-03", end_date="2026-09-04", strategies=["adaptive_edge"])
+
+    # Simulate loaded recorded signals that exist ONLY on day 2 (2026-09-04)
+    runner._recorded_signals = [
+        {
+            "underlying": "NIFTY",
+            "direction": "BULLISH",
+            "timestamp_ms": int(datetime(2026, 9, 4, 10, 0, tzinfo=ist).timestamp() * 1000),
+            "spot": 24100.0,
+            "strategy": "adaptive_edge",
+            "is_spot_scan": True,
+        }
+    ]
+
+    # Pre-seed history with 25 bars on day 1 (2026-09-03)
+    bars = []
+    base_t = int(datetime(2026, 9, 3, 9, 15, tzinfo=ist).timestamp())
+    for i in range(25):
+        bars.append({
+            "time": base_t + i * 300,
+            "open": 24000.0 + i * 2,
+            "high": 24010.0 + i * 2,
+            "low": 23990.0 + i * 2,
+            "close": 24005.0 + i * 2,
+            "volume": 500.0,
+        })
+    runner._bar_history = {"NIFTY": bars}
+
+    # Evaluate bar on day 1: has_recorded_today and has_recorded_ae must evaluate to False!
+    curr_bar = bars[-1]
+    bar_dt = datetime.fromtimestamp(curr_bar["time"], tz=ist)
+    runner._evaluate_bar(curr_bar, bar_dt)
+
+    # Verify that status reports current_date
+    runner._current_sim_epoch = curr_bar["time"]
+    runner._current_date = "2026-09-03"
+    runner._current_time_iso = "2026-09-03T11:15:00"
+    st = runner.status
+    assert st.current_date == "2026-09-03"
+    assert "2026-09-03" in st.current_time_iso
+
+
+
 

@@ -29,7 +29,7 @@ import { ReplayTimeline } from './ReplayTimeline';
 import { ReplayToastHost } from './ReplayToastHost';
 import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
-import { fmtTime } from './replayFormat';
+import { fmtSessionDate, fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
 import { useReplaySignalToasts } from './useReplaySignalToasts';
@@ -178,14 +178,25 @@ function ReplayUnifiedTable() {
 function ReplayPlayerBarInfo() {
   const state = useReplayState();
   const clock = useReplayStore((s) => s.status.current_time_iso);
+  const currentDate = useReplayStore((s) => s.status.current_date);
   const startTime = useReplayStore((s) => s.draft.startTime);
   const pct = useReplayStore((s) => s.status.progress_pct);
+  const cfg = useReplayStore((s) => s.status.config);
+  const multiDay = !!cfg?.end_date && cfg.end_date !== cfg?.date;
+
   const displayTime = clock ? fmtTime(clock) : fmtTime(startTime);
+  let datePrefix = '';
+  if (multiDay) {
+    const rawDate = currentDate || (clock && clock.includes('T') ? clock.split('T')[0] : cfg?.date);
+    if (rawDate) {
+      datePrefix = `${fmtSessionDate(rawDate, true)} · `;
+    }
+  }
 
   return (
     <div className="rd-player-bar-info" data-testid="replay-player-bar-info">
       <span className="rd-player-bar-clock" data-state={state}>
-        {displayTime} IST
+        {datePrefix}{displayTime} IST
       </span>
       <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
     </div>

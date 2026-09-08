@@ -745,7 +745,7 @@ describe('unrealised is kept apart from realised', () => {
     expect(within(strip).getByText('+₹340.00')).toBeTruthy();
     // And the realised figure must NOT have absorbed it.
     const realised = within(strip).getByText('P&L').parentElement!;
-    expect(within(realised).getByText('+₹0.00')).toBeTruthy();
+    expect(within(realised).getByText('₹0.00')).toBeTruthy();
   });
 
   it('colors P&L as dim when idle with no trades', async () => {

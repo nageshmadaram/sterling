@@ -31,7 +31,7 @@ describe('absent values', () => {
 
   it('does not confuse a real zero with an absent value', () => {
     expect(fmtInr(0)).toBe('₹0.00');
-    expect(fmtSignedInr(0)).toBe('+₹0.00');
+    expect(fmtSignedInr(0)).toBe('₹0.00');
   });
 });
 
