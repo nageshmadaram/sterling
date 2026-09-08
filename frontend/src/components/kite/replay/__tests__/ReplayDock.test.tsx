@@ -343,57 +343,48 @@ describe('trades table', () => {
 describe('configuration', () => {
   it('is reachable while idle and locked while running', async () => {
     await renderDock();
-    expect(screen.getByTestId('replay-configure')).not.toBeDisabled();
+    expect(screen.getByTestId('replay-session-trigger')).not.toBeDisabled();
+    expect(screen.getByTestId('replay-hours-trigger')).not.toBeDisabled();
+    expect(screen.getByTestId('replay-strategy-trigger')).not.toBeDisabled();
+    expect(screen.getByTestId('replay-sizing-trigger')).not.toBeDisabled();
+    expect(screen.getByTestId('replay-filters-trigger')).not.toBeDisabled();
 
     await act(async () => {
       useReplayStore.getState().setStatus(makeStatus({ state: 'running' }));
     });
-    expect(screen.getByTestId('replay-configure')).toBeDisabled();
     expect(screen.getByTestId('replay-session-trigger')).toBeDisabled();
+    expect(screen.getByTestId('replay-hours-trigger')).toBeDisabled();
+    expect(screen.getByTestId('replay-strategy-trigger')).toBeDisabled();
+    expect(screen.getByTestId('replay-sizing-trigger')).toBeDisabled();
     expect(screen.getByTestId('replay-filters-trigger')).toBeDisabled();
   });
 
-  it('opens as a dialog and closes on Escape, returning focus', async () => {
+  it('opens as a popover dialog and closes on Escape, returning focus', async () => {
     await renderDock();
-    const trigger = screen.getByTestId('replay-configure');
-    // jsdom does not focus a button on click the way a browser does, and the
-    // trap restores focus to whatever was focused when it opened.
+    const trigger = screen.getByTestId('replay-filters-trigger');
     trigger.focus();
     await act(async () => { fireEvent.click(trigger); });
-    const sheet = screen.getByTestId('replay-config-sheet');
-    expect(sheet).toHaveAttribute('aria-modal', 'true');
+    const pop = screen.getByRole('dialog', { name: 'Execution and engine settings' });
+    expect(pop).toBeInTheDocument();
 
     await act(async () => { fireEvent.keyDown(document, { key: 'Escape' }); });
-    expect(screen.queryByTestId('replay-config-sheet')).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Execution and engine settings' })).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
   it('says plainly when the engine cannot model friction', async () => {
     setupDock({ status: makeStatus({ capabilities: { ...FULL_CAPS, friction: false } }) });
     await renderDock();
-    await act(async () => { fireEvent.click(screen.getByTestId('replay-configure')); });
-    expect(screen.getByText('NOT AVAILABLE')).toBeTruthy();
-    expect(screen.getByText(/Spread and slippage\s+modelling is not implemented/)).toBeTruthy();
-    // And offers no control that would pretend otherwise.
+    await act(async () => { fireEvent.click(screen.getByTestId('replay-filters-trigger')); });
+    expect(screen.getByText(/Friction and spread modelling is not supported/)).toBeTruthy();
     expect(screen.queryByLabelText('Index spread %')).toBeNull();
   });
 
   it('offers the real parameters when it can', async () => {
     await renderDock();
-    await act(async () => { fireEvent.click(screen.getByTestId('replay-configure')); });
+    await act(async () => { fireEvent.click(screen.getByTestId('replay-filters-trigger')); });
     expect(screen.getByLabelText('Index spread %')).toBeTruthy();
     expect(screen.getByLabelText('Slippage % (each leg)')).toBeTruthy();
-  });
-
-  it('blocks Apply on an impossible time range', async () => {
-    await renderDock();
-    await act(async () => { fireEvent.click(screen.getByTestId('replay-configure')); });
-    expect(screen.getByTestId('replay-apply-start')).not.toBeDisabled();
-
-    await act(async () => {
-      useReplayStore.getState().setDraft({ endTime: '08:00:00' });
-    });
-    expect(screen.getByTestId('replay-apply-start')).toBeDisabled();
   });
 
   it('does not close the filter popover when scrolling inside the popover', async () => {
@@ -402,14 +393,14 @@ describe('configuration', () => {
     await act(async () => {
       fireEvent.click(trigger);
     });
-    const dialog = screen.getByRole('dialog', { name: 'Filter strategies, instruments and legs' });
+    const dialog = screen.getByRole('dialog', { name: 'Execution and engine settings' });
     expect(dialog).toBeTruthy();
 
     await act(async () => {
       const scrollable = dialog.querySelector('div') || dialog;
       fireEvent.scroll(scrollable);
     });
-    expect(screen.getByRole('dialog', { name: 'Filter strategies, instruments and legs' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Execution and engine settings' })).toBeTruthy();
   });
 });
 

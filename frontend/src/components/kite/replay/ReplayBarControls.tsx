@@ -1,0 +1,397 @@
+import React, { useMemo, useRef, useState } from 'react';
+import {
+  useReplaySessionPolicy,
+  useReplayState,
+  useReplayStore,
+} from '../../../hooks/useReplayStore';
+import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
+import { ReplayPopover } from './primitives/ReplayPopover';
+import { fmtSmartDate, fmtTime } from './replayFormat';
+import { MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
+import * as Icons from './ReplayIcons';
+
+function shiftTime(time: string, mins: number): string {
+  const [h, m] = time.split(':').map(Number);
+  const t = h * 60 + m + mins;
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}:00`;
+}
+
+const LOT_PRESETS = [1, 2, 5, 10, 25];
+
+/* ── 1. Session / Date Dropdown (Source/Exit style) ─────────────────────── */
+
+export function ReplaySessionDropdown() {
+  const draft = useReplayStore((s) => s.draft);
+  const setDraft = useReplayStore((s) => s.setDraft);
+  const state = useReplayState();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const locked = state !== 'idle';
+  const presets = useMemo(() => getDynamicMarketPresets(), []);
+
+  const activePreset = presets.find((p) => p.date === draft.date);
+  const displayLabel = activePreset?.label ?? fmtSmartDate(draft.date);
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="rd-inline-drop-btn"
+        disabled={locked}
+        data-open={open}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={locked ? 'Replay is running' : 'Session date'}
+        onClick={() => setOpen((o) => !o)}
+        data-testid="replay-session-trigger"
+      >
+        <span className="rd-inline-drop-label">SESSION</span>
+        <span className="rd-inline-drop-value">{displayLabel}</span>
+        <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
+      </button>
+
+      <ReplayPopover
+        open={open}
+        onOpenChange={setOpen}
+        label="Select session date"
+        anchorRef={anchor}
+        width={220}
+        align="start"
+      >
+        <div className="rd-drop-menu" role="listbox" aria-label="Session date presets">
+          <div className="rd-drop-header">Session date</div>
+          {presets.map((p) => {
+            const selected = draft.date === p.date;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className="rd-drop-option"
+                data-selected={selected}
+                onClick={() => {
+                  setDraft({ date: p.date, endDate: p.date });
+                  setOpen(false);
+                }}
+              >
+                <span className="rd-drop-check">{selected ? '✓' : ''}</span>
+                <span className="rd-drop-option-text">
+                  <span className="rd-drop-option-title">{p.label}</span>
+                  <span className="rd-drop-option-hint">{fmtSmartDate(p.date)}</span>
+                </span>
+              </button>
+            );
+          })}
+          <div className="rd-drop-sep" />
+          <div className="rd-drop-custom-row">
+            <span className="rd-drop-custom-label">Custom:</span>
+            <input
+              type="date"
+              className="rd-drop-date-input"
+              value={draft.date}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setDraft({ date: e.target.value, endDate: e.target.value });
+                }
+              }}
+            />
+          </div>
+        </div>
+      </ReplayPopover>
+    </>
+  );
+}
+
+/* ── 2. Market Hours Dropdown (Source/Exit style) ───────────────────────── */
+
+export function ReplayHoursDropdown() {
+  const draft = useReplayStore((s) => s.draft);
+  const setDraft = useReplayStore((s) => s.setDraft);
+  const state = useReplayState();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const locked = state !== 'idle';
+  const policy = useReplaySessionPolicy();
+
+  const contOpen = policy?.continuous_open ?? '09:15:00';
+  const contClose = policy?.continuous_close ?? '15:40:00';
+  const preopenStart = policy?.preopen_start ?? '09:00:00';
+
+  const HOUR_OPTIONS = useMemo(() => [
+    { id: 'regular', label: 'Regular', start: contOpen, end: contClose, hint: `${fmtTime(contOpen, 5)} – ${fmtTime(contClose, 5)}` },
+    { id: 'preopen', label: 'Pre-open', start: preopenStart, end: contClose, hint: `${fmtTime(preopenStart, 5)} – ${fmtTime(contClose, 5)}` },
+    { id: 'first', label: '1st hr', start: contOpen, end: shiftTime(contOpen, 60), hint: `${fmtTime(contOpen, 5)} – ${fmtTime(shiftTime(contOpen, 60), 5)}` },
+    { id: 'last', label: 'Last hr', start: shiftTime(contClose, -60), end: contClose, hint: `${fmtTime(shiftTime(contClose, -60), 5)} – ${fmtTime(contClose, 5)}` },
+  ], [contOpen, contClose, preopenStart]);
+
+  const activeOption = HOUR_OPTIONS.find(
+    (o) => o.start === draft.startTime && o.end === draft.endTime,
+  );
+  const displayLabel = activeOption?.label ?? `${fmtTime(draft.startTime, 5)}–${fmtTime(draft.endTime, 5)}`;
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="rd-inline-drop-btn"
+        disabled={locked}
+        data-open={open}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={locked ? 'Replay is running' : 'Market hours'}
+        onClick={() => setOpen((o) => !o)}
+        data-testid="replay-hours-trigger"
+      >
+        <span className="rd-inline-drop-label">HOURS</span>
+        <span className="rd-inline-drop-value">{displayLabel}</span>
+        <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
+      </button>
+
+      <ReplayPopover
+        open={open}
+        onOpenChange={setOpen}
+        label="Select market hours"
+        anchorRef={anchor}
+        width={220}
+        align="start"
+      >
+        <div className="rd-drop-menu" role="listbox" aria-label="Market hours presets">
+          <div className="rd-drop-header">Market hours</div>
+          {HOUR_OPTIONS.map((opt) => {
+            const selected = draft.startTime === opt.start && draft.endTime === opt.end;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                className="rd-drop-option"
+                data-selected={selected}
+                onClick={() => {
+                  setDraft({ startTime: opt.start, endTime: opt.end });
+                  setOpen(false);
+                }}
+              >
+                <span className="rd-drop-check">{selected ? '✓' : ''}</span>
+                <span className="rd-drop-option-text">
+                  <span className="rd-drop-option-title">{opt.label}</span>
+                  <span className="rd-drop-option-hint">{opt.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+          <div className="rd-drop-sep" />
+          <div className="rd-drop-time-row">
+            <span className="rd-drop-custom-label">Custom:</span>
+            <input
+              type="time"
+              step="1"
+              className="rd-drop-time-input"
+              value={draft.startTime}
+              onChange={(e) => setDraft({ startTime: e.target.value })}
+              title="Start time"
+            />
+            <span>–</span>
+            <input
+              type="time"
+              step="1"
+              className="rd-drop-time-input"
+              value={draft.endTime}
+              onChange={(e) => setDraft({ endTime: e.target.value })}
+              title="End time"
+            />
+          </div>
+        </div>
+      </ReplayPopover>
+    </>
+  );
+}
+
+/* ── 3. Strategy Dropdown (Source/Exit style) ───────────────────────────── */
+
+export function ReplayStrategyDropdown() {
+  const draft = useReplayStore((s) => s.draft);
+  const toggleStrategy = useReplayStore((s) => s.toggleStrategy);
+  const setDraft = useReplayStore((s) => s.setDraft);
+  const state = useReplayState();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const locked = state !== 'idle';
+
+  const allStrategies = draft.strategies.includes('all');
+  const count = allStrategies ? REPLAY_STRATEGIES.length : draft.strategies.length;
+  const displayLabel = allStrategies
+    ? 'All'
+    : count === 1
+      ? strategyLabel(draft.strategies[0])
+      : `${count} active`;
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="rd-inline-drop-btn"
+        disabled={locked}
+        data-open={open}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={locked ? 'Replay is running' : 'Configure strategy emitters'}
+        onClick={() => setOpen((o) => !o)}
+        data-testid="replay-strategy-trigger"
+      >
+        <span className="rd-inline-drop-label">STRATEGY</span>
+        <span className="rd-inline-drop-value">{displayLabel}</span>
+        <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
+      </button>
+
+      <ReplayPopover
+        open={open}
+        onOpenChange={setOpen}
+        label="Select strategies"
+        anchorRef={anchor}
+        width={240}
+        align="start"
+      >
+        <div className="rd-drop-menu" role="dialog" aria-label="Strategy selection">
+          <div className="rd-drop-header">
+            <span>Strategies</span>
+            <button
+              type="button"
+              className="rd-btn rd-btn-sm"
+              data-variant="ghost"
+              onClick={() => setDraft({ strategies: ['all'] })}
+            >
+              Select all
+            </button>
+          </div>
+          {REPLAY_STRATEGIES.map((s) => {
+            const active = allStrategies || draft.strategies.includes(s.id);
+            return (
+              <label className="rd-drop-check-row" key={s.id}>
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={() => toggleStrategy(s.id)}
+                />
+                <span style={{ color: s.tone, display: 'inline-flex' }}>
+                  <span className="rd-dot-tone" />
+                </span>
+                <span className="rd-drop-check-label">{s.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      </ReplayPopover>
+    </>
+  );
+}
+
+/* ── 4. Position Sizing Dropdown (Source/Exit style) ────────────────────── */
+
+export function ReplaySizingDropdown() {
+  const draft = useReplayStore((s) => s.draft);
+  const toggleMoneyness = useReplayStore((s) => s.toggleMoneyness);
+  const setDraft = useReplayStore((s) => s.setDraft);
+  const state = useReplayState();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const locked = state !== 'idle';
+
+  const allLegs = draft.moneyness.includes('ALL');
+  const legsLabel = allLegs ? 'ALL' : draft.moneyness.join(',');
+  const displayLabel = `${legsLabel} · ${draft.lots}L`;
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="rd-inline-drop-btn"
+        disabled={locked}
+        data-open={open}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={locked ? 'Replay is running' : 'Strike moneyness and lot sizing'}
+        onClick={() => setOpen((o) => !o)}
+        data-testid="replay-sizing-trigger"
+      >
+        <span className="rd-inline-drop-label">SIZING</span>
+        <span className="rd-inline-drop-value">{displayLabel}</span>
+        <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
+      </button>
+
+      <ReplayPopover
+        open={open}
+        onOpenChange={setOpen}
+        label="Position sizing"
+        anchorRef={anchor}
+        width={260}
+        align="start"
+      >
+        <div className="rd-drop-menu" role="dialog" aria-label="Position sizing">
+          <div className="rd-drop-header">
+            <span>Strike Selection</span>
+            <button
+              type="button"
+              className="rd-btn rd-btn-sm"
+              data-variant="ghost"
+              onClick={() => setDraft({ moneyness: ['ALL'] })}
+            >
+              All
+            </button>
+          </div>
+          <div className="rd-drop-pills">
+            {MONEYNESS_LEGS.map((leg) => {
+              const active = allLegs || draft.moneyness.includes(leg.id);
+              return (
+                <button
+                  key={leg.id}
+                  type="button"
+                  className="rd-btn rd-btn-sm"
+                  title={leg.hint}
+                  data-variant={active ? 'primary' : undefined}
+                  onClick={() => toggleMoneyness(leg.id)}
+                >
+                  {leg.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="rd-drop-sep" />
+
+          <div className="rd-drop-header">Order Lots</div>
+          <div className="rd-drop-pills">
+            {LOT_PRESETS.map((l) => (
+              <button
+                key={l}
+                type="button"
+                className="rd-btn rd-btn-sm"
+                data-variant={draft.lots === l ? 'primary' : undefined}
+                onClick={() => setDraft({ lots: l })}
+              >
+                {l}L
+              </button>
+            ))}
+            <input
+              type="number"
+              className="rd-drop-lot-input"
+              min={1}
+              max={500}
+              value={draft.lots}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (val >= 1 && val <= 500) setDraft({ lots: val });
+              }}
+              title="Custom lots"
+            />
+          </div>
+        </div>
+      </ReplayPopover>
+    </>
+  );
+}

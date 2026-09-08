@@ -7,15 +7,18 @@ import {
   useFilteredReplayTrades,
   useReplayHostHidden,
   useReplayIsHistorical,
-  useReplaySessionPolicy,
   useReplayState,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
 import { useReplayStream } from '../../../hooks/useReplayStream';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
-import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
 import { FOOTER_HEIGHT } from '../layoutConstants';
-import { ReplayConfigSheet } from './ReplayConfigPanel';
+import {
+  ReplayHoursDropdown,
+  ReplaySessionDropdown,
+  ReplaySizingDropdown,
+  ReplayStrategyDropdown,
+} from './ReplayBarControls';
 import { ReplayFilters } from './ReplayFilters';
 import { ReplayMetricsCard } from './ReplayMetricsStrip';
 import { ReplayShellBar, ReplayWindowControls } from './ReplayShellBar';
@@ -28,7 +31,7 @@ import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
 import { SIGNAL_CSV_COLUMNS } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
-import { fmtSmartDate, fmtTime } from './replayFormat';
+import { fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
 import { useReplaySignalToasts } from './useReplaySignalToasts';
@@ -45,93 +48,18 @@ const ACTIVE_HEIGHT = 480;
 /* ═══════════════════════════════════════════════════════════════════════════
    Session row — compact inline controls, sits at the very bottom.
    ═══════════════════════════════════════════════════════════════════════════ */
-function shiftTime(time: string, mins: number): string {
-  const [h, m] = time.split(':').map(Number);
-  const t = h * 60 + m + mins;
-  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}:00`;
-}
-
-function ReplaySessionRow({ bucket }: { bucket: WidthBucket }) {
-  const draft = useReplayStore((s) => s.draft);
-  const setDraft = useReplayStore((s) => s.setDraft);
-  const state = useReplayState();
-  const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
-  const policy = useReplaySessionPolicy();
-  const presets = useMemo(() => getDynamicMarketPresets(), []);
-  const locked = state !== 'idle';
-
-  const open = policy?.continuous_open ?? '09:15:00';
-  const close = policy?.continuous_close ?? '15:40:00';
-  const preopen = policy?.preopen_start ?? '09:00:00';
-
-  const HOUR_PRESETS = useMemo(() => [
-    { id: 'regular', label: 'Regular', start: open, end: close },
-    { id: 'preopen', label: 'Pre-open', start: preopen, end: close },
-    { id: 'first', label: '1st hr', start: open, end: shiftTime(open, 60) },
-    { id: 'last', label: 'Last hr', start: shiftTime(close, -60), end: close },
-  ], [open, close, preopen]);
-
+function ReplaySessionRow({ bucket: _bucket }: { bucket: WidthBucket }) {
   return (
     <div className="rd-session-row" data-testid="replay-session-row">
-      <div className="rd-session-dates">
-        {presets.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className="rd-session-pill"
-            disabled={locked}
-            aria-pressed={draft.date === p.date}
-            data-active={draft.date === p.date}
-            title={p.description}
-            onClick={() => setDraft({ date: p.date, endDate: p.date })}
-          >
-            {p.label}
-          </button>
-        ))}
-        <input
-          type="date"
-          className="rd-session-date-input"
-          disabled={locked}
-          value={draft.date}
-          onChange={(e) => setDraft({ date: e.target.value, endDate: e.target.value })}
-          title="Custom date"
-        />
-      </div>
-
+      <ReplaySessionDropdown />
       <span className="rd-bar-sep" aria-hidden />
-
-      <div className="rd-session-times">
-        <span className="rd-session-range">
-          {fmtTime(draft.startTime, 5)}–{fmtTime(draft.endTime, 5)}
-        </span>
-        {HOUR_PRESETS.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            className="rd-session-pill"
-            disabled={locked}
-            data-active={draft.startTime === r.start && draft.endTime === r.end}
-            onClick={() => setDraft({ startTime: r.start, endTime: r.end })}
-          >
-            {r.label}
-          </button>
-        ))}
-      </div>
-
+      <ReplayHoursDropdown />
       <span className="rd-bar-sep" aria-hidden />
-
-      <div className="rd-session-actions">
+      <ReplayStrategyDropdown />
+      <span className="rd-bar-sep" aria-hidden />
+      <ReplaySizingDropdown />
+      <div className="rd-session-actions" style={{ marginLeft: 'auto' }}>
         <ReplayFilters />
-        <button
-          type="button"
-          className="rd-btn"
-          disabled={locked}
-          onClick={() => setConfigOpen(true)}
-          title="Configure replay"
-          data-testid="replay-configure"
-        >
-          <Icons.Config size={13} />
-        </button>
       </div>
     </div>
   );
@@ -143,11 +71,14 @@ function ReplaySessionRow({ bucket }: { bucket: WidthBucket }) {
 function ReplayUnifiedTable() {
   const events = useFilteredReplayEvents();
   const trades = useFilteredReplayTrades();
+  const tab = useReplayStore((s) => s.tab);
+  const setTab = useReplayStore((s) => s.setTab);
+  const state = useReplayState();
   const [expanded, setExpanded] = useState<'signals' | 'trades' | null>(null);
 
-  if (events.length === 0 && trades.length === 0) return null;
+  const activeView = expanded ?? (tab === 'signals' || tab === 'trades' ? tab : null);
 
-  if (expanded === 'signals') {
+  if (activeView === 'signals') {
     return (
       <div className="rd-unified-table">
         <div className="rd-unified-head">
@@ -155,7 +86,7 @@ function ReplayUnifiedTable() {
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant="ghost"
-            onClick={() => setExpanded(null)}
+            onClick={() => { setExpanded(null); setTab('split'); }}
           >
             <Icons.ChevronUp size={10} /> Back
           </button>
@@ -168,7 +99,7 @@ function ReplayUnifiedTable() {
     );
   }
 
-  if (expanded === 'trades') {
+  if (activeView === 'trades') {
     return (
       <div className="rd-unified-table">
         <div className="rd-unified-head">
@@ -176,7 +107,7 @@ function ReplayUnifiedTable() {
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant="ghost"
-            onClick={() => setExpanded(null)}
+            onClick={() => { setExpanded(null); setTab('split'); }}
           >
             <Icons.ChevronUp size={10} /> Back
           </button>
@@ -189,7 +120,16 @@ function ReplayUnifiedTable() {
     );
   }
 
-  // Default: combined view — both tables stacked with expand buttons
+  // Combined view (default)
+  if (events.length === 0 && trades.length === 0) {
+    if (state === 'idle') return null;
+    return (
+      <div className="rd-unified-table">
+        <ReplaySignalsTable />
+      </div>
+    );
+  }
+
   return (
     <div className="rd-unified-table">
       {/* Signals section */}
@@ -203,7 +143,7 @@ function ReplayUnifiedTable() {
               type="button"
               className="rd-btn rd-btn-sm"
               data-variant="ghost"
-              onClick={() => setExpanded('signals')}
+              onClick={() => { setExpanded('signals'); setTab('signals'); }}
               title="View full signals table"
             >
               Expand <Icons.Fullscreen size={10} />
@@ -224,7 +164,7 @@ function ReplayUnifiedTable() {
               type="button"
               className="rd-btn rd-btn-sm"
               data-variant="ghost"
-              onClick={() => setExpanded('trades')}
+              onClick={() => { setExpanded('trades'); setTab('trades'); }}
               title="View full trades table"
             >
               Expand <Icons.Fullscreen size={10} />
@@ -252,6 +192,7 @@ export function ReplayDock() {
   const errorMsg = useReplayStore((s) => s.error?.message);
   const setError = useReplayStore((s) => s.setError);
   const cfg = useReplayStore((s) => s.status.config);
+  const multiDay = !!cfg?.end_date && cfg.end_date !== cfg?.date;
   const draft = useReplayStore((s) => s.draft);
   const historical = useReplayIsHistorical();
   const clearSession = useReplayStore((s) => s.clearSession);
@@ -417,11 +358,19 @@ export function ReplayDock() {
           <div className="rd-session-note" data-testid="replay-historical-note">
             <Icons.Alert size={13} />
             <span>
-              Finished session{cfg?.date ? ` from ${cfg.date}` : ''} — {events.length} signals, {trades.length} trades.
+              Showing results from finished session{cfg?.date ? ` (${cfg.date})` : ''} — Nothing is replaying now. {events.length} signals, {trades.length} trades.
             </span>
             <span className="rd-error-strip-actions">
-              <button type="button" className="rd-btn rd-btn-sm" onClick={() => void clearSession()}>Clear</button>
+              <button type="button" className="rd-btn rd-btn-sm" aria-label="Clear results" onClick={() => void clearSession()}>Clear results</button>
             </span>
+          </div>
+        )}
+
+        {/* Multi-day range note */}
+        {multiDay && (
+          <div className="rd-session-note" data-testid="replay-multiday-note">
+            <Icons.Alert size={13} />
+            <span>Multi-day range — the timeline shows session times only.</span>
           </div>
         )}
 
@@ -453,9 +402,6 @@ export function ReplayDock() {
             {fmtTime(clock)} IST
           </span>
           <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
-          {active && (
-            <span style={{ fontSize: 'var(--rd-fs-label)', color: 'var(--k-dim)' }}>{speed}×</span>
-          )}
         </div>
         {showDetailedReport && (
           <div className="rd-player-bar-detail">
@@ -474,9 +420,6 @@ export function ReplayDock() {
 
       {/* ── Session row (never scrolls) ──────────────────────────── */}
       <ReplaySessionRow bucket={bucket} />
-
-      {/* Config sheet overlay */}
-      <ReplayConfigSheet />
 
       <div aria-live="polite" aria-atomic="true" className="rd-sr-only" data-testid="replay-live">
         {announcement}

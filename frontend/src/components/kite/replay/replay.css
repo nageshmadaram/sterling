@@ -2300,3 +2300,211 @@ kbd.rd-kbd {
 .rd-player-bar {
   position: relative;  /* override sticky — flex-shrink:0 is what keeps it fixed */
 }
+
+/* ── Inline dropdowns in the session bar (Source/Exit style) ────────── */
+
+.rd-inline-drop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid var(--k-border);
+  background: var(--k-bg);
+  color: var(--k-text);
+  font-family: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--rd-dur-fast) ease;
+}
+
+.rd-inline-drop-btn:hover:not(:disabled) {
+  border-color: var(--k-border-strong-2);
+  background: var(--k-surface-hover);
+}
+
+.rd-inline-drop-btn[data-open="true"] {
+  border-color: var(--k-brand);
+  background: var(--k-tint-warm-1);
+}
+
+.rd-inline-drop-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rd-inline-drop-label {
+  font-size: 8.5px;
+  font-weight: 800;
+  color: var(--k-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.rd-inline-drop-value {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--k-text);
+}
+
+.rd-inline-drop-btn[data-open="true"] .rd-inline-drop-value {
+  color: var(--k-brand);
+}
+
+.rd-inline-drop-caret {
+  color: var(--k-dim);
+  transition: transform var(--rd-dur-fast) ease;
+}
+
+.rd-inline-drop-btn[data-open="true"] .rd-inline-drop-caret {
+  transform: rotate(180deg);
+  color: var(--k-brand);
+}
+
+/* ── Menu & Options inside ReplayPopover ────────────────────────────── */
+
+.rd-drop-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+  background: var(--k-bg);
+}
+
+.rd-drop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--k-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.rd-drop-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--k-text);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--rd-dur-instant) ease;
+}
+
+.rd-drop-option:hover {
+  background: var(--k-surface-hover);
+}
+
+.rd-drop-option[data-selected="true"] {
+  background: var(--k-tint-warm-1);
+  color: var(--k-brand);
+  font-weight: 700;
+}
+
+.rd-drop-check {
+  width: 12px;
+  color: var(--k-brand);
+  font-size: 11px;
+  font-weight: 750;
+  flex-shrink: 0;
+}
+
+.rd-drop-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rd-drop-option-title {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.rd-drop-option[data-selected="true"] .rd-drop-option-title {
+  font-weight: 750;
+}
+
+.rd-drop-option-hint {
+  font-size: 9.5px;
+  color: var(--k-dim);
+}
+
+.rd-drop-sep {
+  height: 1px;
+  background: var(--k-border);
+  margin: 4px 0;
+}
+
+.rd-drop-custom-row,
+.rd-drop-time-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: 10.5px;
+  color: var(--k-dim);
+}
+
+.rd-drop-custom-label {
+  font-weight: 600;
+}
+
+.rd-drop-date-input,
+.rd-drop-time-input {
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--k-border);
+  background: var(--k-bg);
+  color: var(--k-text);
+  font-size: 10.5px;
+  font-family: inherit;
+}
+
+.rd-drop-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11.5px;
+  user-select: none;
+}
+
+.rd-drop-check-row:hover {
+  background: var(--k-surface-hover);
+}
+
+.rd-drop-check-label {
+  font-weight: 600;
+  color: var(--k-text);
+}
+
+.rd-drop-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+}
+
+.rd-drop-lot-input {
+  width: 55px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--k-border);
+  background: var(--k-bg);
+  color: var(--k-text);
+  font-size: 11px;
+  font-family: inherit;
+}
