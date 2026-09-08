@@ -1078,3 +1078,40 @@ describe('the keyboard survives a mode change', () => {
     outside.remove();
   });
 });
+
+describe('simulation tables scroll container hierarchy', () => {
+  it('preserves the flex scroll container hierarchy from rd-scroll-content to rd-pane-body', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [makeTrade({ trade_id: 'TRD-SCROLL-1' })],
+        },
+      }),
+    });
+    await renderDock();
+
+    const scrollContent = document.querySelector('.rd-scroll-content');
+    expect(scrollContent).toBeTruthy();
+
+    const unifiedTable = scrollContent?.querySelector('.rd-unified-table');
+    expect(unifiedTable).toBeTruthy();
+
+    const tabPanel = unifiedTable?.querySelector('.rd-tab-panel');
+    expect(tabPanel).toBeTruthy();
+
+    const paneBody = tabPanel?.querySelector('.rd-pane-body');
+    expect(paneBody).toBeTruthy();
+
+    const table = paneBody?.querySelector('.rd-table');
+    expect(table).toBeTruthy();
+
+    const thead = table?.querySelector('thead');
+    expect(thead).toBeTruthy();
+
+    const tfoot = table?.querySelector('tfoot.rd-tfoot');
+    expect(tfoot).toBeTruthy();
+  });
+});
+

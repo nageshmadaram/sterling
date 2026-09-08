@@ -63,7 +63,7 @@ export function useStickToTop(ref: React.RefObject<HTMLElement | null>, count: n
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const onScroll = () => setPinned(el.scrollTop <= 40);
+    const onScroll = () => setPinned(el.scrollTop <= 10);
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, [ref]);

@@ -800,11 +800,14 @@
 .rd-pane-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: auto;
   overscroll-behavior: contain;
   position: relative;
+  -webkit-overflow-scrolling: touch;
 }
 .rd-pane-note {
+  flex-shrink: 0;
   padding: 5px 8px;
   font-size: var(--rd-fs-micro);
   color: var(--k-dim);
@@ -816,6 +819,7 @@
 
 .rd-table {
   width: 100%;
+  min-width: max-content;
   border-collapse: collapse;
   font-size: var(--rd-fs-data);
   font-variant-numeric: tabular-nums;
@@ -889,6 +893,7 @@
 .rd-tfoot td {
   position: sticky;
   bottom: 0;
+  z-index: 2;
   background: var(--k-surface);
   border-top: 2px solid var(--k-border);
   font-weight: 700;
@@ -1013,6 +1018,8 @@
   text-align: center;
   color: var(--k-dim);
   font-size: var(--rd-fs-body);
+  flex: 1;
+  min-height: 0;
 }
 .rd-empty-title { font-weight: 700; color: var(--k-text); font-size: var(--rd-fs-data); }
 .rd-empty-icon { color: var(--k-faint); }
@@ -1042,6 +1049,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   padding: 8px 12px;
   background: color-mix(in srgb, var(--k-red) 10%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--k-red) 28%, transparent);
@@ -1942,9 +1950,9 @@ kbd.rd-kbd {
 .rd-scroll-content {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 0;
 }
 
@@ -2013,6 +2021,7 @@ kbd.rd-kbd {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .rd-table-tabs {
@@ -2080,6 +2089,7 @@ kbd.rd-kbd {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .rd-unified-section + .rd-unified-section {
