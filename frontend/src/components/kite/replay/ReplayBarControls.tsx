@@ -29,8 +29,11 @@ export function ReplaySessionDropdown() {
   const locked = state !== 'idle';
   const presets = useMemo(() => getDynamicMarketPresets(), []);
 
-  const activePreset = presets.find((p) => p.date === draft.date);
-  const displayLabel = activePreset?.label ?? fmtSmartDate(draft.date);
+  const isRange = Boolean(draft.endDate && draft.endDate !== draft.date);
+  const activePreset = !isRange ? presets.find((p) => p.date === draft.date) : undefined;
+  const displayLabel = isRange
+    ? `${fmtSmartDate(draft.date)} – ${fmtSmartDate(draft.endDate)}`
+    : (activePreset?.label ?? fmtSmartDate(draft.date));
 
   return (
     <>
@@ -56,13 +59,13 @@ export function ReplaySessionDropdown() {
         onOpenChange={setOpen}
         label="Select session date"
         anchorRef={anchor}
-        width={220}
+        width={240}
         align="start"
       >
         <div className="rd-drop-menu" role="listbox" aria-label="Session date presets">
           <div className="rd-drop-header">Session date</div>
           {presets.map((p) => {
-            const selected = draft.date === p.date;
+            const selected = !isRange && draft.date === p.date;
             return (
               <button
                 key={p.id}
@@ -85,18 +88,36 @@ export function ReplaySessionDropdown() {
             );
           })}
           <div className="rd-drop-sep" />
-          <div className="rd-drop-custom-row">
-            <span className="rd-drop-custom-label">Custom:</span>
-            <input
-              type="date"
-              className="rd-drop-date-input"
-              value={draft.date}
-              onChange={(e) => {
-                if (e.target.value) {
-                  setDraft({ date: e.target.value, endDate: e.target.value });
-                }
-              }}
-            />
+          <div className="rd-drop-custom-row" style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span className="rd-drop-custom-label">From:</span>
+              <input
+                type="date"
+                className="rd-drop-date-input"
+                value={draft.date}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    const newDate = e.target.value;
+                    const newEndDate = draft.endDate && draft.endDate < newDate ? newDate : (draft.endDate ?? newDate);
+                    setDraft({ date: newDate, endDate: newEndDate });
+                  }
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span className="rd-drop-custom-label">To:</span>
+              <input
+                type="date"
+                className="rd-drop-date-input"
+                value={draft.endDate ?? draft.date}
+                min={draft.date}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setDraft({ endDate: e.target.value });
+                  }
+                }}
+              />
+            </div>
           </div>
         </div>
       </ReplayPopover>

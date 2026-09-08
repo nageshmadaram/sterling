@@ -218,7 +218,16 @@ export function ReplayDock() {
   const rootRef = useRef<HTMLElement>(null);
   const [bucket, setBucket] = useState<WidthBucket>('xl');
   const [dragging, setDragging] = useState(false);
+  const [userInteractedHeight, setUserInteractedHeight] = useState(false);
   const prevStateRef = useRef(state);
+
+  const hasResults = events.length > 0 || trades.length > 0;
+  const isCompactIdle =
+    (mode === 'docked' || mode === 'overlay') &&
+    state === 'idle' &&
+    !hasResults &&
+    !historical &&
+    !userInteractedHeight;
 
   useReplayStream(true);
   useReplayShortcuts(rootRef, transport);
@@ -229,7 +238,7 @@ export function ReplayDock() {
   useEffect(() => {
     const prev = prevStateRef.current;
     prevStateRef.current = state;
-    if (prev === 'idle' && (state === 'loading' || state === 'running') && mode === 'docked') {
+    if (prev === 'idle' && (state === 'loading' || state === 'running') && (mode === 'docked' || mode === 'overlay')) {
       if (height < ACTIVE_HEIGHT) setHeight(ACTIVE_HEIGHT);
     }
   }, [state, mode, height, setHeight]);
@@ -261,6 +270,7 @@ export function ReplayDock() {
 
   const onResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    setUserInteractedHeight(true);
     const node = e.currentTarget;
     node.setPointerCapture(e.pointerId);
     setDragging(true);
@@ -290,6 +300,7 @@ export function ReplayDock() {
   };
 
   const onResizeKey = (e: React.KeyboardEvent) => {
+    setUserInteractedHeight(true);
     const step = e.shiftKey ? 64 : 16;
     if (e.key === 'ArrowUp') { e.preventDefault(); setHeight(Math.min(maxHeight(), height + step)); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setHeight(Math.max(MIN_DOCK_HEIGHT, height - step)); }
@@ -298,20 +309,30 @@ export function ReplayDock() {
   };
 
   const geometry = useMemo<Record<ReplayMode, React.CSSProperties>>(() => ({
-    docked: { width: '100%', flexShrink: 0, height: `${height}px`, borderTop: '1px solid var(--k-border-strong-4)' },
+    docked: {
+      width: '100%',
+      flexShrink: 0,
+      height: isCompactIdle ? 'auto' : `${height}px`,
+      borderTop: '1px solid var(--k-border-strong-4)',
+    },
     expanded: { width: '100%', height: '100%', flex: 1, minHeight: 0, borderTop: 'none' },
     overlay: {
-      position: 'fixed', left: 0, right: 0, bottom: FOOTER_HEIGHT,
-      height: `${height}px`, zIndex: 'var(--rd-z-dock)' as unknown as number,
+      position: 'fixed',
+      left: 0,
+      right: 0,
+      bottom: FOOTER_HEIGHT,
+      height: isCompactIdle ? 'auto' : `${height}px`,
+      zIndex: 'var(--rd-z-dock)' as unknown as number,
       borderTop: '1px solid var(--k-border-strong-4)',
       boxShadow: '0 -8px 24px color-mix(in srgb, var(--k-text) 10%, transparent)',
     },
     fullscreen: {
-      position: 'fixed', inset: 0,
+      position: 'fixed',
+      inset: 0,
       zIndex: 'var(--rd-z-fullscreen)' as unknown as number,
       background: 'var(--k-surface-sunken)',
     },
-  }), [height]);
+  }), [height, isCompactIdle]);
 
   const overlays = (
     <>
@@ -325,7 +346,6 @@ export function ReplayDock() {
 
   const resizable = mode === 'docked' || mode === 'overlay';
   const active = state === 'running' || state === 'paused';
-  const hasResults = events.length > 0 || trades.length > 0;
   const showDetailedReport = (state === 'idle' && hasResults) || historical;
 
   const shell = (
@@ -374,7 +394,7 @@ export function ReplayDock() {
               Showing results from finished session{cfg?.date ? ` (${cfg.date})` : ''} — Nothing is replaying now. {events.length} signals, {trades.length} trades.
             </span>
             <span className="rd-error-strip-actions">
-              <button type="button" className="rd-btn rd-btn-sm" aria-label="Clear results" onClick={() => void clearSession()}>Clear results</button>
+              <button type="button" className="rd-btn rd-btn-sm" aria-label="Clear results" onClick={() => { void clearSession(); setUserInteractedHeight(false); }}>Clear results</button>
             </span>
           </div>
         )}

@@ -5,6 +5,7 @@ import {
   useReplayState,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
+import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { EmptyState } from './primitives/EmptyState';
 import { SkeletonRows } from './primitives/Skeleton';
 import { tradesHaveFriction } from './replayColumns';
@@ -180,7 +181,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       ? Number(trades.reduce((sum, t) => sum + (t.slippage || 0), 0).toFixed(2))
       : null
     : rawDrag;
-  const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
+  const transport = useReplayTransport();
   const state = useReplayState();
 
   const [groupBy, setGroupBy] = useState<TradeGroupBy>('none');
@@ -227,8 +228,8 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
         }
         action={
           state === 'idle' ? (
-            <button type="button" className="rd-btn" onClick={() => setConfigOpen(true)}>
-              <Icons.Config size={13} /> Configure
+            <button type="button" className="rd-btn" data-variant="primary" onClick={() => void transport.start()}>
+              <Icons.Play size={13} /> Start Replay
             </button>
           ) : undefined
         }
@@ -247,15 +248,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       {/* Say it once, at the top, rather than implying it with a zero. */}
       {!hasFriction && (
         <div className="rd-pane-note">
-          Execution friction is not modelled in this replay — fills are at the signal price.{' '}
-          <button
-            type="button"
-            className="rd-btn rd-btn-sm"
-            data-variant="ghost"
-            onClick={() => setConfigOpen(true)}
-          >
-            Configure
-          </button>
+          Execution friction is not modelled in this replay — fills are at the signal price.
         </div>
       )}
 

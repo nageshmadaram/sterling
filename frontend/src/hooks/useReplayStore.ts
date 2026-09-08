@@ -421,7 +421,6 @@ export interface ReplayStore {
   prevMode: Exclude<ReplayMode, 'fullscreen'>;
   height: number;
   tab: ReplayTab;
-  configOpen: boolean;
   shortcutsOpen: boolean;
   summaryOpen: boolean;
   /** The single boolean KiteLayout subscribes to. It must not know our modes. */
@@ -441,7 +440,6 @@ export interface ReplayStore {
   escapeMode(): void;
   setHeight(h: number): void;
   setTab(tab: ReplayTab): void;
-  setConfigOpen(open: boolean): void;
   setShortcutsOpen(open: boolean): void;
   setSummaryOpen(open: boolean): void;
   setSelectedSignal(key: string | null): void;
@@ -492,7 +490,6 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
   prevMode: boot.mode,
   height: boot.height,
   tab: boot.tab,
-  configOpen: false,
   shortcutsOpen: false,
   summaryOpen: false,
   hostContentHidden: hostHidden({ open: boot.open, mode: boot.mode, hostFocusMode: null }),
@@ -546,7 +543,6 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
     set({ tab });
   },
 
-  setConfigOpen: (configOpen) => set({ configOpen }),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
   setSummaryOpen: (summaryOpen) => set({ summaryOpen }),
   setSelectedSignal: (selectedSignalKey) => set({ selectedSignalKey }),

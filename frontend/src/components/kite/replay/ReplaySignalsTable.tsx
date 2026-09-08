@@ -98,7 +98,6 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
   const barsPlayed = useReplayStore((s) => s.status.bars_played);
   const selected = useReplayStore((s) => s.selectedSignalKey);
   const setSelected = useReplayStore((s) => s.setSelectedSignal);
-  const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
   const caps = useReplayStore((s) => s.status.capabilities);
   const cfg = useReplayStore((s) => s.status.config);
   const draft = useReplayStore((s) => s.draft);
@@ -151,8 +150,8 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
         }
         action={
           state === 'idle' ? (
-            <button type="button" className="rd-btn" onClick={() => setConfigOpen(true)}>
-              <Icons.Config size={13} /> Configure
+            <button type="button" className="rd-btn" data-variant="primary" onClick={() => void transport.start()}>
+              <Icons.Play size={13} /> Start Replay
             </button>
           ) : undefined
         }

@@ -18,7 +18,6 @@ import './replay.css';
 export function ReplayFooterChip() {
   const open = useReplayStore((s) => s.open);
   const setOpen = useReplayStore((s) => s.setOpen);
-  const setConfigOpen = useReplayStore((s) => s.setConfigOpen);
   const state = useReplayState();
   const clock = useReplayStore((s) => s.status.current_time_iso);
   const date = useReplayStore((s) => s.status.config?.date);
@@ -52,7 +51,6 @@ export function ReplayFooterChip() {
         if (next) {
           window.dispatchEvent(new CustomEvent('kite-restore-slot', { detail: 'center' }));
         }
-        if (state === 'error' && !open) setConfigOpen(false);
       }}
     >
       <span style={{ display: 'inline-flex' }}>

@@ -55,7 +55,7 @@ export function useReplayShortcuts(
       if (!owned) return;
 
       // While a dialog is up, only Escape (handled by its own trap) applies.
-      if (store.configOpen || store.summaryOpen || store.shortcutsOpen) return;
+      if (store.summaryOpen || store.shortcutsOpen) return;
 
       const step = e.altKey ? 30 : e.shiftKey ? 5 : 1;
       const speed = store.status.config?.speed ?? store.draft.speed;
@@ -104,10 +104,6 @@ export function useReplayShortcuts(
         case 't':
         case 'T':
           store.setTab('trades');
-          return;
-        case 'c':
-        case 'C':
-          if (store.status.state === 'idle') store.setConfigOpen(true);
           return;
         case 'f':
         case 'F':

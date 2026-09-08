@@ -1849,6 +1849,10 @@ kbd.rd-kbd {
   padding: 0;
 }
 
+.rd-scroll-content:empty {
+  display: none;
+}
+
 /* ── Flat inline metrics strip ────────────────────────────────────────── */
 
 .rd-metrics-strip {

@@ -77,7 +77,6 @@ export function primeStore(over: Partial<ReturnType<typeof useReplayStore.getSta
     prevMode: 'docked',
     height: 320,
     tab: 'split',
-    configOpen: false,
     shortcutsOpen: false,
     summaryOpen: false,
     hostContentHidden: false,

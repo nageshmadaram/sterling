@@ -27,6 +27,13 @@ export function ReplayFilters() {
   const frictionSupported = caps?.friction !== false;
   const resolutions = caps?.resolutions ?? ['1m', '3m', '5m', '15m'];
 
+  const isDefaultSettings =
+    draft.frictionMode === 'realistic' &&
+    draft.indexSpreadPct === 0.5 &&
+    draft.stockSpreadPct === 1.5 &&
+    draft.slippagePct === 0.25 &&
+    draft.resolution === '5m';
+
   return (
     <>
       <button
@@ -153,8 +160,18 @@ export function ReplayFilters() {
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant="ghost"
-            onClick={resetDraft}
-            title="Reset settings to defaults"
+            disabled={isDefaultSettings}
+            onClick={() => {
+              setDraft({
+                frictionMode: 'realistic',
+                indexSpreadPct: 0.5,
+                stockSpreadPct: 1.5,
+                slippagePct: 0.25,
+                resolution: '5m',
+              });
+            }}
+            style={isDefaultSettings ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+            title={isDefaultSettings ? 'Settings are at default values' : 'Reset execution settings to defaults'}
           >
             Reset to defaults
           </button>
