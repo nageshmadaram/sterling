@@ -209,6 +209,8 @@ def put_settings(body: AdaptiveEdgeSettings) -> dict[str, Any]:
     # actually read. Without this the page saves successfully and the engine
     # keeps running on whatever it had.
     problems = _mirror_into_engine_config(body)
+    global _BRIDGED_CACHE
+    _BRIDGED_CACHE["result"] = None
     return {
         "settings": body.model_dump(),
         "live_trading": False,
@@ -218,19 +220,78 @@ def put_settings(body: AdaptiveEdgeSettings) -> dict[str, Any]:
     }
 
 
+_BRIDGED_CACHE: dict[str, Any] = {"time": 0.0, "result": None}
+_HISTORICAL_CACHE: dict[str, Any] = {"initialized": False, "legs": [], "daily": []}
+
+
 def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    """Bridge all missing trading dates from August 1 to September 7 into legs and daily summaries."""
+    """Bridge all missing trading dates from August 1 to September 8 into legs and daily summaries."""
+    import time
     from datetime import datetime, timezone, timedelta
     from app.services import db
     from app.services.ohlcv_store import get_candles
     from app.services.adaptive_edge_strategy import decide_from_candles
     from app.services.adaptive_edge import get_config
 
-    ist = timezone(timedelta(hours=5, minutes=30))
-    legs = list(artifact.get("legs") or [])
-    existing_dates = set(l.get("session_date") for l in legs if l.get("session_date"))
+    global _BRIDGED_CACHE, _HISTORICAL_CACHE
+    now = time.time()
+    if _BRIDGED_CACHE["result"] is not None and (now - _BRIDGED_CACHE["time"]) < 60.0:
+        return _BRIDGED_CACHE["result"]
 
+    ist = timezone(timedelta(hours=5, minutes=30))
     settings = _load_settings()
+    scan_idx_list = list(settings.scan_indices or ["NIFTY 50", "NIFTY BANK", "SENSEX"])
+    ae_cfg = get_config()
+    today_iso = datetime.now(ist).strftime("%Y-%m-%d")
+
+    # Initialize historical cache (< today_iso) once
+    if not _HISTORICAL_CACHE["initialized"]:
+        hist_legs = list(artifact.get("legs") or [])
+        hist_dates = set((l.get("symbol"), l.get("session_date")) for l in hist_legs if l.get("symbol") and l.get("session_date"))
+        for idx_name in scan_idx_list:
+            tape = INDEX_TO_TAPE.get(idx_name, idx_name)
+            try:
+                candles = get_candles(idx_name, "5m", limit=1000)
+                by_date: dict[str, list[dict]] = {}
+                for c in candles:
+                    d = datetime.fromtimestamp(c["time"], ist).strftime("%Y-%m-%d")
+                    if d < today_iso:
+                        by_date.setdefault(d, []).append(c)
+                for d, d_candles in sorted(by_date.items()):
+                    if (tape, d) in hist_dates or len(d_candles) < 25:
+                        continue
+                    c_list = [
+                        {"timestamp_ms": c["time"] * 1000, "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": c.get("volume", 0)}
+                        for c in d_candles
+                    ]
+                    dec = decide_from_candles(idx_name, c_list, ae_cfg, expiry=d, spot=d_candles[-1]["close"])
+                    if dec and dec.actionable:
+                        entry_bar_idx = min(15, len(d_candles) - 1)
+                        entry_t = datetime.fromtimestamp(d_candles[entry_bar_idx]["time"], tz=ist)
+                        exit_t = datetime.fromtimestamp(d_candles[-1]["time"], tz=ist)
+                        side = "BUY" if dec.direction == "BULLISH" else "SELL"
+                        spot = d_candles[entry_bar_idx]["close"]
+                        hist_legs.append({
+                            "symbol": tape, "side": side, "entry_price": spot, "entry_time": entry_t.isoformat(),
+                            "exit_price": d_candles[-1]["close"], "exit_time": exit_t.isoformat(),
+                            "stop_price": round(spot - dec.stop_points if side == "BUY" else spot + dec.stop_points, 2),
+                            "trail_price": round(spot - dec.stop_points * 0.5 if side == "BUY" else spot + dec.stop_points * 0.5, 2),
+                            "flattened": True, "quantity": 0, "session_date": d, "horizon": dec.horizon,
+                            "entry_mode": "MICRO", "peak_mode": "MICRO", "exit_mode": "MICRO", "thesis": dec.reason,
+                            "entry_score": 0.88, "entry_vwap": spot, "entry_poc": spot, "entry_cvd": 1500.0 if side == "BUY" else -1500.0,
+                            "scan_origin": "adaptive_edge",
+                        })
+                        hist_dates.add((tape, d))
+            except Exception as err:
+                log.warning("Failed bridging historical candles for %s: %s", idx_name, err)
+
+        _HISTORICAL_CACHE["legs"] = hist_legs
+        _HISTORICAL_CACHE["daily"] = list(artifact.get("daily") or [])
+        _HISTORICAL_CACHE["initialized"] = True
+
+    legs = [dict(x) for x in _HISTORICAL_CACHE["legs"]]
+    existing_sym_dates = set((l.get("symbol"), l.get("session_date")) for l in legs if l.get("symbol") and l.get("session_date"))
+
     allowed_tapes = set(settings.symbols)
     if settings.scan_stocks:
         for st in settings.scan_stocks:
@@ -253,98 +314,97 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
                     continue
                 dt = datetime.fromtimestamp(ts / 1000, tz=ist)
                 s_date = dt.strftime("%Y-%m-%d")
-                if s_date in existing_dates:
-                    continue
                 u = r.get("underlying", "")
                 tape = INDEX_TO_TAPE.get(u, u)
+                if (tape, s_date) in existing_sym_dates:
+                    continue
                 if allowed_tapes and tape not in allowed_tapes and u not in allowed_tapes and u.upper() not in allowed_tapes:
                     continue
                 spot = float(r.get("spot") or r.get("underlying_spot") or 0.0)
                 sl = float(r.get("stop_loss") or (spot * 0.99))
                 side = "SELL" if r.get("direction") in ("short", "BEARISH") else "BUY"
+                is_active = bool(r.get("is_active", False))
                 legs.append({
                     "symbol": tape,
                     "side": side,
                     "entry_price": spot,
                     "entry_time": dt.isoformat(),
-                    "exit_price": spot,
-                    "exit_time": dt.isoformat(),
+                    "exit_price": None if is_active else spot,
+                    "exit_time": None if is_active else dt.isoformat(),
                     "stop_price": sl,
                     "trail_price": sl,
-                    "flattened": True,
-                    "quantity": 0,
+                    "flattened": not is_active,
+                    "quantity": 1 if is_active else 0,
                     "session_date": s_date,
                     "horizon": "SESSION_TREND",
                     "entry_mode": "MICRO",
                     "peak_mode": "MICRO",
-                    "exit_mode": "MICRO",
+                    "exit_mode": "" if is_active else "MICRO",
                     "thesis": f"{side} {tape} at {spot}",
                     "entry_score": float(r.get("score") or 0.85),
                     "entry_vwap": spot,
                     "entry_poc": spot,
                     "entry_cvd": 1200.0 if side == "BUY" else -1200.0,
+                    "scan_origin": "spot_scan",
                 })
-                existing_dates.add(s_date)
+                existing_sym_dates.add((tape, s_date))
     except Exception:
         pass
 
-    # 2. Bridge remaining dates in OHLCV store using canonical decisions
-    try:
-        candles = get_candles("NIFTY 50", "5m", limit=3000)
-        by_date: dict[str, list[dict]] = {}
-        for c in candles:
-            d = datetime.fromtimestamp(c["time"], ist).strftime("%Y-%m-%d")
-            by_date.setdefault(d, []).append(c)
+    # 2. Bridge today's dates for indices using fast limit
+    for idx_name in scan_idx_list:
+        tape = INDEX_TO_TAPE.get(idx_name, idx_name)
+        if (tape, today_iso) in existing_sym_dates:
+            continue
+        try:
+            candles = get_candles(idx_name, "5m", limit=150)
+            today_candles = [c for c in candles if datetime.fromtimestamp(c["time"], ist).strftime("%Y-%m-%d") == today_iso]
+            if len(today_candles) >= 25:
+                c_list = [
+                    {
+                        "timestamp_ms": c["time"] * 1000,
+                        "open": c["open"],
+                        "high": c["high"],
+                        "low": c["low"],
+                        "close": c["close"],
+                        "volume": c.get("volume", 0),
+                    }
+                    for c in today_candles
+                ]
+                dec = decide_from_candles(idx_name, c_list, ae_cfg, expiry=today_iso, spot=today_candles[-1]["close"])
+                if dec and dec.actionable:
+                    entry_bar_idx = min(15, len(today_candles) - 1)
+                    entry_t = datetime.fromtimestamp(today_candles[entry_bar_idx]["time"], tz=ist)
+                    side = "BUY" if dec.direction == "BULLISH" else "SELL"
+                    spot = today_candles[entry_bar_idx]["close"]
+                    legs.append({
+                        "symbol": tape,
+                        "side": side,
+                        "entry_price": spot,
+                        "entry_time": entry_t.isoformat(),
+                        "exit_price": None,
+                        "exit_time": None,
+                        "stop_price": round(spot - dec.stop_points if side == "BUY" else spot + dec.stop_points, 2),
+                        "trail_price": round(spot - dec.stop_points * 0.5 if side == "BUY" else spot + dec.stop_points * 0.5, 2),
+                        "flattened": False,
+                        "quantity": 1,
+                        "session_date": today_iso,
+                        "horizon": dec.horizon,
+                        "entry_mode": "MICRO",
+                        "peak_mode": "MICRO",
+                        "exit_mode": "",
+                        "thesis": dec.reason,
+                        "entry_score": 0.88,
+                        "entry_vwap": spot,
+                        "entry_poc": spot,
+                        "entry_cvd": 1500.0 if side == "BUY" else -1500.0,
+                        "scan_origin": "adaptive_edge",
+                    })
+                    existing_sym_dates.add((tape, today_iso))
+        except Exception as err:
+            log.warning("Failed bridging today candles for %s: %s", idx_name, err)
 
-        ae_cfg = get_config()
-        for d, d_candles in sorted(by_date.items()):
-            if d in existing_dates or len(d_candles) < 30:
-                continue
-            c_list = [
-                {
-                    "timestamp_ms": c["time"] * 1000,
-                    "open": c["open"],
-                    "high": c["high"],
-                    "low": c["low"],
-                    "close": c["close"],
-                    "volume": c.get("volume", 0),
-                }
-                for c in d_candles
-            ]
-            dec = decide_from_candles("NIFTY 50", c_list, ae_cfg, expiry=d, spot=d_candles[-1]["close"])
-            if dec and dec.actionable:
-                entry_t = datetime.fromtimestamp(d_candles[15]["time"], tz=ist)
-                exit_t = datetime.fromtimestamp(d_candles[-1]["time"], tz=ist)
-                side = "BUY" if dec.direction == "BULLISH" else "SELL"
-                spot = d_candles[15]["close"]
-                exit_p = d_candles[-1]["close"]
-                legs.append({
-                    "symbol": "NIFTY-I",
-                    "side": side,
-                    "entry_price": spot,
-                    "entry_time": entry_t.isoformat(),
-                    "exit_price": exit_p,
-                    "exit_time": exit_t.isoformat(),
-                    "stop_price": round(spot - dec.stop_points if side == "BUY" else spot + dec.stop_points, 2),
-                    "trail_price": round(spot - dec.stop_points * 0.5 if side == "BUY" else spot + dec.stop_points * 0.5, 2),
-                    "flattened": True,
-                    "quantity": 0,
-                    "session_date": d,
-                    "horizon": dec.horizon,
-                    "entry_mode": "MICRO",
-                    "peak_mode": "MICRO",
-                    "exit_mode": "MICRO",
-                    "thesis": dec.reason,
-                    "entry_score": 0.88,
-                    "entry_vwap": spot,
-                    "entry_poc": spot,
-                    "entry_cvd": 1500.0 if side == "BUY" else -1500.0,
-                })
-                existing_dates.add(d)
-    except Exception:
-        pass
-
-    daily = list(artifact.get("daily") or [])
+    daily = [dict(x) for x in _HISTORICAL_CACHE["daily"]]
     daily_dates = set(d.get("session_date") for d in daily if isinstance(d, dict) and d.get("session_date"))
     legs_by_day: dict[str, list[dict]] = {}
     for l in legs:
@@ -377,7 +437,10 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
             "last_thesis": last_leg.get("thesis"),
         }
 
-    return legs, daily, session_patch
+    res = (legs, daily, session_patch)
+    _BRIDGED_CACHE["time"] = time.time()
+    _BRIDGED_CACHE["result"] = res
+    return res
 
 
 @router.get("/snapshot")

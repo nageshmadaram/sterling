@@ -803,12 +803,17 @@ def build_snapshot_signals(
                 "mode_path": mode_path,
                 "mode_history": path_segments,
                 "horizon": raw.get("horizon") or "IMPULSE",
-                "scan_origin": "adaptive_edge",
+                "scan_origin": raw.get("scan_origin") or "adaptive_edge",
                 "legs": [leg.as_dict() for leg in option_legs],
             }
         )
 
+    current_day_str = today.strftime("%Y-%m-%d") if today else None
     seen_underlyings = {item["underlying"] for item in signals}
+    seen_underlyings_today = {
+        item["underlying"] for item in signals
+        if not item.get("flattened") or (current_day_str and item.get("session_date") == current_day_str)
+    }
 
     scan_targets = list(scan_indices)
     if settings.get("scan_stock_contracts"):
@@ -822,7 +827,7 @@ def build_snapshot_signals(
                     scan_targets.append(str(s))
 
     for name in scan_targets:
-        if name in seen_underlyings:
+        if name in seen_underlyings_today:
             continue
         row = live.get(name)
         if not row:
