@@ -1024,6 +1024,69 @@ class SimulationRunner:
         self._publish_state()
         return self.status
 
+    def _apply_seek(self, target: float) -> int:
+        """Apply a seek to target timestamp immediately, updating books, clock, and warming history."""
+        all_bars = getattr(self, "_candles", [])
+        self._seek_requested_epoch = None
+        self._current_sim_epoch = target
+
+        bar_idx = 0
+        while bar_idx < len(all_bars) and all_bars[bar_idx]["time"] <= target:
+            bar_idx += 1
+        self._bars_played = bar_idx
+
+        target_ms = int(target * 1000)
+        self._stats.events = [ev for ev in self._stats.events if ev.timestamp_ms <= target_ms]
+        self._stats.trades = [tr for tr in self._stats.trades if tr.timestamp_ms <= target_ms]
+
+        self._open_by_symbol = {}
+        for tr in self._stats.trades:
+            if tr.exit_timestamp_ms is not None and tr.exit_timestamp_ms > target_ms:
+                tr.status = "OPEN"
+                tr.exit_price = None
+                tr.exit_time_iso = "OPEN"
+                tr.exit_timestamp_ms = None
+                tr.pnl_usd = 0.0
+                tr.pnl_pct = 0.0
+            if tr.status == "OPEN":
+                self._open_by_symbol.setdefault(tr.underlying, []).append(tr)
+        self._recompute_totals()
+        self._last_signal = self._stats.events[-1] if self._stats.events else None
+        self._emitted_recorded_keys = {
+            f"{ev.instrument}:{ev.timestamp_ms}" for ev in self._stats.events
+        }
+
+        # Rebuild bar history and in-session count up to seek target so indicators are immediately warm
+        self._bar_history = {}
+        self._in_session_bars = {}
+        for b in all_bars[:bar_idx]:
+            b_sym = b.get("symbol", "UNKNOWN")
+            self._bar_history.setdefault(b_sym, []).append(b)
+            self._in_session_bars[b_sym] = self._in_session_bars.get(b_sym, 0) + 1
+        for b_sym in self._bar_history:
+            if len(self._bar_history[b_sym]) > 60:
+                self._bar_history[b_sym] = self._bar_history[b_sym][-60:]
+
+        self._last_fired = {}
+        self._active_until_bar = {}
+
+        from datetime import datetime, timezone, timedelta
+        try:
+            from zoneinfo import ZoneInfo
+            ist = ZoneInfo("Asia/Kolkata")
+        except ImportError:
+            ist = timezone(timedelta(hours=5, minutes=30))
+
+        bar_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
+        self._current_time_iso = bar_dt.strftime("%H:%M:%S")
+        total_sim_seconds = float(max(1, self._end_epoch - self._start_epoch))
+        self._progress = round(
+            min(100.0, max(0.0, (self._current_sim_epoch - self._start_epoch) / total_sim_seconds * 100.0)),
+            1,
+        )
+        self._publish_frame(force=True)
+        return bar_idx
+
     def step_bars(self, count: int) -> SimStatus:
         from app.services.ohlcv_store import RESOLUTION_SECONDS
         if self._state == SimState.IDLE:
@@ -1032,7 +1095,10 @@ class SimulationRunner:
         res_sec = RESOLUTION_SECONDS.get(res, 300)
         target = self._current_sim_epoch + (count * res_sec)
         target = max(float(self._start_epoch), min(float(self._end_epoch), target))
-        self._seek_requested_epoch = target
+        if self._state == SimState.PAUSED:
+            self._apply_seek(target)
+        else:
+            self._seek_requested_epoch = target
         return self.status
 
     def seek_to(
@@ -1040,12 +1106,13 @@ class SimulationRunner:
         bar_index: Optional[int] = None,
         to_pct: Optional[float] = None,
         to_time: Optional[str] = None,
+        target_epoch: Optional[float] = None,
     ) -> SimStatus:
         """Absolute seek, so a timeline drag commits as ONE request.
 
         A relative `bars_offset` forces the client either to issue a request per
         pointer move or to compute an offset from a `bars_played` that is moving
-        underneath it. All three forms below clamp into the session.
+        underneath it. All forms below clamp into the session.
         """
         if self._state == SimState.IDLE or self._end_epoch <= self._start_epoch:
             return self.status
@@ -1053,49 +1120,87 @@ class SimulationRunner:
         span = float(self._end_epoch - self._start_epoch)
         target: Optional[float] = None
 
-        if bar_index is not None and self._candles:
+        if target_epoch is not None:
+            target = float(target_epoch)
+        elif bar_index is not None and self._candles:
             idx = max(0, min(len(self._candles) - 1, int(bar_index)))
             target = float(self._candles[idx]["time"])
         elif to_pct is not None:
             pct = max(0.0, min(100.0, float(to_pct)))
             target = self._start_epoch + span * (pct / 100.0)
         elif to_time is not None:
-            parts = [int(x) for x in str(to_time).split(":")]
-            while len(parts) < 3:
-                parts.append(0)
+            raw = str(to_time).strip()
             from datetime import datetime, timezone, timedelta
             try:
                 from zoneinfo import ZoneInfo
                 ist = ZoneInfo("Asia/Kolkata")
             except ImportError:
                 ist = timezone(timedelta(hours=5, minutes=30))
-            base = datetime.fromtimestamp(self._start_epoch, tz=ist)
-            target = datetime(
-                base.year, base.month, base.day,
-                parts[0], parts[1], parts[2], tzinfo=ist,
-            ).timestamp()
+
+            target = None
+            if "T" in raw or ("-" in raw and len(raw) >= 10):
+                try:
+                    clean_iso = raw.replace("Z", "+00:00").replace(" ", "T")
+                    dt = datetime.fromisoformat(clean_iso)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=ist)
+                    target = dt.timestamp()
+                except Exception:
+                    pass
+
+            if target is None:
+                try:
+                    time_part = raw.split("T")[-1].split("+")[0].split("Z")[0].strip()
+                    parts = [int(x) for x in time_part.split(":")]
+                    while len(parts) < 3:
+                        parts.append(0)
+                    base = datetime.fromtimestamp(self._start_epoch, tz=ist)
+                    target = datetime(
+                        base.year, base.month, base.day,
+                        parts[0], parts[1], parts[2], tzinfo=ist,
+                    ).timestamp()
+                except Exception:
+                    target = None
 
         if target is None:
             return self.status
 
-        self._seek_requested_epoch = max(
+        clamped_target = max(
             float(self._start_epoch), min(float(self._end_epoch), target)
         )
+        if self._state == SimState.PAUSED:
+            self._apply_seek(clamped_target)
+        else:
+            self._seek_requested_epoch = clamped_target
         return self.status
 
     def jump_start(self) -> SimStatus:
         if self._start_epoch > 0:
-            self._seek_requested_epoch = float(self._start_epoch)
-            self._stats = SimStats()
-            self._open_by_symbol.clear()
-            self._last_signal = None
-            self._last_fired.clear()
-            self._emitted_recorded_keys.clear()
+            target = float(self._start_epoch)
+            if self._state == SimState.PAUSED:
+                self._apply_seek(target)
+                self._stats = SimStats()
+                self._open_by_symbol.clear()
+                self._last_signal = None
+                self._last_fired.clear()
+                self._emitted_recorded_keys.clear()
+                self._publish_frame(force=True)
+            else:
+                self._seek_requested_epoch = target
+                self._stats = SimStats()
+                self._open_by_symbol.clear()
+                self._last_signal = None
+                self._last_fired.clear()
+                self._emitted_recorded_keys.clear()
         return self.status
 
     def jump_end(self) -> SimStatus:
         if self._end_epoch > 0:
-            self._seek_requested_epoch = float(self._end_epoch)
+            target = float(self._end_epoch)
+            if self._state == SimState.PAUSED:
+                self._apply_seek(target)
+            else:
+                self._seek_requested_epoch = target
         return self.status
 
     def _emit_recorded_signal(self, rec: Dict[str, Any]) -> None:
@@ -1460,6 +1565,7 @@ class SimulationRunner:
                 await self._pause_event.wait()
                 if self._stop_requested:
                     break
+                bar_idx = self._bars_played
                 # A superseded loop must not keep writing. Cancellation only
                 # lands at an await, so between `start()` clearing the stop flag
                 # and the old task actually dying, two loops could both advance
@@ -1471,42 +1577,7 @@ class SimulationRunner:
 
                 # Handle seek/rewind requests
                 if self._seek_requested_epoch is not None:
-                    target = self._seek_requested_epoch
-                    self._seek_requested_epoch = None
-                    self._current_sim_epoch = target
-                    # Reset bar pointer to match target epoch
-                    bar_idx = 0
-                    while bar_idx < len(all_bars) and all_bars[bar_idx]["time"] <= target:
-                        bar_idx += 1
-                    self._bars_played = bar_idx
-                    # Filter event stats & trades up to seek target
-                    target_ms = int(target * 1000)
-                    self._stats.events = [ev for ev in self._stats.events if ev.timestamp_ms <= target_ms]
-                    self._stats.trades = [tr for tr in self._stats.trades if tr.timestamp_ms <= target_ms]
-                    # Rebuild the open book from what survived, or a position
-                    # seeked past would keep settling against bars that no
-                    # longer follow it.
-                    self._open_by_symbol = {}
-                    for tr in self._stats.trades:
-                        if tr.exit_timestamp_ms is not None and tr.exit_timestamp_ms > target_ms:
-                            tr.status = "OPEN"
-                            tr.exit_price = None
-                            tr.exit_time_iso = "OPEN"
-                            tr.exit_timestamp_ms = None
-                            tr.pnl_usd = 0.0
-                            tr.pnl_pct = 0.0
-                        if tr.status == "OPEN":
-                            self._open_by_symbol.setdefault(tr.underlying, []).append(tr)
-                    self._recompute_totals()
-                    self._last_signal = self._stats.events[-1] if self._stats.events else None
-                    self._emitted_recorded_keys = {
-                        f"{ev.instrument}:{ev.timestamp_ms}" for ev in self._stats.events
-                    }
-                    # Reset bar history and dedup state for clean indicator recalculation
-                    self._bar_history = {}
-                    self._in_session_bars = {}
-                    self._last_fired = {}
-                    self._active_until_bar = {}
+                    bar_idx = self._apply_seek(self._seek_requested_epoch)
 
                 # Dynamic update tick interval (30ms for >=500x, 50ms for >=50x, 100ms otherwise)
                 dt = 0.03 if self._speed >= 500 else (0.05 if self._speed >= 50 else 0.1)

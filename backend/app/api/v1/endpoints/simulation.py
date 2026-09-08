@@ -82,7 +82,8 @@ class SeekBody(BaseModel):
     bars_offset: Optional[int] = None
     bar_index: Optional[int] = None      # absolute bar
     to_pct: Optional[float] = None       # 0..100 through the session
-    to_time: Optional[str] = None        # "HH:MM:SS" IST
+    to_time: Optional[str] = None        # "HH:MM:SS" IST or ISO datetime
+    target_epoch: Optional[float] = None # epoch timestamp in seconds
     action: Optional[str] = None         # "jump_start", "jump_end", "step"
 
 
@@ -100,9 +101,17 @@ async def seek_sim(body: SeekBody):
         return simulation_runner.jump_start()
     if body.action == "jump_end":
         return simulation_runner.jump_end()
-    if body.bar_index is not None or body.to_pct is not None or body.to_time is not None:
+    if (
+        body.bar_index is not None
+        or body.to_pct is not None
+        or body.to_time is not None
+        or body.target_epoch is not None
+    ):
         return simulation_runner.seek_to(
-            bar_index=body.bar_index, to_pct=body.to_pct, to_time=body.to_time
+            bar_index=body.bar_index,
+            to_pct=body.to_pct,
+            to_time=body.to_time,
+            target_epoch=body.target_epoch,
         )
     if body.bars_offset is not None:
         return simulation_runner.step_bars(body.bars_offset)

@@ -482,3 +482,101 @@ def test_backward_seek_reopens_future_closed_trades():
     assert runner._open_by_symbol["NIFTY"] == [trade]
     assert runner._stats.wins == 0
     assert runner._stats.pnl == 0.0
+
+
+def test_seek_to_while_paused_updates_state_immediately():
+    from app.services.simulation import SimState
+    runner = SimulationRunner()
+    runner._state = SimState.PAUSED
+    runner._start_epoch = 1756353000  # 09:15:00 IST
+    runner._end_epoch = 1756375500    # 15:30:00 IST
+    runner._candles = [
+        {"time": 1756353000 + (i * 300), "symbol": "NIFTY", "open": 24000 + i, "close": 24001 + i}
+        for i in range(75)
+    ]
+    trade = SimTradeEvent(
+        trade_id="TRD-SEEK-1",
+        entry_time_iso="09:20:00",
+        exit_time_iso="11:30:00",
+        timestamp_ms=(1756353000 + 300) * 1000,
+        exit_timestamp_ms=(1756353000 + 7200) * 1000,
+        strategy="supertrend",
+        symbol="NIFTY26SEP24500CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=24500.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        exit_price=150.0,
+        stop_loss=75.0,
+        target_price=150.0,
+        status="WIN",
+        pnl_usd=1250.0,
+    )
+    runner._stats.trades = [trade]
+
+    # Target: 10:05:00 IST (45 mins in, before trade exit at 11:30:00)
+    target_epoch = 1756353000 + 2700
+    status = runner.seek_to(target_epoch=target_epoch)
+
+    # Verifies status is updated immediately without needing loop execution
+    assert status.current_time_iso == "10:05:00"
+    assert status.bars_played == 10  # 9:20 through 10:05 is 10 bars (0 to 9 <= target)
+    assert status.open_positions == 1
+    assert trade.status == "OPEN"
+    assert trade.exit_price is None
+
+
+def test_seek_to_parses_iso_datetime_and_time_strings():
+    from app.services.simulation import SimState
+    runner = SimulationRunner()
+    runner._state = SimState.PAUSED
+    runner._start_epoch = 1756353000  # 2025-08-28 09:15:00 IST
+    runner._end_epoch = 1756375500    # 2025-08-28 15:30:00 IST
+    runner._candles = [
+        {"time": 1756353000 + (i * 300), "symbol": "NIFTY"}
+        for i in range(75)
+    ]
+
+    # Test full ISO datetime
+    runner.seek_to(to_time="2025-08-28T10:30:00+05:30")
+    assert runner._current_time_iso == "10:30:00"
+
+    # Test space-separated datetime
+    runner.seek_to(to_time="2025-08-28 11:00:00")
+    assert runner._current_time_iso == "11:00:00"
+
+    # Test standard HH:MM:SS
+    runner.seek_to(to_time="11:45:00")
+    assert runner._current_time_iso == "11:45:00"
+
+    # Test HH:MM
+    runner.seek_to(to_time="12:15")
+    assert runner._current_time_iso == "12:15:00"
+
+
+def test_seek_warms_bar_history_for_indicator_continuity():
+    from app.services.simulation import SimState
+    runner = SimulationRunner()
+    runner._state = SimState.PAUSED
+    runner._start_epoch = 1756353000
+    runner._end_epoch = 1756375500
+    runner._candles = [
+        {"time": 1756353000 + (i * 300), "symbol": "NIFTY", "close": 24000.0 + i}
+        for i in range(75)
+    ]
+
+    # Seek to bar 65
+    target_epoch = 1756353000 + (65 * 300)
+    runner.seek_to(target_epoch=target_epoch)
+
+    assert "NIFTY" in runner._bar_history
+    # Capped at max 60 history bars
+    assert len(runner._bar_history["NIFTY"]) == 60
+    # In-session count reflects all bars up to target
+    assert runner._in_session_bars["NIFTY"] == 66
+    # Most recent bar in history is bar 65
+    assert runner._bar_history["NIFTY"][-1]["close"] == 24000.0 + 65
+
