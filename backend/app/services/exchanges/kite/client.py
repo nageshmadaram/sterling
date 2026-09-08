@@ -44,6 +44,22 @@ _INDIA_VIX_TOKEN = K.INDIA_VIX_TOKEN
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _historical_days_needed(interval: str, n_bars: int) -> int:
+    """Calendar days of history so ``n_bars`` of this interval can exist.
+
+    A 1H heuristic (``n_bars / 6``) requested 205 days of 5-minute data for a
+    15-session lookback and made the ORB universe scan unusable. Size the
+    window from the interval; add a weekend/holiday pad.
+    """
+    minutes = {
+        "minute": 1, "3minute": 3, "5minute": 5, "10minute": 10,
+        "15minute": 15, "30minute": 30, "60minute": 60, "day": 24 * 60,
+    }.get(interval, 60)
+    session_minutes = 6 * 60 + 15
+    per_day = 1 if minutes >= 24 * 60 else max(1, session_minutes // minutes)
+    return max(2, int(n_bars / per_day) + 8)
+
+
 def _parse_kite_ts(ts_str) -> int:
     """Parse a Kite timestamp ('2024-01-15 09:15:00' / '...+0530') → epoch ms."""
     if not ts_str:
@@ -805,7 +821,7 @@ class KiteClient(TradingExchangeAdapter):
         interval = K.RESOLUTION_MAP.get(resolution, "60minute")
         now = datetime.now(_IST)
         n_bars = limit * 4 if want_4h else limit
-        days_needed = max(2, int(n_bars / 6) + 5)
+        days_needed = _historical_days_needed(interval, n_bars)
         from_str = (now - timedelta(days=days_needed)).strftime("%Y-%m-%d %H:%M:%S")
         to_str = now.strftime("%Y-%m-%d %H:%M:%S")
         
