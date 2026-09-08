@@ -95,10 +95,22 @@ def test_session_walk_recovers_a_morning_fire_after_the_window():
     from tests.engines.test_nifty_orb_options import orb_session
     from app.engines.nifty_orb_options import StrategyConfig
     from app.services.nifty_orb_scanner import session_fire_transitions
-    from datetime import datetime
     bars = orb_session("LONG")
     cfg = StrategyConfig()
     as_of = datetime(2026, 8, 18, 15, 40, tzinfo=IST)
+    fires = session_fire_transitions(bars, cfg, as_of=as_of)
+    assert fires
+    assert fires[0].direction == "LONG"
+
+
+def test_session_walk_recovers_yesterdays_fire_after_midnight():
+    """The overnight board used to walk only *today*, which has no bars yet."""
+    from tests.engines.test_nifty_orb_options import orb_session
+    from app.engines.nifty_orb_options import StrategyConfig
+    from app.services.nifty_orb_scanner import session_fire_transitions
+    bars = orb_session("LONG")
+    cfg = StrategyConfig()
+    as_of = datetime(2026, 8, 19, 2, 32, tzinfo=IST)
     fires = session_fire_transitions(bars, cfg, as_of=as_of)
     assert fires
     assert fires[0].direction == "LONG"
