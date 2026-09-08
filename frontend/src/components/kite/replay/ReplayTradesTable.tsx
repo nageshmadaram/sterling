@@ -163,19 +163,19 @@ const TradeRow = memo(function TradeRow({
  */
 export const ReplayTradesTable = memo(function ReplayTradesTable() {
   const trades = useFilteredReplayTrades();
+  const rawTrades = useReplayStore((s) => s.status.stats.trades);
   const rawPnl = useReplayStore((s) => s.status.stats.pnl);
   const rawWins = useReplayStore((s) => s.status.stats.wins);
   const rawLosses = useReplayStore((s) => s.status.stats.losses);
   const rawDrag = useReplayStore((s) => s.status.stats.slippage_total);
-  const isNarrowed = useReplayStore(
-    (s) => !s.draft.strategies.includes('all') && !s.draft.strategies.includes('*'),
-  );
+  const isNarrowed = trades.length !== rawTrades.length;
 
+  const closedTrades = trades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
   const pnl = isNarrowed
-    ? Number(trades.reduce((sum, t) => sum + (t.pnl_usd || 0), 0).toFixed(2))
+    ? Number(closedTrades.reduce((sum, t) => sum + (t.pnl_usd || 0), 0).toFixed(2))
     : rawPnl;
-  const wins = isNarrowed ? trades.filter((t) => t.status === 'WIN').length : rawWins;
-  const losses = isNarrowed ? trades.filter((t) => t.status === 'LOSS').length : rawLosses;
+  const wins = isNarrowed ? closedTrades.filter((t) => t.status === 'WIN').length : rawWins;
+  const losses = isNarrowed ? closedTrades.filter((t) => t.status === 'LOSS').length : rawLosses;
   const drag = isNarrowed
     ? trades.some((t) => t.slippage != null)
       ? Number(trades.reduce((sum, t) => sum + (t.slippage || 0), 0).toFixed(2))

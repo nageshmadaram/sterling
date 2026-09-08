@@ -107,6 +107,8 @@ function applyStatus(next: ReplayStatus, wasDelta: boolean) {
     capabilities: next.capabilities,
     events_total: totalEvents,
     trades_total: totalTrades,
+    open_positions: next.open_positions,
+    unrealised_pnl: next.unrealised_pnl,
     stats: {
       signals_fired: next.stats.signals_fired,
       trades_entered: next.stats.trades_entered,
@@ -251,6 +253,8 @@ export function useReplayStream(enabled: boolean): void {
             bars_played: d.bars_played ?? store.status.bars_played,
             bars_total: d.bars_total ?? store.status.bars_total,
             elapsed_real_s: d.elapsed_real_s ?? store.status.elapsed_real_s,
+            open_positions: d.open_positions ?? store.status.open_positions,
+            unrealised_pnl: d.unrealised_pnl ?? store.status.unrealised_pnl,
             stats: {
               pnl: d.pnl ?? store.status.stats.pnl,
               wins: d.wins ?? store.status.stats.wins,

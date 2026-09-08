@@ -232,6 +232,25 @@ describe('incremental updates', () => {
     ]);
     expect(useReplayStore.getState().status.stats.slippage_total).toBe(20);
   });
+
+  it('keeps unrealised P&L separated from realised P&L when open trades arrive', () => {
+    const s = () => useReplayStore.getState();
+    s().upsertTrades([
+      makeTrade({ trade_id: 'T1', status: 'OPEN', pnl_usd: 450 }),
+      makeTrade({ trade_id: 'T2', status: 'WIN', pnl_usd: 800 }),
+    ]);
+    expect(s().status.stats.pnl).toBe(800);
+    expect(s().status.open_positions).toBe(1);
+    expect(s().status.unrealised_pnl).toBe(450);
+
+    // When T1 closes as WIN
+    s().upsertTrades([
+      makeTrade({ trade_id: 'T1', status: 'WIN', pnl_usd: 600 }),
+    ]);
+    expect(s().status.stats.pnl).toBe(1400);
+    expect(s().status.open_positions).toBe(0);
+    expect(s().status.unrealised_pnl).toBe(0);
+  });
 });
 
 describe('replay-aware clock', () => {

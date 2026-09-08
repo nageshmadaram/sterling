@@ -679,16 +679,23 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       trades.forEach((t) => byId.set(t.trade_id, t));
       const next = Array.from(byId.values());
       const drag = next.map((t) => t.slippage).filter((v): v is number => v != null);
+      const closed = next.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
+      const openTrades = next.filter((t) => t.status === 'OPEN');
+      const unrealised = openTrades.length
+        ? Number(openTrades.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2))
+        : 0;
       return {
         status: {
           ...s.status,
+          open_positions: openTrades.length,
+          unrealised_pnl: unrealised,
           stats: {
             ...s.status.stats,
             trades: next,
             trades_entered: next.length,
-            wins: next.filter((t) => t.status === 'WIN').length,
-            losses: next.filter((t) => t.status === 'LOSS').length,
-            pnl: Number(next.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2)),
+            wins: closed.filter((t) => t.status === 'WIN').length,
+            losses: closed.filter((t) => t.status === 'LOSS').length,
+            pnl: Number(closed.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2)),
             slippage_total: drag.length ? Number(drag.reduce((a, b) => a + b, 0).toFixed(2)) : null,
           },
         },
