@@ -208,6 +208,7 @@ describe('timeline', () => {
     const t = screen.getByTestId('replay-timeline');
     expect(t).toHaveAttribute('aria-disabled', 'true');
     expect(t.getAttribute('tabindex')).toBe('-1');
+    expect(t.getAttribute('aria-valuetext')).toContain('09:00:00 IST');
   });
 
   it('seeks once per drag, not once per pointer move', async () => {
@@ -745,6 +746,24 @@ describe('unrealised is kept apart from realised', () => {
     // And the realised figure must NOT have absorbed it.
     const realised = within(strip).getByText('P&L').parentElement!;
     expect(within(realised).getByText('+₹0.00')).toBeTruthy();
+  });
+
+  it('colors P&L as dim when idle with no trades', async () => {
+    setupDock({ status: makeStatus({ stats: { ...DEFAULT_STATUS.stats, pnl: 0, trades: [] } }) });
+    await renderDock();
+    const strip = screen.getByTestId('replay-metrics');
+    const pnlMetric = within(strip).getByText('P&L').closest('.rd-metric')!;
+    expect(pnlMetric.getAttribute('data-tone')).toBe('dim');
+  });
+
+  it('colors P&L as profit when positive', async () => {
+    setupDock({
+      status: makeStatus({ stats: { ...DEFAULT_STATUS.stats, pnl: 1500, trades: [makeTrade({ pnl_usd: 1500 })] } }),
+    });
+    await renderDock();
+    const strip = screen.getByTestId('replay-metrics');
+    const pnlMetric = within(strip).getByText('P&L').closest('.rd-metric')!;
+    expect(pnlMetric.getAttribute('data-tone')).toBe('profit');
   });
 });
 

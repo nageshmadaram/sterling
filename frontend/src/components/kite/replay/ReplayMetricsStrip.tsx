@@ -25,10 +25,11 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
   const closed = trades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
   const openCount = openPositions ?? (trades.length - closed.length);
   const winRate = decided > 0 ? (wins / decided) * 100 : null;
+  const pnlTone = trades.length === 0 && pnl === 0 ? 'dim' : pnl > 0 ? 'profit' : pnl < 0 ? 'loss' : 'dim';
 
   return (
     <div className="rd-metrics-strip" role="region" aria-label="Replay performance" data-testid="replay-metrics">
-      <span className="rd-metric" data-tone={pnl >= 0 ? 'profit' : 'loss'}>
+      <span className="rd-metric" data-tone={pnlTone}>
         <span className="rd-metric-label">P&L</span>
         <span className="rd-metric-value">{fmtSignedInr(pnl)}</span>
       </span>

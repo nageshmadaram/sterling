@@ -265,7 +265,7 @@ export function ReplayTimeline() {
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.round(shown)}
-        aria-valuetext={`${fmtTime(clock)} IST, bar ${barsPlayed} of ${barsTotal}`}
+        aria-valuetext={`${clock ? fmtTime(clock) : fmtTime(startTime)} IST, bar ${barsPlayed} of ${barsTotal}`}
         aria-disabled={disabled}
         tabIndex={disabled ? -1 : 0}
         onPointerDown={onPointerDown}
