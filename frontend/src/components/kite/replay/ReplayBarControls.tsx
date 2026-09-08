@@ -119,6 +119,18 @@ export function ReplaySessionDropdown() {
                 }}
               />
             </div>
+            {isRange && (
+              <button
+                type="button"
+                className="rd-btn rd-btn-sm"
+                data-variant="ghost"
+                style={{ fontSize: '10px', padding: '2px 6px', alignSelf: 'flex-start' }}
+                onClick={() => setDraft({ endDate: draft.date })}
+                data-testid="replay-session-single-day"
+              >
+                Reset to single day
+              </button>
+            )}
           </div>
         </div>
       </ReplayPopover>
@@ -253,7 +265,7 @@ export function ReplayStrategyDropdown() {
   const anchor = useRef<HTMLButtonElement>(null);
   const locked = state !== 'idle';
 
-  const allStrategies = draft.strategies.includes('all');
+  const allStrategies = draft.strategies.includes('all') || draft.strategies.length >= REPLAY_STRATEGIES.length;
   const count = allStrategies ? REPLAY_STRATEGIES.length : draft.strategies.length;
   const displayLabel = allStrategies
     ? 'All'
@@ -329,6 +341,7 @@ export function ReplaySizingDropdown() {
   const setDraft = useReplayStore((s) => s.setDraft);
   const state = useReplayState();
   const [open, setOpen] = useState(false);
+  const [lotStr, setLotStr] = useState<string | null>(null);
   const anchor = useRef<HTMLButtonElement>(null);
   const locked = state !== 'idle';
 
@@ -411,7 +424,10 @@ export function ReplaySizingDropdown() {
                 type="button"
                 className="rd-btn rd-btn-sm"
                 data-variant={draft.lots === l ? 'primary' : undefined}
-                onClick={() => setDraft({ lots: l })}
+                onClick={() => {
+                  setLotStr(null);
+                  setDraft({ lots: l });
+                }}
               >
                 {l}L
               </button>
@@ -421,14 +437,28 @@ export function ReplaySizingDropdown() {
               className="rd-drop-lot-input"
               min={1}
               max={500}
-              value={draft.lots}
+              value={lotStr !== null ? lotStr : draft.lots}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === '') {
-                  setDraft({ lots: 1 });
-                } else {
+                setLotStr(v);
+                if (v !== '') {
                   const val = parseInt(v, 10);
-                  if (!isNaN(val)) setDraft({ lots: Math.max(1, Math.min(500, val)) });
+                  if (!isNaN(val) && val >= 1 && val <= 500) {
+                    setDraft({ lots: val });
+                  }
+                }
+              }}
+              onBlur={() => {
+                if (lotStr !== null) {
+                  const val = parseInt(lotStr, 10);
+                  if (isNaN(val) || val < 1) {
+                    setDraft({ lots: 1 });
+                  } else if (val > 500) {
+                    setDraft({ lots: 500 });
+                  } else {
+                    setDraft({ lots: val });
+                  }
+                  setLotStr(null);
                 }
               }}
               title="Custom lots"

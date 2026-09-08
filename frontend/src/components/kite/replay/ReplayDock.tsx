@@ -70,11 +70,8 @@ function ReplayUnifiedTable() {
   const tab = useReplayStore((s) => s.tab);
   const setTab = useReplayStore((s) => s.setTab);
   const state = useReplayState();
-  const [expanded, setExpanded] = useState<'signals' | 'trades' | null>(null);
 
-  const activeView = expanded ?? (tab === 'signals' || tab === 'trades' ? tab : null);
-
-  if (activeView === 'signals') {
+  if (tab === 'signals') {
     return (
       <div className="rd-unified-table">
         <div className="rd-unified-head">
@@ -82,7 +79,8 @@ function ReplayUnifiedTable() {
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant="ghost"
-            onClick={() => { setExpanded(null); setTab('split'); }}
+            onClick={() => setTab('split')}
+            data-testid="replay-signals-back"
           >
             <Icons.ChevronUp size={10} /> Back
           </button>
@@ -95,7 +93,7 @@ function ReplayUnifiedTable() {
     );
   }
 
-  if (activeView === 'trades') {
+  if (tab === 'trades') {
     return (
       <div className="rd-unified-table">
         <div className="rd-unified-head">
@@ -103,7 +101,8 @@ function ReplayUnifiedTable() {
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant="ghost"
-            onClick={() => { setExpanded(null); setTab('split'); }}
+            onClick={() => setTab('split')}
+            data-testid="replay-trades-back"
           >
             <Icons.ChevronUp size={10} /> Back
           </button>
@@ -116,7 +115,7 @@ function ReplayUnifiedTable() {
     );
   }
 
-  // Combined view (default)
+  // Combined view (default: tab === 'split')
   if (events.length === 0 && trades.length === 0) {
     if (state === 'idle') return null;
     return (
@@ -139,8 +138,9 @@ function ReplayUnifiedTable() {
               type="button"
               className="rd-btn rd-btn-sm"
               data-variant="ghost"
-              onClick={() => { setExpanded('signals'); setTab('signals'); }}
-              title="View full signals table"
+              onClick={() => setTab('signals')}
+              title="View full signals table (S)"
+              data-testid="replay-signals-expand"
             >
               Expand <Icons.Fullscreen size={10} />
             </button>
@@ -160,8 +160,9 @@ function ReplayUnifiedTable() {
               type="button"
               className="rd-btn rd-btn-sm"
               data-variant="ghost"
-              onClick={() => { setExpanded('trades'); setTab('trades'); }}
-              title="View full trades table"
+              onClick={() => setTab('trades')}
+              title="View full trades table (T)"
+              data-testid="replay-trades-expand"
             >
               Expand <Icons.Fullscreen size={10} />
             </button>
@@ -177,12 +178,14 @@ function ReplayUnifiedTable() {
 function ReplayPlayerBarInfo() {
   const state = useReplayState();
   const clock = useReplayStore((s) => s.status.current_time_iso);
+  const startTime = useReplayStore((s) => s.draft.startTime);
   const pct = useReplayStore((s) => s.status.progress_pct);
+  const displayTime = clock ? fmtTime(clock) : fmtTime(startTime);
 
   return (
     <div className="rd-player-bar-info" data-testid="replay-player-bar-info">
       <span className="rd-player-bar-clock" data-state={state}>
-        {fmtTime(clock)} IST
+        {displayTime} IST
       </span>
       <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
     </div>

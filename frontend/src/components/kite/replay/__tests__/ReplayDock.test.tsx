@@ -487,6 +487,70 @@ describe('configuration', () => {
     await act(async () => { fireEvent.click(playBtn); });
     expect(useReplayStore.getState().error?.code).toBe('invalid_time_range');
   });
+
+  it('resets date range to single day with quick action', async () => {
+    useReplayStore.getState().setDraft({ date: '2026-09-01', endDate: '2026-09-05' });
+    await renderDock();
+    const trigger = screen.getByTestId('replay-session-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const singleDayBtn = screen.getByTestId('replay-session-single-day');
+    expect(singleDayBtn).toBeTruthy();
+    await act(async () => { fireEvent.click(singleDayBtn); });
+    expect(useReplayStore.getState().draft.endDate).toBe('2026-09-01');
+  });
+
+  it('supports typing custom lot size', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-sizing-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const lotInput = screen.getByTitle('Custom lots');
+    await act(async () => {
+      fireEvent.change(lotInput, { target: { value: '15' } });
+    });
+    expect(useReplayStore.getState().draft.lots).toBe(15);
+  });
+
+  it('expands signals table and restores split view', async () => {
+    setupDock({
+      tab: 'split',
+      status: makeStatus({
+        state: 'running',
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          events: [makeSignal()],
+          trades: [makeTrade()],
+        },
+      }),
+    });
+    await renderDock();
+    const expandBtn = screen.getByTestId('replay-signals-expand');
+    await act(async () => { fireEvent.click(expandBtn); });
+    expect(useReplayStore.getState().tab).toBe('signals');
+    const backBtn = screen.getByTestId('replay-signals-back');
+    await act(async () => { fireEvent.click(backBtn); });
+    expect(useReplayStore.getState().tab).toBe('split');
+  });
+
+  it('expands trades table and restores split view', async () => {
+    setupDock({
+      tab: 'split',
+      status: makeStatus({
+        state: 'running',
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          events: [makeSignal()],
+          trades: [makeTrade()],
+        },
+      }),
+    });
+    await renderDock();
+    const expandBtn = screen.getByTestId('replay-trades-expand');
+    await act(async () => { fireEvent.click(expandBtn); });
+    expect(useReplayStore.getState().tab).toBe('trades');
+    const backBtn = screen.getByTestId('replay-trades-back');
+    await act(async () => { fireEvent.click(backBtn); });
+    expect(useReplayStore.getState().tab).toBe('split');
+  });
 });
 
 /* ── Keyboard ───────────────────────────────────────────────────────────── */

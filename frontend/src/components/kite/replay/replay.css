@@ -1732,12 +1732,16 @@ kbd.rd-kbd {
 .rd-viewbar-right .rd-btn { padding: 0 6px; }
 .rd-viewbar-right { gap: 2px; }
 
-/* Split view is two ~470px columns; the lowest-value columns step out there
-   and return in the single-tab views. */
+/* Split view and narrow screens: secondary columns step out when constrained
+   and return in the single-tab views or wide layouts. */
 .rd-split .rd-table [data-col="strength"],
 .rd-split .rd-table [data-col="rr"],
 .rd-split .rd-table [data-col="held"],
-.rd-split .rd-table [data-col="sltgt"] { display: none; }
+.rd-split .rd-table [data-col="sltgt"],
+.replay-dock[data-width="sm"] .rd-table [data-col="strength"],
+.replay-dock[data-width="sm"] .rd-table [data-col="rr"],
+.replay-dock[data-width="sm"] .rd-table [data-col="held"],
+.replay-dock[data-width="sm"] .rd-table [data-col="sltgt"] { display: none; }
 
 /* Group-by, as a quiet footer control rather than a full-width banded row. */
 .rd-groupby {
@@ -1751,13 +1755,17 @@ kbd.rd-kbd {
   border-top: 1px solid var(--k-hairline);
 }
 
-/* The trades table is 13 columns; a half-width split pane fits about seven.
-   In split view it keeps the ones that answer "what happened": time, what,
+/* The trades table is 13 columns; a constrained container fits about seven.
+   In constrained views it keeps the ones that answer "what happened": time, what,
    in, out, and the money. The rest return in the Trades tab. */
 .rd-split .rd-table [data-col="id"],
 .rd-split .rd-table [data-col="out"],
 .rd-split .rd-table [data-col="size"],
-.rd-split .rd-table [data-col="slip"] { display: none; }
+.rd-split .rd-table [data-col="slip"],
+.replay-dock[data-width="sm"] .rd-table [data-col="id"],
+.replay-dock[data-width="sm"] .rd-table [data-col="out"],
+.replay-dock[data-width="sm"] .rd-table [data-col="size"],
+.replay-dock[data-width="sm"] .rd-table [data-col="slip"] { display: none; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Replay Dock Redesign — Fixed Player Bar, Unified Settings, Clean Metrics
@@ -1766,8 +1774,7 @@ kbd.rd-kbd {
 /* ── Fixed bottom player bar (matches SettingsDraftBar pattern) ───────── */
 
 .rd-player-bar {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 10;
   display: flex;
   align-items: center;

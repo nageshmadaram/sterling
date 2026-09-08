@@ -95,7 +95,14 @@ export function ReplayFilters() {
                       max={20}
                       className="rd-input"
                       value={draft.indexSpreadPct}
-                      onChange={(e) => setDraft({ indexSpreadPct: Number(e.target.value) })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '') setDraft({ indexSpreadPct: 0 });
+                        else {
+                          const n = parseFloat(v);
+                          if (!isNaN(n)) setDraft({ indexSpreadPct: Math.max(0, Math.min(20, n)) });
+                        }
+                      }}
                     />
                   </div>
                   <div className="rd-field">
@@ -108,7 +115,14 @@ export function ReplayFilters() {
                       max={20}
                       className="rd-input"
                       value={draft.stockSpreadPct}
-                      onChange={(e) => setDraft({ stockSpreadPct: Number(e.target.value) })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '') setDraft({ stockSpreadPct: 0 });
+                        else {
+                          const n = parseFloat(v);
+                          if (!isNaN(n)) setDraft({ stockSpreadPct: Math.max(0, Math.min(20, n)) });
+                        }
+                      }}
                     />
                   </div>
                   <div className="rd-field" style={{ gridColumn: '1 / -1' }}>
@@ -121,7 +135,14 @@ export function ReplayFilters() {
                       max={5}
                       className="rd-input"
                       value={draft.slippagePct}
-                      onChange={(e) => setDraft({ slippagePct: Number(e.target.value) })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '') setDraft({ slippagePct: 0 });
+                        else {
+                          const n = parseFloat(v);
+                          if (!isNaN(n)) setDraft({ slippagePct: Math.max(0, Math.min(5, n)) });
+                        }
+                      }}
                     />
                   </div>
                 </div>
