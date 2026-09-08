@@ -187,7 +187,4 @@ export function ReplayFilters() {
   );
 }
 
-/** The applied narrowings chip display (now simplified) */
-export function ReplayFilterChips() {
-  return null;
-}
+

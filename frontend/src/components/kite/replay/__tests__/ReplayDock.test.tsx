@@ -120,6 +120,15 @@ describe('resizer', () => {
     await renderDock();
     expect(screen.queryByTestId('replay-resizer')).toBeNull();
   });
+
+  it('jumps to min or max height on Home and End', async () => {
+    await renderDock();
+    const r = screen.getByTestId('replay-resizer');
+    fireEvent.keyDown(r, { key: 'End' });
+    expect(useReplayStore.getState().height).toBeGreaterThan(500);
+    fireEvent.keyDown(r, { key: 'Home' });
+    expect(useReplayStore.getState().height).toBe(220);
+  });
 });
 
 /* ── Transport ──────────────────────────────────────────────────────────── */
@@ -426,6 +435,42 @@ describe('configuration', () => {
       fireEvent.scroll(scrollable);
     });
     expect(screen.getByRole('dialog', { name: 'Execution and engine settings' })).toBeTruthy();
+  });
+
+  it('allows selecting session presets', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-session-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const options = screen.getAllByRole('option');
+    expect(options.length).toBeGreaterThan(0);
+    await act(async () => { fireEvent.click(options[0]); });
+  });
+
+  it('allows selecting market hours preset', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-hours-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const preopen = screen.getByRole('option', { name: /Pre-open/ });
+    await act(async () => { fireEvent.click(preopen); });
+    expect(useReplayStore.getState().draft.startTime).toBe('09:00:00');
+  });
+
+  it('allows configuring replay strategies', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-strategy-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const orbLabel = screen.getByText('NIFTY ORB');
+    await act(async () => { fireEvent.click(orbLabel); });
+    expect(useReplayStore.getState().draft.strategies).toContain('nifty_orb');
+  });
+
+  it('allows configuring position sizing and moneyness', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-sizing-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    const lot5 = screen.getByRole('button', { name: '5L' });
+    await act(async () => { fireEvent.click(lot5); });
+    expect(useReplayStore.getState().draft.lots).toBe(5);
   });
 });
 
