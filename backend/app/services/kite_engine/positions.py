@@ -180,9 +180,10 @@ def should_exit(stop_premium: float, ltp: float, direction: str = "long") -> boo
     For long positions (options + long futures): exit when LTP ≤ stop (downside).
     For short futures: exit when LTP ≥ stop (upside, buy-to-cover).
     A non-positive stop means 'no stop set' → never auto-exit on it.
-    A non-positive ltp is treated as a stale tick and ignored.
+    A non-positive or NaN ltp is treated as a stale tick and ignored.
     """
-    if stop_premium <= 0 or ltp <= 0:
+    import math
+    if not math.isfinite(stop_premium) or not math.isfinite(ltp) or stop_premium <= 0 or ltp <= 0:
         return False
     if direction == "short":
         return ltp >= stop_premium

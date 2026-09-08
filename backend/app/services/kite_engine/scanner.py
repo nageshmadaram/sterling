@@ -552,8 +552,16 @@ def option_order_args(row: EngineSignalRow, leg: Optional[OptionLeg] = None) -> 
     first. The advisory ST trailing stop rides along as the SL trigger.
     """
     if leg is None and row.legs:
-        reference_spot = float(row.underlying_spot or row.spot or 0.0)
-        leg = min(row.legs, key=lambda l: abs(l.strike - reference_spot))
+        reference_spot = float(row.underlying_spot or 0.0)
+        min_strike = min((float(l.strike) for l in row.legs if l.strike), default=0.0)
+        if reference_spot <= 0 and min_strike > 0 and float(row.spot or 0.0) > (min_strike * 0.3):
+            reference_spot = float(row.spot)
+
+        if reference_spot > 0:
+            leg = min(row.legs, key=lambda l: abs(l.strike - reference_spot))
+        else:
+            # Fall back to canonical first leg (ATM) rather than selecting an absurd strike nearest 0
+            leg = row.legs[0]
     if leg is None:
         return None
     return {

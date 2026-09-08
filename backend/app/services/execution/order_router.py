@@ -284,6 +284,7 @@ class OrderRouter:
             if hasattr(gate_result, "__await__"):
                 gate_result = await gate_result   # type: ignore[assignment]
         except Exception as _exc:
+            log.warning("order router: greeks_budget_gate failed (%s); falling back to fail-open", _exc)
             gate_result = None                    # fail-open
         if gate_result:
             return self._reject(
