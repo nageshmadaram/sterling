@@ -30,8 +30,8 @@ export function getIstDateParts(d: Date = new Date()): { year: number; month: nu
   const year = parseInt(map.year, 10);
   const month = parseInt(map.month, 10);
   const day = parseInt(map.day, 10);
-  const hours = parseInt(map.hour, 10);
-  const minutes = parseInt(map.minute, 10);
+  const hours = (parseInt(map.hour, 10) || 0) % 24;
+  const minutes = parseInt(map.minute, 10) || 0;
   
   const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const dayOfWeek = weekdayMap[map.weekday] ?? d.getDay();
