@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ABSENT,
   ensureSeconds,
+  extractDate,
   fmtDuration,
   fmtElapsed,
   fmtInr,
@@ -163,4 +164,29 @@ describe('ensureSeconds', () => {
     expect(ensureSeconds('invalid', '15:30:00')).toBe('15:30:00');
   });
 });
+
+describe('extractDate', () => {
+  it('extracts date from ISO strings with T', () => {
+    expect(extractDate('2026-09-04T10:47:05')).toBe('2026-09-04');
+    expect(extractDate('2026-08-03T09:15:00+05:30')).toBe('2026-08-03');
+  });
+
+  it('extracts date from bare date strings', () => {
+    expect(extractDate('2026-09-04')).toBe('2026-09-04');
+  });
+
+  it('extracts date from timestamp_ms in IST', () => {
+    // 2026-08-03 09:15:00 IST = 2026-08-03 03:45:00 UTC
+    const ts = Date.UTC(2026, 7, 3, 3, 45, 0);
+    expect(extractDate('09:15:00', ts)).toBe('2026-08-03');
+  });
+
+  it('returns empty string for missing or invalid inputs', () => {
+    expect(extractDate(null, null)).toBe('');
+    expect(extractDate(undefined, undefined)).toBe('');
+    expect(extractDate('10:47:05', null)).toBe('');
+    expect(extractDate('invalid', undefined)).toBe('');
+  });
+});
+
 

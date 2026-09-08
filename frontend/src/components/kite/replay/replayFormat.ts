@@ -162,6 +162,29 @@ export function fmtSmartDate(iso: string | null | undefined, refDate: Date = new
   return fmtSessionDate(iso, true);
 }
 
+/**
+ * Extracts session date (`YYYY-MM-DD`) from an ISO time string or timestamp in epoch ms.
+ * Grounded in Indian Standard Time (Asia/Kolkata: UTC+05:30) for timestamp_ms.
+ */
+export function extractDate(iso?: string | null, timestampMs?: number | null): string {
+  if (iso) {
+    if (iso.includes('T')) {
+      const candidate = iso.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return candidate;
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+      return iso;
+    }
+  }
+  if (timestampMs && Number.isFinite(timestampMs) && timestampMs > 0) {
+    const istMs = timestampMs + 19800000;
+    const d = new Date(istMs);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toISOString().slice(0, 10);
+    }
+  }
+  return '';
+}
+
 /** Minutes past midnight, for placing a time on the session timeline. */
 export function timeToMinutes(time: string | null | undefined): number {
   if (!time) return 0;

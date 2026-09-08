@@ -752,7 +752,12 @@ class SimulationRunner:
         )
 
         trade.exit_price = fill_exit
-        trade.exit_time_iso = bar_dt.strftime("%H:%M:%S")
+        is_multi = getattr(self, "_is_multi_day", False)
+        trade.exit_time_iso = (
+            bar_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if is_multi
+            else bar_dt.strftime("%H:%M:%S")
+        )
         trade.exit_timestamp_ms = int(bar_dt.timestamp() * 1000)
         trade.duration_mins = trade.bars_held * self._bar_minutes()
         trade.pnl_usd = round((fill_exit - trade.entry_price) * trade.quantity, 2)
@@ -1388,8 +1393,16 @@ class SimulationRunner:
             tgt_prem = round(entry_prem * 1.5, 2)
             opt_symbol = f"{canon_sym}{expiry_tag}{int(strike)}{opt_type}"
 
+        is_multi = getattr(self, "_is_multi_day", False)
+        entry_dt = datetime.fromtimestamp(rec["timestamp_ms"] / 1000, tz=ist)
+        sig_time = (
+            entry_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if is_multi
+            else (rec.get("time_iso") or entry_dt.strftime("%H:%M:%S"))
+        )
+
         event = SimSignalEvent(
-            time_iso=rec["time_iso"],
+            time_iso=sig_time,
             timestamp_ms=rec["timestamp_ms"],
             strategy=strat_to_emit,
             instrument=sym,
@@ -1417,8 +1430,7 @@ class SimulationRunner:
         )
         entry_slip = round((effective_entry - entry_prem) * qty, 2)
 
-        entry_dt = datetime.fromtimestamp(rec["timestamp_ms"] / 1000, tz=ist)
-        entry_time_str = rec.get("time_iso") or entry_dt.strftime("%H:%M:%S")
+        entry_time_str = sig_time
 
         trade = SimTradeEvent(
             trade_id=f"TRD-{1000 + len(self._stats.trades) + 1}",
@@ -2910,8 +2922,9 @@ class SimulationRunner:
                 target = round(close - 2.5 * atr, 2)
 
             leg = _option_contract(sym, close, direction, self._config, sim_date=bar_dt.strftime("%Y-%m-%d"))
+            is_multi = getattr(self, "_is_multi_day", False)
             event = SimSignalEvent(
-                time_iso=bar_dt.strftime("%H:%M:%S"),
+                time_iso=bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi else bar_dt.strftime("%H:%M:%S"),
                 timestamp_ms=int(bar_dt.timestamp() * 1000),
                 strategy=strategy,
                 instrument=sym,
@@ -2954,7 +2967,7 @@ class SimulationRunner:
 
                 trade = SimTradeEvent(
                     trade_id=f"TRD-{1000 + len(self._stats.trades) + 1}",
-                    entry_time_iso=bar_dt.strftime("%H:%M:%S"),
+                    entry_time_iso=bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi else bar_dt.strftime("%H:%M:%S"),
                     exit_time_iso="OPEN",
                     timestamp_ms=int(bar_dt.timestamp() * 1000),
                     strategy=strategy,

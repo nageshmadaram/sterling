@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useRef, useState } from 'react';
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReplayTrade,
   useFilteredReplayTrades,
@@ -11,9 +11,11 @@ import { SkeletonRows } from './primitives/Skeleton';
 import { tradesHaveFriction } from './replayColumns';
 import {
   ABSENT,
+  extractDate,
   fmtDuration,
   fmtInr,
   fmtInt,
+  fmtSessionDate,
   fmtSignedInr,
   fmtSignedPct,
   fmtTime,
@@ -25,7 +27,7 @@ import * as Icons from './ReplayIcons';
 const ROW_H = 28;
 const VIRTUALISE_ABOVE = 200;
 
-export type TradeGroupBy = 'none' | 'strategy' | 'contract';
+export type TradeGroupBy = 'none' | 'date' | 'strategy' | 'contract';
 
 const TradeRow = memo(function TradeRow({
   t,
@@ -183,32 +185,80 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
     : rawDrag;
   const transport = useReplayTransport();
   const state = useReplayState();
+  const cfg = useReplayStore((s) => s.status.config);
+  const draft = useReplayStore((s) => s.draft);
+  const multiDay = Boolean(
+    (cfg?.end_date && cfg.end_date !== cfg.date) ||
+    (!cfg && draft.endDate && draft.endDate !== draft.date)
+  );
 
-  const [groupBy, setGroupBy] = useState<TradeGroupBy>('none');
+  const [userInteractedGroup, setUserInteractedGroup] = useState(false);
+  const [groupBy, setGroupBy] = useState<TradeGroupBy>(multiDay ? 'date' : 'none');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!userInteractedGroup) {
+      setGroupBy(multiDay ? 'date' : 'none');
+    }
+  }, [multiDay, userInteractedGroup]);
 
   const hasFriction = tradesHaveFriction(trades);
   const rows = useMemo(() => trades.slice().reverse(), [trades]);
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return null;
-    const map = new Map<string, { label: string; tone?: string; rows: ReplayTrade[]; pnl: number }>();
+    const map = new Map<
+      string,
+      {
+        label: string;
+        tone?: string;
+        rows: ReplayTrade[];
+        pnl: number;
+        wins: number;
+        losses: number;
+      }
+    >();
+
     rows.forEach((t) => {
-      const key = groupBy === 'strategy' ? strategyKey(t.strategy) : t.symbol;
+      let key: string;
+      let label: string;
+      let tone: string | undefined;
+
+      if (groupBy === 'date') {
+        const rawDate = extractDate(t.entry_time_iso, t.timestamp_ms);
+        key = rawDate || 'unknown';
+        label = rawDate ? fmtSessionDate(rawDate, false) : 'Unknown Date';
+      } else if (groupBy === 'strategy') {
+        key = strategyKey(t.strategy);
+        label = strategyLabel(t.strategy);
+        tone = strategyTone(t.strategy);
+      } else {
+        key = t.symbol;
+        label = t.symbol;
+      }
+
       let g = map.get(key);
       if (!g) {
         g = {
-          label: groupBy === 'strategy' ? strategyLabel(t.strategy) : t.symbol,
-          tone: groupBy === 'strategy' ? strategyTone(t.strategy) : undefined,
+          label,
+          tone,
           rows: [],
           pnl: 0,
+          wins: 0,
+          losses: 0,
         };
         map.set(key, g);
       }
       g.rows.push(t);
       g.pnl += t.pnl_usd || 0;
+      if (t.status === 'WIN') g.wins += 1;
+      if (t.status === 'LOSS') g.losses += 1;
     });
+
+    if (groupBy === 'date') {
+      return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+    }
     return Array.from(map.entries()).sort((a, b) => b[1].pnl - a[1].pnl);
   }, [rows, groupBy]);
 
@@ -285,11 +335,22 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                           onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
                         >
                           {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
-                          <span style={{ color: g.tone }}>{g.label}</span>
-                          <span style={{ color: 'var(--k-dim)' }}>{g.rows.length} trades</span>
+                          <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
+                          <span style={{ color: 'var(--k-dim)' }}>
+                            {g.rows.length} {g.rows.length === 1 ? 'trade' : 'trades'}
+                          </span>
+                          {(g.wins > 0 || g.losses > 0) && (
+                            <span style={{ color: 'var(--k-dim)', fontSize: 'var(--rd-fs-micro)' }}>
+                              ({g.wins}W / {g.losses}L)
+                            </span>
+                          )}
                         </button>
                       </td>
-                      <td data-align="right" className="rd-num rd-pnl" data-tone={g.pnl >= 0 ? 'profit' : 'loss'}>
+                      <td
+                        data-align="right"
+                        className="rd-num rd-pnl"
+                        data-tone={g.pnl === 0 ? 'dim' : g.pnl > 0 ? 'profit' : 'loss'}
+                      >
                         {fmtSignedInr(g.pnl)}
                       </td>
                     </tr>
@@ -339,16 +400,19 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
 
       <div className="rd-groupby">
         <span style={{ marginRight: 4 }}>Group</span>
-        {(['none', 'strategy', 'contract'] as TradeGroupBy[]).map((g) => (
+        {(['none', 'date', 'strategy', 'contract'] as TradeGroupBy[]).map((g) => (
           <button
             key={g}
             type="button"
             className="rd-btn rd-btn-sm"
             data-variant={groupBy === g ? 'primary' : 'ghost'}
             aria-pressed={groupBy === g}
-            onClick={() => setGroupBy(g)}
+            onClick={() => {
+              setUserInteractedGroup(true);
+              setGroupBy(g);
+            }}
           >
-            {g === 'none' ? 'None' : g === 'strategy' ? 'Strategy' : 'Contract'}
+            {g === 'none' ? 'None' : g === 'date' ? 'Date' : g === 'strategy' ? 'Strategy' : 'Contract'}
           </button>
         ))}
       </div>

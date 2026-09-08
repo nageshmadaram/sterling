@@ -351,6 +351,33 @@ describe('signals table', () => {
     expect(screen.getByText('Watching for signals')).toBeTruthy();
     expect(screen.getByText(/47 bars replayed/)).toBeTruthy();
   });
+
+  it('groups signals by date by default in multi-day range', async () => {
+    setupDock({
+      tab: 'signals',
+      status: makeStatus({
+        config: {
+          date: '2026-08-03',
+          end_date: '2026-08-05',
+          start_time: '09:00:00',
+          end_time: '15:30:00',
+          speed: 5,
+          resolution: '5m',
+          instruments: [],
+        },
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          events: [
+            makeSignal({ time_iso: '2026-08-03T10:47:05', timestamp_ms: Date.UTC(2026, 7, 3, 5, 17, 5) }),
+            makeSignal({ time_iso: '2026-08-04T11:15:00', timestamp_ms: Date.UTC(2026, 7, 4, 5, 45, 0) }),
+          ],
+        },
+      }),
+    });
+    await renderDock();
+    expect(screen.getByText('Mon 3 Aug 2026')).toBeTruthy();
+    expect(screen.getByText('Tue 4 Aug 2026')).toBeTruthy();
+  });
 });
 
 describe('trades table', () => {
@@ -370,6 +397,45 @@ describe('trades table', () => {
     });
     await renderDock();
     expect(screen.getByText('no friction modelled')).toBeTruthy();
+  });
+
+  it('groups trades by date by default in multi-day range', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        config: {
+          date: '2026-08-03',
+          end_date: '2026-08-05',
+          start_time: '09:00:00',
+          end_time: '15:30:00',
+          speed: 5,
+          resolution: '5m',
+          instruments: [],
+        },
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [
+            makeTrade({
+              trade_id: 'TRD-1',
+              entry_time_iso: '2026-08-03T10:47:05',
+              timestamp_ms: Date.UTC(2026, 7, 3, 5, 17, 5),
+              pnl_usd: 1500,
+            }),
+            makeTrade({
+              trade_id: 'TRD-2',
+              entry_time_iso: '2026-08-04T11:15:00',
+              timestamp_ms: Date.UTC(2026, 7, 4, 5, 45, 0),
+              pnl_usd: -500,
+            }),
+          ],
+        },
+      }),
+    });
+    await renderDock();
+    expect(screen.getByText('Mon 3 Aug 2026')).toBeTruthy();
+    expect(screen.getByText('Tue 4 Aug 2026')).toBeTruthy();
+    expect(screen.getAllByText('+₹1,500.00').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('−₹500.00').length).toBeGreaterThanOrEqual(1);
   });
 });
 
