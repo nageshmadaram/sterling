@@ -353,12 +353,19 @@ export function ReplayConfigSheet() {
 
         {/* ── Footer ────────────────────────────────────────────────── */}
         <footer className="rd-sheet-foot">
-          <button type="button" className="rd-btn" data-variant="ghost" onClick={resetDraft}>
-            Reset to defaults
+          <button
+            type="button"
+            className="rd-btn rd-btn-sm"
+            data-variant="ghost"
+            onClick={resetDraft}
+            title="Reset all configuration to defaults"
+            style={{ opacity: 0.6 }}
+          >
+            Reset defaults
           </button>
           <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
             <button type="button" className="rd-btn" onClick={() => setOpen(false)}>
-              Cancel
+              Close
             </button>
             <button
               type="button"
