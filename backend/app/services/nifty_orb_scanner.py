@@ -7,16 +7,27 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.engines.nifty_orb_options import Bar, OptionContract, StrategyConfig, build_trade_plan, generate_signal, is_monthly_expiry, select_option
+from app.engines.nifty_orb_options import Bar, OptionContract, StrategyConfig, build_trade_plan, generate_signal, is_monthly_expiry, opening_range, select_option
 from app.services.nifty_orb_options import _bar, get_config
 from app.services.providers.truedata.orb_provider import TrueDataOrbProvider
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 _BAR_CACHE_TTL_S = 4.0
+# 09:15–15:30 IST. Fifteen sessions of 5-minute bars is what SuperTrend-style
+# history needs; 240 bars was ~3 sessions, so a Monday morning scan could not
+# reconstruct Friday's fire.
+_SESSION_MINUTES = 6 * 60 + 15
+_HISTORY_SESSIONS = 15
 #: Instruments per `/quote` request. Kite caps a quote call at 500; staying
 #: under it keeps a full option chain to one or two round trips without ever
 #: silently dropping the tail of a large chain.
 _QUOTE_BATCH = 250
+
+
+def history_bar_limit(interval_minutes: int) -> int:
+    """How many completed bars cover `_HISTORY_SESSIONS` cash sessions."""
+    per = max(1, _SESSION_MINUTES // max(1, int(interval_minutes)))
+    return min(2000, _HISTORY_SESSIONS * per + 30)
 
 
 class _MinSpacing:
@@ -186,7 +197,8 @@ async def _kite_bars_for_underlying(uid: str, underlying: str, interval: str) ->
     if cached and datetime.now().timestamp() - cached[0] < _BAR_CACHE_TTL_S:
         return _completed_bars(cached[1], int(interval.rstrip("m")))
     client = await accounts.acquire_client(acct)
-    rows = await client.get_candles(await _kite_instrument(client, underlying), interval, limit=240)
+    limit = history_bar_limit(int(interval.rstrip("m")))
+    rows = await client.get_candles(await _kite_instrument(client, underlying), interval, limit=limit)
     bars = [_bar({"timestamp_ms": r.timestamp_ms, "open": r.open, "high": r.high, "low": r.low, "close": r.close, "volume": r.volume}) for r in rows]
     _cache_put(_bar_cache, key, bars)
     return _completed_bars(bars, int(interval.rstrip("m")))
@@ -197,7 +209,11 @@ async def _truedata_bars_for_underlying(underlying: str, interval: str) -> list[
     from app.services.market_data.truedata import TrueDataHistoricalClient
     client = TrueDataHistoricalClient(settings.truedata_username, settings.truedata_password, timeout=settings.truedata_timeout_seconds)
     try:
-        bars = await TrueDataOrbProvider(client).bars(_truedata_symbol(underlying), StrategyConfig(interval_minutes=int(interval)))
+        bars = await TrueDataOrbProvider(client).bars(
+            _truedata_symbol(underlying),
+            StrategyConfig(interval_minutes=int(interval)),
+            limit=history_bar_limit(int(interval)),
+        )
         return _completed_bars(bars, int(interval))
     finally:
         await client.aclose()
@@ -396,8 +412,9 @@ def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: dat
     fires = []
     seen: set[str] = set()
     current_day = None
+    or_high = or_low = None
     as_of_ist = _as_ist(as_of)
-    cutoff = as_of_ist - timedelta(days=15)
+    cutoff = as_of_ist - timedelta(days=_HISTORY_SESSIONS)
     interval = max(1, int(cfg.interval_minutes))
     for i, bar in enumerate(bars):
         ts = _as_ist(bar.timestamp)
@@ -406,8 +423,18 @@ def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: dat
         if ts.date() != current_day:
             current_day = ts.date()
             seen = set()
+            or_high = or_low = None
+        if len(seen) == 2:
+            continue
         clock = ts.strftime("%H:%M")
         if clock < cfg.entry_start or clock > cfg.entry_end:
+            continue
+        if or_high is None:
+            try:
+                or_high, or_low = opening_range(bars[: i + 1], cfg.opening_range_minutes)
+            except ValueError:
+                continue
+        if or_low is not None and or_low < bar.close < or_high:
             continue
         try:
             sig = generate_signal(bars[: i + 1], cfg, as_of=ts + timedelta(minutes=interval))

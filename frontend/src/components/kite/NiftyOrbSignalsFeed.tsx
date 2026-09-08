@@ -25,14 +25,10 @@ import { k, tint } from '../../styles/kiteUI';
  * `OrbTicket` below, which is the order surface.
  *
  * Rows split by whether they want a decision. The board carries setups you can
- * act on *and* signals that fired but could not be filled; candidates that
- * simply did not fire sit behind one disclosure. They are real information — a
- * scan that refuses to trade must say why — but they are not a call to action,
- * and putting them in the main list buries the ones that are.
- *
- * That disclosure opens by default when the board is empty. Closed-by-default
- * plus an empty board meant a healthy scan of eighteen underlyings rendered as
- * one line of grey text, which is indistinguishable from a broken engine.
+ * act on *and* signals that already fired (ended/PAST), the way SuperTrend
+ * keeps history. Candidates that simply did not fire sit behind one
+ * disclosure. Overnight waiting is a banner on top of that table, never a
+ * replacement for it.
  */
 function QuietRow({ entry }: { entry: OrbFeedEntry }) {
   const color = entry.state === 'ERROR' ? k.red : k.dim;
@@ -77,69 +73,32 @@ function quietReason(entry: OrbFeedEntry): string {
   return (entry.autoBlock || entry.reason || entry.state.toLowerCase().replace(/_/g, ' ')).trim();
 }
 
-function groupQuiet(entries: OrbFeedEntry[]): { reason: string; entries: OrbFeedEntry[] }[] {
-  const map = new Map<string, OrbFeedEntry[]>();
-  for (const entry of entries) {
-    const reason = quietReason(entry);
-    const list = map.get(reason) ?? [];
-    list.push(entry);
-    map.set(reason, list);
-  }
-  return [...map.entries()]
-    .map(([reason, grouped]) => ({ reason, entries: grouped }))
-    .sort((a, b) => b.entries.length - a.entries.length);
-}
-
 /**
- * Overnight / outside-window empty state.
+ * Overnight / outside-window banner.
  *
- * Dumping every underlying as a row that says the same gate made a healthy
- * scan look like a broken SuperTrend table. One card states the gate; names
- * stay behind a disclosure.
+ * SuperTrend never replaces the table with a list of quiet names. ORB used to:
+ * eighteen identical "outside entry window" rows became the whole dock. The
+ * board stays; this line states the gate. Names live behind "not signalling".
  */
-function WaitingPanel({
-  groups,
+function WaitingBanner({
   windowLabel,
+  scanned,
+  isWindow,
 }: {
-  groups: { reason: string; entries: OrbFeedEntry[] }[];
   windowLabel: string;
+  scanned: number;
+  isWindow: boolean;
 }) {
-  const only = groups.length === 1 ? groups[0] : null;
-  const isWindow = !!only && /entry window/i.test(only.reason);
-  const scanned = groups.reduce((n, g) => n + g.entries.length, 0);
-  const [open, setOpen] = React.useState<string | null>(null);
-  const title = isWindow ? 'Waiting for entry window' : 'No tradable ORB setup';
-  const detail = isWindow
-    ? `ORB only arms ${windowLabel}. ${scanned} underlyings scanned — none can fire until then.`
-    : `${scanned} underlyings scanned. Nothing is armed.`;
-
   return (
-    <div role="status" style={{ margin: 12, padding: '16px 14px', borderRadius: 6, border: `1px solid ${k.border}`, background: k.surface }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: k.text }}>{title}</div>
-      <p style={{ margin: '6px 0 0', fontSize: 11, lineHeight: 1.5, color: k.dim }}>{detail}</p>
-      {groups.map((g) => {
-        const expanded = open === g.reason;
-        return (
-          <div key={g.reason} style={{ marginTop: 10 }}>
-            <button
-              type="button"
-              onClick={() => setOpen(expanded ? null : g.reason)}
-              aria-expanded={expanded}
-              style={{
-                width: '100%', textAlign: 'left', padding: '6px 8px', cursor: 'pointer',
-                border: `1px solid ${k.border}`, borderRadius: 4, background: k.bg,
-                color: k.dim, fontFamily: 'inherit', fontSize: 10,
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}
-            >
-              <Chevron open={expanded} />
-              <span style={{ fontWeight: 600, color: k.text }}>{g.reason}</span>
-              <span style={{ marginLeft: 'auto' }}>{g.entries.length}</span>
-            </button>
-            {expanded && g.entries.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
-          </div>
-        );
-      })}
+    <div role="status" style={{ margin: 0, padding: '8px 12px', borderBottom: `1px solid ${k.border}`, background: k.surface }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: k.text }}>
+        {isWindow ? 'Waiting for entry window' : 'No tradable ORB setup'}
+      </div>
+      <p style={{ margin: '4px 0 0', fontSize: 10, lineHeight: 1.45, color: k.dim }}>
+        {isWindow
+          ? `ORB only arms ${windowLabel}. ${scanned} underlyings scanned — past fires stay on the board like SuperTrend.`
+          : `${scanned} underlyings scanned. Nothing is armed. Past fires stay on the board like SuperTrend.`}
+      </p>
     </div>
   );
 }
@@ -244,9 +203,9 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
   const promotedIds = new Set(promoted.map((s) => s.id));
   const quiet = signals.filter((s) => !promotedIds.has(s.id));
   const failed = signals.filter((s) => s.state === 'ERROR');
-  const waiting = tradable.length === 0 && blocked === 0 && ended.length === 0;
+  const showWait = tradable.length === 0 && blocked === 0 && ended.length === 0;
   const showQuiet = quietOverride ?? false;
-  const quietGroups = groupQuiet(quiet);
+  const quietWindow = quiet.length > 0 && quiet.every((e) => /entry window/i.test(quietReason(e)));
 
   return (
     <div>
@@ -277,47 +236,44 @@ export function NiftyOrbSignalsFeed({ onOpenDetail, onOpenChart, nowMs: nowMsPro
         </span>
       </div>
 
-      {waiting ? (
-        <WaitingPanel groups={quietGroups} windowLabel={windowLabel} />
-      ) : (
+      {showWait && (
+        <WaitingBanner windowLabel={windowLabel} scanned={quiet.length} isWindow={quietWindow} />
+      )}
+      <BoardFilters view={view} columns={ORB_COLUMNS} columnLabels={ORB_COLUMN_LABELS} />
+      <SignalBoard
+        renderTrade={rowActions.renderTrade}
+        renderChart={rowActions.renderChart}
+        signals={view.visible}
+        columns={ORB_COLUMNS}
+        hidden={view.hidden}
+        openId={openId}
+        onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
+        renderDetail={(s) => <BoardTicket signal={s} tag="ORB" />}
+        onOpenDetail={onOpenDetail}
+        sort={sort}
+        onSortChange={setSort}
+        nowMs={nowMs}
+        emptyLabel="No active or recent ORB setups on the board yet."
+        columnLabels={ORB_COLUMN_LABELS}
+        columnHints={ORB_COLUMN_HINTS}
+      />
+      {quiet.length > 0 && (
         <>
-          <BoardFilters view={view} columns={ORB_COLUMNS} columnLabels={ORB_COLUMN_LABELS} />
-          <SignalBoard
-            renderTrade={rowActions.renderTrade}
-            renderChart={rowActions.renderChart}
-            signals={view.visible}
-            columns={ORB_COLUMNS}
-            hidden={view.hidden}
-            openId={openId}
-            onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
-            renderDetail={(s) => <BoardTicket signal={s} tag="ORB" />}
-            onOpenDetail={onOpenDetail}
-            sort={sort}
-            onSortChange={setSort}
-            nowMs={nowMs}
-            emptyLabel="No tradable ORB setup right now. The universe is being scanned — the list below says what each underlying is waiting on."
-            columnLabels={ORB_COLUMN_LABELS}
-            columnHints={ORB_COLUMN_HINTS}
-          />
-          {quiet.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setQuietOverride(!showQuiet)}
-                aria-expanded={showQuiet}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '7px 12px', cursor: 'pointer',
-                  border: 'none', borderTop: `1px solid ${k.border}`, borderBottom: showQuiet ? `1px solid ${k.border}` : 'none',
-                  background: k.surface, color: k.dim, fontFamily: 'inherit', fontSize: 9.5,
-                  display: 'flex', alignItems: 'center', gap: 6,
-                }}
-              >
-                <Chevron open={showQuiet} />
-                {quiet.length} not signalling
-              </button>
-              {showQuiet && quiet.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
-            </>
-          )}
+          <button
+            type="button"
+            onClick={() => setQuietOverride(!showQuiet)}
+            aria-expanded={showQuiet}
+            style={{
+              width: '100%', textAlign: 'left', padding: '7px 12px', cursor: 'pointer',
+              border: 'none', borderTop: `1px solid ${k.border}`, borderBottom: showQuiet ? `1px solid ${k.border}` : 'none',
+              background: k.surface, color: k.dim, fontFamily: 'inherit', fontSize: 9.5,
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            <Chevron open={showQuiet} />
+            {quiet.length} not signalling
+          </button>
+          {showQuiet && quiet.map((entry) => <QuietRow key={entry.id} entry={entry} />)}
         </>
       )}
     </div>
