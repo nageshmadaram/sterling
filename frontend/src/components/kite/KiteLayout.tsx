@@ -232,7 +232,7 @@ function PaneWindow({ pane, slot, locked, focus, compact = false, onMinimize, on
           {!compact && control('fullscreen', 'Full screen', 'fullscreen')}
         </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: 'auto', position: 'relative' }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: pane.id === 'dashboard' ? 'hidden' : 'auto', position: 'relative' }}>
         {pane.content}
       </div>
     </section>
@@ -370,7 +370,7 @@ export function KiteLayout({ activeNav, onNavClick, sidebar, rightSidebar, botto
     dashboard: {
       id: 'dashboard', title: titleCase(activeNav), shortTitle: 'Dashboard', accent: 'var(--k-brand)',
       content: (
-        <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
           {centerTopBar && !isSimFullHeight && <div style={{ flexShrink: 0 }}>{centerTopBar}</div>}
           <div style={{
             flex: 1,

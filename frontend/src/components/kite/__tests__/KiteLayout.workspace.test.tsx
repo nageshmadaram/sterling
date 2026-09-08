@@ -66,6 +66,13 @@ describe('KiteLayout advanced workspace', () => {
     expect(screen.getByText('All panes active')).toBeInTheDocument();
   });
 
+  it('prevents outer scrolling on dashboard pane so bottom docks remain fixed', () => {
+    renderLayout(props);
+    const dashboardPane = screen.getByLabelText('Dashboard pane');
+    const contentWrapper = dashboardPane.querySelector('div[style*="overflow: hidden"]');
+    expect(contentWrapper).toBeInTheDocument();
+  });
+
   it('minimizes into the dock and restores without changing the pane slot', () => {
     renderLayout(props);
     fireEvent.click(screen.getByRole('button', { name: 'Minimize Watchlist' }));

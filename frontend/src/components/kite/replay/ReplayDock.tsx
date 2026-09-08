@@ -236,6 +236,12 @@ export function ReplayDock() {
 
   const maxHeight = useCallback(() => {
     if (typeof window === 'undefined') return 900;
+    if (mode === 'docked' && rootRef.current?.parentElement) {
+      const parentH = rootRef.current.parentElement.clientHeight;
+      if (parentH > MIN_DOCK_HEIGHT + 60) {
+        return Math.max(MIN_DOCK_HEIGHT, parentH - 60);
+      }
+    }
     const ceiling = mode === 'overlay' ? window.innerHeight - FOOTER_HEIGHT - 80 : window.innerHeight - 160;
     return Math.max(MIN_DOCK_HEIGHT, ceiling);
   }, [mode]);
@@ -283,17 +289,28 @@ export function ReplayDock() {
   const geometry = useMemo<Record<ReplayMode, React.CSSProperties>>(() => ({
     docked: {
       width: '100%',
-      flexShrink: 0,
+      flexShrink: 1,
+      minHeight: 0,
+      maxHeight: '100%',
       height: isCompactIdle ? 'auto' : `${height}px`,
       borderTop: '1px solid var(--k-border-strong-4)',
     },
-    expanded: { width: '100%', height: '100%', flex: 1, minHeight: 0, borderTop: 'none' },
+    expanded: {
+      width: '100%',
+      height: '100%',
+      maxHeight: '100%',
+      flex: 1,
+      minHeight: 0,
+      borderTop: 'none',
+    },
     overlay: {
       position: 'fixed',
       left: 0,
       right: 0,
       bottom: FOOTER_HEIGHT,
       height: isCompactIdle ? 'auto' : `${height}px`,
+      maxHeight: `calc(100vh - ${FOOTER_HEIGHT}px)`,
+      minHeight: 0,
       zIndex: 'var(--rd-z-dock)' as unknown as number,
       borderTop: '1px solid var(--k-border-strong-4)',
       boxShadow: '0 -8px 24px color-mix(in srgb, var(--k-text) 10%, transparent)',
@@ -304,7 +321,7 @@ export function ReplayDock() {
       zIndex: 'var(--rd-z-fullscreen)' as unknown as number,
       background: 'var(--k-surface-sunken)',
     },
-  }), [height, isCompactIdle]);
+  }), [height, isCompactIdle, mode]);
 
   const overlays = (
     <>

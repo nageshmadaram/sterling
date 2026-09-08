@@ -82,6 +82,28 @@ describe('mounting', () => {
       unmount();
     }
   });
+
+  it('places player bar and session row outside the scrollable body to remain fixed at bottom', async () => {
+    await renderDock();
+    const dock = screen.getByTestId('replay-dock');
+    const playerBar = screen.getByTestId('replay-player-bar');
+    const sessionRow = screen.getByTestId('replay-session-row');
+    const scrollBody = dock.querySelector('.rd-scroll-content');
+
+    expect(scrollBody).toBeTruthy();
+    expect(scrollBody?.contains(playerBar)).toBe(false);
+    expect(scrollBody?.contains(sessionRow)).toBe(false);
+    expect(dock.contains(playerBar)).toBe(true);
+    expect(dock.contains(sessionRow)).toBe(true);
+  });
+
+  it('clamps dock geometry to prevent forcing outer container overflow', async () => {
+    await renderDock();
+    const dock = screen.getByTestId('replay-dock');
+    expect(dock.style.maxHeight).toBe('100%');
+    expect(dock.style.flexShrink).toBe('1');
+    expect(dock.style.minHeight).toBe('0');
+  });
 });
 
 /* ── Resizer ────────────────────────────────────────────────────────────── */
