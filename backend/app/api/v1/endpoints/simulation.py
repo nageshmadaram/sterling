@@ -182,8 +182,6 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
         entry = get_symbol_coverage(instrument.upper(), "5m")
 
     if entry and entry["earliest"] and entry["latest"]:
-        current = datetime.fromtimestamp(entry["earliest"], tz=timezone.utc)
-        end = datetime.fromtimestamp(entry["latest"], tz=timezone.utc)
         current = datetime.fromtimestamp(entry["earliest"], tz=ist_tz)
         end = datetime.fromtimestamp(entry["latest"], tz=ist_tz)
         earliest_iso = current.strftime("%Y-%m-%d")
@@ -200,11 +198,6 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
     # as evidence that candles exist.
     if not dates:
         source = "fallback"
-        try:
-            from zoneinfo import ZoneInfo
-            ist_tz = ZoneInfo("Asia/Kolkata")
-        except ImportError:
-            ist_tz = timezone.utc
         today = datetime.now(tz=ist_tz)
         curr = today - timedelta(days=90)
         while curr <= today:

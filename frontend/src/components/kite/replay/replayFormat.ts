@@ -8,6 +8,8 @@
  * measurement of zero. Absent values render an em dash here, always.
  */
 
+import { getTodayMarketDate, getYesterdayMarketDate } from '../../../lib/replay/marketSessions';
+
 /** What we draw when there is no value. Never `0`, never an empty string. */
 export const ABSENT = '—';
 
@@ -145,25 +147,14 @@ export function fmtSessionDate(iso: string | null | undefined, short = false): s
 /**
  * Smart date: "Today" / "Yesterday" / short date like "4 Sep".
  *
- * If the user picked today there is no reason to echo "Mon 8 Sep 2026" —
- * they know what day it is.
+ * Grounded in Indian Standard Time (Asia/Kolkata) calendar days so users outside
+ * IST still see accurate market day associations.
  */
-export function fmtSmartDate(iso: string | null | undefined): string {
+export function fmtSmartDate(iso: string | null | undefined, refDate: Date = new Date()): string {
   if (!iso) return ABSENT;
-  const now = new Date();
-  const todayIso = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('-');
+  const todayIso = getTodayMarketDate(refDate);
   if (iso === todayIso) return 'Today';
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayIso = [
-    yesterday.getFullYear(),
-    String(yesterday.getMonth() + 1).padStart(2, '0'),
-    String(yesterday.getDate()).padStart(2, '0'),
-  ].join('-');
+  const yesterdayIso = getYesterdayMarketDate(refDate);
   if (iso === yesterdayIso) return 'Yesterday';
   return fmtSessionDate(iso, true);
 }

@@ -10,6 +10,7 @@ import {
   fmtSessionDate,
   fmtSignedInr,
   fmtSignedPct,
+  fmtSmartDate,
   fmtTime,
   isBullish,
   minutesToTime,
@@ -96,6 +97,16 @@ describe('time', () => {
     expect(fmtSessionDate('2026-09-04')).toBe('Fri 4 Sep 2026');
     expect(fmtSessionDate('2026-09-04', true)).toBe('4 Sep');
     expect(fmtSessionDate('not-a-date')).toBe('not-a-date');
+  });
+
+  it('formats smart dates relative to IST market day', () => {
+    // 2026-09-08 10:00:00 IST is 2026-09-08T04:30:00Z
+    const refDate = new Date('2026-09-08T04:30:00Z');
+    expect(fmtSmartDate('2026-09-08', refDate)).toBe('Today');
+    expect(fmtSmartDate('2026-09-07', refDate)).toBe('Yesterday');
+    expect(fmtSmartDate('2026-09-04', refDate)).toBe('4 Sep');
+    expect(fmtSmartDate(null)).toBe(ABSENT);
+    expect(fmtSmartDate(undefined)).toBe(ABSENT);
   });
 });
 
