@@ -94,9 +94,9 @@ export interface MarketDatePreset {
 
 /**
  * Generates dynamically filtered market presets based on the current market status.
- * - Never shows "Today" if today is a weekend, holiday, or before 09:00 AM.
- * - Never shows "Yesterday" if yesterday was a weekend, holiday, or identical to Last Working Day.
- * - If today is a weekend/holiday, provides "Last Working Day" and "Prev Session" so traders always have valid session options.
+ * - Shows "Today" if today is an active market day, NOT a weekend/holiday, and after 09:00 AM IST.
+ * - Shows "Yesterday" (or "Previous Session" if yesterday was non-trading) for the last completed session.
+ * - Shows "Prior Session (T-2)" for the trading session before that.
  */
 export function getDynamicMarketPresets(refDate: Date = new Date()): MarketDatePreset[] {
   const ist = getIstDateParts(refDate);
@@ -105,21 +105,13 @@ export function getDynamicMarketPresets(refDate: Date = new Date()): MarketDateP
   yesterdayTarget.setUTCDate(yesterdayTarget.getUTCDate() - 1);
   const yesterdayIso = formatYmd(yesterdayTarget.getUTCFullYear(), yesterdayTarget.getUTCMonth() + 1, yesterdayTarget.getUTCDate());
 
-  const lastWorkingDay = getLastMarketWorkingDay(refDate);
+  const lastCompletedSession = getLastMarketWorkingDay(refDate);
   const presets: MarketDatePreset[] = [];
 
-  // Preset 1: Last Working Day (always valid)
-  presets.push({
-    id: 'lastWorkingDay',
-    label: 'Last Working Day',
-    date: lastWorkingDay,
-    description: `Last completed market session (${lastWorkingDay})`,
-  });
-
-  // Preset 2: Today (ONLY if today is an active market day, NOT a weekend/holiday, and after 09:00 AM IST)
+  // Preset 1: Today (ONLY if today is an active market day, NOT a weekend/holiday, and after 09:00 AM IST)
   const isTodayTradingDay = !isNseClosed(todayIso);
   const isAfterMarketOpen = ist.hours > 9 || (ist.hours === 9 && ist.minutes >= 0);
-  if (isTodayTradingDay && isAfterMarketOpen && todayIso !== lastWorkingDay) {
+  if (isTodayTradingDay && isAfterMarketOpen && todayIso !== lastCompletedSession) {
     presets.push({
       id: 'today',
       label: 'Today',
@@ -128,28 +120,23 @@ export function getDynamicMarketPresets(refDate: Date = new Date()): MarketDateP
     });
   }
 
-  // Preset 3: Yesterday (ONLY if yesterday was an active market day, NOT a weekend/holiday, and distinct from Last Working Day)
-  const isYesterdayTradingDay = !isNseClosed(yesterdayIso);
-  if (isYesterdayTradingDay && yesterdayIso !== lastWorkingDay && yesterdayIso !== todayIso) {
-    presets.push({
-      id: 'yesterday',
-      label: 'Yesterday',
-      date: yesterdayIso,
-      description: `Yesterday's market session (${yesterdayIso})`,
-    });
-  }
+  // Preset 2: Previous Session (uses "Yesterday" if yesterday was the trading day, else "Previous Session")
+  const isYesterday = yesterdayIso === lastCompletedSession;
+  presets.push({
+    id: 'prevSession',
+    label: isYesterday ? 'Yesterday' : 'Previous Session',
+    date: lastCompletedSession,
+    description: `Last completed market session (${lastCompletedSession})`,
+  });
 
-  // Preset 4: If today is a weekend or holiday, and we only have 1 preset (Last Working Day),
-  // provide "Prev Session" as an additional quick option.
-  if (presets.length === 1) {
-    const prevSession = shiftSessionIso(lastWorkingDay, -1);
-    presets.push({
-      id: 'prevSession',
-      label: 'Prev Session',
-      date: prevSession,
-      description: `Prior market session before ${lastWorkingDay} (${prevSession})`,
-    });
-  }
+  // Preset 3: Prior Session (T-2) — the trading session before the previous one
+  const priorSession = shiftSessionIso(lastCompletedSession, -1);
+  presets.push({
+    id: 'priorSession',
+    label: 'Prior Session (T-2)',
+    date: priorSession,
+    description: `Prior session before ${lastCompletedSession} (${priorSession})`,
+  });
 
   return presets;
 }

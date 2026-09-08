@@ -31,7 +31,6 @@ import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
 import { SIGNAL_CSV_COLUMNS } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
-import { fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
 import { useReplaySignalToasts } from './useReplaySignalToasts';
@@ -197,9 +196,6 @@ export function ReplayDock() {
   const historical = useReplayIsHistorical();
   const clearSession = useReplayStore((s) => s.clearSession);
   const setSummaryOpen = useReplayStore((s) => s.setSummaryOpen);
-  const clock = useReplayStore((s) => s.status.current_time_iso);
-  const pct = useReplayStore((s) => s.status.progress_pct);
-  const speed = useReplayStore((s) => s.status.config?.speed ?? s.draft.speed);
 
   const transport = useReplayTransport();
   const rootRef = useRef<HTMLElement>(null);
@@ -397,12 +393,6 @@ export function ReplayDock() {
       <div className="rd-player-bar" data-testid="replay-player-bar">
         <ReplayTransport />
         <ReplayTimeline />
-        <div className="rd-player-bar-info">
-          <span className="rd-player-bar-clock" data-state={state}>
-            {fmtTime(clock)} IST
-          </span>
-          <span className="rd-player-bar-pct">{Math.round(pct)}%</span>
-        </div>
         {showDetailedReport && (
           <div className="rd-player-bar-detail">
             <button

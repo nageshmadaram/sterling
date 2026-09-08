@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { useReplayState, useReplayStore } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
+import { ReplayPopover } from './primitives/ReplayPopover';
 import { MAX_SPEED, REPLAY_SPEEDS, speedLabel } from './replaySpeeds';
 import * as Icons from './ReplayIcons';
 
@@ -12,29 +13,93 @@ export function stepSizeFor(e: { shiftKey: boolean; altKey: boolean }): number {
 }
 
 /**
- * Transport cluster and speed ladder.
+ * Single speed dropdown element (1×, 5×, 10×, 25×, 50×, 100×, MAX).
+ * Matches the inline dropdown design pattern used across the bar.
+ */
+export function ReplaySpeedDropdown() {
+  const speed = useReplayStore((s) => s.status.config?.speed ?? s.draft.speed);
+  const transport = useReplayTransport();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="rd-inline-drop-btn rd-speed-drop-btn"
+        data-open={open}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Replay speed"
+        title="Replay speed (+ / − to step)"
+        onClick={() => setOpen((o) => !o)}
+        data-testid="replay-speed-trigger"
+      >
+        <span className="rd-inline-drop-label">SPEED</span>
+        <span className="rd-inline-drop-value">{speedLabel(speed)}</span>
+        <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
+      </button>
+
+      <ReplayPopover
+        open={open}
+        onOpenChange={setOpen}
+        label="Select replay speed"
+        anchorRef={anchor}
+        width={130}
+        align="start"
+      >
+        <div className="rd-drop-menu" role="listbox" aria-label="Replay speed options">
+          <div className="rd-drop-header">Playback speed</div>
+          {REPLAY_SPEEDS.map((s) => {
+            const selected = speed === s;
+            return (
+              <button
+                key={s}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                aria-pressed={selected}
+                className="rd-drop-option"
+                data-selected={selected}
+                onClick={() => {
+                  void transport.setSpeed(s);
+                  setOpen(false);
+                }}
+              >
+                <span className="rd-drop-check">{selected ? '✓' : ''}</span>
+                <span className="rd-drop-option-title">{speedLabel(s)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </ReplayPopover>
+    </>
+  );
+}
+
+/**
+ * Transport cluster and speed control.
  *
  * The primary play/pause button is the only filled control in the rail, which
- * is what makes it findable without reading. The speed pills read from
- * `REPLAY_SPEEDS` — the same array the keyboard handler steps through, so
- * `+` can no longer land on a speed that has no button.
+ * is what makes it findable without reading. Speeds are integrated into a
+ * single dropdown element matching the rest of the control bar.
  */
 export function ReplayTransport() {
   const state = useReplayState();
-  const speed = useReplayStore((s) => s.status.config?.speed ?? s.draft.speed);
   const transport = useReplayTransport();
 
   const canSeek = state === 'running' || state === 'paused';
   const primary =
     state === 'running'
-      ? { kind: 'pause' as const, icon: <Icons.Pause size={14} />, label: 'Pause replay (Space)' }
+      ? { kind: 'pause' as const, icon: <Icons.Pause size={16} />, label: 'Pause replay (Space)' }
       : state === 'paused'
-        ? { kind: 'play' as const, icon: <Icons.Play size={14} />, label: 'Resume replay (Space)' }
+        ? { kind: 'play' as const, icon: <Icons.Play size={16} />, label: 'Resume replay (Space)' }
         : state === 'error'
-          ? { kind: 'retry' as const, icon: <Icons.Play size={14} />, label: 'Retry replay (Space)' }
+          ? { kind: 'retry' as const, icon: <Icons.Play size={16} />, label: 'Retry replay (Space)' }
           : state === 'loading'
-            ? { kind: 'play' as const, icon: <Icons.Spinner size={14} />, label: 'Starting replay' }
-            : { kind: 'play' as const, icon: <Icons.Play size={14} />, label: 'Start replay (Space)' };
+            ? { kind: 'play' as const, icon: <Icons.Spinner size={16} />, label: 'Starting replay' }
+            : { kind: 'play' as const, icon: <Icons.Play size={16} />, label: 'Start replay (Space)' };
 
   return (
     <div className="rd-transport" data-testid="replay-transport">
@@ -47,7 +112,7 @@ export function ReplayTransport() {
           aria-label="Jump to session start (Home)"
           title="Jump to session start (Home)"
         >
-          <Icons.SkipStart />
+          <Icons.SkipStart size={15} />
         </button>
         <button
           type="button"
@@ -57,7 +122,7 @@ export function ReplayTransport() {
           aria-label="Step back (Left arrow; Shift 5 bars, Alt 30)"
           title="Step back — 1 bar, Shift 5, Alt 30"
         >
-          <Icons.StepBack />
+          <Icons.StepBack size={15} />
         </button>
       </div>
 
@@ -83,7 +148,7 @@ export function ReplayTransport() {
           aria-label="Step forward (Right arrow; Shift 5 bars, Alt 30)"
           title="Step forward — 1 bar, Shift 5, Alt 30"
         >
-          <Icons.StepFwd />
+          <Icons.StepFwd size={15} />
         </button>
         <button
           type="button"
@@ -93,7 +158,7 @@ export function ReplayTransport() {
           aria-label="Jump to session end (End)"
           title="Jump to session end (End)"
         >
-          <Icons.SkipEnd />
+          <Icons.SkipEnd size={15} />
         </button>
       </div>
 
@@ -108,27 +173,12 @@ export function ReplayTransport() {
         aria-label="Stop replay"
         title="Stop replay"
       >
-        <Icons.Stop size={12} />
+        <Icons.Stop size={14} />
       </button>
 
       <span className="rd-rail-divider" aria-hidden="true" />
 
-      <div className="rd-speeds" role="group" aria-label="Replay speed">
-        {REPLAY_SPEEDS.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className="rd-speed"
-            data-active={speed === s}
-            data-max={s >= MAX_SPEED}
-            aria-pressed={speed === s}
-            onClick={() => void transport.setSpeed(s)}
-            title={`Replay at ${speedLabel(s)} (+ / − to step)`}
-          >
-            {speedLabel(s)}
-          </button>
-        ))}
-      </div>
+      <ReplaySpeedDropdown />
     </div>
   );
 }

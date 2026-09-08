@@ -6,7 +6,7 @@ describe('the speed ladder', () => {
   // toolbar rendered six of those, so `+` could land on 250 and leave every
   // pill unhighlighted — a control that looked broken.
   it('is the only list, and every rung has a label', () => {
-    expect(REPLAY_SPEEDS).toEqual([1, 5, 10, 50, 100, 5000]);
+    expect(REPLAY_SPEEDS).toEqual([1, 5, 10, 25, 50, 100, 5000]);
     REPLAY_SPEEDS.forEach((s) => expect(speedLabel(s)).toBeTruthy());
   });
 
@@ -22,7 +22,8 @@ describe('the speed ladder', () => {
       s = stepSpeed(s, 1);
       seen.push(s);
     }
-    expect(seen[5]).toBe(5000);
+    expect(seen[6]).toBe(5000);
+    expect(seen[7]).toBe(5000);
     expect(seen[9]).toBe(5000);
     seen.forEach((v) => expect(REPLAY_SPEEDS).toContain(v as never));
   });

@@ -133,23 +133,33 @@ describe('transport', () => {
 
   it('renders every speed on the ladder and marks the active one', async () => {
     await renderDock();
-    ['1×', '5×', '10×', '50×', '100×', 'MAX'].forEach((label) => {
-      expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    const trigger = screen.getByTestId('replay-speed-trigger');
+    expect(within(trigger).getByText('5×')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(trigger);
     });
-    expect(screen.getByText('5×').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    ['1×', '5×', '10×', '25×', '50×', '100×', 'MAX'].forEach((label) => {
+      expect(screen.getByRole('option', { name: new RegExp(`^(?:✓\\s*)?${label}$`) })).toBeTruthy();
+    });
+    expect(screen.getByRole('option', { name: /^(?:✓\s*)?5×$/ })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('updates the active speed immediately when a speed pill is clicked while running', async () => {
+  it('updates the active speed immediately when a speed option is clicked while running', async () => {
     setupDock({
       status: makeStatus({ state: 'running', config: { speed: 5, date: '2026-09-07' } as any }),
     });
     await renderDock();
-    expect(screen.getByText('5×').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    const trigger = screen.getByTestId('replay-speed-trigger');
+    expect(within(trigger).getByText('5×')).toBeTruthy();
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '10×' }));
+      fireEvent.click(trigger);
     });
-    expect(screen.getByText('10×').closest('button')).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: /^(?:✓\s*)?10×$/ }));
+    });
+    expect(within(trigger).getByText('10×')).toBeTruthy();
     expect(useReplayStore.getState().status.config?.speed).toBe(10);
   });
 });

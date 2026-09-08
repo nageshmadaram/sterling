@@ -1596,12 +1596,16 @@ kbd.rd-kbd {
 .rd-rail-divider,
 .rd-shell-divider { display: none; }
 
-/* Transport: no filled block, just a clear primary glyph. */
+/* Transport: clean prominent controls */
+.rd-tbtn {
+  width: 30px;
+  height: 30px;
+}
 .rd-tbtn-primary {
-  width: 26px;
-  height: 26px;
-  margin: 0 2px;
-  border-radius: 5px;
+  width: 34px;
+  height: 34px;
+  margin: 0 4px;
+  border-radius: 6px;
   background: none;
   color: var(--k-green);
 }
@@ -1609,7 +1613,18 @@ kbd.rd-kbd {
 .rd-tbtn-primary[data-kind="pause"] { background: none; color: var(--k-amber); }
 .rd-tbtn-primary[data-kind="pause"]:hover:not(:disabled) { background: color-mix(in srgb, var(--k-amber) 14%, transparent); }
 .rd-tbtn-primary[data-kind="retry"] { background: none; color: var(--k-red); }
-.rd-tbtn { width: 24px; height: 24px; }
+
+/* Speed dropdown in player bar */
+.rd-speed-drop-btn {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.rd-speed-drop-btn .rd-inline-drop-value {
+  font-family: var(--rd-font-mono);
+  font-size: 11.5px;
+  font-weight: 750;
+}
 
 /* Speed: one quiet segmented run, no per-pill border or hatch. */
 .rd-speed {
