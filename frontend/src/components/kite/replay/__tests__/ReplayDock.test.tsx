@@ -472,6 +472,21 @@ describe('configuration', () => {
     await act(async () => { fireEvent.click(lot5); });
     expect(useReplayStore.getState().draft.lots).toBe(5);
   });
+
+  it('indicates invalid hours when start time is after end time', async () => {
+    useReplayStore.getState().setDraft({ startTime: '15:30:00', endTime: '09:15:00' });
+    await renderDock();
+    const trigger = screen.getByTestId('replay-hours-trigger');
+    expect(trigger).toHaveAttribute('title', 'Start time must precede end time');
+  });
+
+  it('rejects starting replay when start time is after end time', async () => {
+    useReplayStore.getState().setDraft({ startTime: '15:30:00', endTime: '09:15:00' });
+    await renderDock();
+    const playBtn = screen.getByTestId('replay-primary');
+    await act(async () => { fireEvent.click(playBtn); });
+    expect(useReplayStore.getState().error?.code).toBe('invalid_time_range');
+  });
 });
 
 /* ── Keyboard ───────────────────────────────────────────────────────────── */

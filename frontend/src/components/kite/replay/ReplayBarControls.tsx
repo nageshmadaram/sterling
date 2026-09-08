@@ -113,7 +113,8 @@ export function ReplaySessionDropdown() {
                 min={draft.date}
                 onChange={(e) => {
                   if (e.target.value) {
-                    setDraft({ endDate: e.target.value });
+                    const to = e.target.value;
+                    setDraft({ endDate: to < draft.date ? draft.date : to });
                   }
                 }}
               />
@@ -147,6 +148,7 @@ export function ReplayHoursDropdown() {
     { id: 'last', label: 'Last hr', start: shiftTime(contClose, -60), end: contClose, hint: `${fmtTime(shiftTime(contClose, -60), 5)} – ${fmtTime(contClose, 5)}` },
   ], [contOpen, contClose, preopenStart]);
 
+  const invalidHours = draft.startTime >= draft.endTime;
   const activeOption = HOUR_OPTIONS.find(
     (o) => o.start === draft.startTime && o.end === draft.endTime,
   );
@@ -162,12 +164,14 @@ export function ReplayHoursDropdown() {
         data-open={open}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={locked ? 'Replay is running' : 'Market hours'}
+        title={locked ? 'Replay is running' : invalidHours ? 'Start time must precede end time' : 'Market hours'}
         onClick={() => setOpen((o) => !o)}
         data-testid="replay-hours-trigger"
       >
         <span className="rd-inline-drop-label">HOURS</span>
-        <span className="rd-inline-drop-value">{displayLabel}</span>
+        <span className="rd-inline-drop-value" style={invalidHours ? { color: 'var(--k-red-brick)' } : undefined}>
+          {displayLabel}
+        </span>
         <Icons.ChevronDown size={10} className="rd-inline-drop-caret" />
       </button>
 
@@ -212,6 +216,7 @@ export function ReplayHoursDropdown() {
               step="1"
               className="rd-drop-time-input"
               value={draft.startTime}
+              style={invalidHours ? { borderColor: 'var(--k-red-brick)' } : undefined}
               onChange={(e) => setDraft({ startTime: ensureSeconds(e.target.value, draft.startTime) })}
               title="Start time"
             />
@@ -221,10 +226,16 @@ export function ReplayHoursDropdown() {
               step="1"
               className="rd-drop-time-input"
               value={draft.endTime}
+              style={invalidHours ? { borderColor: 'var(--k-red-brick)' } : undefined}
               onChange={(e) => setDraft({ endTime: ensureSeconds(e.target.value, draft.endTime) })}
               title="End time"
             />
           </div>
+          {invalidHours && (
+            <div style={{ fontSize: 9.5, color: 'var(--k-red-brick)', padding: '2px 8px 4px' }}>
+              Start time must precede end time
+            </div>
+          )}
         </div>
       </ReplayPopover>
     </>
@@ -315,7 +326,6 @@ export function ReplayStrategyDropdown() {
 
 export function ReplaySizingDropdown() {
   const draft = useReplayStore((s) => s.draft);
-  const toggleMoneyness = useReplayStore((s) => s.toggleMoneyness);
   const setDraft = useReplayStore((s) => s.setDraft);
   const state = useReplayState();
   const [open, setOpen] = useState(false);
@@ -375,7 +385,15 @@ export function ReplaySizingDropdown() {
                   className="rd-btn rd-btn-sm"
                   title={leg.hint}
                   data-variant={active ? 'primary' : undefined}
-                  onClick={() => toggleMoneyness(leg.id)}
+                  onClick={() => {
+                    if (allLegs) {
+                      setDraft({ moneyness: [leg.id] });
+                    } else {
+                      const cur = draft.moneyness;
+                      const next = cur.includes(leg.id) ? cur.filter((x) => x !== leg.id) : [...cur, leg.id];
+                      setDraft({ moneyness: next.length === 0 || next.length === MONEYNESS_LEGS.length ? ['ALL'] : next });
+                    }
+                  }}
                 >
                   {leg.label}
                 </button>
@@ -405,8 +423,13 @@ export function ReplaySizingDropdown() {
               max={500}
               value={draft.lots}
               onChange={(e) => {
-                const val = Number(e.target.value);
-                if (val >= 1 && val <= 500) setDraft({ lots: val });
+                const v = e.target.value;
+                if (v === '') {
+                  setDraft({ lots: 1 });
+                } else {
+                  const val = parseInt(v, 10);
+                  if (!isNaN(val)) setDraft({ lots: Math.max(1, Math.min(500, val)) });
+                }
               }}
               title="Custom lots"
             />

@@ -145,6 +145,14 @@ export function useReplayTransport(): ReplayTransport {
 
   const start = useCallback(async (): Promise<void> => {
     const store = useReplayStore.getState();
+    if (store.draft.startTime >= store.draft.endTime) {
+      fail('invalid_time_range', 'Start time must precede end time.');
+      return;
+    }
+    if (store.draft.endDate && store.draft.endDate < store.draft.date) {
+      fail('invalid_date_range', 'Start date must precede end date.');
+      return;
+    }
     const config = draftToConfig(store.draft);
     store.setError(null);
     store.reset();
