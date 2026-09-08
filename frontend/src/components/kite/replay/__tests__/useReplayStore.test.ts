@@ -259,6 +259,32 @@ describe('replay-aware clock', () => {
       })),
     ).toBeNull();
   });
+
+  it('correctly parses full ISO timestamps with timezone or bare ISO', () => {
+    const msWithZ = getReplayNowMs(
+      makeStatus({
+        state: 'running',
+        current_time_iso: '2026-09-08T03:46:19.000Z',
+      }),
+    );
+    expect(msWithZ).toBe(Date.parse('2026-09-08T03:46:19.000Z'));
+
+    const msWithTz = getReplayNowMs(
+      makeStatus({
+        state: 'running',
+        current_time_iso: '2026-09-08T09:16:19+05:30',
+      }),
+    );
+    expect(msWithTz).toBe(Date.parse('2026-09-08T09:16:19+05:30'));
+
+    const msBareIso = getReplayNowMs(
+      makeStatus({
+        state: 'running',
+        current_time_iso: '2026-09-08T09:16:19',
+      }),
+    );
+    expect(msBareIso).toBe(Date.parse('2026-09-08T09:16:19+05:30'));
+  });
 });
 
 describe('draft preferences persistence', () => {
