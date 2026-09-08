@@ -6,6 +6,7 @@ import {
   useReplayStore,
 } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
+import { InstrumentLabel } from '../InstrumentLabel';
 import { EmptyState } from './primitives/EmptyState';
 import { SkeletonRows } from './primitives/Skeleton';
 import { signalKey } from './replayColumns';
@@ -71,9 +72,11 @@ const SignalRow = memo(function SignalRow({
         </span>
       </td>
       <td>
-        {showContract && ev.contract ? (
+        {(showContract || Boolean(ev.contract)) && ev.contract ? (
           <>
-            <strong>{ev.contract}</strong>
+            <strong style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <InstrumentLabel symbol={ev.contract} fallback={ev.instrument} />
+            </strong>
             {ev.spot != null && <span className="rd-sub">{ev.instrument} spot {fmtInr(ev.spot)}</span>}
           </>
         ) : (
@@ -254,7 +257,7 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
             <tr>
               <th>Time</th>
               <th>Strategy</th>
-              <th>{caps?.contract_on_signal ? 'Contract' : 'Underlying'}</th>
+              <th>{caps?.contract_on_signal || rows.some((r) => r.ev.contract) ? 'Contract' : 'Underlying'}</th>
               <th>Dir</th>
               <th data-col="strength">Strength</th>
               <th data-align="right">Entry</th>
@@ -300,7 +303,7 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
                           selected={selected === rowKey}
                           isNew={rowKey === newestKey && state === 'running'}
                           onSelect={onSelect}
-                          showContract={!!caps?.contract_on_signal}
+                          showContract={Boolean(caps?.contract_on_signal || rows.some((r) => r.ev.contract))}
                         />
                       ))}
                   </React.Fragment>
@@ -316,7 +319,7 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
                       selected={selected === rowKey}
                       isNew={rowKey === newestKey && state === 'running'}
                       onSelect={onSelect}
-                      showContract={!!caps?.contract_on_signal}
+                      showContract={Boolean(caps?.contract_on_signal || rows.some((r) => r.ev.contract))}
                     />
                   ))}
                   {virtual.padBottom > 0 && <tr style={{ height: virtual.padBottom }} aria-hidden="true"><td colSpan={9} /></tr>}

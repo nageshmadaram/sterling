@@ -84,6 +84,9 @@ export interface ReplayTrade {
   raw_entry?: number | null;
   raw_exit?: number | null;
   slippage?: number | null;
+  spot_entry?: number | null;
+  spot_stop?: number | null;
+  spot_target?: number | null;
 }
 
 export interface ReplayStats {

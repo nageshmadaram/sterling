@@ -378,6 +378,25 @@ describe('signals table', () => {
     expect(screen.getByText('Mon 3 Aug 2026')).toBeTruthy();
     expect(screen.getByText('Tue 4 Aug 2026')).toBeTruthy();
   });
+
+  it('formats contract names using InstrumentLabel', async () => {
+    setupDock({
+      tab: 'signals',
+      status: makeStatus({
+        state: 'running',
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          events: [
+            makeSignal({ contract: 'NIFTY26AUG24500CE', spot: 24510 }),
+          ],
+        },
+      }),
+    });
+    await renderDock();
+    expect(screen.getByText('AUG')).toBeTruthy();
+    expect(screen.getByText('24500')).toBeTruthy();
+    expect(screen.getByText('CE')).toBeTruthy();
+  });
 });
 
 describe('trades table', () => {
@@ -478,6 +497,22 @@ describe('trades table', () => {
     expect(screen.getByText('4.00')).toBeTruthy();
     expect(screen.getAllByText('+₹750.00').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('+₹1,500.00').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('formats trade contract names using InstrumentLabel', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [makeTrade({ symbol: 'NIFTY26AUG24500CE' })],
+        },
+      }),
+    });
+    await renderDock();
+    expect(screen.getByText('AUG')).toBeTruthy();
+    expect(screen.getByText('24500')).toBeTruthy();
+    expect(screen.getByText('CE')).toBeTruthy();
   });
 });
 

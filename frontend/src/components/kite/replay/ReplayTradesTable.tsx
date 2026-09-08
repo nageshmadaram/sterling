@@ -6,6 +6,7 @@ import {
   useReplayStore,
 } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
+import { InstrumentLabel, parseInstrument } from '../InstrumentLabel';
 import { EmptyState } from './primitives/EmptyState';
 import { SkeletonRows } from './primitives/Skeleton';
 import { tradesHaveFriction } from './replayColumns';
@@ -93,12 +94,16 @@ const TradeRow = memo(function TradeRow({
         </span>
       </td>
       <td>
-        <strong>{t.symbol}</strong>
-        {t.underlying && (
+        <strong style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <InstrumentLabel symbol={t.symbol} fallback={t.underlying} />
+        </strong>
+        {t.underlying && (!parseInstrument(t.symbol) || t.spot_entry != null) ? (
           <span className="rd-sub">
-            {t.underlying}{t.strike ? ` · ${t.strike} ${t.opt_type || ''}` : ''}
+            {t.spot_entry != null
+              ? `${t.underlying} spot ${fmtInr(t.spot_entry)}`
+              : `${t.underlying}${t.strike ? ` · ${t.strike} ${t.opt_type || ''}` : ''}`}
           </span>
-        )}
+        ) : null}
       </td>
       <td data-align="right" data-col="size" className="rd-num">
         {fmtInt(t.lots)}L<span className="rd-sub">{fmtInt(t.quantity)} qty</span>
@@ -403,7 +408,9 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                             onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
                           >
                             {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
-                            <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
+                            <span style={{ color: g.tone, fontWeight: 700, display: 'inline-flex', alignItems: 'center' }}>
+                              {groupBy === 'contract' ? <InstrumentLabel symbol={g.label} /> : g.label}
+                            </span>
                             <span style={{ color: 'var(--k-dim)' }}>
                               {g.rows.length} {g.rows.length === 1 ? 'trade' : 'trades'}
                             </span>

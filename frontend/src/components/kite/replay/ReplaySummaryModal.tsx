@@ -6,6 +6,7 @@ import {
   useReplayStore,
 } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
+import { InstrumentLabel } from '../InstrumentLabel';
 import { Sparkline } from './primitives/Sparkline';
 import { useFocusTrap, useScrollLock } from './primitives/useFocusTrap';
 import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './replayColumns';
@@ -562,7 +563,11 @@ function TradeLog({ trades }: { trades: readonly ReplayTrade[] }) {
                 <td style={{ color: strategyTone(t.strategy) }}>
                   <span style={{ color: 'var(--k-text)' }}>{strategyLabel(t.strategy)}</span>
                 </td>
-                <td>{t.symbol}</td>
+                <td>
+                  <strong style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <InstrumentLabel symbol={t.symbol} fallback={t.underlying} />
+                  </strong>
+                </td>
                 <td data-align="right" className="rd-num">{t.lots}L</td>
                 <td data-align="right" className="rd-num">{fmtInr(t.entry_price)}</td>
                 <td data-align="right" className="rd-num">
