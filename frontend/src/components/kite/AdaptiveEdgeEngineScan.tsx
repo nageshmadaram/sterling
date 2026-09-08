@@ -2,6 +2,7 @@ import React from 'react';
 import { useAdaptiveEdgeEngineConfig } from '../../hooks/useAdaptiveEdge';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../utils/api';
+import { useReplayActive as useSimActive, useReplayState, useReplayClock } from '../../hooks/useReplayStore';
 
 /* The Master Specification engine's own scan.
    Deliberately not folded into the board beside it: that board renders a
@@ -59,22 +60,24 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-import { useReplayActive as useSimActive } from '../../hooks/useReplayStore';
-
 export function AdaptiveEdgeEngineScan() {
   const isSimActive = useSimActive();
+  const replayState = useReplayState();
+  const replayClock = useReplayClock();
+  const pollInterval = isSimActive ? (replayState === 'running' ? 300 : 2000) : 10000;
+
   const config = useAdaptiveEdgeEngineConfig();
   const snapshot = useQuery<EngineSnapshot>({
-    queryKey: ['adaptive-edge-engine-snapshot'],
+    queryKey: ['adaptive-edge-engine-snapshot', isSimActive ? replayClock : 'live'],
     queryFn: () => api.get<EngineSnapshot>('/api/v1/config/adaptive-edge/snapshot'),
-    refetchInterval: isSimActive ? 300 : 10000,
+    refetchInterval: pollInterval,
   });
 
   const qc = useQueryClient();
   const positions = useQuery<{ positions: PositionRow[]; realised_pnl_today: number }>({
-    queryKey: ['adaptive-edge-engine-positions'],
+    queryKey: ['adaptive-edge-engine-positions', isSimActive ? replayClock : 'live'],
     queryFn: () => api.get('/api/v1/config/adaptive-edge/positions'),
-    refetchInterval: isSimActive ? 300 : 10000,
+    refetchInterval: pollInterval,
   });
   const squareOff = useMutation({
     mutationFn: () => api.post('/api/v1/config/adaptive-edge/square-off', {}),

@@ -61,6 +61,43 @@ def test_banknifty_uses_a_wider_strike_step_than_nifty():
     assert _strike_step("NIFTY", 24_500.0) == 50.0
 
 
+def test_index_aliases_resolve_canonical_strike_steps():
+    """Verbose exchange names like NIFTY 50 and NIFTY BANK must resolve correctly."""
+    assert _strike_step("NIFTY 50", 24_500.0) == 50.0
+    assert _strike_step("NIFTY BANK", 52_300.0) == 100.0
+    assert _strike_step("FINNIFTY", 23_000.0) == 50.0
+    assert _strike_step("NIFTY FIN SERVICE", 23_000.0) == 50.0
+    assert _strike_step("MIDCPNIFTY", 12_000.0) == 25.0
+    assert _strike_step("NIFTY MID SELECT", 12_000.0) == 25.0
+    assert _strike_step("SENSEX", 80_000.0) == 100.0
+    assert _strike_step("BANKEX", 60_000.0) == 100.0
+
+
+def test_index_aliases_produce_clean_contract_symbols_without_spaces():
+    """Option contracts for NIFTY 50 / NIFTY BANK must never contain spaces."""
+    leg = _option_contract("NIFTY 50", 24_512.0, "BULLISH", SimConfig(date="2026-09-04"))
+    assert leg["contract"].startswith("NIFTY26")
+    assert " " not in leg["contract"]
+    assert leg["strike"] == 24_500.0
+    assert leg["lot_size"] == 25
+
+    leg_bank = _option_contract("NIFTY BANK", 52_300.0, "BEARISH", SimConfig(date="2026-09-04"))
+    assert leg_bank["contract"].startswith("BANKNIFTY26")
+    assert " " not in leg_bank["contract"]
+    assert leg_bank["strike"] == 52_300.0
+    assert leg_bank["opt_type"] == "PE"
+
+
+def test_index_aliases_apply_index_spread_friction():
+    """NIFTY 50 must receive index spread friction rather than stock spread friction."""
+    cfg = SimConfig(date="2026-09-04", friction_mode="realistic")
+    entry_short, exit_short, _ = _apply_friction(100.0, 120.0, "NIFTY", cfg)
+    entry_alias, exit_alias, _ = _apply_friction(100.0, 120.0, "NIFTY 50", cfg)
+    assert entry_short == entry_alias
+    assert exit_short == exit_alias
+
+
+
 def test_stock_strike_step_scales_with_price():
     """A 2.5-point step on a 3,000-rupee stock would be nonsense."""
     assert _strike_step("TATASTEEL", 150.0) <= 5.0

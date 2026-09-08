@@ -5,8 +5,8 @@ import { k, tint } from '../../styles/kiteUI';
 import { useOrderWindowStore } from '../../store/useOrderWindowStore';
 import { KiteActionButtons } from './KiteActionButtons';
 import { ColumnsMenu } from './board/BoardFilters';
-import { useEffectiveNowMs } from '../../hooks/useReplayStore';
-import { isDayExpandedByDefault, sessionDayKey, shiftSessionDay, parseTimestampMs } from './board/boardTypes';
+import { useEffectiveNowMs, useSimNowMs } from '../../hooks/useReplayStore';
+import { isDayExpandedByDefault, sessionDayKey, shiftSessionDay, parseTimestampMs, formatSessionDay } from './board/boardTypes';
 import type {
   AdaptiveEdgeHorizon,
   AdaptiveEdgeLeg,
@@ -736,11 +736,16 @@ export function AdaptiveEdgePanel({
   };
 
   const effectiveNowMs = useEffectiveNowMs();
+  const simNowMs = useSimNowMs();
   const todayKey = sessionDayKey(effectiveNowMs);
+  const realTodayKey = sessionDayKey(Date.now());
   const yesterdayKey = shiftSessionDay(todayKey, -1);
+  const isHistoricalSim = simNowMs != null && todayKey !== realTodayKey;
+  const todayLabel = isHistoricalSim ? formatSessionDay(todayKey) : 'Today';
+  const yesterdayLabel = isHistoricalSim ? formatSessionDay(yesterdayKey) : 'Yesterday';
 
   interface DayBucket {
-    label: 'Today' | 'Yesterday' | 'Older';
+    label: string;
     key: string;
     rows: AdaptiveEdgeRow[];
     groups: UnderlyingGroup[];
@@ -758,9 +763,9 @@ export function AdaptiveEdgePanel({
       );
     };
 
-    const bucketMap: Record<'Today' | 'Yesterday' | 'Older', AdaptiveEdgeRow[]> = {
-      Today: [],
-      Yesterday: [],
+    const bucketMap: Record<string, AdaptiveEdgeRow[]> = {
+      [todayLabel]: [],
+      [yesterdayLabel]: [],
       Older: [],
     };
 
@@ -769,15 +774,15 @@ export function AdaptiveEdgePanel({
         r.entryTime ?? r.sessionDate ?? (r as any).session_date ?? r.observationTime ?? (r as any).timestamp_ms ?? (r as any).timestamp
       );
       const day = sessionDayKey(rawTs);
-      if (day === todayKey) bucketMap.Today.push(r);
-      else if (day === yesterdayKey) bucketMap.Yesterday.push(r);
+      if (day === todayKey) bucketMap[todayLabel].push(r);
+      else if (day === yesterdayKey) bucketMap[yesterdayLabel].push(r);
       else bucketMap.Older.push(r);
     }
 
     const out: DayBucket[] = [];
-    for (const label of ['Today', 'Yesterday', 'Older'] as const) {
+    for (const label of [todayLabel, yesterdayLabel, 'Older'] as const) {
       const dRows = bucketMap[label];
-      if (!dRows.length) continue;
+      if (!dRows || !dRows.length) continue;
 
       const map = new Map<string, UnderlyingGroup>();
       dRows.forEach((r) => {
@@ -797,13 +802,13 @@ export function AdaptiveEdgePanel({
 
       out.push({
         label,
-        key: label === 'Today' ? todayKey : label === 'Yesterday' ? yesterdayKey : 'older',
+        key: label === todayLabel ? todayKey : label === yesterdayLabel ? yesterdayKey : 'older',
         rows: dRows,
         groups: Array.from(map.values()),
       });
     }
     return out;
-  }, [rows, todayKey, yesterdayKey]);
+  }, [rows, todayKey, yesterdayKey, todayLabel, yesterdayLabel]);
 
   const [userToggledDays, setUserToggledDays] = useState<Map<string, boolean>>(() => new Map());
   const toggleDay = (label: string) => {

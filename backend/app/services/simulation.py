@@ -281,13 +281,40 @@ class SimStatus(BaseModel):
     unrealised_pnl: float = 0.0
 
 
-INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+INDEX_SYMBOLS = {
+    "NIFTY", "NIFTY 50",
+    "BANKNIFTY", "NIFTY BANK",
+    "FINNIFTY", "NIFTY FIN SERVICE",
+    "MIDCPNIFTY", "NIFTY MID SELECT",
+    "SENSEX", "BSE:SENSEX",
+    "BANKEX", "BSE:BANKEX",
+}
+
+CANONICAL_INDEX_MAP = {
+    "NIFTY 50": "NIFTY",
+    "NIFTY BANK": "BANKNIFTY",
+    "NIFTY FIN SERVICE": "FINNIFTY",
+    "NIFTY MID SELECT": "MIDCPNIFTY",
+    "BSE:SENSEX": "SENSEX",
+    "BSE:BANKEX": "BANKEX",
+}
+
+
+def _canonical_symbol(symbol: str) -> str:
+    s = symbol.upper().strip()
+    if ":" in s:
+        s = s.split(":")[-1].strip()
+    return CANONICAL_INDEX_MAP.get(s, s)
+
 
 # Strike step per underlying. Anything not listed falls back to a percentage of
 # spot, rounded to a sane increment.
 STRIKE_STEP = {
-    "NIFTY": 50.0, "BANKNIFTY": 100.0, "FINNIFTY": 50.0,
-    "MIDCPNIFTY": 25.0, "SENSEX": 100.0, "BANKEX": 100.0,
+    "NIFTY": 50.0, "NIFTY 50": 50.0,
+    "BANKNIFTY": 100.0, "NIFTY BANK": 100.0,
+    "FINNIFTY": 50.0, "NIFTY FIN SERVICE": 50.0,
+    "MIDCPNIFTY": 25.0, "NIFTY MID SELECT": 25.0,
+    "SENSEX": 100.0, "BANKEX": 100.0,
 }
 
 # How far each moneyness label sits from ATM, in strike steps. Positive moves
@@ -296,11 +323,15 @@ MONEYNESS_OFFSET = {"ATM": 0, "ITM1": -1, "ITM2": -2, "OTM1": 1, "OTM2": 2}
 
 
 def _is_index(symbol: str) -> bool:
-    return symbol.upper() in INDEX_SYMBOLS
+    s = symbol.upper().strip()
+    if ":" in s:
+        s = s.split(":")[-1].strip()
+    return s in INDEX_SYMBOLS or _canonical_symbol(symbol) in INDEX_SYMBOLS
 
 
 def _strike_step(symbol: str, spot: float) -> float:
-    step = STRIKE_STEP.get(symbol.upper())
+    canon = _canonical_symbol(symbol)
+    step = STRIKE_STEP.get(canon) or STRIKE_STEP.get(symbol.upper().strip())
     if step:
         return step
     # Stocks: ~1% of spot, snapped to a familiar increment.
@@ -409,7 +440,7 @@ def _option_contract(
             pass
 
     return {
-        "contract": f"{symbol.upper()}{expiry_tag}{int(strike)}{opt_type}",
+        "contract": f"{_canonical_symbol(symbol)}{expiry_tag}{int(strike)}{opt_type}",
         "strike": float(strike),
         "opt_type": opt_type,
         "lot_size": lot_size,
@@ -1783,10 +1814,6 @@ class SimulationRunner:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "spot_scan")]
         else:
             ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
-        ae_events = [
-            ev for ev in self._stats.events
-            if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")
-        ]
 
         if allowed_syms:
             ae_events = [ev for ev in ae_events if ev.instrument in allowed_syms or ev.instrument.upper() in allowed_syms]
@@ -1855,16 +1882,7 @@ class SimulationRunner:
                         curr_spot = float(b.get("close") or spot_val)
                         break
 
-            if "SENSEX" in inst_u or "BANKNIFTY" in inst_u:
-                step = 100.0
-            elif "NIFTY" in inst_u:
-                step = 50.0
-            elif spot_val > 1000:
-                step = 20.0
-            elif spot_val > 500:
-                step = 10.0
-            else:
-                step = 5.0
+            step = _strike_step(inst_u, spot_val)
 
             atm_strike = ev.strike if (ev.strike and ev.strike > 0) else round(spot_val / step) * step
             exch = "BSE" if "SENSEX" in inst_u else "NSE"

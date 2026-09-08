@@ -1865,7 +1865,8 @@ function InlineDropdown<T extends string>({
 
 export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
   const simNowMs = useSimNowMs();
-  const currentTodayKey = sessionDayKey(simNowMs ?? Date.now());
+  const effectiveNowMs = useEffectiveNowMs();
+  const currentTodayKey = sessionDayKey(effectiveNowMs);
   const realSessionKey = sessionDayKey(Date.now());
   const isHistoricalSim = simNowMs != null && currentTodayKey !== realSessionKey;
   const currentSimDayLabel = isHistoricalSim ? formatSessionDay(currentTodayKey) : 'Today';
@@ -2040,8 +2041,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
     // ones) — it differs from the others only in whether/how badges render
     // (see SignalCard).
     if (todayOnly) {
-      const nowMs = simNowMs ?? Date.now();
-      const todayKey = sessionDayKey(nowMs);
+      const todayKey = sessionDayKey(effectiveNowMs);
       result = result.filter((r) => {
         const rawTs = (r as any).timestamp_ms ?? (r as any).timestamp ?? (r as any).time ?? (r as any).atMs;
         const day = sessionDayKey(rawTs);
@@ -2058,7 +2058,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
       });
     }
     return result;
-  }, [rows, query, signalMode, todayOnly, simNowMs]);
+  }, [rows, query, signalMode, todayOnly, effectiveNowMs]);
   const showSignalPremiumColumns = React.useMemo(
     () => cfg?.scan_source !== 'spot' || filteredRows.some(hasPremiumSnapshot),
     [cfg?.scan_source, filteredRows],
@@ -2106,7 +2106,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
     return Array.from(syms);
   }, [filteredRows]);
 
-  const { data: quotes } = useKiteQuote(optionSymbols, optionSymbols.length > 0);
+  const { data: quotes } = useKiteQuote(optionSymbols, optionSymbols.length > 0 && !isHistoricalSim);
 
   // What the user has toggled this session, NOT what is collapsed. The default
   // is a rule (see isDayExpandedByDefault), and storing the collapsed set
@@ -2132,7 +2132,6 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
       return next;
     });
   };
-  const effectiveNowMs = useEffectiveNowMs();
 
   const groupedRows = React.useMemo(() => {
     const buckets: { label: string; rows: typeof filteredRows; active?: boolean }[] = [];
@@ -2180,7 +2179,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
       if (aIdx !== bIdx) return bIdx - aIdx; // indices first
       return a.underlying.localeCompare(b.underlying);
     });
-    const nowMs = simNowMs ?? Date.now();
+    const nowMs = effectiveNowMs;
     const todayKey = sessionDayKey(nowMs);
     const realTodayKey = sessionDayKey(Date.now());
     const yesterdayKey = shiftSessionDay(todayKey, -1);
@@ -2249,7 +2248,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
     buckets.push(...dayBuckets.filter(b => b.label === 'Older'));
     if (!showEnded) return buckets.filter(b => b.active);
     return buckets;
-  }, [filteredRows, showEnded, quotes, s.sortBy, s.chgType, simNowMs]);
+  }, [filteredRows, showEnded, quotes, s.sortBy, s.chgType, simNowMs, effectiveNowMs]);
   const scanning = signals?.scanning;
   // The Navigator/Common lenses can legitimately show nothing even while
   // SuperTrend has live setups — Navigator may be disabled, still warming
