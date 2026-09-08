@@ -437,6 +437,48 @@ describe('trades table', () => {
     expect(screen.getAllByText('+₹1,500.00').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('−₹500.00').length).toBeGreaterThanOrEqual(1);
   });
+
+  it('displays each days pnl stats on grouped day rows', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        config: {
+          date: '2026-08-03',
+          end_date: '2026-08-05',
+          start_time: '09:00:00',
+          end_time: '15:30:00',
+          speed: 5,
+          resolution: '5m',
+          instruments: [],
+        },
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [
+            makeTrade({
+              trade_id: 'TRD-1',
+              status: 'WIN',
+              entry_time_iso: '2026-08-03T10:00:00',
+              timestamp_ms: Date.UTC(2026, 7, 3, 4, 30, 0),
+              pnl_usd: 2000,
+            }),
+            makeTrade({
+              trade_id: 'TRD-2',
+              status: 'LOSS',
+              entry_time_iso: '2026-08-03T12:00:00',
+              timestamp_ms: Date.UTC(2026, 7, 3, 6, 30, 0),
+              pnl_usd: -500,
+            }),
+          ],
+        },
+      }),
+    });
+    await renderDock();
+    expect(screen.getByText('Mon 3 Aug 2026')).toBeTruthy();
+    expect(screen.getByText('50%')).toBeTruthy();
+    expect(screen.getByText('4.00')).toBeTruthy();
+    expect(screen.getAllByText('+₹750.00').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('+₹1,500.00').length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 /* ── Configuration ──────────────────────────────────────────────────────── */

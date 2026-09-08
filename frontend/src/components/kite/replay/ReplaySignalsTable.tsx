@@ -269,24 +269,26 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
                   <React.Fragment key={key}>
                     <tr className="rd-group-row">
                       <td colSpan={9}>
-                        <button
-                          type="button"
-                          className="rd-btn rd-btn-sm"
-                          data-variant="ghost"
-                          aria-expanded={!collapsed[key]}
-                          onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
-                        >
-                          {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
-                          <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
-                          <span style={{ color: 'var(--k-dim)' }}>
-                            {g.rows.length} {g.rows.length === 1 ? 'signal' : 'signals'}
-                          </span>
-                          {(g.bulls > 0 || g.bears > 0) && (
-                            <span style={{ color: 'var(--k-dim)', fontSize: 'var(--rd-fs-micro)' }}>
-                              ({g.bulls} Long · {g.bears} Short)
+                        <div className="rd-group-header-cell">
+                          <button
+                            type="button"
+                            className="rd-btn rd-btn-sm rd-group-toggle-btn"
+                            data-variant="ghost"
+                            aria-expanded={!collapsed[key]}
+                            onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
+                          >
+                            {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
+                            <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
+                            <span style={{ color: 'var(--k-dim)' }}>
+                              {g.rows.length} {g.rows.length === 1 ? 'signal' : 'signals'}
                             </span>
-                          )}
-                        </button>
+                            {(g.bulls > 0 || g.bears > 0) && (
+                              <span style={{ color: 'var(--k-dim)', fontSize: 'var(--rd-fs-micro)' }}>
+                                ({g.bulls} Long · {g.bears} Short)
+                              </span>
+                            )}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                     {!collapsed[key] &&

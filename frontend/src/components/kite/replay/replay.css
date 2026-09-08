@@ -895,11 +895,100 @@
 .rd-group-row td {
   background: var(--k-surface-sunken);
   font-size: var(--rd-fs-label);
+  color: var(--k-dim);
+  height: auto;
+  min-height: 28px;
+  padding: 3px 8px;
+}
+
+.rd-group-header-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.rd-group-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
   font-weight: 700;
   letter-spacing: .04em;
-  text-transform: uppercase;
+  padding: 2px 6px;
+  height: 22px;
+}
+
+.rd-group-pnl-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.rd-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--k-surface);
+  border: 1px solid var(--k-border);
+  font-size: var(--rd-fs-micro);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.rd-stat-pill-lbl {
   color: var(--k-dim);
-  height: 24px;
+  font-size: 9.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.rd-stat-pill-val {
+  font-family: var(--rd-font-mono);
+  font-weight: 700;
+  color: var(--k-text);
+  font-size: 10px;
+}
+
+.rd-stat-pill[data-tone="profit"] {
+  border-color: color-mix(in srgb, var(--k-green) 35%, var(--k-border));
+  background: color-mix(in srgb, var(--k-green) 8%, var(--k-surface));
+}
+.rd-stat-pill[data-tone="profit"] .rd-stat-pill-val {
+  color: var(--k-green);
+}
+
+.rd-stat-pill[data-tone="loss"] {
+  border-color: color-mix(in srgb, var(--k-red-brick) 35%, var(--k-border));
+  background: color-mix(in srgb, var(--k-red-brick) 8%, var(--k-surface));
+}
+.rd-stat-pill[data-tone="loss"] .rd-stat-pill-val {
+  color: var(--k-red-brick);
+}
+
+.rd-stat-pill-range .rd-stat-pill-val {
+  display: inline-flex;
+  align-items: center;
+}
+
+.rd-stat-pill-dd {
+  border-color: color-mix(in srgb, var(--k-amber) 30%, var(--k-border));
+}
+
+.rd-split .rd-stat-pill-range,
+.rd-split .rd-stat-pill-dd,
+.replay-dock[data-width="sm"] .rd-stat-pill-range,
+.replay-dock[data-width="sm"] .rd-stat-pill-dd,
+.replay-dock[data-width="sm"] .rd-stat-pill:not([title*="Win"]) {
+  display: none;
 }
 
 .rd-newer {

@@ -12,6 +12,7 @@ import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './repla
 import { exportCsv, replayCsvName } from './replayCsv';
 import {
   ABSENT,
+  extractDate,
   fmtElapsed,
   fmtInr,
   fmtPct,
@@ -247,6 +248,7 @@ export function ReplaySummaryModal() {
             </section>
           )}
 
+          <DayBreakdown trades={trades} />
           <StrategyBreakdown events={events} trades={trades} />
           <TradeLog trades={trades} />
         </div>
@@ -423,6 +425,108 @@ function StrategyBreakdown({
                 </td>
               </tr>
             )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function DayBreakdown({ trades }: { trades: readonly ReplayTrade[] }) {
+  const rows = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        date: string;
+        trades: number;
+        wins: number;
+        losses: number;
+        pnl: number;
+        grossWin: number;
+        grossLoss: number;
+      }
+    >();
+
+    trades.forEach((t) => {
+      const rawDate = extractDate(t.entry_time_iso, t.timestamp_ms);
+      if (!rawDate) return;
+      let row = map.get(rawDate);
+      if (!row) {
+        row = { date: rawDate, trades: 0, wins: 0, losses: 0, pnl: 0, grossWin: 0, grossLoss: 0 };
+        map.set(rawDate, row);
+      }
+      row.trades += 1;
+      if (t.status === 'WIN') {
+        row.wins += 1;
+        if ((t.pnl_usd || 0) > 0) row.grossWin += t.pnl_usd || 0;
+      } else if (t.status === 'LOSS') {
+        row.losses += 1;
+        if ((t.pnl_usd || 0) < 0) row.grossLoss += Math.abs(t.pnl_usd || 0);
+      }
+      row.pnl += t.pnl_usd || 0;
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [trades]);
+
+  if (rows.length <= 1) return null;
+
+  const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r.pnl)));
+
+  return (
+    <section>
+      <h3 className="rd-section-title">Daily breakdown</h3>
+      <div className="rd-scroll-box">
+        <table className="rd-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th data-align="right">Trades</th>
+              <th data-align="right">W / L</th>
+              <th data-align="right">Win %</th>
+              <th data-align="right">Profit Factor</th>
+              <th data-align="right">Net P&L</th>
+              <th style={{ width: 90 }}>Share</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const decided = r.wins + r.losses;
+              const pf =
+                r.grossLoss > 0
+                  ? (r.grossWin / r.grossLoss).toFixed(2)
+                  : r.grossWin > 0
+                    ? '∞'
+                    : ABSENT;
+              return (
+                <tr key={r.date}>
+                  <td>
+                    <span style={{ color: 'var(--k-text)', fontWeight: 600 }}>
+                      {fmtSessionDate(r.date, false)}
+                    </span>
+                  </td>
+                  <td data-align="right" className="rd-num">{r.trades}</td>
+                  <td data-align="right" className="rd-num">{r.wins} / {r.losses}</td>
+                  <td data-align="right" className="rd-num">
+                    {decided ? fmtPct((r.wins / decided) * 100) : ABSENT}
+                  </td>
+                  <td data-align="right" className="rd-num">{pf}</td>
+                  <td data-align="right" className="rd-num rd-pnl" data-tone={r.pnl >= 0 ? 'profit' : 'loss'}>
+                    {fmtSignedInr(r.pnl)}
+                  </td>
+                  <td>
+                    <span
+                      className="rd-share-bar"
+                      style={{
+                        display: 'block',
+                        width: `${(Math.abs(r.pnl) / maxAbs) * 100}%`,
+                        color: r.pnl >= 0 ? 'var(--k-green)' : 'var(--k-red-brick)',
+                      }}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

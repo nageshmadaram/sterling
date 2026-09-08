@@ -15,6 +15,7 @@ import {
   fmtDuration,
   fmtInr,
   fmtInt,
+  fmtPct,
   fmtSessionDate,
   fmtSignedInr,
   fmtSignedPct,
@@ -28,6 +29,27 @@ const ROW_H = 28;
 const VIRTUALISE_ABOVE = 200;
 
 export type TradeGroupBy = 'none' | 'date' | 'strategy' | 'contract';
+
+interface TradeGroupSummary {
+  label: string;
+  tone?: string;
+  rows: ReplayTrade[];
+  pnl: number;
+  wins: number;
+  losses: number;
+  open: number;
+  decided: number;
+  winRate: number | null;
+  grossProfit: number;
+  grossLoss: number;
+  profitFactor: number | null;
+  avgTrade: number | null;
+  bestTrade: number | null;
+  worstTrade: number | null;
+  maxDrawdown: number;
+  totalLots: number;
+  totalQty: number;
+}
 
 const TradeRow = memo(function TradeRow({
   t,
@@ -208,17 +230,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
 
   const groups = useMemo(() => {
     if (groupBy === 'none') return null;
-    const map = new Map<
-      string,
-      {
-        label: string;
-        tone?: string;
-        rows: ReplayTrade[];
-        pnl: number;
-        wins: number;
-        losses: number;
-      }
-    >();
+    const map = new Map<string, TradeGroupSummary>();
 
     rows.forEach((t) => {
       let key: string;
@@ -247,13 +259,68 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
           pnl: 0,
           wins: 0,
           losses: 0,
+          open: 0,
+          decided: 0,
+          winRate: null,
+          grossProfit: 0,
+          grossLoss: 0,
+          profitFactor: null,
+          avgTrade: null,
+          bestTrade: null,
+          worstTrade: null,
+          maxDrawdown: 0,
+          totalLots: 0,
+          totalQty: 0,
         };
         map.set(key, g);
       }
       g.rows.push(t);
-      g.pnl += t.pnl_usd || 0;
-      if (t.status === 'WIN') g.wins += 1;
-      if (t.status === 'LOSS') g.losses += 1;
+      const p = t.pnl_usd || 0;
+      g.pnl += p;
+      if (t.status === 'WIN') {
+        g.wins += 1;
+        if (p > 0) g.grossProfit += p;
+      } else if (t.status === 'LOSS') {
+        g.losses += 1;
+        if (p < 0) g.grossLoss += Math.abs(p);
+      } else {
+        g.open += 1;
+      }
+      g.totalLots += t.lots || 0;
+      g.totalQty += t.quantity || 0;
+    });
+
+    map.forEach((g) => {
+      g.decided = g.wins + g.losses;
+      g.winRate = g.decided > 0 ? (g.wins / g.decided) * 100 : null;
+      g.avgTrade = g.decided > 0 ? g.pnl / g.decided : null;
+      g.profitFactor =
+        g.grossLoss > 0
+          ? g.grossProfit / g.grossLoss
+          : g.grossProfit > 0
+            ? Infinity
+            : null;
+
+      const closed = g.rows.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
+      const closedPnls = closed
+        .map((t) => t.pnl_usd)
+        .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+      if (closedPnls.length > 0) {
+        g.bestTrade = Math.max(...closedPnls);
+        g.worstTrade = Math.min(...closedPnls);
+      }
+
+      // Compute intraday peak-to-trough drawdown chronologically
+      const chrono = closed.slice().sort((a, b) => (a.timestamp_ms || 0) - (b.timestamp_ms || 0));
+      let peak = 0;
+      let cum = 0;
+      let maxDd = 0;
+      chrono.forEach((t) => {
+        cum += t.pnl_usd || 0;
+        peak = Math.max(peak, cum);
+        maxDd = Math.max(maxDd, peak - cum);
+      });
+      g.maxDrawdown = maxDd;
     });
 
     if (groupBy === 'date') {
@@ -327,31 +394,101 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                   <React.Fragment key={key}>
                     <tr className="rd-group-row">
                       <td colSpan={cols - 1}>
-                        <button
-                          type="button"
-                          className="rd-btn rd-btn-sm"
-                          data-variant="ghost"
-                          aria-expanded={!collapsed[key]}
-                          onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
-                        >
-                          {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
-                          <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
-                          <span style={{ color: 'var(--k-dim)' }}>
-                            {g.rows.length} {g.rows.length === 1 ? 'trade' : 'trades'}
-                          </span>
-                          {(g.wins > 0 || g.losses > 0) && (
-                            <span style={{ color: 'var(--k-dim)', fontSize: 'var(--rd-fs-micro)' }}>
-                              ({g.wins}W / {g.losses}L)
+                        <div className="rd-group-header-cell">
+                          <button
+                            type="button"
+                            className="rd-btn rd-btn-sm rd-group-toggle-btn"
+                            data-variant="ghost"
+                            aria-expanded={!collapsed[key]}
+                            onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
+                          >
+                            {collapsed[key] ? <Icons.ChevronDown size={11} /> : <Icons.ChevronUp size={11} />}
+                            <span style={{ color: g.tone, fontWeight: 700 }}>{g.label}</span>
+                            <span style={{ color: 'var(--k-dim)' }}>
+                              {g.rows.length} {g.rows.length === 1 ? 'trade' : 'trades'}
                             </span>
-                          )}
-                        </button>
+                            {(g.wins > 0 || g.losses > 0) && (
+                              <span style={{ color: 'var(--k-dim)', fontSize: 'var(--rd-fs-micro)' }}>
+                                ({g.wins}W · {g.losses}L)
+                              </span>
+                            )}
+                          </button>
+
+                          <div className="rd-group-pnl-stats" role="group" aria-label={`${g.label} P&L stats`}>
+                            {g.winRate != null && (
+                              <span
+                                className="rd-stat-pill"
+                                data-tone={g.winRate >= 50 ? 'profit' : 'loss'}
+                                title={`Win Rate: ${fmtPct(g.winRate, 1)} (${g.wins} won / ${g.decided} decided)`}
+                              >
+                                <span className="rd-stat-pill-lbl">Win</span>
+                                <span className="rd-stat-pill-val">{fmtPct(g.winRate)}</span>
+                              </span>
+                            )}
+
+                            {g.profitFactor != null && (
+                              <span
+                                className="rd-stat-pill"
+                                data-tone={g.profitFactor >= 1 ? 'profit' : 'loss'}
+                                title={`Profit Factor: ${g.profitFactor === Infinity ? 'Infinite' : g.profitFactor.toFixed(2)} (Gross Win: ${fmtInr(g.grossProfit)} / Gross Loss: ${fmtInr(g.grossLoss)})`}
+                              >
+                                <span className="rd-stat-pill-lbl">PF</span>
+                                <span className="rd-stat-pill-val">
+                                  {g.profitFactor === Infinity ? '∞' : g.profitFactor.toFixed(2)}
+                                </span>
+                              </span>
+                            )}
+
+                            {g.avgTrade != null && (
+                              <span
+                                className="rd-stat-pill"
+                                data-tone={g.avgTrade >= 0 ? 'profit' : 'loss'}
+                                title={`Average Trade P&L: ${fmtSignedInr(g.avgTrade)}`}
+                              >
+                                <span className="rd-stat-pill-lbl">Avg</span>
+                                <span className="rd-stat-pill-val">{fmtSignedInr(g.avgTrade)}</span>
+                              </span>
+                            )}
+
+                            {g.bestTrade != null && g.worstTrade != null && (
+                              <span
+                                className="rd-stat-pill rd-stat-pill-range"
+                                title={`Best Trade: ${fmtSignedInr(g.bestTrade)} · Worst Trade: ${fmtSignedInr(g.worstTrade)}`}
+                              >
+                                <span className="rd-stat-pill-lbl">Best/Worst</span>
+                                <span className="rd-stat-pill-val">
+                                  <span style={{ color: g.bestTrade >= 0 ? 'var(--k-green)' : 'inherit' }}>
+                                    {fmtSignedInr(g.bestTrade)}
+                                  </span>
+                                  <span style={{ color: 'var(--k-dim)', margin: '0 2px' }}>/</span>
+                                  <span style={{ color: g.worstTrade < 0 ? 'var(--k-red-brick)' : 'inherit' }}>
+                                    {fmtSignedInr(g.worstTrade)}
+                                  </span>
+                                </span>
+                              </span>
+                            )}
+
+                            {g.maxDrawdown > 0 && (
+                              <span
+                                className="rd-stat-pill rd-stat-pill-dd"
+                                data-tone="loss"
+                                title={`Intraday Max Drawdown: ${fmtInr(g.maxDrawdown)}`}
+                              >
+                                <span className="rd-stat-pill-lbl">MaxDD</span>
+                                <span className="rd-stat-pill-val">{fmtInr(g.maxDrawdown)}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </td>
                       <td
                         data-align="right"
                         className="rd-num rd-pnl"
                         data-tone={g.pnl === 0 ? 'dim' : g.pnl > 0 ? 'profit' : 'loss'}
                       >
-                        {fmtSignedInr(g.pnl)}
+                        <span title={`${g.label} Net Realised P&L: ${fmtSignedInr(g.pnl)}`}>
+                          {fmtSignedInr(g.pnl)}
+                        </span>
                       </td>
                     </tr>
                     {!collapsed[key] &&
