@@ -63,6 +63,7 @@ export interface ReplayTrade {
   entry_time_iso: string;
   exit_time_iso: string;
   timestamp_ms?: number;
+  exit_timestamp_ms?: number | null;
   strategy: string;
   symbol: string;
   underlying: string;

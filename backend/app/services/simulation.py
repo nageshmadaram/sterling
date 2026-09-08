@@ -164,6 +164,7 @@ class SimTradeEvent(BaseModel):
     trade_id: str
     entry_time_iso: str = ""
     exit_time_iso: str = "OPEN"
+    exit_timestamp_ms: Optional[int] = None
     timestamp_ms: int = 0
     strategy: str
     symbol: str
@@ -694,6 +695,7 @@ class SimulationRunner:
 
         trade.exit_price = fill_exit
         trade.exit_time_iso = bar_dt.strftime("%H:%M:%S")
+        trade.exit_timestamp_ms = int(bar_dt.timestamp() * 1000)
         trade.duration_mins = trade.bars_held * self._bar_minutes()
         trade.pnl_usd = round((fill_exit - trade.entry_price) * trade.quantity, 2)
         trade.pnl_pct = round(
@@ -1054,6 +1056,7 @@ class SimulationRunner:
         if self._start_epoch > 0:
             self._seek_requested_epoch = float(self._start_epoch)
             self._stats = SimStats()
+            self._open_by_symbol.clear()
             self._last_signal = None
             self._last_fired.clear()
             self._emitted_recorded_keys.clear()
@@ -1454,6 +1457,13 @@ class SimulationRunner:
                     # longer follow it.
                     self._open_by_symbol = {}
                     for tr in self._stats.trades:
+                        if tr.exit_timestamp_ms is not None and tr.exit_timestamp_ms > target_ms:
+                            tr.status = "OPEN"
+                            tr.exit_price = None
+                            tr.exit_time_iso = "OPEN"
+                            tr.exit_timestamp_ms = None
+                            tr.pnl_usd = 0.0
+                            tr.pnl_pct = 0.0
                         if tr.status == "OPEN":
                             self._open_by_symbol.setdefault(tr.underlying, []).append(tr)
                     self._recompute_totals()

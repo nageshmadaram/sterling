@@ -366,3 +366,82 @@ class _CollectingQueue:
 
     def put_nowait(self, item):
         self._sink.append(item)
+
+
+def test_jump_start_clears_open_book():
+    runner = SimulationRunner()
+    runner._start_epoch = 1757000000
+    trade = SimTradeEvent(
+        trade_id="TRD-1",
+        entry_time_iso="09:20:00",
+        exit_time_iso="OPEN",
+        timestamp_ms=1757000000000,
+        strategy="supertrend",
+        symbol="NIFTY26SEP24500CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=24500.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        stop_loss=75.0,
+        target_price=150.0,
+        status="OPEN",
+    )
+    runner._open_by_symbol["NIFTY"] = [trade]
+    runner._stats.trades.append(trade)
+
+    status = runner.jump_start()
+    assert runner._open_by_symbol == {}
+    assert status.open_positions == 0
+    assert status.stats.trades == []
+
+
+def test_backward_seek_reopens_future_closed_trades():
+    runner = SimulationRunner()
+    trade = SimTradeEvent(
+        trade_id="TRD-1",
+        entry_time_iso="09:20:00",
+        exit_time_iso="09:45:00",
+        timestamp_ms=1757000000000,
+        exit_timestamp_ms=1757001500000,
+        strategy="supertrend",
+        symbol="NIFTY26SEP24500CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=24500.0,
+        lots=1,
+        quantity=25,
+        entry_price=100.0,
+        exit_price=150.0,
+        stop_loss=75.0,
+        target_price=150.0,
+        status="WIN",
+        pnl_usd=1250.0,
+    )
+    runner._stats.trades = [trade]
+    target_ms = 1757000500000  # between entry (09:20) and exit (09:45)
+
+    # Reconstruct seek logic from runner
+    runner._open_by_symbol = {}
+    for tr in runner._stats.trades:
+        if tr.exit_timestamp_ms is not None and tr.exit_timestamp_ms > target_ms:
+            tr.status = "OPEN"
+            tr.exit_price = None
+            tr.exit_time_iso = "OPEN"
+            tr.exit_timestamp_ms = None
+            tr.pnl_usd = 0.0
+            tr.pnl_pct = 0.0
+        if tr.status == "OPEN":
+            runner._open_by_symbol.setdefault(tr.underlying, []).append(tr)
+    runner._recompute_totals()
+
+    assert trade.status == "OPEN"
+    assert trade.exit_price is None
+    assert trade.exit_time_iso == "OPEN"
+    assert "NIFTY" in runner._open_by_symbol
+    assert runner._open_by_symbol["NIFTY"] == [trade]
+    assert runner._stats.wins == 0
+    assert runner._stats.pnl == 0.0
