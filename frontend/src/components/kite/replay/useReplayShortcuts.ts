@@ -97,7 +97,7 @@ export function useReplayShortcuts(
           return;
         case 'd':
         case 'D':
-          store.setTab('split');
+          store.setTab('trades');
           return;
         case 's':
         case 'S':

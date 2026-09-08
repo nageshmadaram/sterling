@@ -357,7 +357,7 @@ function initialDraft(): ReplayDraft {
   };
 }
 
-const DEFAULT_PREFS: ReplayUiPrefs = { v: 1, mode: 'docked', height: 320, tab: 'split', open: false };
+const DEFAULT_PREFS: ReplayUiPrefs = { v: 1, mode: 'docked', height: 320, tab: 'trades', open: false };
 
 export function loadPrefs(storage: Storage | undefined = safeStorage()): ReplayUiPrefs {
   if (!storage) return DEFAULT_PREFS;
@@ -374,7 +374,7 @@ export function loadPrefs(storage: Storage | undefined = safeStorage()): ReplayU
         v: 1,
         mode: rawMode === 'expanded' || rawMode === 'overlay' ? rawMode : 'docked',
         height: clampHeight(parsed.height),
-        tab: tab === 'signals' || tab === 'trades' ? tab : 'split',
+        tab: tab === 'signals' ? 'signals' : 'trades',
         open: parsed.open === true,
       };
     }

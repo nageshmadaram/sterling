@@ -20,7 +20,12 @@ beforeEach(() => {
 
 describe('preferences', () => {
   it('starts from defaults with nothing stored', () => {
-    expect(loadPrefs(localStorage)).toMatchObject({ v: 1, mode: 'docked', tab: 'split', open: false });
+    expect(loadPrefs(localStorage)).toMatchObject({ v: 1, mode: 'docked', tab: 'trades', open: false });
+  });
+
+  it('migrates legacy split tab to trades', () => {
+    localStorage.setItem(REPLAY_UI_KEY, JSON.stringify({ v: 1, mode: 'docked', height: 320, tab: 'split', open: true }));
+    expect(loadPrefs(localStorage).tab).toBe('trades');
   });
 
   it('migrates the legacy height-only key exactly once', () => {
@@ -32,7 +37,7 @@ describe('preferences', () => {
   it('degrades a stored fullscreen to overlay', () => {
     // Reopening into a full-screen takeover the user does not remember
     // choosing is hostile, so fullscreen is never restored.
-    localStorage.setItem(REPLAY_UI_KEY, JSON.stringify({ v: 1, mode: 'fullscreen', height: 320, tab: 'split', open: true }));
+    localStorage.setItem(REPLAY_UI_KEY, JSON.stringify({ v: 1, mode: 'fullscreen', height: 320, tab: 'trades', open: true }));
     expect(loadPrefs(localStorage).mode).toBe('overlay');
   });
 
@@ -48,7 +53,7 @@ describe('preferences', () => {
 
   it('clamps a stored height below the usable minimum', () => {
     // 160px left 54px of content under the chrome — a dock that shows no rows.
-    localStorage.setItem(REPLAY_UI_KEY, JSON.stringify({ v: 1, mode: 'docked', height: 40, tab: 'split', open: true }));
+    localStorage.setItem(REPLAY_UI_KEY, JSON.stringify({ v: 1, mode: 'docked', height: 40, tab: 'trades', open: true }));
     expect(loadPrefs(localStorage).height).toBe(MIN_DOCK_HEIGHT);
   });
 });

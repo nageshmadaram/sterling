@@ -12,7 +12,7 @@ const KEYS: [string, string][] = [
   ['Home / End', 'Jump to session start or end'],
   ['+ / −', 'Step the replay speed'],
   ['1 … 7', 'Speed presets, 1× to MAX'],
-  ['D / S / T', 'Split, Signals or Trades'],
+  ['T / S', 'Trades or Signals tab'],
   ['E', 'Export the current tab'],
   ['F', 'Cycle docked, expanded, floating'],
   ['Escape', 'Step down a level, then close'],

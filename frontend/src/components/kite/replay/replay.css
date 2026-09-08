@@ -2013,6 +2013,73 @@ kbd.rd-kbd {
   min-height: 0;
 }
 
+.rd-table-tabs {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 16px;
+  background: var(--k-surface-sunken-2);
+  border-bottom: 1px solid var(--k-hairline);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex-shrink: 0;
+}
+
+.rd-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px 7px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--k-dim);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--rd-dur-fast) var(--rd-ease-out), border-color var(--rd-dur-fast) var(--rd-ease-out);
+  user-select: none;
+  margin-bottom: -1px;
+}
+
+.rd-tab-btn:hover {
+  color: var(--k-text);
+}
+
+.rd-tab-btn[aria-selected="true"],
+.rd-tab-btn[data-active="true"] {
+  color: var(--k-orange, var(--k-brand));
+  border-bottom-color: var(--k-orange, var(--k-brand));
+  font-weight: 700;
+}
+
+.rd-tab-count {
+  font-size: 10px;
+  font-family: var(--rd-font-mono);
+  padding: 0 5px;
+  line-height: 15px;
+  height: 15px;
+  border-radius: 8px;
+  background: var(--k-surface-hover);
+  color: var(--k-dim);
+  font-weight: 600;
+}
+
+.rd-tab-btn[aria-selected="true"] .rd-tab-count,
+.rd-tab-btn[data-active="true"] .rd-tab-count {
+  background: color-mix(in srgb, var(--k-orange, var(--k-brand)) 15%, transparent);
+  color: var(--k-orange, var(--k-brand));
+}
+
+.rd-tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .rd-unified-section + .rd-unified-section {
   border-top: 1px solid var(--k-border);
 }

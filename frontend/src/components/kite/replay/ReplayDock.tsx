@@ -62,7 +62,7 @@ function ReplaySessionRow({ bucket: _bucket }: { bucket: WidthBucket }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Unified table — signals and trades combined, with section toggles.
+   Unified table — tabbed signals and trades, defaulting to trades.
    ═══════════════════════════════════════════════════════════════════════════ */
 function ReplayUnifiedTable() {
   const events = useFilteredReplayEvents();
@@ -70,106 +70,68 @@ function ReplayUnifiedTable() {
   const tab = useReplayStore((s) => s.tab);
   const setTab = useReplayStore((s) => s.setTab);
   const state = useReplayState();
+  const historical = useReplayIsHistorical();
 
-  if (tab === 'signals') {
-    return (
-      <div className="rd-unified-table">
-        <div className="rd-unified-head">
-          <button
-            type="button"
-            className="rd-btn rd-btn-sm"
-            data-variant="ghost"
-            onClick={() => setTab('split')}
-            data-testid="replay-signals-back"
-          >
-            <Icons.ChevronUp size={10} /> Back
-          </button>
-          <span className="rd-unified-title">
-            <Icons.Signal size={12} /> Signals <span className="rd-dim">{events.length}</span>
-          </span>
-        </div>
-        <ReplaySignalsTable />
-      </div>
-    );
+  // If idle with no recorded signals or trades and no historical session, keep compact
+  if (events.length === 0 && trades.length === 0 && state === 'idle' && !historical && tab !== 'signals') {
+    return null;
   }
 
-  if (tab === 'trades') {
-    return (
-      <div className="rd-unified-table">
-        <div className="rd-unified-head">
-          <button
-            type="button"
-            className="rd-btn rd-btn-sm"
-            data-variant="ghost"
-            onClick={() => setTab('split')}
-            data-testid="replay-trades-back"
-          >
-            <Icons.ChevronUp size={10} /> Back
-          </button>
-          <span className="rd-unified-title">
-            <Icons.Trades size={12} /> Trades <span className="rd-dim">{trades.length}</span>
-          </span>
-        </div>
-        <ReplayTradesTable />
-      </div>
-    );
-  }
-
-  // Combined view (default: tab === 'split')
-  if (events.length === 0 && trades.length === 0) {
-    if (state === 'idle') return null;
-    return (
-      <div className="rd-unified-table">
-        <ReplaySignalsTable />
-      </div>
-    );
-  }
+  const activeTab = tab === 'signals' ? 'signals' : 'trades';
 
   return (
     <div className="rd-unified-table">
-      {/* Signals section */}
-      {events.length > 0 && (
-        <div className="rd-unified-section">
-          <div className="rd-unified-head">
-            <span className="rd-unified-title">
-              <Icons.Signal size={12} /> Signals <span className="rd-dim">{events.length}</span>
-            </span>
-            <button
-              type="button"
-              className="rd-btn rd-btn-sm"
-              data-variant="ghost"
-              onClick={() => setTab('signals')}
-              title="View full signals table (S)"
-              data-testid="replay-signals-expand"
-            >
-              Expand <Icons.Fullscreen size={10} />
-            </button>
-          </div>
-          <ReplaySignalsTable />
-        </div>
-      )}
+      <div
+        className="rd-table-tabs"
+        role="tablist"
+        aria-label="Replay tables"
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            setTab(activeTab === 'trades' ? 'signals' : 'trades');
+          }
+        }}
+      >
+        <button
+          type="button"
+          role="tab"
+          id="replay-tab-trades"
+          aria-selected={activeTab === 'trades'}
+          aria-controls="replay-panel-trades"
+          className="rd-tab-btn"
+          data-active={activeTab === 'trades'}
+          onClick={() => setTab('trades')}
+          data-testid="replay-tab-trades"
+        >
+          <Icons.Trades size={12} />
+          <span>Trades</span>
+          <span className="rd-tab-count">{trades.length}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="replay-tab-signals"
+          aria-selected={activeTab === 'signals'}
+          aria-controls="replay-panel-signals"
+          className="rd-tab-btn"
+          data-active={activeTab === 'signals'}
+          onClick={() => setTab('signals')}
+          data-testid="replay-tab-signals"
+        >
+          <Icons.Signal size={12} />
+          <span>Signals</span>
+          <span className="rd-tab-count">{events.length}</span>
+        </button>
+      </div>
 
-      {/* Trades section */}
-      {trades.length > 0 && (
-        <div className="rd-unified-section">
-          <div className="rd-unified-head">
-            <span className="rd-unified-title">
-              <Icons.Trades size={12} /> Trades <span className="rd-dim">{trades.length}</span>
-            </span>
-            <button
-              type="button"
-              className="rd-btn rd-btn-sm"
-              data-variant="ghost"
-              onClick={() => setTab('trades')}
-              title="View full trades table (T)"
-              data-testid="replay-trades-expand"
-            >
-              Expand <Icons.Fullscreen size={10} />
-            </button>
-          </div>
-          <ReplayTradesTable />
-        </div>
-      )}
+      <div
+        role="tabpanel"
+        id={activeTab === 'signals' ? 'replay-panel-signals' : 'replay-panel-trades'}
+        aria-labelledby={activeTab === 'signals' ? 'replay-tab-signals' : 'replay-tab-trades'}
+        className="rd-tab-panel"
+      >
+        {activeTab === 'signals' ? <ReplaySignalsTable /> : <ReplayTradesTable />}
+      </div>
     </div>
   );
 }

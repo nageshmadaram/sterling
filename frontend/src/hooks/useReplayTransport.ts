@@ -158,7 +158,7 @@ export function useReplayTransport(): ReplayTransport {
     const config = draftToConfig(store.draft);
     store.setError(null);
     store.reset();
-    store.setTab(store.tab === 'split' ? 'split' : store.tab);
+    store.setTab(store.tab === 'signals' ? 'signals' : 'trades');
     clearFeedCache();
 
     try {

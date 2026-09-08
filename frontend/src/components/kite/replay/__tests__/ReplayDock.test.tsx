@@ -619,9 +619,9 @@ describe('configuration', () => {
     expect(useReplayStore.getState().draft.lots).toBe(15);
   });
 
-  it('expands signals table and restores split view', async () => {
+  it('switches between trades and signals tabs', async () => {
     setupDock({
-      tab: 'split',
+      tab: 'trades',
       status: makeStatus({
         state: 'running',
         stats: {
@@ -632,17 +632,19 @@ describe('configuration', () => {
       }),
     });
     await renderDock();
-    const expandBtn = screen.getByTestId('replay-signals-expand');
-    await act(async () => { fireEvent.click(expandBtn); });
+    expect(screen.getByTestId('replay-tab-trades')).toHaveAttribute('aria-selected', 'true');
+    const signalsTab = screen.getByTestId('replay-tab-signals');
+    await act(async () => { fireEvent.click(signalsTab); });
     expect(useReplayStore.getState().tab).toBe('signals');
-    const backBtn = screen.getByTestId('replay-signals-back');
-    await act(async () => { fireEvent.click(backBtn); });
-    expect(useReplayStore.getState().tab).toBe('split');
+    expect(screen.getByTestId('replay-tab-signals')).toHaveAttribute('aria-selected', 'true');
+    const tradesTab = screen.getByTestId('replay-tab-trades');
+    await act(async () => { fireEvent.click(tradesTab); });
+    expect(useReplayStore.getState().tab).toBe('trades');
+    expect(screen.getByTestId('replay-tab-trades')).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('expands trades table and restores split view', async () => {
+  it('defaults to trades tab when starting replay', async () => {
     setupDock({
-      tab: 'split',
       status: makeStatus({
         state: 'running',
         stats: {
@@ -653,12 +655,8 @@ describe('configuration', () => {
       }),
     });
     await renderDock();
-    const expandBtn = screen.getByTestId('replay-trades-expand');
-    await act(async () => { fireEvent.click(expandBtn); });
-    expect(useReplayStore.getState().tab).toBe('trades');
-    const backBtn = screen.getByTestId('replay-trades-back');
-    await act(async () => { fireEvent.click(backBtn); });
-    expect(useReplayStore.getState().tab).toBe('split');
+    expect(screen.getByTestId('replay-tab-trades')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('replay-tab-signals')).toHaveAttribute('aria-selected', 'false');
   });
 });
 
@@ -699,7 +697,7 @@ describe('keyboard scope', () => {
     fireEvent.keyDown(document, { key: 't' });
     expect(useReplayStore.getState().tab).toBe('trades');
     fireEvent.keyDown(document, { key: 'd' });
-    expect(useReplayStore.getState().tab).toBe('split');
+    expect(useReplayStore.getState().tab).toBe('trades');
   });
 
   it('opens the shortcut sheet on ?', async () => {
