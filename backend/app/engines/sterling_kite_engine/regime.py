@@ -32,6 +32,7 @@ class RegimeSeries:
     # Basis prices drive indicators; only raw prices prove executable stop touches.
     raw_high: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
     raw_low: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
+    basis_open: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
     basis_high: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
     basis_low: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
     basis_close: NDArray[np.float64] = field(default_factory=lambda: np.empty(0))
@@ -50,6 +51,7 @@ class RegimeSeries:
         For a short position, red = trend == +1.
         """
         against = -1 if direction == "long" else 1
+        against = -1 if str(direction).lower() == "long" else 1
         count = 0
         if int(self.t_fast[i]) == against:
             count += 1
@@ -62,6 +64,7 @@ class RegimeSeries:
     def green_lines(self, direction: str, i: int) -> list:
         """Return the names of ST lines still aligned with the position at bar ``i``."""
         want = 1 if direction == "long" else -1
+        want = 1 if str(direction).lower() == "long" else -1
         lines = []
         if int(self.t_slow[i]) == want:
             lines.append("slow")
@@ -95,8 +98,10 @@ def compute_regime(opens, highs, lows, closes, cfg: SterlingKiteEngineConfig) ->
     # executable stop touches; synthetic HA extrema never prove a market fill.
     if cfg.candle_basis == "heikin_ashi":
         _, basis_h, basis_l, basis_c = compute_heikin_ashi(o, h, l, c)
+        basis_o, basis_h, basis_l, basis_c = compute_heikin_ashi(o, h, l, c)
     else:
         basis_h, basis_l, basis_c = h, l, c
+        basis_o, basis_h, basis_l, basis_c = o, h, l, c
 
     l_fast, t_fast = compute_supertrend(basis_h, basis_l, basis_c, cfg.fast[0], cfg.fast[1])
     l_mid, t_mid = compute_supertrend(basis_h, basis_l, basis_c, cfg.mid[0], cfg.mid[1])
@@ -117,6 +122,7 @@ def compute_regime(opens, highs, lows, closes, cfg: SterlingKiteEngineConfig) ->
         warmup=cfg.warmup,
         raw_high=np.asarray(highs, dtype=float),
         raw_low=np.asarray(lows, dtype=float),
+        basis_open=np.asarray(basis_o, dtype=float),
         basis_high=np.asarray(basis_h, dtype=float),
         basis_low=np.asarray(basis_l, dtype=float),
         basis_close=np.asarray(basis_c, dtype=float),

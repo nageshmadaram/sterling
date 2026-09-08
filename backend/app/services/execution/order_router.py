@@ -69,6 +69,7 @@ class OrderRouterRequest:
     score: float = 0.0
     signal_strength: str = "SIGNAL"
     mode_name: str = "swing"     # for cooldown keying
+    uid: Optional[str] = None    # user / account identity for daily loss and circuit breaker gates
 
 
 @dataclass
@@ -178,6 +179,7 @@ class OrderRouter:
         decision = live_safety.assert_safe_to_trade(
             positions=self.deps.list_open_positions(),
             idempotency_key=idem_key,
+            uid=req.uid,
         )
         if not decision.allowed:
             if decision.code == "duplicate_order":

@@ -55,6 +55,7 @@ def compute_red_count_from_trends(trends: list[int], direction: str) -> int:
     For short: against = +1
     """
     against = -1 if direction == "long" else 1
+    against = -1 if str(direction).lower() == "long" else 1
     return sum(1 for t in trends if t == against)
 
 

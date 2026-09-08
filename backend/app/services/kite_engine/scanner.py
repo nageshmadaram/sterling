@@ -501,6 +501,7 @@ def attach_strikes(
     row: EngineSignalRow, option_rows: Sequence[dict], *, option_name: str,
     moneynesses: Sequence[str] = ("ATM",), today: Optional[date] = None,
     expiry_types: Sequence[ExpiryType] = (),
+    cfg: Optional[SterlingKiteEngineConfig] = None,
 ) -> EngineSignalRow:
     """Resolve and attach an option leg per selected moneyness from a raw dump.
 
@@ -515,7 +516,7 @@ def attach_strikes(
     ordered = sorted(moneynesses, key=lambda m: _MONEYNESS_ORDER.get(m, 99))
     picks = pick_strikes(chain, spot=row.spot, direction=row.direction,
                          moneynesses=ordered, expiry_types=expiry_types, today=today,
-                         **expiry_window_of(cfg))
+                         **expiry_window_of(cfg or SterlingKiteEngineConfig()))
     row.resolution_reason = None
     if not picks:
         if not chain:
@@ -1157,11 +1158,22 @@ class KiteEngineScanner:
                 chain = chain_rows_for(option_rows, item.tradingsymbol, today)
                 ordered = sorted(moneyness, key=lambda m: _MONEYNESS_ORDER.get(m, 99))
                 latest_ts = candles[-1].timestamp_ms
+                prior_active_confluence = {
+                    r.underlying: r for r in us.rows
+                    if getattr(r, "source", "") == "confluence" and getattr(r, "is_active", False)
+                }
+                retained_rows = _retain_signals(eval_rows, now_ms)
 
                 # Confluence must exist on one bar; never join an old underlying
                 # trigger to a premium trend observed later.
-                for row in eval_rows:
+                for row in retained_rows:
                     if not row.is_fresh or int(row.timestamp_ms) != int(latest_ts):
+                        if row.is_active and row.underlying in prior_active_confluence:
+                            prior = prior_active_confluence[row.underlying]
+                            row.source = "confluence"
+                            row.legs = prior.legs
+                            row.underlying_spot = row.spot
+                            rows.append(row)
                         continue
                     # Candidate strikes for this signal's direction — the SAME picks
                     # attach_strikes resolves — then confirm each on its own premium.

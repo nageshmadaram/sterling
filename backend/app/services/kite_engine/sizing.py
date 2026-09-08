@@ -67,6 +67,7 @@ def size_position(
     lot_size = int(lot_size or 0)
     if lot_size <= 0:
         return SizingResult(0, 0, 0.0, 0.0, 0.0, "no lot size — cannot size")
+        return SizingResult(0, 0, 0.0, 0.0, 0.0, "no lot size — cannot size", blocked=True)
 
     entry = float(entry_premium or 0.0)
     stop = float(stop_premium or 0.0)
@@ -141,6 +142,7 @@ def size_future_position(
     lot_size = int(lot_size or 0)
     if lot_size <= 0:
         return SizingResult(0, 0, 0.0, 0.0, 0.0, "no lot size — cannot size")
+        return SizingResult(0, 0, 0.0, 0.0, 0.0, "no lot size — cannot size", blocked=True)
 
     entry = float(entry_price or 0.0)
     stop = float(stop_price or 0.0)

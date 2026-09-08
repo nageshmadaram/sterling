@@ -489,6 +489,7 @@ def run_unified_backtest(
                     gst = (brokerage + turnover_charge) * 0.18
                     slippage_cost = req.slippage_points * total_qty * 2.0
                     total_friction = round(brokerage + stt + turnover_charge + stamp_duty + sebi_charge + gst + slippage_cost, 2)
+                    total_friction = round(brokerage + stt + turnover_charge + stamp_duty + sebi_charge + gst, 2)
                 else:
                     entry_turnover = entry_price * total_qty
                     exit_turnover = exit_price * total_qty
@@ -502,6 +503,7 @@ def run_unified_backtest(
                     gst = (brokerage + turnover_charge) * 0.18
                     slippage_cost = req.slippage_points * total_qty * 2.0
                     total_friction = round(brokerage + stt + turnover_charge + stamp_duty + sebi_charge + gst + slippage_cost, 2)
+                    total_friction = round(brokerage + stt + turnover_charge + stamp_duty + sebi_charge + gst, 2)
 
                 net_pnl = round(gross_pnl - total_friction, 2)
                 return_pct = round((net_pnl / capital) * 100.0, 2) if capital > 0 else 0.0
@@ -733,6 +735,22 @@ def _compute_metrics(
     total_friction = round(sum(t.friction_cost for t in trades), 2)
     friction_drag_pct = round((total_friction / initial_capital) * 100.0, 2)
 
+    # True compound CAGR based on elapsed calendar days
+    try:
+        start_dt = df["dt"].iloc[0]
+        end_dt = df["dt"].iloc[-1]
+        delta_days = max(1.0, abs((pd.to_datetime(end_dt) - pd.to_datetime(start_dt)).total_seconds() / 86400.0))
+    except Exception:
+        delta_days = max(1.0, float(total_bars) / 75.0)
+
+    elapsed_years = max(1.0 / 252.0, delta_days / 365.25)
+    end_cap = max(0.01, ending_capital)
+    if initial_capital > 0 and end_cap > 0:
+        cagr_val = ((end_cap / initial_capital) ** (1.0 / elapsed_years) - 1.0) * 100.0
+    else:
+        cagr_val = total_return_pct
+    cagr_pct = round(cagr_val, 2)
+
     return PerformanceMetrics(
         total_trades=total_trades,
         winning_trades=winning_trades,
@@ -741,7 +759,7 @@ def _compute_metrics(
         profit_factor=profit_factor,
         net_pnl_inr=net_pnl,
         total_return_pct=total_return_pct,
-        cagr_pct=round(total_return_pct * (252.0 / max(1, total_bars / 75)), 2),
+        cagr_pct=cagr_pct,
         max_drawdown_inr=round(max_dd_inr, 2),
         max_drawdown_pct=round(max_dd_pct, 2),
         max_drawdown_duration_bars=max_dd_duration,

@@ -688,6 +688,8 @@ def test_september_7_recorded_signals_adaptive_edge():
     simulation_runner._stats.events = []
     simulation_runner._stats.trades = []
     simulation_runner._open_by_symbol = {}
+    simulation_runner._candles = []
+    simulation_runner._bars_played = 0
 
     for s in sigs:
         simulation_runner._emit_recorded_signal(s)

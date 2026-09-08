@@ -86,8 +86,16 @@ async def _place_protection(client, p) -> None:
     """Arm or resize the broker trigger. Caller owns the protection lease."""
     from app.services.kite_engine import protective_stop as stops
 
+    ref_last_price = float(p.fill_price or 0.0)
+    if p.direction == "long" and p.stop_premium > 0:
+        # Sell stop: Kite requires trigger_premium < last_price
+        ref_last_price = max(ref_last_price, p.stop_premium + 0.05)
+    elif p.direction == "short" and p.stop_premium > 0:
+        # Buy stop: Kite requires trigger_premium > last_price
+        ref_last_price = min(ref_last_price, max(0.05, p.stop_premium - 0.05)) if ref_last_price > 0 else max(0.05, p.stop_premium - 0.05)
+
     kwargs = dict(tradingsymbol=p.symbol, exchange=p.exchange, qty=p.qty,
-                  trigger_premium=p.stop_premium, last_price=p.fill_price,
+                  trigger_premium=p.stop_premium, last_price=ref_last_price,
                   direction=p.direction, target_premium=p.target_premium)
     if p.gtt_id:
         if not await stops.move_stop(client, trigger_id=p.gtt_id, **kwargs):

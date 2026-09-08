@@ -73,6 +73,7 @@ class SterlingKiteEngine:
         entry = float(c[i])
         self._positions[underlying] = _OpenPos(direction, entry, trail, trail, int(candles[i].timestamp_ms))
         score = self._score(r, i)
+        score = self._score(r, i, direction)
         return [Signal(
             underlying=underlying,
             direction=direction,
@@ -86,7 +87,7 @@ class SterlingKiteEngine:
         )]
 
     # ── trailing lifecycle ─────────────────────────────────────────────────────
-    def manage(self, candles: Sequence[Candle], underlying: str) -> Optional[ManageResult]:
+    def manage(self, candles: Sequence[Candle], underlying: str, *, is_stock: bool = False) -> Optional[ManageResult]:
         pos = self._positions.get(underlying)
         if pos is None or len(candles) <= self.cfg.warmup + 1:
             return None
@@ -109,8 +110,11 @@ class SterlingKiteEngine:
                 return ManageResult(underlying, pos.stop, exit=True, reason="raw price stop",
                                     red_count=red_count, green_lines=green_count)
             entry_i = i
+            # Retain full visible history for red count and trail checks across the window
+            entry_i = 0
         longs, shorts = entry_transitions(r)
         exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts)
+        exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts, is_stock=is_stock)
         if exit_i is not None:
             self._positions.pop(underlying, None)
             level = reported_trail_level(r, pos.direction, entry_i, exit_i, i, self.cfg)
@@ -128,3 +132,32 @@ class SterlingKiteEngine:
     def _score(self, r, i: int) -> float:
         # full three-way alignment is the entry condition; fixed high conviction.
         return 85.0
+    def _score(self, r, i: int, direction: str = "long") -> float:
+        """Dynamic multi-factor quality score (70.0 - 95.0).
+        Base score: 80.0 (baseline for fresh 3-line SuperTrend alignment).
+        +10.0 if Heikin-Ashi candle is cleanly directional (flat bottom for long, flat top for short).
+        +5.0 if ATR is expanding above its trailing 14-bar baseline.
+        """
+        score = 80.0
+        is_long = str(direction).lower() == "long"
+
+        # 1. Heikin-Ashi candle cleanliness (absence of opposing wick indicates strong momentum)
+        if hasattr(r, "basis_open") and len(r.basis_open) > i:
+            b_open = float(r.basis_open[i])
+            if is_long and hasattr(r, "basis_low") and len(r.basis_low) > i:
+                b_low = float(r.basis_low[i])
+                if abs(b_open - b_low) <= max(0.05, b_open * 0.0005):
+                    score += 10.0  # Flat bottom on green candle = strong bull impulse
+            elif not is_long and hasattr(r, "basis_high") and len(r.basis_high) > i:
+                b_high = float(r.basis_high[i])
+                if abs(b_open - b_high) <= max(0.05, b_open * 0.0005):
+                    score += 10.0  # Flat top on red candle = strong bear impulse
+
+        # 2. Volatility expansion confirmation
+        if hasattr(r, "atr") and len(r.atr) > i and i >= 14:
+            curr_atr = float(r.atr[i])
+            baseline_atr = float(np.mean(r.atr[max(0, i - 14):i]))
+            if curr_atr > baseline_atr > 0:
+                score += 5.0
+
+        return min(95.0, max(70.0, score))
