@@ -6,7 +6,7 @@ import {
 } from '../../../hooks/useReplayStore';
 import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
 import { ReplayPopover } from './primitives/ReplayPopover';
-import { fmtSmartDate, fmtTime } from './replayFormat';
+import { ensureSeconds, fmtSmartDate, fmtTime } from './replayFormat';
 import { MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
 import * as Icons from './ReplayIcons';
 
@@ -212,7 +212,7 @@ export function ReplayHoursDropdown() {
               step="1"
               className="rd-drop-time-input"
               value={draft.startTime}
-              onChange={(e) => setDraft({ startTime: e.target.value })}
+              onChange={(e) => setDraft({ startTime: ensureSeconds(e.target.value, draft.startTime) })}
               title="Start time"
             />
             <span>–</span>
@@ -221,7 +221,7 @@ export function ReplayHoursDropdown() {
               step="1"
               className="rd-drop-time-input"
               value={draft.endTime}
-              onChange={(e) => setDraft({ endTime: e.target.value })}
+              onChange={(e) => setDraft({ endTime: ensureSeconds(e.target.value, draft.endTime) })}
               title="End time"
             />
           </div>

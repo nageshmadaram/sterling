@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { useReplayStore } from '../../../hooks/useReplayStore';
 import type { ReplayTransport } from '../../../hooks/useReplayTransport';
+import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './replayColumns';
+import { exportCsv, replayCsvName } from './replayCsv';
 import { REPLAY_SPEEDS, stepSpeed } from './replaySpeeds';
 
 /**
@@ -105,6 +107,35 @@ export function useReplayShortcuts(
         case 'T':
           store.setTab('trades');
           return;
+        case 'e':
+        case 'E': {
+          e.preventDefault();
+          const date = store.status.config?.date ?? store.draft.date;
+          const startTime = store.status.config?.start_time ?? store.draft.startTime;
+          const endTime = store.status.config?.end_time ?? store.draft.endTime;
+          if (store.tab === 'trades' && store.status.stats.trades.length > 0) {
+            const trades = store.status.stats.trades;
+            exportCsv(
+              replayCsvName('trades', date, startTime, endTime),
+              trades,
+              tradeCsvColumns(tradesHaveFriction(trades)),
+            );
+          } else if (store.status.stats.events.length > 0) {
+            exportCsv(
+              replayCsvName('signals', date, startTime, endTime),
+              store.status.stats.events,
+              SIGNAL_CSV_COLUMNS,
+            );
+          } else if (store.status.stats.trades.length > 0) {
+            const trades = store.status.stats.trades;
+            exportCsv(
+              replayCsvName('trades', date, startTime, endTime),
+              trades,
+              tradeCsvColumns(tradesHaveFriction(trades)),
+            );
+          }
+          return;
+        }
         case 'f':
         case 'F':
           store.cycleMode();

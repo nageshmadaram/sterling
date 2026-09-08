@@ -29,8 +29,6 @@ import { ReplayTimeline } from './ReplayTimeline';
 import { ReplayToastHost } from './ReplayToastHost';
 import { ReplayTradesTable } from './ReplayTradesTable';
 import { ReplayTransport } from './ReplayTransport';
-import { SIGNAL_CSV_COLUMNS } from './replayColumns';
-import { exportCsv, replayCsvName } from './replayCsv';
 import { fmtTime } from './replayFormat';
 import { useReplayAnnouncer } from './useReplayAnnouncer';
 import { useReplayShortcuts } from './useReplayShortcuts';
@@ -40,8 +38,6 @@ import './replay.css';
 
 type WidthBucket = 'xl' | 'lg' | 'md' | 'sm';
 
-/** Compact height when idle — just header + player + session row */
-const IDLE_HEIGHT = MIN_DOCK_HEIGHT;
 /** Expanded height when content is showing */
 const ACTIVE_HEIGHT = 480;
 
@@ -345,7 +341,6 @@ export function ReplayDock() {
   if (!open) return overlays;
 
   const resizable = mode === 'docked' || mode === 'overlay';
-  const active = state === 'running' || state === 'paused';
   const showDetailedReport = (state === 'idle' && hasResults) || historical;
 
   const shell = (

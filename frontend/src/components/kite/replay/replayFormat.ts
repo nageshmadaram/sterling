@@ -74,6 +74,34 @@ export function fmtTime(iso: string | null | undefined, len = 8): string {
   return body.substring(0, len);
 }
 
+/**
+ * Normalises a time string (`HH:MM` or `HH:MM:SS`) to `HH:MM:SS`.
+ * Pads single-digit parts with leading zeros.
+ * Absent or invalid returns the fallback.
+ */
+export function ensureSeconds(time: string | null | undefined, fallback = '09:00:00'): string {
+  if (!time || typeof time !== 'string') return fallback;
+  const clean = time.trim();
+  if (!clean) return fallback;
+  const parts = clean.split(':');
+  if (parts.length === 2) {
+    const [h, m] = parts;
+    const hn = parseInt(h, 10);
+    const mn = parseInt(m, 10);
+    if (Number.isNaN(hn) || Number.isNaN(mn)) return fallback;
+    return `${String(hn).padStart(2, '0')}:${String(mn).padStart(2, '0')}:00`;
+  }
+  if (parts.length >= 3) {
+    const [h, m, s] = parts;
+    const hn = parseInt(h, 10);
+    const mn = parseInt(m, 10);
+    const sn = parseInt(s, 10);
+    if (Number.isNaN(hn) || Number.isNaN(mn) || Number.isNaN(sn)) return fallback;
+    return `${String(hn).padStart(2, '0')}:${String(mn).padStart(2, '0')}:${String(sn).padStart(2, '0')}`;
+  }
+  return fallback;
+}
+
 /** `47m`, `1h 12m`, `< 1m`. */
 export function fmtDuration(mins: number | null | undefined): string {
   if (!isNum(mins)) return ABSENT;

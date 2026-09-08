@@ -17,7 +17,6 @@ import * as Icons from './ReplayIcons';
 export function ReplayFilters() {
   const draft = useReplayStore((s) => s.draft);
   const setDraft = useReplayStore((s) => s.setDraft);
-  const resetDraft = useReplayStore((s) => s.resetDraft);
   const caps = useReplayStore((s) => s.status.capabilities);
   const state = useReplayState();
   const [open, setOpen] = useState(false);

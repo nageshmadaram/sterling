@@ -485,6 +485,12 @@ describe('keyboard scope', () => {
     expect(useReplayStore.getState().open).toBe(false);
     outside.remove();
   });
+
+  it('triggers export on E without crashing', async () => {
+    await renderDock();
+    screen.getByTestId('replay-dock').focus();
+    fireEvent.keyDown(document, { key: 'e' });
+  });
 });
 
 /* ── Footer ─────────────────────────────────────────────────────────────── */

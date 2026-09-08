@@ -120,6 +120,7 @@ async def test_simulation_default_instruments_never_fabricate_missing_warmup(mon
     from unittest.mock import AsyncMock
     from app.services import simulation, ohlcv_store
     monkeypatch.setattr(simulation, "_hydrate_missing_candles", AsyncMock())
+    monkeypatch.setattr(simulation, "_load_recorded_signals", lambda *a, **kw: [])
     monkeypatch.setattr(ohlcv_store, "get_candles", lambda *a, **kw: [])
     config = SimConfig(
         date="2026-09-03",

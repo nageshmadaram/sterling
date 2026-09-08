@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ABSENT,
+  ensureSeconds,
   fmtDuration,
   fmtElapsed,
   fmtInr,
@@ -126,3 +127,29 @@ describe('reward to risk', () => {
     expect(rewardRisk(100, undefined, 130)).toBeNull();
   });
 });
+
+describe('ensureSeconds', () => {
+  it('appends :00 to HH:MM', () => {
+    expect(ensureSeconds('09:15')).toBe('09:15:00');
+    expect(ensureSeconds('15:30')).toBe('15:30:00');
+  });
+
+  it('preserves existing seconds in HH:MM:SS', () => {
+    expect(ensureSeconds('09:15:30')).toBe('09:15:30');
+    expect(ensureSeconds('15:30:00')).toBe('15:30:00');
+  });
+
+  it('pads single digits with leading zero', () => {
+    expect(ensureSeconds('9:5')).toBe('09:05:00');
+    expect(ensureSeconds('9:5:2')).toBe('09:05:02');
+  });
+
+  it('falls back to default on invalid or empty values', () => {
+    expect(ensureSeconds('')).toBe('09:00:00');
+    expect(ensureSeconds(null)).toBe('09:00:00');
+    expect(ensureSeconds(undefined)).toBe('09:00:00');
+    expect(ensureSeconds('invalid')).toBe('09:00:00');
+    expect(ensureSeconds('invalid', '15:30:00')).toBe('15:30:00');
+  });
+});
+

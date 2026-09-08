@@ -6,6 +6,7 @@ import {
   useReplayStore,
 } from './useReplayStore';
 import { pushReplayToast } from '../components/kite/replay/replayToastBus';
+import { ensureSeconds } from '../components/kite/replay/replayFormat';
 import { syncReplayStatus } from './useReplayStream';
 
 const API = '/api/v1/simulation';
@@ -74,8 +75,8 @@ export function draftToConfig(draft: ReplayDraft) {
   return {
     date: draft.date,
     end_date: draft.endDate,
-    start_time: draft.startTime,
-    end_time: draft.endTime,
+    start_time: ensureSeconds(draft.startTime, '09:00:00'),
+    end_time: ensureSeconds(draft.endTime, '15:30:00'),
     speed: draft.speed,
     resolution: draft.resolution,
     instruments: draft.instruments,
