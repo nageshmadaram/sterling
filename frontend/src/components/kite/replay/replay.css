@@ -1373,8 +1373,9 @@
   box-shadow: 0 10px 26px color-mix(in srgb, var(--k-text) 18%, transparent);
   animation: rd-toast-in var(--rd-dur-base) var(--rd-ease-out);
   overflow: hidden;
-  cursor: pointer;
+  cursor: default;
 }
+.rd-toast[data-clickable="true"] { cursor: pointer; }
 .rd-toast[data-leaving="true"] { animation: rd-toast-out var(--rd-dur-fast) var(--rd-ease-in) forwards; }
 .rd-toast-rule { align-self: stretch; background: var(--k-dim); }
 .rd-toast[data-tone="bull"] .rd-toast-rule { background: var(--k-green); }

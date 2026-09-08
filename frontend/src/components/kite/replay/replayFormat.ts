@@ -147,6 +147,8 @@ export function fmtSessionDate(iso: string | null | undefined, short = false): s
 /**
  * Smart date: "Today" / "Yesterday" / short date like "4 Sep".
  *
+ * If the user picked today there is no reason to echo "Mon 8 Sep 2026" —
+ * they know what day it is.
  * Grounded in Indian Standard Time (Asia/Kolkata) calendar days so users outside
  * IST still see accurate market day associations.
  */

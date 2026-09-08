@@ -12,8 +12,10 @@ export function useVirtualRows(
   rowHeight: number,
   enabled: boolean,
   overscan = 8,
+  containerRef?: React.RefObject<HTMLElement | null>,
 ) {
-  const ref = useRef<HTMLDivElement>(null);
+  const internalRef = useRef<HTMLDivElement>(null);
+  const ref = containerRef ?? internalRef;
   const [range, setRange] = useState({ start: 0, end: total });
 
   const measure = useCallback(() => {
@@ -25,7 +27,7 @@ export function useVirtualRows(
     const visible = Math.ceil(el.clientHeight / rowHeight) + overscan * 2;
     const start = Math.max(0, Math.floor(el.scrollTop / rowHeight) - overscan);
     setRange({ start, end: Math.min(total, start + visible) });
-  }, [total, rowHeight, enabled, overscan]);
+  }, [ref, total, rowHeight, enabled, overscan]);
 
   useEffect(() => {
     measure();
@@ -36,7 +38,7 @@ export function useVirtualRows(
     if (!el || !enabled) return;
     el.addEventListener('scroll', measure, { passive: true });
     return () => el.removeEventListener('scroll', measure);
-  }, [measure, enabled]);
+  }, [ref, measure, enabled]);
 
   return {
     ref,

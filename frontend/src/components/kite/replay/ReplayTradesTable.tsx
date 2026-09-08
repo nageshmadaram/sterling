@@ -212,7 +212,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
     return Array.from(map.entries()).sort((a, b) => b[1].pnl - a[1].pnl);
   }, [rows, groupBy]);
 
-  const virtual = useVirtualRows(rows.length, ROW_H, !groups && rows.length > VIRTUALISE_ABOVE);
+  const virtual = useVirtualRows(rows.length, ROW_H, !groups && rows.length > VIRTUALISE_ABOVE, 8, bodyRef);
 
   if (state === 'loading') return <SkeletonRows rows={6} cols={7} />;
 

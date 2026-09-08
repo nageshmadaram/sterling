@@ -63,7 +63,9 @@ export function ReplaySummaryModal() {
     // position is still open at the session close.
     const winRate = decided > 0 ? (stats.wins / decided) * 100 : null;
     const avg = closed.length ? stats.pnl / closed.length : null;
-    const pnls = closed.map((t) => t.pnl_usd);
+    const pnls = closed
+      .map((t) => t.pnl_usd)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
 
     // Gross profit over gross loss. `null` rather than Infinity when nothing
     // lost — "no losses yet" is not a ratio.

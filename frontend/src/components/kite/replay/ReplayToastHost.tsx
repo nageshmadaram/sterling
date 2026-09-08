@@ -101,6 +101,7 @@ export function ReplayToastHost() {
           className="rd-toast"
           data-tone={t.tone}
           data-leaving={leaving.has(t.id) || undefined}
+          data-clickable={Boolean(t.seekTimeIso) || undefined}
           role={t.kind === 'error' ? 'alert' : undefined}
           onClick={() => seekTo(t)}
         >

@@ -119,7 +119,7 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
   );
 
   const { unseen, goToNewest } = useStickToTop(bodyRef, rows.length);
-  const virtual = useVirtualRows(rows.length, ROW_H, rows.length > VIRTUALISE_ABOVE);
+  const virtual = useVirtualRows(rows.length, ROW_H, rows.length > VIRTUALISE_ABOVE, 8, bodyRef);
   const newestKey = rows.length ? rows[0].key : null;
 
   // Selecting a row moves the playhead to that signal — the reverse of clicking
