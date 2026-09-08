@@ -81,6 +81,9 @@ _SIGNAL_RETENTION_MS = 15 * 24 * 60 * 60 * 1000
 _FIRED_STATUSES = frozenset({"signal", "signal_unresolved"})
 _KEEP_STATUSES = frozenset({"signal", "signal_unresolved", "ended"})
 _STORE_CAP = 200
+# Bump when reconstruction rules change so the next scan rewalks lookback
+# instead of trusting a store filled by the old today-only walk.
+_REPLAY_VERSION = 2
 
 
 def fired_row_key(row: dict[str, Any]) -> str | None:
@@ -109,21 +112,38 @@ def _row_ts_ms(row: dict[str, Any]) -> int:
     return 0
 
 
-def load_fired_signals(uid: str) -> list[dict[str, Any]]:
+def load_fired_store(uid: str) -> dict[str, Any]:
     import json
     from app.services import db
     try:
         raw = db.get_config(f"nifty_orb_signals:{uid}")
     except Exception:
-        return []
+        return {"rows": [], "replay_version": 0}
     if not raw:
-        return []
+        return {"rows": [], "replay_version": 0}
     try:
         payload = json.loads(raw)
     except Exception:
-        return []
-    rows = payload.get("rows") if isinstance(payload, dict) else payload
-    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        return {"rows": [], "replay_version": 0}
+    if isinstance(payload, list):
+        rows = payload
+        version = 0
+    elif isinstance(payload, dict):
+        rows = payload.get("rows")
+        version = int(payload.get("replay_version") or 0)
+    else:
+        return {"rows": [], "replay_version": 0}
+    clean = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    return {"rows": clean, "replay_version": version}
+
+
+def load_fired_signals(uid: str) -> list[dict[str, Any]]:
+    return load_fired_store(uid)["rows"]
+
+
+def fired_replay_is_warm(uid: str) -> bool:
+    """True when lookback has already been walked under the current rules."""
+    return int(load_fired_store(uid).get("replay_version") or 0) >= _REPLAY_VERSION
 
 
 def save_fired_signals(uid: str, rows: list[dict[str, Any]]) -> None:
@@ -134,7 +154,14 @@ def save_fired_signals(uid: str, rows: list[dict[str, Any]]) -> None:
     fired = fired[:_STORE_CAP]
     db.set_config(
         f"nifty_orb_signals:{uid}",
-        json.dumps({"rows": fired, "saved_ms": int(datetime.now(IST).timestamp() * 1000)}, separators=(",", ":")),
+        json.dumps(
+            {
+                "rows": fired,
+                "saved_ms": int(datetime.now(IST).timestamp() * 1000),
+                "replay_version": _REPLAY_VERSION,
+            },
+            separators=(",", ":"),
+        ),
     )
 
 

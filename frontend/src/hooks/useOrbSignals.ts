@@ -13,9 +13,9 @@ export function useOrbSignals(enabled = true) {
       return toOrbFeedEntries(payload);
     },
     enabled,
-    refetchInterval: enabled ? (isSimActive ? 300 : 2000) : false,
+    refetchInterval: enabled ? (isSimActive ? 300 : 5000) : false,
     refetchIntervalInBackground: false,
-    staleTime: isSimActive ? 0 : 2000,
+    staleTime: isSimActive ? 0 : 5000,
     retry: 1,
   });
 

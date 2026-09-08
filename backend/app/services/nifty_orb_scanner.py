@@ -12,7 +12,7 @@ from app.services.nifty_orb_options import _bar, get_config
 from app.services.providers.truedata.orb_provider import TrueDataOrbProvider
 
 _IST = timezone(timedelta(hours=5, minutes=30))
-_BAR_CACHE_TTL_S = 4.0
+_BAR_CACHE_TTL_S = 30.0
 # 09:15–15:30 IST. Fifteen sessions of 5-minute bars is what SuperTrend-style
 # history needs; 240 bars was ~3 sessions, so a Monday morning scan could not
 # reconstruct Friday's fire.
@@ -57,6 +57,9 @@ class _MinSpacing:
 #: Kite allows 3 quote requests a second. One batched call per chain means this
 #: costs a single interval per firing signal, not one per strike.
 _QUOTE_PACER = _MinSpacing(1.0 / 3.0)
+#: Historical candles share the same per-second ceiling. 18 concurrent 15-session
+#: fetches 429'd the universe scan and the board came back empty.
+_CANDLE_PACER = _MinSpacing(0.35)
 #: Instrument metadata is stable for a session; re-searching it every tick would
 #: spend the broker's rate limit on an answer that does not change.
 _META_CACHE_TTL_S = 900.0
@@ -197,6 +200,7 @@ async def _kite_bars_for_underlying(uid: str, underlying: str, interval: str) ->
     if cached and datetime.now().timestamp() - cached[0] < _BAR_CACHE_TTL_S:
         return _completed_bars(cached[1], int(interval.rstrip("m")))
     client = await accounts.acquire_client(acct)
+    await _CANDLE_PACER.wait()
     limit = history_bar_limit(int(interval.rstrip("m")))
     rows = await client.get_candles(await _kite_instrument(client, underlying), interval, limit=limit)
     bars = [_bar({"timestamp_ms": r.timestamp_ms, "open": r.open, "high": r.high, "low": r.low, "close": r.close, "volume": r.volume}) for r in rows]
@@ -400,7 +404,7 @@ async def _option_contracts(uid: str, underlying: str, direction: str, cfg: Stra
     return await _truedata_option_contracts(underlying, direction, cfg)
 
 
-def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: datetime) -> list:
+def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: datetime, since: datetime | None = None) -> list:
     """First fire of each direction per session, reconstructed from completed bars.
 
     SuperTrend keeps past transitions by replaying lookback. Restricting the
@@ -414,7 +418,7 @@ def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: dat
     current_day = None
     or_high = or_low = None
     as_of_ist = _as_ist(as_of)
-    cutoff = as_of_ist - timedelta(days=_HISTORY_SESSIONS)
+    cutoff = _as_ist(since) if since is not None else as_of_ist - timedelta(days=_HISTORY_SESSIONS)
     interval = max(1, int(cfg.interval_minutes))
     for i, bar in enumerate(bars):
         ts = _as_ist(bar.timestamp)
@@ -446,9 +450,9 @@ def session_fire_transitions(bars: list[Bar], cfg: StrategyConfig, *, as_of: dat
     return fires
 
 
-def _history_rows(symbol: str, bars: list[Bar], local: StrategyConfig, cfg: StrategyConfig, now: datetime, *, live_ts: str | None) -> list[dict[str, Any]]:
+def _history_rows(symbol: str, bars: list[Bar], local: StrategyConfig, cfg: StrategyConfig, now: datetime, *, live_ts: str | None, since: datetime | None = None) -> list[dict[str, Any]]:
     history = []
-    for sig in session_fire_transitions(bars, local, as_of=now):
+    for sig in session_fire_transitions(bars, local, as_of=now, since=since):
         payload = sig.to_dict()
         if payload.get("timestamp") == live_ts:
             continue
@@ -464,7 +468,7 @@ def _history_rows(symbol: str, bars: list[Bar], local: StrategyConfig, cfg: Stra
     return history
 
 
-async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None = None) -> dict[str, Any]:
+async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None = None, *, replay_since: datetime | None = None) -> dict[str, Any]:
     cfg = cfg or get_config()
     symbol = _canonical(underlying)
     local = StrategyConfig(**{**cfg.__dict__, "underlying": symbol})
@@ -485,7 +489,7 @@ async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None 
         "trade": None,
     }
     if signal.direction == "NONE":
-        result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(signal.to_dict().get("timestamp") if signal else None))
+        result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(signal.to_dict().get("timestamp") if signal else None), since=replay_since)
         return result
     try:
         contracts = await _option_contracts(uid, symbol, signal.direction, cfg)
@@ -521,7 +525,7 @@ async def scan_underlying(uid: str, underlying: str, cfg: StrategyConfig | None 
     except (ValueError, RuntimeError) as exc:
         result["status"] = "signal_unresolved"
         result["trade_error"] = str(exc)
-    result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(result.get("signal") or {}).get("timestamp"))
+    result["history"] = _history_rows(symbol, bars, local, cfg, now, live_ts=(result.get("signal") or {}).get("timestamp"), since=replay_since)
     return result
 
 
@@ -530,7 +534,11 @@ async def scan_user(uid: str, cfg: StrategyConfig | None = None) -> dict[str, An
     if not cfg.enabled:
         return {"enabled": False, "signals": [], "universe": []}
     universe = configured_underlyings(cfg)
-    results = await asyncio.gather(*(scan_underlying(uid, s, cfg) for s in universe), return_exceptions=True)
+    from app.services.nifty_orb_lifecycle import fired_replay_is_warm, remember_fired_signals
+    replay_since = None
+    if fired_replay_is_warm(uid):
+        replay_since = datetime.now(_IST).replace(hour=0, minute=0, second=0, microsecond=0)
+    results = await asyncio.gather(*(scan_underlying(uid, s, cfg, replay_since=replay_since) for s in universe), return_exceptions=True)
     rows = []
     for symbol, result in zip(universe, results):
         if isinstance(result, Exception):
@@ -544,7 +552,6 @@ async def scan_user(uid: str, cfg: StrategyConfig | None = None) -> dict[str, An
         r.get("status") != "ended",
         str(r.get("underlying") or ""),
     ))
-    from app.services.nifty_orb_lifecycle import remember_fired_signals
     rows = remember_fired_signals(uid, rows)
     rows.sort(key=lambda r: (
         r.get("status") not in {"signal", "signal_unresolved"},

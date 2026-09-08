@@ -89,6 +89,8 @@ def test_remember_round_trips_through_the_store(monkeypatch):
     second = remember_fired_signals("u1", quiet, now_ms=NOW_MS)
     assert any(r["status"] == "ended" for r in second)
     assert any(r.get("ticket_fingerprint") == first[0]["ticket_fingerprint"] for r in second)
+    from app.services.nifty_orb_lifecycle import fired_replay_is_warm
+    assert fired_replay_is_warm("u1") is True
 
 
 def test_session_walk_recovers_a_morning_fire_after_the_window():
@@ -136,3 +138,23 @@ def test_history_bar_limit_covers_fifteen_sessions():
     # 09:15–15:30 is 75 five-minute bars. 240 used to cover ~3 sessions.
     assert history_bar_limit(5) >= 15 * 75
     assert history_bar_limit(5) <= 2000
+
+
+def test_warm_replay_does_not_rewalk_yesterday():
+    """After persist is warm, reconstruction is today-only; persist holds older fires."""
+    from tests.engines.test_nifty_orb_options import orb_session
+    from app.engines.nifty_orb_options import StrategyConfig
+    from app.services.nifty_orb_scanner import session_fire_transitions
+    bars = orb_session("LONG")
+    cfg = StrategyConfig()
+    since = datetime(2026, 8, 19, 0, 0, tzinfo=IST)
+    as_of = datetime(2026, 8, 19, 2, 32, tzinfo=IST)
+    assert session_fire_transitions(bars, cfg, as_of=as_of, since=since) == []
+
+
+def test_five_minute_history_window_is_weeks_not_months():
+    from app.services.exchanges.kite.client import _historical_days_needed
+    # 15 sessions of 5m used to request 205 days via n_bars/6.
+    assert _historical_days_needed("5minute", 1155) <= 30
+    assert _historical_days_needed("5minute", 1155) >= 15
+    assert _historical_days_needed("60minute", 2000) >= 300
