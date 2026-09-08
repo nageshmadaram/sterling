@@ -136,7 +136,7 @@ describe('ORB feed — tradable setups', () => {
     show({ rows: [entry({ state: 'WATCHING', reason: 'outside entry window' })] });
     expect(screen.getByText('Waiting for entry window')).toBeInTheDocument();
     expect(screen.getByText(/09:30–12:00 IST/)).toBeInTheDocument();
-    expect(screen.queryByText(/No tradable ORB setup right now/)).not.toBeInTheDocument();
+    expect(screen.getByText('No active or recent ORB setups on the board yet.')).toBeInTheDocument();
   });
 
   it('keeps a past fire on the board instead of pretending the session never printed', () => {
@@ -165,7 +165,7 @@ describe('ORB feed — tradable setups', () => {
 
   it('does not dump every underlying as a table when they share one gate', () => {
     // Auto-expanded identical "outside entry window" rows looked like a broken
-    // SuperTrend table. The card states the gate; names stay collapsed.
+    // SuperTrend table. The board stays; names sit behind not-signalling.
     show({
       rows: [
         entry({ underlying: 'NIFTY', state: 'WATCHING', reason: 'outside entry window' }),
@@ -174,7 +174,7 @@ describe('ORB feed — tradable setups', () => {
     });
     expect(screen.getByText('Waiting for entry window')).toBeInTheDocument();
     expect(screen.queryByText('NIFTY')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /outside entry window/ }));
+    fireEvent.click(screen.getByRole('button', { name: /2 not signalling/ }));
     expect(screen.getByText('NIFTY')).toBeInTheDocument();
     expect(screen.getByText('SBIN')).toBeInTheDocument();
   });

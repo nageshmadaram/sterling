@@ -129,3 +129,10 @@ def test_reconstructed_ended_row_reuses_the_stored_ticket():
     assert len(ended) == 1
     assert ended[0]["trade"]["quantity"] == 75
     assert ended[0]["ticket_fingerprint"]
+
+
+def test_history_bar_limit_covers_fifteen_sessions():
+    from app.services.nifty_orb_scanner import history_bar_limit
+    # 09:15–15:30 is 75 five-minute bars. 240 used to cover ~3 sessions.
+    assert history_bar_limit(5) >= 15 * 75
+    assert history_bar_limit(5) <= 2000

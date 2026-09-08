@@ -21,8 +21,9 @@ class TrueDataOrbProvider:
         dt = datetime.fromisoformat(text) if "T" in text or "+" in text[10:] else datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
         return (dt.replace(tzinfo=IST) if dt.tzinfo is None else dt).astimezone(timezone.utc)
 
-    async def bars(self, symbol: str, cfg: StrategyConfig) -> list[Bar]:
-        rows = await self.client.get_last_bars(symbol, 200, interval=f"{cfg.interval_minutes}min", bidask=0)
+    async def bars(self, symbol: str, cfg: StrategyConfig, *, limit: int | None = None) -> list[Bar]:
+        n = int(limit) if limit else 200
+        rows = await self.client.get_last_bars(symbol, n, interval=f"{cfg.interval_minutes}min", bidask=0)
         return [Bar(self._parse_provider_time(r.get("timestamp") or r.get("time")), float(r.get("open", 0)), float(r.get("high", 0)), float(r.get("low", 0)), float(r.get("close", 0)), float(r.get("volume", 0))) for r in rows]
 
     async def latest_tick(self, symbol: str, *, bidask: bool = True) -> dict[str, Any] | None:
