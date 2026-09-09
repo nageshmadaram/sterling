@@ -534,6 +534,18 @@ def test_gamma_move_watch_needs_enough_history():
     assert _gamma_move_watch_from_bars(short, 100.0) is None
 
 
+def test_asof_symbol_bars_drops_future_prints():
+    from app.services.simulation import _asof_symbol_bars
+    candles = [
+        {"symbol": "RELIANCE", "time": 1, "close": 10},
+        {"symbol": "RELIANCE", "time": 2, "close": 11},
+        {"symbol": "RELIANCE", "time": 3, "close": 12},
+        {"symbol": "TCS", "time": 2, "close": 99},
+    ]
+    got = _asof_symbol_bars(candles, "RELIANCE", 2)
+    assert [b["time"] for b in got] == [1, 2]
+
+
 def test_adaptive_edge_snapshot_dynamic_ltp():
     """Verify get_adaptive_edge_snapshot dynamically tracks current spot and produces points delta."""
     from app.services.simulation import SimSignalEvent

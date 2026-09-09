@@ -494,6 +494,40 @@ def _premium_at(leg: Dict[str, Any], spot_entry: float, spot_level: float) -> fl
     return round(max(0.05, leg["premium"] + move * 0.50), 2)
 
 
+def _asof_symbol_bars(candles: list, sym: str, bar_time: Any) -> list:
+    """Bars for `sym` at or before `bar_time`. Future prints stay off the tape."""
+    if not candles or bar_time is None:
+        return []
+    aliases = {sym, str(sym).upper()}
+    try:
+        from app.services.ohlcv_store import INDEX_ALIASES
+        u = str(sym).upper()
+        if u in INDEX_ALIASES:
+            aliases.add(INDEX_ALIASES[u])
+            aliases.add(str(INDEX_ALIASES[u]).upper())
+        for k, v in INDEX_ALIASES.items():
+            if u in (str(k).upper(), str(v).upper()):
+                aliases.add(k)
+                aliases.add(v)
+    except Exception:
+        pass
+    alias_u = {str(a).upper() for a in aliases}
+    t = float(bar_time)
+    out = []
+    for b in candles:
+        if str(b.get("symbol") or "").upper() not in alias_u:
+            continue
+        bt = b.get("time")
+        if bt is None:
+            continue
+        try:
+            if float(bt) <= t:
+                out.append(b)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[str, Any]]:
     """Level+regime gate on underlying bars. Never STRONG — no option OI tape."""
     from app.engines.gamma_move import (
@@ -2950,7 +2984,9 @@ class SimulationRunner:
         # 4b. Gamma Move: shipped level+regime gates on the underlying.
         # The 15m OI trigger cannot run on this tape, so strength stays WATCHING.
         try:
-            gm = _gamma_move_watch_from_bars(history, close)
+            asof = _asof_symbol_bars(getattr(self, "_candles", None) or [],
+                                     sym, bar.get("time"))
+            gm = _gamma_move_watch_from_bars(asof or history, close)
             if gm:
                 signals_to_fire.append(gm)
         except Exception as exc:

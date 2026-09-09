@@ -96,6 +96,15 @@ describe('GammaMoveBoard', () => {
     expect(scanState.mutate).toHaveBeenCalled();
   });
 
+  it('disables live scan while replay is driving the board', () => {
+    snap.data = data({ simulation: { mode: 'replay' },
+                       blockers: ['replay has no 15-minute option open-interest tape — the trigger cannot fire'] });
+    render(<GammaMoveBoard nowMs={Date.now()} />);
+    expect(screen.getByRole('button', { name: /scan now/i })).toBeDisabled();
+    expect(screen.getByText(/open-interest tape/)).toBeTruthy();
+    expect(document.body.textContent).toContain('replay');
+  });
+
   it('reads out every blocker rather than sitting silent', () => {
     snap.data = data({ blockers: ['strategy disabled', 'paper mode — no live orders'] });
     render(<GammaMoveBoard nowMs={Date.now()} />);
