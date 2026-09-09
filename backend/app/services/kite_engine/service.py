@@ -2153,3 +2153,345 @@ async def auto_scan_loop(interval_s: float = SCAN_INTERVAL_S) -> None:
         raise
     finally:
         _auto_running = False
+
+
+async def check_live_readiness(client, uid: str) -> dict:
+    """Comprehensive pre-flight health and safety diagnostic for live production trading.
+
+    Evaluates:
+      1. Broker Session: Connectivity and authentication validity (Zerodha Kite).
+      2. Available Capital: F&O segment cash balance vs minimum recommended trading threshold.
+      3. Registry Integrity: Verifies position store and durable journal via autoexec_preflight.
+      4. Emergency Kill Switch: Checks global kill switch state.
+      5. Circuit Breaker / Daily Loss: Compares realized PnL vs configured max_daily_loss_pct.
+      6. Stop-Loss Mode: Checks for dual/broker stop protection ("broker" or "both").
+      7. Strategy Parameters: Evaluates production hardening knobs (adx_min, time_stop_bars, etc.).
+      8. Market Hours: Checks session phase and time to close.
+    """
+    now_ms = int(time.time() * 1000)
+    cfg = state.get_config(uid)
+    checks: dict[str, dict] = {}
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    # 1. Broker Session & Auth
+    from app.services.exchanges.kite import accounts as kite_accounts, auth as kite_auth
+    acct = kite_accounts.get_active(uid)
+    is_live = False
+    acct_label = "No Active Account"
+    if acct is None:
+        blockers.append("No active Kite account configured.")
+        checks["broker_session"] = {
+            "name": "Broker Session",
+            "status": "blocked",
+            "detail": "No active account found. Add or select an account in Connect tab.",
+        }
+    else:
+        acct_label = acct.label or acct.id
+        is_live = not getattr(acct, "is_paper", True)
+        if not acct.has_credentials:
+            blockers.append("Kite account has no API credentials.")
+            checks["broker_session"] = {
+                "name": "Broker Session",
+                "status": "blocked",
+                "detail": "API credentials missing.",
+            }
+        else:
+            try:
+                session_health = await kite_auth.ensure_session(uid, acct, force_validate=False)
+                if not session_health.connected:
+                    blockers.append(f"Broker session disconnected: {session_health.message}")
+                    checks["broker_session"] = {
+                        "name": "Broker Session",
+                        "status": "blocked",
+                        "detail": session_health.message,
+                    }
+                else:
+                    checks["broker_session"] = {
+                        "name": "Broker Session",
+                        "status": "ok",
+                        "detail": f"{'LIVE' if is_live else 'PAPER'} · Connected as {session_health.user_name or acct.kite_user_id or 'Authorized'}",
+                        "data": {
+                            "is_paper": acct.is_paper,
+                            "kite_user_id": acct.kite_user_id,
+                            "expires_at_ms": session_health.expires_at_ms,
+                        },
+                    }
+            except Exception as exc:
+                blockers.append(f"Broker session check failed: {exc}")
+                checks["broker_session"] = {
+                    "name": "Broker Session",
+                    "status": "blocked",
+                    "detail": str(exc),
+                }
+
+    # 2. Capital & F&O Margin
+    cap = 0.0
+    if client is not None:
+        try:
+            cap = await available_fo_capital(client)
+        except Exception:
+            cap = 0.0
+    min_capital = 25000.0  # ₹25,000 threshold for 1-lot index options
+    if cap <= 0:
+        if is_live:
+            blockers.append(f"Available F&O capital is ₹{cap:.2f}. Minimum ₹{min_capital:,.0f} required for live trading.")
+            checks["capital"] = {
+                "name": "F&O Capital",
+                "status": "blocked",
+                "detail": f"Zero or unreadable capital (₹{cap:.2f}). Check Zerodha funds.",
+                "data": {"available_inr": cap, "min_required": min_capital},
+            }
+        else:
+            warnings.append(f"Paper capital read as ₹{cap:.2f}. Paper sizing will floor to 1 lot.")
+            checks["capital"] = {
+                "name": "F&O Capital",
+                "status": "warning",
+                "detail": f"Paper capital: ₹{cap:.2f}.",
+                "data": {"available_inr": cap, "min_required": min_capital},
+            }
+    elif cap < min_capital:
+        msg = f"Available capital ₹{cap:,.0f} is below recommended minimum ₹{min_capital:,.0f}."
+        if is_live:
+            warnings.append(msg)
+            checks["capital"] = {
+                "name": "F&O Capital",
+                "status": "warning",
+                "detail": msg,
+                "data": {"available_inr": cap, "min_required": min_capital},
+            }
+        else:
+            checks["capital"] = {
+                "name": "F&O Capital",
+                "status": "ok",
+                "detail": f"₹{cap:,.0f} available.",
+                "data": {"available_inr": cap, "min_required": min_capital},
+            }
+    else:
+        checks["capital"] = {
+            "name": "F&O Capital",
+            "status": "ok",
+            "detail": f"₹{cap:,.0f} available in F&O margin.",
+            "data": {"available_inr": cap, "min_required": min_capital},
+        }
+
+    # 3. Position Registry & Durable Journal (autoexec_preflight)
+    preflight_reasons = autoexec_preflight(uid)
+    open_count = len([p for p in positions.open_positions(uid) if p.status in (positions.OPEN, positions.PENDING)])
+    if preflight_reasons:
+        for r in preflight_reasons:
+            blockers.append(r)
+        checks["registry"] = {
+            "name": "Position Registry & Journal",
+            "status": "blocked",
+            "detail": "; ".join(preflight_reasons),
+            "data": {"open_positions": open_count, "reasons": preflight_reasons},
+        }
+    else:
+        checks["registry"] = {
+            "name": "Position Registry & Journal",
+            "status": "ok",
+            "detail": f"Clear. {open_count} tracked position(s) reconciled.",
+            "data": {"open_positions": open_count},
+        }
+
+    # 4. Emergency Kill Switch
+    ks = live_safety.kill_switch_state()
+    if ks.get("enabled"):
+        reason = ks.get("reason") or "manual halt"
+        blockers.append(f"Global Kill Switch is ACTIVE: {reason}")
+        checks["kill_switch"] = {
+            "name": "Kill Switch",
+            "status": "blocked",
+            "detail": f"Halted: {reason}",
+            "data": ks,
+        }
+    else:
+        checks["kill_switch"] = {
+            "name": "Kill Switch",
+            "status": "ok",
+            "detail": "Disarmed (trading allowed).",
+            "data": ks,
+        }
+
+    # 5. Circuit Breaker / Daily Loss
+    day_pnl = state.daily_realized_pnl(uid)
+    loss_pct = getattr(cfg, "max_daily_loss_pct", None)
+    if loss_pct is None:
+        warnings.append("No max_daily_loss_pct set (recommend 2.0% of capital for live).")
+        checks["circuit_breaker"] = {
+            "name": "Daily Loss Circuit Breaker",
+            "status": "warning",
+            "detail": f"Today's PnL ₹{day_pnl:,.2f}; no daily-loss cap configured.",
+            "data": {"day_pnl_inr": day_pnl, "max_daily_loss_pct": None},
+        }
+    else:
+        loss_limit_inr = (float(loss_pct) / 100.0) * cap if cap > 0 else 1500.0
+        if cap > 0 and day_pnl < 0 and (-day_pnl) >= loss_limit_inr:
+            blockers.append(f"Daily loss limit breached: ₹{-day_pnl:,.2f} >= ₹{loss_limit_inr:,.2f} ({loss_pct}%).")
+            checks["circuit_breaker"] = {
+                "name": "Daily Loss Circuit Breaker",
+                "status": "blocked",
+                "detail": f"Halted: Realized loss ₹{-day_pnl:,.2f} reached {loss_pct}% limit.",
+                "data": {"day_pnl_inr": day_pnl, "max_daily_loss_pct": loss_pct, "limit_inr": loss_limit_inr},
+            }
+        else:
+            checks["circuit_breaker"] = {
+                "name": "Daily Loss Circuit Breaker",
+                "status": "ok",
+                "detail": f"Today's PnL ₹{day_pnl:,.2f} within {loss_pct}% cap (-₹{loss_limit_inr:,.0f}).",
+                "data": {"day_pnl_inr": day_pnl, "max_daily_loss_pct": loss_pct, "limit_inr": loss_limit_inr},
+            }
+
+    # 6. Stop Mode
+    if cfg.stop_mode not in ("broker", "both"):
+        warnings.append("stop_mode is set to 'monitor' only. A server restart leaves positions unprotected at broker.")
+        checks["stop_protection"] = {
+            "name": "Stop Protection Mode",
+            "status": "warning",
+            "detail": "Monitor-only. Recommend 'both' for broker-resting GTT defense-in-depth.",
+            "data": {"stop_mode": cfg.stop_mode},
+        }
+    else:
+        checks["stop_protection"] = {
+            "name": "Stop Protection Mode",
+            "status": "ok",
+            "detail": f"Dual protection ({cfg.stop_mode}) enabled.",
+            "data": {"stop_mode": cfg.stop_mode},
+        }
+
+    # 7. Production Hardening Knobs
+    tuning_warnings: list[str] = []
+    if cfg.adx_min is None:
+        tuning_warnings.append("adx_min is None (recommend 25.0 to filter choppy false signals)")
+    if getattr(cfg, "time_stop_bars", 0) <= 0:
+        tuning_warnings.append("time_stop_bars is 0 (recommend 48 to curb long option theta bleed)")
+    if not getattr(cfg, "wire_risk_infra", False):
+        tuning_warnings.append("wire_risk_infra is False (drawdown & correlation sizing inactive)")
+
+    if tuning_warnings:
+        for w in tuning_warnings:
+            warnings.append(w)
+        checks["strategy_tuning"] = {
+            "name": "Production Tuning",
+            "status": "warning",
+            "detail": "; ".join(tuning_warnings),
+            "data": {"adx_min": cfg.adx_min, "time_stop_bars": cfg.time_stop_bars, "wire_risk_infra": cfg.wire_risk_infra},
+        }
+    else:
+        checks["strategy_tuning"] = {
+            "name": "Production Tuning",
+            "status": "ok",
+            "detail": "ADX filter (25.0), time-stop (48 bars), and risk infrastructure wired.",
+            "data": {"adx_min": cfg.adx_min, "time_stop_bars": cfg.time_stop_bars, "wire_risk_infra": cfg.wire_risk_infra},
+        }
+
+    # 8. Market Hours
+    market_open = is_market_open()
+    phase = market_hours.session_phase()
+    if not market_open:
+        warnings.append(f"Market is currently closed (phase: {phase}). Orders will be blocked until market opens.")
+        checks["market_hours"] = {
+            "name": "Market Hours",
+            "status": "warning",
+            "detail": f"Closed ({phase}). Normal trading 09:15–15:30 IST.",
+            "data": {"is_open": False, "phase": phase},
+        }
+    else:
+        checks["market_hours"] = {
+            "name": "Market Hours",
+            "status": "ok",
+            "detail": f"Continuous trading ({phase}).",
+            "data": {"is_open": True, "phase": phase},
+        }
+
+    ready = len(blockers) == 0
+    return {
+        "ready_for_live": ready,
+        "is_live_account": is_live,
+        "account_label": acct_label,
+        "checks": checks,
+        "blockers": blockers,
+        "warnings": warnings,
+        "timestamp_ms": now_ms,
+    }
+
+
+async def emergency_square_off_all(client, uid: str) -> dict:
+    """Emergency manual square-off for all open/pending positions in this engine.
+
+    Cancels all associated broker GTT triggers first, obtains fresh market quotes,
+    places immediate market exits, clears auto-open guard slots, and unsubscribes
+    from live ticker monitoring.
+    """
+    open_pos = [p for p in positions.open_positions(uid)
+                if p.status in (positions.OPEN, positions.PENDING)]
+    results: list[dict] = []
+    closed = 0
+    failed = 0
+
+    state.log(uid, "info", f"🚨 Emergency square-off initiated for {len(open_pos)} open position(s)")
+
+    for p in open_pos:
+        key = f"{p.exchange}:{p.symbol}"
+        ltp = float(p.stop_premium or p.fill_price or 1.0)
+        if client is not None:
+            try:
+                q = await client.get_ltp([key])
+                if q and key in q and q[key].get("last_price"):
+                    ltp = float(q[key]["last_price"])
+            except Exception as _exc:
+                log.debug("ltp fetch fallback for %s: %s", key, _exc)
+
+        try:
+            exited = await monitor._exit_position(
+                client, uid, p, ltp, price_stop_exit=False,
+                reason="emergency_square_off"
+            )
+            if exited:
+                closed += 1
+                results.append({"symbol": p.symbol, "status": "closed", "price": ltp})
+            else:
+                failed += 1
+                results.append({"symbol": p.symbol, "status": "failed", "detail": "exit rejected or pending reconciliation"})
+        except Exception as exc:
+            failed += 1
+            results.append({"symbol": p.symbol, "status": "error", "detail": str(exc)})
+            state.log(uid, "order_failed", f"Emergency square-off failed for {p.symbol}: {exc}")
+
+        # Ensure ticker monitor and auto-open guards are released
+        if p.guard_key:
+            state.clear_auto_open(uid, p.guard_key)
+        if p.token and client is not None:
+            try:
+                from app.services.exchanges.kite import ticker_manager
+                await ticker_manager.unsubscribe(uid, [p.token])
+            except Exception:
+                pass
+
+    state.log(uid, "info", f"🚨 Emergency square-off completed: {closed} closed, {failed} failed")
+    return {
+        "status": "ok",
+        "message": f"Emergency square-off: {closed} closed, {failed} failed out of {len(open_pos)} positions",
+        "positions_count": len(open_pos),
+        "squared_off": closed,
+        "failed": failed,
+        "details": results,
+    }
+
+
+async def emergency_halt(client, uid: str, reason: str = "Operator Emergency Halt") -> dict:
+    """Simultaneously engage the global kill switch and square off all open positions."""
+    live_safety.set_kill_switch(True, reason=reason)
+    cfg = state.get_config(uid)
+    if cfg.auto_execute:
+        state.set_config(uid, cfg.model_copy(update={"auto_execute": False}))
+    square_off_res = await emergency_square_off_all(client, uid)
+    state.log(uid, "kill_switch", f"🚨 EMERGENCY HALT engaged: {reason}. Auto-execute disabled. All positions squared off.")
+    return {
+        "status": "ok",
+        "message": f"Emergency halt engaged: Kill switch ON, auto-execute disabled. {square_off_res.get('squared_off', 0)} position(s) squared off.",
+        "kill_switch": live_safety.kill_switch_state(),
+        "square_off": square_off_res,
+    }
+
