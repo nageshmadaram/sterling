@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.engines.gamma_move import (GammaMoveConfig, PositionState, TradeRecord,
-                                    exit_order_price, initial_stop, lots_for,
-                                    realised_inr, risk_multiplier, should_exit,
-                                    sizing_blocker, swing_low_stop, target_price,
-                                    update_trail)
+from app.engines.gamma_move import (GammaMoveConfig, InstrumentRef, PositionState,
+                                    TradeRecord, align_to_tick, exit_order_price,
+                                    initial_stop, lots_for, realised_inr,
+                                    risk_multiplier, should_exit, sizing_blocker,
+                                    swing_low_stop, target_price, update_trail,
+                                    weekday_sessions_held)
 from tests.engines.gamma_move.conftest import bar
 
 CFG = GammaMoveConfig()
@@ -22,9 +23,7 @@ def test_stop_is_the_options_own_swing_low():
 
 
 def test_percent_floor_caps_a_far_swing_low():
-    """A swing low 70% below entry is a stop in name only; the tighter wins."""
-    stop = initial_stop(100.0, series(low=30.0), CFG)
-    assert stop == 70.0                      # the 30% floor, not the 30.0 swing low
+    assert initial_stop(100.0, series(low=30.0), CFG) == 70.0
 
 
 def test_swing_low_wins_when_it_is_tighter():
@@ -32,7 +31,6 @@ def test_swing_low_wins_when_it_is_tighter():
 
 
 def test_inverted_stop_is_a_rejected_setup():
-    """Never entered with the stop quietly moved somewhere it can be honoured."""
     assert initial_stop(50.0, series(low=60.0), CFG) is None
 
 
@@ -43,7 +41,9 @@ def test_target_only_under_percent_target():
 
 
 def position(**kw):
-    base = dict(signal_id="s", instrument=None, entry=100.0, stop=70.0, quantity=500,
+    inst = InstrumentRef(instrument_id="1", tradingsymbol="X26SEP1CE",
+                         option_type="CE", strike=100.0, expiry="2026-09-29")
+    base = dict(signal_id="s", instrument=inst, entry=100.0, stop=70.0, quantity=500,
                 lots=1, entered_ms=0, entry_day="2026-09-20")
     base.update(kw)
     return PositionState(**base)
@@ -54,12 +54,16 @@ def test_stop_fires_before_anything_else():
 
 
 def test_time_stop_counts_sessions_not_hours():
-    """A weekend must not age a position by two."""
     pos = position()
-    assert should_exit(pos, 100.0, 0, "2026-09-20", CFG) is None   # same day
-    pos.sessions_held = 1
-    assert should_exit(pos, 100.0, 0, "2026-09-21", CFG) is None   # one session
-    pos.sessions_held = 2
+    assert should_exit(pos, 100.0, 0, "2026-09-20", CFG) is None
+    assert should_exit(pos, 100.0, 0, "2026-09-21", CFG) is None
+    assert should_exit(pos, 100.0, 0, "2026-09-22", CFG) == "time_stop"
+
+
+def test_weekend_is_one_session_not_three_nights():
+    pos = position(entry_day="2026-09-18")
+    assert weekday_sessions_held("2026-09-18", "2026-09-21") == 1
+    assert should_exit(pos, 100.0, 0, "2026-09-21", CFG) is None
     assert should_exit(pos, 100.0, 0, "2026-09-22", CFG) == "time_stop"
 
 
@@ -68,16 +72,16 @@ def test_trail_only_ratchets_up():
     pos = position()
     update_trail(pos, 200.0, cfg)
     first = pos.trail
-    update_trail(pos, 120.0, cfg)             # price falls back
-    assert pos.trail == first                 # the trail does not follow it down
+    update_trail(pos, 120.0, cfg)
+    assert pos.trail == first
 
 
 def test_trail_waits_for_the_start_threshold():
     cfg = GammaMoveConfig(exit_policy="TRAILING_STOP", trail_pct=20, trail_start_pct=50)
     pos = position()
-    update_trail(pos, 120.0, cfg)             # only +20%
+    update_trail(pos, 120.0, cfg)
     assert pos.trail is None
-    update_trail(pos, 160.0, cfg)             # +60%, past the start
+    update_trail(pos, 160.0, cfg)
     assert pos.trail is not None
 
 
@@ -85,13 +89,22 @@ def test_exit_price_aligns_to_the_tick():
     assert exit_order_price(53.037, 0.05) == 53.05
 
 
+def test_buy_limit_floors_to_the_tick():
+    assert align_to_tick(53.037, 0.05, side="buy") == 53.00
+    assert align_to_tick(53.00, 0.05, side="buy") == 53.00
+
+
 def test_realised_is_per_unit_times_quantity():
     assert realised_inr(position(), 110.0) == 5000.0
 
 
+def test_realised_uses_the_fill_not_the_intended_entry():
+    pos = position(entry=100.0, fill_price=102.0, quantity=500)
+    assert realised_inr(pos, 110.0) == 4000.0
+
+
 class TestSizing:
     def test_risk_budget_sets_the_size(self):
-        # 1% of 500,000 = 5,000; risk per unit 10 x lot 500 = 5,000 -> 1 lot
         assert lots_for(50.0, 40.0, 500, CFG) == 1
 
     def test_premium_outlay_cap_can_bind_instead(self):
@@ -111,8 +124,6 @@ class TestSizing:
 
 
 class TestDescaleLadder:
-    """The one risk rule the source actually states."""
-
     @staticmethod
     def rec(*pnls):
         r = TradeRecord()
@@ -127,9 +138,13 @@ class TestDescaleLadder:
     def test_halves_at_the_threshold(self):
         assert risk_multiplier(self.rec(-100, -100, -100), CFG) == 0.5
 
+    def test_continuing_streak_cuts_again_to_a_quarter(self):
+        assert risk_multiplier(self.rec(*([-100] * 6)), CFG) == 0.25
+
+    def test_four_losses_stay_at_half_until_the_next_packet(self):
+        assert risk_multiplier(self.rec(-100, -100, -100, -100), CFG) == 0.5
+
     def test_one_winner_does_not_restore_full_size(self):
-        """A single win resets the loss streak, so a multiplier derived from the
-        live streak would put full size back on mid-run. The flag latches."""
         assert risk_multiplier(self.rec(-100, -100, -100, 100), CFG) == 0.5
 
     def test_restores_after_the_required_wins(self):
@@ -143,3 +158,15 @@ class TestDescaleLadder:
         r = self.rec(-100, -100, -100)
         big = GammaMoveConfig(capital_inr=5_000_000, max_premium_at_risk_inr=10_000_000)
         assert lots_for(50.0, 40.0, 500, big, r) < lots_for(50.0, 40.0, 500, big)
+
+    def test_lots_mode_also_shrinks(self):
+        r = self.rec(-100, -100, -100)
+        cfg = GammaMoveConfig(sizing_mode="LOTS", lots=2, max_premium_at_risk_inr=10_000_000)
+        assert lots_for(50.0, 40.0, 500, cfg) == 2
+        assert lots_for(50.0, 40.0, 500, cfg, r) == 1
+
+    def test_record_round_trips(self):
+        r = self.rec(-100, -100, -100)
+        clone = TradeRecord.from_dict(r.as_dict())
+        assert clone.descale_step == 1 and clone.descaled
+        assert risk_multiplier(clone, CFG) == 0.5
