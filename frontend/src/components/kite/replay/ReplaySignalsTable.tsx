@@ -87,7 +87,7 @@ const SignalRow = memo(function SignalRow({
         <span className="rd-dir" data-tone={bull ? 'bull' : 'bear'}>{bull ? 'LONG' : 'SHORT'}</span>
       </td>
       <td data-col="strength" style={{ color: 'var(--k-dim)' }}>{ev.strength}</td>
-      <td data-align="right" className="rd-num">{fmtInr(ev.entry)}</td>
+      <td data-align="right" className="rd-num">{fmtInr(ev.premium_entry ?? (ev.strength === 'WATCHING' ? null : ev.entry))}</td>
       <td data-align="right" className="rd-num rd-sl">{fmtInr(ev.stop)}</td>
       <td data-align="right" className="rd-num rd-tp">{fmtInr(ev.target)}</td>
       <td data-align="right" data-col="rr" className="rd-num">

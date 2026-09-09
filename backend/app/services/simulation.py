@@ -2213,11 +2213,15 @@ class SimulationRunner:
             })
         return {"signals": signals, "total": len(signals)}
 
+    def _events_for(self, *names: str) -> list:
+        want = {n.lower() for n in names}
+        return [ev for ev in self._stats.events if str(ev.strategy).lower() in want]
+
     def get_navigator_signals_response(self) -> Dict[str, Any]:
         """Return signals formatted for /api/v1/navigator/signals during simulation."""
         now_ms = int(time.time() * 1000)
         items = []
-        for ev in self._stats.events:
+        for ev in self._events_for("navigator"):
             ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
             items.append({
                 "event_id": f"nav_sim_{ev.instrument}_{ev.time_iso}",
@@ -2251,11 +2255,7 @@ class SimulationRunner:
                     if inst.upper() == v.upper():
                         allowed_syms.add(k)
 
-        has_pure_ae = any(ev.strategy == "adaptive_edge" for ev in self._stats.events)
-        if has_pure_ae:
-            ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "spot_scan")]
-        else:
-            ae_events = [ev for ev in self._stats.events if ev.strategy in ("adaptive_edge", "supertrend", "spot_scan")]
+        ae_events = self._events_for("adaptive_edge", "spot_scan")
 
         if allowed_syms:
             ae_events = [ev for ev in ae_events if ev.instrument in allowed_syms or ev.instrument.upper() in allowed_syms]
@@ -2345,7 +2345,7 @@ class SimulationRunner:
                     m_ness = leg.get("moneyness", "ATM")
                     strike = float(leg.get("strike") or atm_strike)
                     l_size = int(leg.get("lot_size") or lot_size)
-                    prem_spot = float(leg.get("premium_spot") or max(5.0, round(spot_val * 0.02, 2)))
+                    prem_spot = float(leg.get("premium_spot") or round(max(0.05, spot_val * 0.02), 2))
                     prem_sl = float(leg.get("premium_sl") or leg.get("entry_sl") or round(max(2.0, prem_spot * 0.7), 2))
                     spot_move = (curr_spot - spot_val) if is_long else (spot_val - curr_spot)
                     delta_mult = 0.60 if m_ness == "ITM1" else (0.40 if m_ness == "OTM1" else 0.50)
@@ -2377,7 +2377,7 @@ class SimulationRunner:
                         premium_est = float(ev.premium_entry)
                         sl_est = float(ev.premium_sl) if ev.premium_sl else round(max(2.0, premium_est * 0.7), 2)
                     else:
-                        premium_est = max(5.0, round(spot_val * mult, 2))
+                        premium_est = round(max(0.05, spot_val * mult), 2)
                         sl_est = round(max(2.0, premium_est * 0.7), 2)
 
                     # Dynamically calculate option LTP based on current spot movement
@@ -2575,7 +2575,8 @@ class SimulationRunner:
     def get_atm_imbalance_snapshot(self) -> Dict[str, Any]:
         """Return snapshot for ATM Premium Imbalance strategy during simulation."""
         now_ms = int(time.time() * 1000)
-        first_event = self._stats.events[0] if self._stats.events else None
+        atm_events = self._events_for("atm_imbalance")
+        first_event = atm_events[0] if atm_events else None
         sym = first_event.instrument if first_event else "NIFTY"
         price = first_event.entry if first_event else 24175.0
         strike_val = round(price / 50.0) * 50.0
@@ -2627,7 +2628,7 @@ class SimulationRunner:
                 "execution_mode": "paper",
                 "quote_mode": "SYNCHRONIZED",
                 "protection_mode": "RESTING_TARGET_LIMIT",
-                "trades_taken": len(self._stats.events),
+                "trades_taken": len(atm_events),
                 "legs": {
                     "CE": {
                         "instrument_id": f"NSE:{sym}26AUG{int(strike_val)}CE",
@@ -2671,37 +2672,36 @@ class SimulationRunner:
         """Return snapshot for Bear to Bearish Strategy during simulation."""
         now_ms = int(time.time() * 1000)
         rows = []
-        for ev in self._stats.events:
-            if ev.direction.upper() in ("BEARISH", "SHORT", "SELL") or ev.strategy == "bear_to_bearish":
-                ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
-                strike_val = round(ev.entry / 50.0) * 50.0
-                rows.append({
-                    "id": f"bear_sim_{ev.instrument}_{ev.time_iso}",
-                    "underlying": ev.instrument,
-                    "symbol": f"{ev.instrument}26AUG{int(strike_val)}PE",
-                    "exchange": "NFO",
-                    "direction": "BEARISH",
-                    "status": "ARMED" if ev.strength == "STRONG" else "ACTIVE",
-                    "timestamp_ms": ev_ms,
-                    "pcr_open": 1.15,
-                    "pcr_current": 0.72,
-                    "pcr_change_5m": -0.08,
-                    "lower_high_price": round(ev.entry * 1.005, 2),
-                    "spot_price": ev.entry,
-                    "spot_sl": ev.stop,
-                    "spot_target": ev.target,
-                    "option_premium": round(ev.entry * 0.02, 2),
-                    "entry_price": ev.entry,
-                    "stop_loss": ev.stop,
-                    "target_price": ev.target,
-                    "score": 92 if ev.strength == "STRONG" else 75,
-                    "reason": "PCR breakdown below 0.80 + Lower-high structure breach",
-                    "option_type": "PE",
-                    "strike": strike_val,
-                    "expiry": "2026-08-28",
-                    "lot_size": 25 if ev.instrument == "NIFTY" else 15,
-                    "quote_key": f"NSE:{ev.instrument}",
-                })
+        for ev in self._events_for("bear_to_bearish"):
+            ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
+            strike_val = round(ev.entry / 50.0) * 50.0
+            rows.append({
+                "id": f"bear_sim_{ev.instrument}_{ev.time_iso}",
+                "underlying": ev.instrument,
+                "symbol": f"{ev.instrument}26AUG{int(strike_val)}PE",
+                "exchange": "NFO",
+                "direction": "BEARISH",
+                "status": "ARMED" if ev.strength == "STRONG" else "ACTIVE",
+                "timestamp_ms": ev_ms,
+                "pcr_open": 1.15,
+                "pcr_current": 0.72,
+                "pcr_change_5m": -0.08,
+                "lower_high_price": round(ev.entry * 1.005, 2),
+                "spot_price": ev.entry,
+                "spot_sl": ev.stop,
+                "spot_target": ev.target,
+                "option_premium": round(ev.entry * 0.02, 2),
+                "entry_price": ev.entry,
+                "stop_loss": ev.stop,
+                "target_price": ev.target,
+                "score": 92 if ev.strength == "STRONG" else 75,
+                "reason": "PCR breakdown below 0.80 + Lower-high structure breach",
+                "option_type": "PE",
+                "strike": strike_val,
+                "expiry": "2026-08-28",
+                "lot_size": 25 if ev.instrument == "NIFTY" else 15,
+                "quote_key": f"NSE:{ev.instrument}",
+            })
         return {
             "generated_ms": now_ms,
             "scanning": False,

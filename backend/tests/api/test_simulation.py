@@ -493,6 +493,54 @@ async def test_simulation_ideal_friction_mode(september_4_recorded_evidence):
     await simulation_runner.stop()
 
 
+def test_replay_snapshots_do_not_steal_other_engines_entries():
+    """Navigator/ATM/Bear/AE used to paint every event as their own.
+
+    Five SuperTrend prints then showed up as five Navigator entries, five
+    ATM trades, five Bear rows — the same five, on every board.
+    """
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    st = dict(time_iso="10:15:00", timestamp_ms=1, instrument="NIFTY",
+              direction="BULLISH", strength="STRONG",
+              entry=24000.0, stop=23900.0, target=24200.0)
+    simulation_runner._stats.events = [
+        SimSignalEvent(strategy="supertrend", **st),
+        SimSignalEvent(strategy="supertrend", time_iso="10:16:00", timestamp_ms=2,
+                       instrument="BANKNIFTY", direction="BEARISH", strength="STRONG",
+                       entry=52000.0, stop=52100.0, target=51500.0),
+        SimSignalEvent(strategy="gamma_move", time_iso="10:17:00", timestamp_ms=3,
+                       instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+                       entry=1298.0, stop=1280.0, target=1320.0),
+        SimSignalEvent(strategy="navigator", time_iso="10:18:00", timestamp_ms=4,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24010.0, stop=23900.0, target=24200.0),
+        SimSignalEvent(strategy="bear_to_bearish", time_iso="10:19:00", timestamp_ms=5,
+                       instrument="NIFTY", direction="BEARISH", strength="STRONG",
+                       entry=23900.0, stop=24000.0, target=23600.0),
+        SimSignalEvent(strategy="atm_imbalance", time_iso="09:20:00", timestamp_ms=6,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24050.0, stop=23900.0, target=24200.0),
+        SimSignalEvent(strategy="adaptive_edge", time_iso="10:21:00", timestamp_ms=7,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24100.0, stop=24000.0, target=24300.0, premium_entry=150.0),
+    ]
+    nav = simulation_runner.get_navigator_signals_response()
+    assert [i["strategy"] for i in nav["items"]] == ["navigator"]
+    bear = simulation_runner.get_bear_to_bearish_snapshot()
+    assert len(bear["rows"]) == 1
+    assert bear["rows"][0]["underlying"] == "NIFTY"
+    atm = simulation_runner.get_atm_imbalance_snapshot()
+    assert atm["session"]["trades_taken"] == 1
+    assert atm["session"]["underlying"] == "NIFTY"
+    ae = simulation_runner.get_adaptive_edge_snapshot()
+    assert len(ae["signals"]) == 1
+    assert ae["signals"][0]["underlying"] == "NIFTY"
+    assert ae["session"]["entries"] == 1
+    gm = simulation_runner.get_gamma_move_snapshot()
+    assert len(gm["candidates"]) == 1
+    simulation_runner._stats.events = []
+
+
 def test_gamma_move_snapshot_matches_the_live_board_schema():
     """Simulation must publish `candidates` + `config`, not a private `signals` blob.
 

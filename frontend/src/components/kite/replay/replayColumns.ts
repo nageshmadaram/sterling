@@ -18,7 +18,7 @@ export const SIGNAL_CSV_COLUMNS: readonly CsvColumn<ReplaySignal>[] = [
   { header: 'Spot', value: (r) => r.spot ?? '' },
   { header: 'Direction', value: (r) => r.direction },
   { header: 'Strength', value: (r) => r.strength },
-  { header: 'Entry', value: (r) => r.entry },
+  { header: 'Entry', value: (r) => r.premium_entry ?? (r.strength === 'WATCHING' ? '' : r.entry) },
   { header: 'Stop Loss', value: (r) => r.stop },
   { header: 'Target', value: (r) => r.target },
   {
