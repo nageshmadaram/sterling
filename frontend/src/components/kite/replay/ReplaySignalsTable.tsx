@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReplaySignal,
   useFilteredReplayEvents,
@@ -223,12 +223,12 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
   // Selecting a row moves the playhead to that signal — the reverse of clicking
   // a timeline dot. The two directions together are what make the timeline
   // worth having rather than a decoration.
-  const onSelect = (key: string) => {
+  const onSelect = useCallback((key: string) => {
     setSelected(key);
     if (state === 'idle') return;
     const row = rows.find((r) => r.key === key);
     if (row) void transport.seekToPct(scale.pctFor(row.ev.time_iso));
-  };
+  }, [state, rows, scale, transport]);
 
   if (state === 'loading') return <SkeletonRows rows={6} cols={6} />;
 

@@ -556,18 +556,21 @@ async def test_tick_red_signal_exit_requires_counter_arrow(monkeypatch):
     pos.reset("mr3")
     monkeypatch.setattr("app.services.kite_engine.monitor.state.clear_auto_open",
                         lambda *a, **k: None)
-    # reds=3 but no signal flag; in real, scanner sets based on entry_transitions
-    # here we just test the monitor path doesn't blindly exit on reds for this mode
+    # reds=3 but counter_signal_fired is False: monitor must not exit on reds alone
     p = pos.register(pos.OpenPosition(
         uid="mr3", symbol="Y", exchange="NFO", token=2, qty=10,
         entry_premium=100, stop_premium=90, status=pos.OPEN,
-        exit_mode="three_red_signal", current_red_count=3))
+        exit_mode="three_red_signal", current_red_count=3, counter_signal_fired=False))
     client = _FakeClient()
     out = await monitor.on_tick("mr3", 2, 95.0, client=client)  # price ok
-    # monitor red check for this mode still exits on reds>=3 (signal check is in scanner/engine manage)
-    # to keep consistent, monitor uses reds >= thresh; full arrow check stays in generate/manage
-    # so for test, accept that reds trigger, but reason includes mode
-    # (if we want stricter, would need arrow state in pos)
-    assert out is not None or pos.get("mr3", "Y").status != pos.OPEN  # depending
+    assert out is None
+    assert pos.get("mr3", "Y").status == pos.OPEN
+
+    # Now simulate health update recording a fresh counter signal arrow
+    pos.update_health("mr3", "Y", 3, "three_red_signal", counter_signal_fired=True)
+    out = await monitor.on_tick("mr3", 2, 95.0, client=client)
+    assert out == "Y"
+    await confirm_exit("mr3", 95.0)
+    assert pos.get("mr3", "Y") is None or pos.get("mr3", "Y").status == pos.CLOSED
 
 from tests.engines.sterling_kite_engine.execution_fixtures import confirm_exit
