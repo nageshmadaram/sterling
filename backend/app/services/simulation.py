@@ -906,11 +906,6 @@ class SimulationRunner:
         epoch = self._current_sim_epoch if getattr(self, "_current_sim_epoch", None) else time.time()
         bar_dt = datetime.fromtimestamp(epoch, tz=ist)
 
-        count = sum(len(v) for v in self._open_by_symbol.values())
-        if count:
-            log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
-        for sym, book in list(self._open_by_symbol.items()):
-            last_close = None
         def _resolve_last_close(sym: str) -> Optional[float]:
             sym_u = sym.upper()
             canon = _canonical_symbol(sym)
@@ -928,19 +923,12 @@ class SimulationRunner:
             if hasattr(self, "_bar_history"):
                 for s in target_syms:
                     if self._bar_history.get(s):
-                        last_close = float(self._bar_history[s][-1].get("close", 0.0))
-                        break
                         return float(self._bar_history[s][-1].get("close", 0.0))
 
-            if last_close is None and hasattr(self, "_candles") and self._candles:
-                played_idx = getattr(self, "_bars_played", 0)
-                for b in reversed(self._candles[:played_idx]):
             if hasattr(self, "_candles") and self._candles:
                 played_idx = getattr(self, "_bars_played", len(self._candles))
                 for b in reversed(self._candles[:max(1, played_idx)]):
                     if b.get("symbol", "").upper() in target_syms:
-                        last_close = float(b.get("close", 0.0))
-                        break
                         return float(b.get("close", 0.0))
             return None
 
@@ -954,8 +942,6 @@ class SimulationRunner:
             last_close = _resolve_last_close(sym)
             for trade in list(book):
                 exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
-                self._close_position(trade, exit_spot, bar_dt)
-                self._close_position(trade, exit_spot, bar_dt, exit_reason="SESSION_CLOSE")
                 self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
         self._open_by_symbol = {}
 
