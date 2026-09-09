@@ -105,6 +105,12 @@ describe('GammaMoveBoard', () => {
     expect(document.body.textContent).toContain('replay');
   });
 
+  it('does not treat a leftover contract-sim blob as market replay', () => {
+    snap.data = data({ simulation: { simulation: true, status: 'done' } });
+    render(<GammaMoveBoard nowMs={Date.now()} />);
+    expect(screen.getByRole('button', { name: /scan now/i })).not.toBeDisabled();
+  });
+
   it('reads out every blocker rather than sitting silent', () => {
     snap.data = data({ blockers: ['strategy disabled', 'paper mode — no live orders'] });
     render(<GammaMoveBoard nowMs={Date.now()} />);

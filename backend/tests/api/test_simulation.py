@@ -508,6 +508,7 @@ def test_gamma_move_snapshot_matches_the_live_board_schema():
             entry=1298.0, stop=1280.0, target=1320.0,
             opt_type="CE", spot=1298.0,
             level_price=1290.0, level_kind="resistance", level_touches=3,
+            regime="up",
         ),
         SimSignalEvent(
             time_iso="10:16:00", timestamp_ms=1788756360000,
@@ -528,9 +529,46 @@ def test_gamma_move_snapshot_matches_the_live_board_schema():
     assert row["instrument"]["strike"] is None
     assert row["level"]["price"] == 1290.0
     assert row["level"]["price"] != 1300
+    assert row["regime"] == "up"
     assert "open-interest" in row["reason"]
     assert any("open-interest" in b for b in snap["blockers"])
     simulation_runner._stats.events = []
+
+
+def test_gamma_move_snapshot_keeps_one_row_per_underlying():
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="10:15:00", timestamp_ms=1, strategy="gamma_move",
+            instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+            entry=1298.0, stop=1280.0, target=1320.0, opt_type="CE",
+            spot=1290.0, level_price=1290.0, level_kind="resistance",
+            level_touches=2, regime="up",
+        ),
+        SimSignalEvent(
+            time_iso="10:45:00", timestamp_ms=2, strategy="gamma_move",
+            instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+            entry=1301.0, stop=1280.0, target=1320.0, opt_type="CE",
+            spot=1301.0, level_price=1290.0, level_kind="resistance",
+            level_touches=2, regime="up",
+        ),
+    ]
+    snap = simulation_runner.get_gamma_move_snapshot()
+    assert len(snap["candidates"]) == 1
+    assert snap["candidates"][0]["spot"] == 1301.0
+    simulation_runner._stats.events = []
+
+
+def test_gamma_move_candidate_does_not_invent_regime_from_the_leg():
+    from app.services.simulation import _gamma_move_candidate
+    ev = SimSignalEvent(
+        time_iso="10:15:00", timestamp_ms=1, strategy="gamma_move",
+        instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+        entry=1298.0, stop=1280.0, target=1320.0, opt_type="CE",
+        spot=1298.0, level_price=1290.0, level_kind="resistance",
+    )
+    row = _gamma_move_candidate(ev, "2026-08-28")
+    assert row["regime"] == "unknown"
 
 
 def test_gamma_move_watch_needs_enough_history():
@@ -579,6 +617,19 @@ def test_gamma_move_watch_five_minute_tape_is_not_a_daily_window():
                      "time": ts, "volume": 1000, "symbol": "RELIANCE"})
     cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
     assert _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg) is None
+
+
+def test_gamma_move_watch_prefers_stored_daily_over_five_minute(monkeypatch):
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services import simulation as sim
+    monkeypatch.setattr(sim, "_gamma_move_store_daily", lambda *_a, **_k: _gm_daily_pivots())
+    ist_bars = [{"open": 100, "high": 101, "low": 99, "close": 100, "time": i,
+                 "volume": 1, "symbol": "RELIANCE"} for i in range(80)]
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    got = sim._gamma_move_watch_from_bars(
+        ist_bars, 105.0, symbol="RELIANCE", cfg=cfg, prefer_store=True)
+    assert got is not None
+    assert got["strength"] == "WATCHING"
 
 
 def test_gamma_move_watch_emits_on_a_confirmed_daily_stock_level():

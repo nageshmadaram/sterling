@@ -154,6 +154,18 @@ def test_warnings_are_published_for_risky_but_legal_choices(client):
     client.put("/config/gamma-move", json={"stop_mode": "both"})
 
 
+def test_scan_and_arm_are_refused_while_replay_owns_the_board(client, monkeypatch):
+    from app.services.simulation import SimulationRunner
+    monkeypatch.setattr(SimulationRunner, "has_session_view",
+                        property(lambda self: True))
+    scan = client.post("/config/gamma-move/scan")
+    assert scan.status_code == 409
+    assert "replay" in scan.json()["detail"]
+    arm = client.post("/config/gamma-move/arm", json={"signal_id": "x"})
+    assert arm.status_code == 409
+    assert "replay" in arm.json()["detail"]
+
+
 def test_a_rejected_change_does_not_persist(client):
     client.put("/config/gamma-move", json={"min_oi_drop_pct": 3.0})
     client.put("/config/gamma-move", json={"min_oi_drop_pct": 0})

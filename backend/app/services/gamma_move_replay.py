@@ -94,7 +94,11 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
                            (f" (nearest is {nearest:.2f}% away)" if nearest else "")),
                 "summary": summarise([])}
 
-    dte = days_to_expiry(inst.expiry, today) or 0
+    dte = days_to_expiry(inst.expiry, today)
+    if dte is None:
+        return {"tradingsymbol": tradingsymbol, "skipped": True,
+                "reason": f"unparseable expiry {inst.expiry!r}",
+                "summary": summarise([])}
     cand = StrikeCandidate(underlying=underlying, level=near[0], instrument=inst,
                            oi=0, days_to_expiry=dte, spot=spot,
                            premium=bars[-1].close)

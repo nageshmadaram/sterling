@@ -438,6 +438,10 @@ async def gamma_move_snapshot(user: UserContext = Depends(get_current_user)) -> 
 @router.post("/gamma-move/scan")
 async def gamma_move_scan(user: UserContext = Depends(get_current_user)) -> dict:
     """Run one on-demand levels -> strikes -> trigger pass."""
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live scan is off")
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
     if not uid:
         raise HTTPException(status_code=401, detail="authenticated user is required")
@@ -453,6 +457,10 @@ async def gamma_move_scan(user: UserContext = Depends(get_current_user)) -> dict
 async def gamma_move_arm(body: dict = Body(...),
                          user: UserContext = Depends(get_current_user)) -> dict:
     """Enter one armed signal by id."""
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live entry is off")
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
     if not uid:
         raise HTTPException(status_code=401, detail="authenticated user is required")

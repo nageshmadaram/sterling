@@ -94,7 +94,9 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
   const arm = useArmGammaMove();
 
   const data = snapshot.data;
-  const isReplay = Boolean(data?.simulation);
+  // Market replay stamps `{ mode: 'replay' }`. A leftover contract-sim blob
+  // also sits on `simulation` and must not disable live Scan/Buy.
+  const isReplay = String(data?.simulation?.mode || '') === 'replay';
   const open = (data?.positions?.length ?? 0) > 0;
   React.useEffect(() => { setPollMs(open ? 3000 : 0); }, [open]);
 
