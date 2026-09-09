@@ -26,9 +26,6 @@ def expiry_in_window(expiry: str, today: date, cfg: GammaMoveConfig) -> bool:
     if dte is None:
         return False
     if cfg.avoid_expiry_day and dte == 0:
-        # Expiry day itself. The open-interest signal degenerates into settlement
-        # mechanics there and the premium is nearly all gamma already — a
-        # different trade wearing this one's name.
         return False
     return cfg.expiry_dte_min <= dte <= cfg.expiry_dte_max
 
@@ -42,11 +39,7 @@ def select_expiry(expiries: Sequence[str], today: date,
 
 def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
                        cfg: GammaMoveConfig) -> list[InstrumentRef]:
-    """Contracts of the right type whose strike sits near the level.
-
-    The source allows the heaviest strike to be "a couple of strikes up or down"
-    from the exact level, which is what ``strike_window_pct`` expresses.
-    """
+    """Contracts of the right type whose strike sits near the level."""
     want = "CE" if level.kind == "resistance" else "PE"
     if level.price <= 0:
         return []
@@ -56,15 +49,7 @@ def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
 
 
 def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
-    """True when this strike is the chain's heaviest open interest.
-
-    The source marks the highest-OI strike as the wall and only trades it when
-    that wall sits on a spot level. A local max inside the strike window that
-    is not the chain max is a different (weaker) writer cluster. When the
-    caller did not measure the rest of the chain, ``chain_oi_max`` is None and
-    the check is skipped so unit tests and partial feeds stay distinguishable
-    from a measured miss.
-    """
+    """True when this strike is the chain's heaviest open interest."""
     if not required or chain_oi_max is None:
         return True
     return int(oi) >= int(chain_oi_max)
@@ -72,12 +57,7 @@ def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
 
 def spot_through_or_at_strike(spot: float, strike: float, option_type: str,
                               proximity_pct: float) -> bool:
-    """Writers cover when spot has broken through the wall, or is on it.
-
-    CE: spot at/above the strike (up-break). PE: spot at/below. "On it" is
-    the same proximity band the level filter already uses — a tick short of
-    the strike is not a different setup from the source's 998-vs-990 example.
-    """
+    """Writers cover when spot has broken through the wall, or is on it."""
     if spot <= 0 or strike <= 0:
         return False
     band = max(0.0, float(proximity_pct)) / 100.0
@@ -86,14 +66,14 @@ def spot_through_or_at_strike(spot: float, strike: float, option_type: str,
     return float(spot) <= float(strike) * (1.0 + band)
 
 
+def _flag(cfg: GammaMoveConfig, name: str, default: bool = True) -> bool:
+    return bool(getattr(cfg, name, default))
+
+
 def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
                 underlying: str, oi_by_id: dict, premium_by_id: dict, spot: float,
                 today: date, cfg: GammaMoveConfig) -> Optional[StrikeCandidate]:
-    """The highest-open-interest strike at the level -- the source's R4 pick.
-
-    Ties break toward the strike nearest the level, because at equal open
-    interest the nearer strike is the one the break actually threatens.
-    """
+    """The highest-open-interest strike at the level -- the source's R4 pick."""
     best: Optional[StrikeCandidate] = None
     for c in strikes_near_level(contracts, level, cfg):
         oi = int(oi_by_id.get(c.instrument_id) or 0)
@@ -103,14 +83,15 @@ def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
         dte = days_to_expiry(c.expiry, today)
         if dte is None or not expiry_in_window(c.expiry, today, cfg):
             continue
-        if cfg.require_spot_through_strike and not spot_through_or_at_strike(
+        if _flag(cfg, "require_spot_through_strike") and not spot_through_or_at_strike(
                 spot, c.strike, c.option_type, cfg.level_proximity_pct):
             continue
         chain_max = max(
             (int(oi_by_id.get(x.instrument_id) or 0) for x in contracts
              if x.option_type == c.option_type and x.expiry[:10] == c.expiry[:10]),
             default=0)
-        if not is_chain_wall(oi, chain_max or None, required=cfg.require_chain_max_oi):
+        if not is_chain_wall(oi, chain_max or None,
+                             required=_flag(cfg, "require_chain_max_oi")):
             continue
         cand = StrikeCandidate(underlying=underlying, level=level, instrument=c,
                                oi=oi, days_to_expiry=dte, spot=spot, premium=premium,
