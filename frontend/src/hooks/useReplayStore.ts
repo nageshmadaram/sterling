@@ -967,10 +967,13 @@ export const useReplayFocusMode = () => useReplayStore((s) => s.hostFocusMode);
    outside the dock and must not change. */
 
 export function getReplayNowMs(status: ReplayStatus): number | null {
-  if (!status.current_time_iso) return null;
-  const isHoldingReplay = status.state !== 'idle' || status.session_complete === true || (status.stats.trades.length > 0 || status.stats.events.length > 0);
+  const isHoldingReplay =
+    status.state !== 'idle' ||
+    status.session_complete === true ||
+    (status.stats.trades.length > 0 || status.stats.events.length > 0);
   if (!isHoldingReplay) return null;
-  const timeIso = status.current_time_iso.trim();
+  const timeIso = status.current_time_iso ? status.current_time_iso.trim() : '15:30:00';
+  if (!timeIso) return null;
   if (timeIso.includes('T')) {
     if (timeIso.endsWith('Z') || timeIso.includes('+') || (timeIso.lastIndexOf('-') > timeIso.indexOf('T'))) {
       const ms = Date.parse(timeIso);

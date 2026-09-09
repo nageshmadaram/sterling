@@ -92,12 +92,17 @@ async def place_stop(client, *, tradingsymbol: str, exchange: str, qty: int,
         trigger_values = [round(round(float(trigger_premium) / 0.05) * 0.05, 2)]
         trigger_type = K.GTT_TYPE_SINGLE
         orders = [exit_leg]
+    ref_last_price = round(round(float(last_price or trigger_premium) / 0.05) * 0.05, 2)
+    if direction == "long" and trigger_values:
+        ref_last_price = max(ref_last_price, trigger_values[0] + 0.05)
+    elif direction == "short" and trigger_values:
+        ref_last_price = min(ref_last_price, max(0.05, trigger_values[0] - 0.05)) if ref_last_price > 0 else max(0.05, trigger_values[0] - 0.05)
     try:
         res = await client.place_gtt(
             trigger_type=trigger_type,
             tradingsymbol=tradingsymbol,
             exchange=exchange,
-            last_price=round(round(float(last_price or trigger_premium) / 0.05) * 0.05, 2),
+            last_price=ref_last_price,
             trigger_values=trigger_values,
             orders=orders,
         )
@@ -128,13 +133,20 @@ async def move_stop(client, *, trigger_id: int, tradingsymbol: str, exchange: st
         trigger_type, orders = K.GTT_TYPE_OCO, [dict(exit_leg), dict(exit_leg)]
     else:
         trigger_values, trigger_type, orders = [float(trigger_premium)], K.GTT_TYPE_SINGLE, [exit_leg]
+        rounded_trig = round(round(float(trigger_premium) / 0.05) * 0.05, 2)
+        trigger_values, trigger_type, orders = [rounded_trig], K.GTT_TYPE_SINGLE, [exit_leg]
+    ref_last_price = round(round(float(last_price or trigger_premium) / 0.05) * 0.05, 2)
+    if direction == "long" and trigger_values:
+        ref_last_price = max(ref_last_price, trigger_values[0] + 0.05)
+    elif direction == "short" and trigger_values:
+        ref_last_price = min(ref_last_price, max(0.05, trigger_values[0] - 0.05)) if ref_last_price > 0 else max(0.05, trigger_values[0] - 0.05)
     try:
         await client.modify_gtt(
             trigger_id,
             trigger_type=trigger_type,
             tradingsymbol=tradingsymbol,
             exchange=exchange,
-            last_price=float(last_price or trigger_premium),
+            last_price=ref_last_price,
             trigger_values=trigger_values,
             orders=orders,
         )

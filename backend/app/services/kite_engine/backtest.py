@@ -398,7 +398,7 @@ def run_synthetic(
         strike = round(spot0 * (1.0 + sign * moneyness_offset_pct / 100.0), 0)
         # exit bar = red-count over the 3 STs (the live exit_mode rule)
         want = 1 if is_long else -1
-        exit_i, reason = _exit_bar(r, i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock=is_stock)
+        exit_i, reason = _exit_bar(r, i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock)
         # model premium at entry and exit
         held = exit_i - i
         entry_dte = dte_days
