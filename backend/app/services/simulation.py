@@ -3265,13 +3265,9 @@ async def _hydrate_missing_candles(
     effective_target_end = min(end_epoch, now_epoch) if is_today_in_range else end_epoch
 
     for sym in instruments:
-        existing = ohlcv_store.get_candles(sym, resolution, limit=5000, since=check_start)
         existing = ohlcv_store.get_candles(sym, resolution, limit=10000, since=check_start)
         in_range = [c for c in existing if check_start <= c["time"] <= end_epoch]
-        if len(in_range) >= 15:
-            continue  # Already cached locally
 
-        log.info("Missing local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, end_epoch)
         span_sec = max(0, effective_target_end - check_start)
         expected_bars = max(1, span_sec // res_sec)
 
@@ -3318,8 +3314,6 @@ async def _hydrate_missing_candles(
                         from datetime import timezone, timedelta
                         ist_tz = timezone(timedelta(hours=5, minutes=30))
                     from_str = datetime.fromtimestamp(start_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    to_str = datetime.fromtimestamp(end_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    k_res = "5minute" if resolution == "5m" else ("15minute" if resolution == "15m" else "60minute")
                     to_str = datetime.fromtimestamp(effective_target_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     k_res_map = {
                         "1m": "minute",
