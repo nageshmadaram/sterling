@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.engines.gamma_move import GammaMoveConfig, days_to_expiry, expiry_in_window
-from study.gamma_move.step9_engine_replay import chain_oi_max_from_quotes, window_label
+from study.gamma_move.step9_engine_replay import window_label
 
 
 def test_dte_34_is_out_of_the_shipped_window():
@@ -22,15 +22,12 @@ def test_dte_9_is_in_window():
     assert window_label("2026-09-29", today, cfg) == "in"
 
 
-def test_chain_oi_max_uses_same_day_quotes_for_the_leg():
-    quotes = [
-        {"underlying": "RELIANCE", "option_type": "CE", "expiry": "2026-09-29", "oi": 100_000},
-        {"underlying": "RELIANCE", "option_type": "CE", "expiry": "2026-09-29", "oi": 6_000_000},
-        {"underlying": "RELIANCE", "option_type": "PE", "expiry": "2026-09-29", "oi": 9_000_000},
-    ]
-    assert chain_oi_max_from_quotes(
-        quotes, underlying="RELIANCE", option_type="CE", expiry="2026-09-29") == 6_000_000
-    assert chain_oi_max_from_quotes(
-        quotes, underlying="RELIANCE", option_type="PE", expiry="2026-09-29") == 9_000_000
-    assert chain_oi_max_from_quotes(
-        quotes, underlying="TCS", option_type="CE", expiry="2026-09-29") is None
+def test_labelled_replay_disables_the_wall_gate_without_asof_chain_oi():
+    """candidates.json is a top-3 snapshot. Feeding it as chain_oi_max would
+    filter every historical bar with future, partial-chain OI."""
+    from study.gamma_move.step9_engine_replay import labelled_replay_config
+    shipped = GammaMoveConfig()
+    cfg, notes = labelled_replay_config(shipped, dtes=[34, 40, 103])
+    assert cfg.require_chain_max_oi is False
+    assert any("wall_gate=skipped" in n for n in notes)
+    assert any("window=out" in n for n in notes)

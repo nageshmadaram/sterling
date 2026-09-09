@@ -9,7 +9,7 @@ import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from dataclasses import replace
@@ -31,16 +31,35 @@ def window_label(expiry: str, today: date, cfg: GammaMoveConfig) -> str:
     return "in" if expiry_in_window(expiry, today, cfg) else "out"
 
 
-def chain_oi_max_from_quotes(quotes: Sequence[dict], *, underlying: str,
-                             option_type: str, expiry: str) -> Optional[int]:
-    """Max OI on the same name + leg + expiry from same-day quoted candidates."""
-    exp = str(expiry or "")[:10]
-    vals = [int(q.get("oi") or 0) for q in quotes
-            if str(q.get("underlying") or "") == underlying
-            and str(q.get("option_type") or "") == option_type
-            and str(q.get("expiry") or "")[:10] == exp]
-    vals = [v for v in vals if v > 0]
-    return max(vals) if vals else None
+def labelled_replay_config(shipped: GammaMoveConfig,
+                           dtes: Sequence[int]) -> tuple[GammaMoveConfig, list[str]]:
+    """Research copy of the shipped config, with every widening labelled.
+
+    The 26 Aug candidates.json is a top-3 snapshot inside ±8% of spot, not
+    as-of full-chain OI. Attaching that max to every historical bar would
+    filter the past with future, partial-chain open interest. The wall gate
+    stays off until a per-bar chain exists.
+    """
+    notes: list[str] = []
+    cfg = shipped
+    out_of_window = bool(dtes) and any(
+        not (shipped.expiry_dte_min <= d <= shipped.expiry_dte_max)
+        or (shipped.avoid_expiry_day and d == 0) for d in dtes)
+    if out_of_window:
+        widened = max(shipped.expiry_dte_max, max(dtes))
+        cfg = replace(cfg, expiry_dte_max=widened)
+        notes.append(
+            f"window=out sample DTE {min(dtes)}-{max(dtes)}; "
+            f"shipped expiry_dte_max={shipped.expiry_dte_max}; "
+            f"replay widened to {widened} and labelled — not a production-window result")
+    else:
+        notes.append(f"window=in shipped expiry_dte_max={shipped.expiry_dte_max}")
+    if cfg.require_chain_max_oi:
+        cfg = replace(cfg, require_chain_max_oi=False)
+    notes.append(
+        "wall_gate=skipped — no as-of full-chain OI; candidates.json is a "
+        "top-3 snapshot, not a per-bar chain")
+    return cfg, notes
 
 
 def _bar_day(iso: str) -> date:
@@ -50,10 +69,6 @@ def _bar_day(iso: str) -> date:
 def main() -> None:
     opt = json.loads((OUT / "bars.json").read_text())
     spot = json.loads((OUT / "spot_daily.json").read_text())
-    quotes: list[dict] = []
-    cand_path = OUT / "candidates.json"
-    if cand_path.exists():
-        quotes = list((json.loads(cand_path.read_text()) or {}).get("candidates") or [])
 
     shipped = GammaMoveConfig(enabled=True, max_premium_at_risk_inr=200_000,
                               capital_inr=2_000_000)
@@ -67,19 +82,9 @@ def main() -> None:
         if dte is not None:
             dtes.append(dte)
 
-    out_of_window = bool(dtes) and any(
-        not (shipped.expiry_dte_min <= d <= shipped.expiry_dte_max)
-        or (shipped.avoid_expiry_day and d == 0) for d in dtes)
-    window = "out" if out_of_window else "in"
-    cfg = shipped
-    if out_of_window:
-        widened = max(shipped.expiry_dte_max, max(dtes))
-        cfg = replace(shipped, expiry_dte_max=widened)
-        print(f"window={window} sample DTE {min(dtes)}-{max(dtes)}; "
-              f"shipped expiry_dte_max={shipped.expiry_dte_max}; "
-              f"replay widened to {widened} and labelled — not a production-window result")
-    else:
-        print(f"window={window} shipped expiry_dte_max={shipped.expiry_dte_max}")
+    cfg, notes = labelled_replay_config(shipped, dtes)
+    for note in notes:
+        print(note)
 
     results, considered, n_in, n_out = [], 0, 0, 0
     for sym, rec in list(opt.items()):
@@ -125,10 +130,7 @@ def main() -> None:
         cand = StrikeCandidate(
             underlying=name, level=near[0], instrument=inst,
             oi=int(meta["oi"]), days_to_expiry=int(dte if dte is not None else 0),
-            spot=px, premium=meta["ltp"],
-            chain_oi_max=chain_oi_max_from_quotes(
-                quotes, underlying=name, option_type=meta["option_type"],
-                expiry=meta["expiry"]))
+            spot=px, premium=meta["ltp"], chain_oi_max=None)
         reg = regime_of(sc, cfg)
         regimes = {b["date"][:10]: reg for b in rec["bars"]}
         results.append(replay_contract(cand, bars, cfg, regime_by_day=regimes,

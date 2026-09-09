@@ -88,7 +88,8 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
     regime = regime_of(spot_candles, cfg)
     regimes = {datetime.fromtimestamp(b.ts_ms / 1000, _IST).strftime("%Y-%m-%d"): regime
                for b in bars}
-    result = replay_contract(cand, bars, cfg, regime_by_day=regimes)
+    result = replay_contract(cand, bars, cfg, regime_by_day=regimes,
+                             spot_candles=spot_candles)
     result["summary"] = summarise([result])
     result["level"] = {"price": near[0].price, "kind": near[0].kind,
                        "touches": near[0].touches}
@@ -98,4 +99,7 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
     result["caveats"].append(
         "the level is today's, held fixed across the window — a clean walk-forward "
         "would rediscover it bar by bar")
+    result["caveats"].append(
+        "chain_oi_max is unset on this path, so the wall gate is skipped unless "
+        "the live scanner already filled it")
     return result
