@@ -92,6 +92,7 @@ export function primeStore(over: Partial<ReturnType<typeof useReplayStore.getSta
       resolution: '5m',
       strategies: ['all'],
       adaptiveSource: 'both',
+      adaptiveVersion: 'v2_hardened',
       moneyness: ['ATM'],
       lots: 1,
       frictionMode: 'realistic',

@@ -94,17 +94,20 @@ def spot_quote_key(option_name: str) -> str:
 
 # ------------------------------------------------------------------ config
 
-def get_config() -> OIWallFlowConfig:
-    """The persisted config, or the defaults when nothing has been stored.
+def get_config(uid: str | None = None) -> OIWallFlowConfig:
+    """The configuration currently in force.
 
     Two different fallbacks, kept apart on purpose:
 
     * **Nothing stored** -> the real defaults, whatever they are.
     * **Stored but unreadable or invalid** -> defaults with the engine OFF.
     """
+    key = f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY
     try:
         from app.services import db
-        raw = db.get_config(_CONFIG_KEY)
+        raw = db.get_config(key)
+        if not raw and uid:
+            raw = db.get_config(_CONFIG_KEY)
     except Exception:                                              # noqa: BLE001
         log.warning("%s: config store unavailable; running with defaults OFF", STRATEGY_ID)
         return OIWallFlowConfig(enabled=False)
@@ -125,9 +128,9 @@ def get_config() -> OIWallFlowConfig:
         return OIWallFlowConfig(enabled=False)
 
 
-def set_config(values: dict[str, Any]) -> OIWallFlowConfig:
+def set_config(values: dict[str, Any], uid: str | None = None) -> OIWallFlowConfig:
     """Persist a config change. Validation is the engine's, not a second copy."""
-    current = get_config().as_dict()
+    current = get_config(uid).as_dict()
     unknown = sorted(set(values) - set(current))
     if unknown:
         raise ValueError(f"Unknown {STRATEGY_ID} config fields: {', '.join(unknown)}")
@@ -137,7 +140,8 @@ def set_config(values: dict[str, Any]) -> OIWallFlowConfig:
             current[key] = tuple(current[key])
     cfg = OIWallFlowConfig(**current).validate()
     from app.services import db
-    db.set_config(_CONFIG_KEY, json.dumps(cfg.as_dict(), separators=(",", ":")))
+    target_key = f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY
+    db.set_config(target_key, json.dumps(cfg.as_dict(), separators=(",", ":")))
     return cfg
 
 

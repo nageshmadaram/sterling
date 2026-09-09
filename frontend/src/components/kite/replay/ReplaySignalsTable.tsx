@@ -69,6 +69,21 @@ const SignalRow = memo(function SignalRow({
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: strategyTone(ev.strategy) }}>
           <span className="rd-dot-tone" />
           <span style={{ color: 'var(--k-text)', fontWeight: 600 }}>{strategyLabel(ev.strategy)}</span>
+          {(ev.strategy === 'adaptive_edge' || ev.scan_origin) && (
+            <span
+              style={{
+                fontSize: '9.5px',
+                fontWeight: 600,
+                padding: '1px 4px',
+                borderRadius: '3px',
+                background: 'rgba(255, 255, 255, 0.06)',
+                color: ev.scan_origin === 'spot_scan' ? 'var(--k-amber, #f59e0b)' : 'var(--k-cyan, #00b4d8)',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {ev.scan_origin === 'spot_scan' ? 'Spot' : 'AE'}
+            </span>
+          )}
         </span>
       </td>
       <td>
@@ -223,12 +238,16 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
         icon={<Icons.Signal size={20} />}
         title={
           state === 'idle'
-            ? 'No replay loaded'
+            ? barsPlayed > 0
+              ? 'No signals triggered'
+              : 'No replay loaded'
             : 'Watching for signals'
         }
         detail={
           state === 'idle'
-            ? 'Pick a session and press play.'
+            ? barsPlayed > 0
+              ? `${fmtInt(barsPlayed)} bars replayed. No strategy conditions were met during this session.`
+              : 'Pick a session and press play.'
             : `${fmtInt(barsPlayed)} bars replayed so far. Strategies fire when their conditions are met.`
         }
         action={

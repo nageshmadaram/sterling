@@ -144,7 +144,33 @@ function ReplayPlayerBarInfo() {
   const startTime = useReplayStore((s) => s.draft.startTime);
   const pct = useReplayStore((s) => s.status.progress_pct);
   const cfg = useReplayStore((s) => s.status.config);
+  const statusMessage = useReplayStore((s) => s.status.status_message);
   const multiDay = !!cfg?.end_date && cfg.end_date !== cfg?.date;
+
+  if (state === 'loading') {
+    return (
+      <div className="rd-player-bar-info" data-testid="replay-player-bar-info">
+        <span
+          className="rd-player-bar-clock"
+          data-state="loading"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            color: 'var(--k-cyan, #06b6d4)',
+            maxWidth: 420,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={statusMessage || 'Preparing historical candles…'}
+        >
+          <Icons.Spinner size={13} />
+          <span>{statusMessage || 'Preparing replay…'}</span>
+        </span>
+      </div>
+    );
+  }
 
   const displayTime = clock ? fmtTime(clock) : fmtTime(startTime);
   let datePrefix = '';

@@ -631,6 +631,25 @@ def test_new_trail_futures_short_no_update_when_wider():
     assert service._new_trail_for_open(p, [row]) is None
 
 
+def test_new_trail_ignores_opposing_signal_direction():
+    """A position with recorded signal_direction must ignore opposing signals even if
+    there is only one row for that underlying, preventing stop inversions."""
+    p = positions.OpenPosition(
+        uid="tx", symbol="NIFTY26JUNFUT", exchange="NFO", token=1,
+        qty=75, stop_premium=25200.0, direction="short", signal_direction="short",
+        vehicle="futures", underlying="NIFTY 50", status=positions.OPEN)
+    bull_row = EngineSignalRow(
+        underlying="NIFTY 50", token=256265, exchange="NFO",
+        regime="BULL", alignment=AlignmentChip(fast=1, mid=1, slow=1),
+        direction="long", option_type="CE",
+        legs=[OptionLeg(moneyness="ATM", option_type="CE",
+                        option_symbol="NIFTY2562625000CE", strike=25000, expiry=_future_expiry(10),
+                        premium_spot=120.0, premium_sl=85.0, token=112)],
+        spot=25000.0, stop_loss=24800.0, score=85.0,
+        timestamp_ms=1_700_000_000_000)
+    assert service._new_trail_for_open(p, [bull_row]) is None
+
+
 def test_new_trail_futures_translates_the_underlying_level_by_the_entry_basis():
     """The trail arrives as an UNDERLYING level; the position's stop is a FUTURES
     price. Without the basis the two are compared in different units, and on a

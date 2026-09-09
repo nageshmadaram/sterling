@@ -46,6 +46,7 @@ class TradingExchangeAdapter(AuthenticatedExchangeAdapter):
         limit_price: Optional[float] = None,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        **kwargs,
     ) -> dict:
         ...
 

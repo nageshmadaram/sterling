@@ -39,6 +39,7 @@ from app.engines.option_contracts import EXPIRY_SELECTIONS, EXPIRY_SERIES
 DECISION_TIMEFRAMES: frozenset[str] = frozenset({"minute", "3minute", "5minute", "15minute"})
 EXIT_POLICIES: frozenset[str] = frozenset({"TIME_STOP", "TARGET_STOP", "PROTECTION_TRAIL"})
 SIZING_MODES: frozenset[str] = frozenset({"LOTS", "RISK_PCT"})
+STRATEGY_VERSIONS: frozenset[str] = frozenset({"v1_baseline", "v2_hardened"})
 #: Same vocabulary and default as the SuperTrend and Gamma Move engines.
 #: ``broker`` is a GTT that survives this process dying, ``monitor`` is our own
 #: tick loop which exits intrabar but only while we are alive, ``both`` is the
@@ -97,6 +98,8 @@ class AdaptiveEdgeConfig:
     #: paper-trades; it cannot reach real money while promotion is RESEARCH_ONLY.
     enabled: bool = True
     auto_execute: bool = False
+    #: Strategy version: "v1_baseline" (Legacy baseline) vs "v2_hardened" (Production-Hardened)
+    strategy_version: str = "v2_hardened"
 
     # --- universe -----------------------------------------------------------
     #: Same field names, semantics and curated-registry boundary as every other
@@ -222,6 +225,8 @@ class AdaptiveEdgeConfig:
             raise ValueError(f"stop_mode must be one of {sorted(STOP_MODES)}")
         if self.expiry_selection not in EXPIRY_SELECTIONS:
             raise ValueError(f"expiry_selection must be one of {sorted(EXPIRY_SELECTIONS)}")
+        if self.strategy_version not in STRATEGY_VERSIONS:
+            raise ValueError(f"strategy_version must be one of {sorted(STRATEGY_VERSIONS)}")
 
         if not self.scan_indices and not self.scan_stocks and not self.scan_all_stocks:
             raise ValueError("at least one of scan_indices, scan_stocks or scan_all_stocks is required")

@@ -48,12 +48,11 @@ export function useReplayShortcuts(
       if (!store.open) return;
       if (isTextEntry(e.target)) return;
 
-      // The dock owns the keyboard when it owns the screen, or when focus is
-      // inside it. Otherwise another pane's keys are none of our business.
-      const owned =
-        store.mode === 'overlay' ||
-        store.mode === 'fullscreen' ||
-        (rootRef.current?.contains(document.activeElement) ?? false);
+      // The dock owns the keyboard when in fullscreen, or when focus/target is
+      // inside the dock. Otherwise another pane's keys are none of our business.
+      const isInside = rootRef.current?.contains(document.activeElement) ?? false;
+      const isEventInside = rootRef.current?.contains(e.target as Node) ?? false;
+      const owned = store.mode === 'fullscreen' || isInside || isEventInside;
       if (!owned) return;
 
       // While a dialog is up, only Escape (handled by its own trap) applies.
