@@ -1,7 +1,7 @@
 # Gamma Move — validation report
 
 **Run** 2026-08-26 · **Engine** `gamma_move` A310.2 · **Verdict** NOT VALIDATED
-**Scripts** `backend/study/gamma_move/` · **Result file** `study/gamma_move/out/CALIBRATION.json`
+**Source-aligned** 2026-09-09 · **Scripts** `backend/study/gamma_move/` · **Result file** `study/gamma_move/out/CALIBRATION.json`
 
 ---
 
@@ -24,6 +24,9 @@ gamma move, is **not** what the data supports. What the data supports is a much
 older idea: things happen at levels. The engine ships with the trigger intact,
 because it is the source's rule and it is cheap, but the setting that actually
 matters is `level_proximity_pct`, and the config docstring says so.
+
+`validated` stays **false**. Matching the podcast is not the same as beating the
+baseline on in-window data.
 
 ---
 
@@ -197,17 +200,17 @@ only holds when the money is real is a rule the paper results were never measure
 under. Every entry carries a stop, `validate()` refuses a config without one, and
 under the default `stop_mode = both` a broker-side GTT goes on at entry.
 
-The list below is therefore a **research** checklist, not a lock. Six of the eight
-are process rather than code:
+The list below is therefore a **research** checklist, not a lock:
 
 - [ ] Re-run this calibration on data **inside** the expiry window (DTE ≤ 14).
-      NSE stock options are monthly, so the first opportunity is mid-September.
+      First window for the Sep-29 monthly is mid-September 2026. Until that run
+      exists, `validated` stays false and the 26 Aug numbers stay the defaults.
 - [ ] A clean walk-forward that rediscovers levels bar by bar
 - [ ] A win rate stated **with** its break-even threshold
 - [ ] A structure-aware cost model, and the edge surviving it
 - [ ] The regime gate shown to help on in-window data, not just out-of-window
-- [ ] `protection_mode != NONE` and `stop_basis == PERCENT` (enforced in code)
-- [ ] The daily-loss breaker proved to receive this engine's `uid=`
+- [x] Stop required and `stop_basis == PERCENT` (enforced in code)
+- [x] Daily-loss breaker receives this engine's `uid=` (`check_daily_loss=True`)
 - [ ] Paper-traded through a full expiry cycle with the record reconciling
 
 ---
@@ -228,3 +231,40 @@ python3 study/gamma_move/step9_engine_replay.py
 
 Needs a live Kite session. The raw pulls are gitignored and re-fetchable; the
 results (`CALIBRATION.json`, `triggers.json`, `candidates.json`) are tracked.
+
+---
+
+## 7. Source alignment, 2026-09-09
+
+Code now matches the W88GygpXZWI 46:22–1:00 walkthrough. That is **not** a new
+calibration. The 26 Aug numbers stay because the study sample has no chain-wide
+OI series and sits at DTE 34–103, so wall / spot-through / two-step descale
+cannot be re-measured on it.
+
+Shipped and left unchanged:
+
+| field | value | why it does not move |
+|---|---:|---|
+| `level_proximity_pct` | 1.0 | only cell whose CI clears baseline |
+| `min_oi_drop_pct` | 3.0 | p98.6 of evaluable bars |
+| `volume_spike_mult` | 2.5 | p87 |
+| `min_price_gain_pct` | 2.0 | p93 |
+| `regime_period` / `regime_multiplier` | 10 / 2.0 | 3.0 inverts the gate |
+| `min_option_premium` | 10.0 | tick quantum below this |
+| `stop_percent` | 30.0 | 16% hit rate vs 41% at 20 |
+| `max_premium_at_risk_inr` | 60_000 | one-lot floor on liquid names |
+| `max_hold_days` | 2 | source hold |
+| `descale_after_losses` / `descale_factor` | 3 / 0.5 | source two-step ladder |
+
+Landed in code, not in the 26 Aug sample:
+
+- chain-max OI wall and spot-through-or-at-strike
+- two-step size ladder 1.0 → 0.5 → 0.25, persisted on `TradeRecord`
+- weekday session hold from dates
+- forming 15m bar dropped live; kept in replay
+- live NSE spot, spread filter, closed daily bars
+- buy limits floor, exits ceil, PnL vs fill
+
+`descriptor().validated` remains `False`. `descriptor().source_aligned` is `True`.
+Flipping the first without the mid-September in-window rerun would be a claim
+the 26 Aug study already falsified.
