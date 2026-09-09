@@ -494,6 +494,106 @@ def _premium_at(leg: Dict[str, Any], spot_entry: float, spot_level: float) -> fl
     return round(max(0.05, leg["premium"] + move * 0.50), 2)
 
 
+def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[str, Any]]:
+    """Level+regime gate on underlying bars. Never STRONG — no option OI tape."""
+    from app.engines.gamma_move import (
+        Candle, GammaMoveConfig, find_levels, live_levels, option_type_for,
+        regime_allows, regime_of,
+    )
+    from app.services.gamma_move import get_config
+    try:
+        cfg = get_config()
+    except Exception:
+        cfg = GammaMoveConfig()
+    if not cfg.enabled:
+        return None
+    candles: list = []
+    for b in history:
+        try:
+            ts = float(b.get("time") or b.get("timestamp") or 0)
+            ts_ms = int(ts * 1000) if ts < 10_000_000_000 else int(ts)
+        except (TypeError, ValueError):
+            ts_ms = 0
+        candles.append(Candle(
+            ts_ms=ts_ms,
+            open=float(b.get("open") or 0),
+            high=float(b.get("high") or 0),
+            low=float(b.get("low") or 0),
+            close=float(b.get("close") or 0),
+            volume=int(float(b.get("volume") or 0)),
+        ))
+    if len(candles) < cfg.pivot_lookback * 2 + 10:
+        return None
+    levels = find_levels(
+        candles,
+        pivot_lookback=cfg.pivot_lookback,
+        cluster_pct=cfg.level_cluster_pct,
+        min_touches=cfg.min_level_touches,
+        window=cfg.level_lookback_days,
+    )
+    near = live_levels(levels, close, cfg.level_proximity_pct)
+    if not near:
+        return None
+    if cfg.regime_enabled:
+        regime = regime_of(candles, cfg)
+        near = [lv for lv in near if regime_allows(regime, option_type_for(lv), cfg)]  # type: ignore[arg-type]
+        if not near:
+            return None
+    want = option_type_for(near[0])
+    return {
+        "strategy": "gamma_move",
+        "direction": "BULLISH" if want == "CE" else "BEARISH",
+        "strength": "WATCHING",
+    }
+
+
+def _gamma_move_candidate(ev: "SimSignalEvent", sim_date: str) -> Dict[str, Any]:
+    opt = ev.opt_type or ("CE" if ev.direction.upper() in ("BULLISH", "LONG", "BUY") else "PE")
+    kind = "resistance" if opt == "CE" else "support"
+    strike = float(ev.strike or ev.entry or 0)
+    spot = float(ev.spot or ev.entry or 0)
+    premium = float(ev.premium_entry or 0)
+    dist = abs(spot - strike) / strike * 100.0 if strike else 0.0
+    symbol = ev.contract or f"{ev.instrument}{opt}"
+    return {
+        "id": f"{symbol}@{kind}:{int(strike)}",
+        "state": "watching",
+        "at_ms": ev.timestamp_ms,
+        "underlying": ev.instrument,
+        "regime": "up" if opt == "CE" else "down",
+        "reason": "replay has no option open-interest tape — trigger cannot fire",
+        "exit_reason": None,
+        "entry_day": sim_date,
+        "instrument": {
+            "instrument_id": symbol,
+            "tradingsymbol": symbol,
+            "exchange": "NFO",
+            "option_type": opt,
+            "strike": strike,
+            "expiry": sim_date,
+            "lot_size": 25 if ev.instrument.upper() in (
+                "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX") else 500,
+            "tick_size": 0.05,
+        },
+        "level": {
+            "price": strike, "kind": kind, "touches": 2, "distance_pct": round(dist, 2),
+        },
+        "oi": 0,
+        "days_to_expiry": 0,
+        "spot": spot,
+        "metrics": None,
+        "levels": {
+            "ltp": premium or None,
+            "entry": premium or None,
+            "stop": ev.premium_sl,
+            "trail": None,
+            "target": ev.premium_target,
+            "exit": None,
+        },
+        "sizing": {"lots": None, "quantity": None, "at_risk_inr": None, "deployed_inr": None},
+    }
+
+
 def _apply_friction(
     raw_entry: float,
     raw_exit: float,
@@ -2479,83 +2579,58 @@ class SimulationRunner:
         }
 
     def get_gamma_move_snapshot(self) -> Dict[str, Any]:
-        """Return snapshot for Gamma Move Strategy during simulation."""
+        """Live board schema. Only events this engine actually emitted.
+
+        Replay has underlying OHLCV, not 15m option OI, so candidates are
+        watching rows with an honest reason — never invented trigger numbers.
+        """
         now_ms = int(time.time() * 1000)
-        cfg = self._config
-        sim_date = cfg.date if cfg else "2026-08-28"
+        sim_date = self._config.date if self._config else ""
+        from app.services.gamma_move import descriptor, get_config
+        try:
+            cfg_obj = get_config()
+            cfg_dict = cfg_obj.as_dict()
+            desc = descriptor()
+            enabled = cfg_obj.enabled
+            warnings = list(cfg_obj.warnings())
+        except Exception:
+            cfg_dict, desc, enabled, warnings = {}, {}, True, []
 
-        signals = []
-        for i, ev in enumerate(self._stats.events):
-            ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
-            is_long = ev.direction.upper() in ("BULLISH", "LONG", "BUY")
-            opt_type = "CE" if is_long else "PE"
-            step = 100.0 if "SENSEX" in ev.instrument.upper() or "BANKNIFTY" in ev.instrument.upper() else (50.0 if "NIFTY" in ev.instrument.upper() else 20.0)
-            strike_val = round(ev.entry / step) * step
-            premium_est = round(max(5.0, ev.entry * 0.02), 2)
-
-            curr_spot = ev.entry
-            inst_u = ev.instrument.upper()
-            target_syms = {inst_u}
-            from app.services.ohlcv_store import INDEX_ALIASES
-            for k, v in INDEX_ALIASES.items():
-                if inst_u in (k.upper(), v.upper()):
-                    target_syms.add(k.upper())
-                    target_syms.add(v.upper())
-
-            found_bar = False
-            if hasattr(self, "_bar_history") and self._bar_history:
-                for sym_key in target_syms:
-                    bars = self._bar_history.get(sym_key)
-                    if bars:
-                        curr_spot = float(bars[-1].get("close") or ev.entry)
-                        found_bar = True
-                        break
-
-            if not found_bar and hasattr(self, "_candles") and self._candles:
-                played_idx = getattr(self, "_bars_played", 0)
-                for b in reversed(self._candles[:played_idx]):
-                    if b.get("symbol", "").upper() in target_syms:
-                        curr_spot = float(b.get("close") or ev.entry)
-                        break
-
-            spot_move = (curr_spot - ev.entry) if is_long else (ev.entry - curr_spot)
-            current_ltp = round(max(0.05, premium_est + spot_move * 0.50), 2)
-
-            signals.append({
-                "instrument": {
-                    "tradingsymbol": f"{ev.instrument}26AUG{int(strike_val)}{opt_type}",
-                    "exchange": "BFO" if "SENSEX" in ev.instrument.upper() else "NFO",
-                    "kind": "option",
-                    "option_type": opt_type,
-                    "strike": strike_val,
-                    "expiry": sim_date,
-                    "lot_size": 15 if "NIFTY" in ev.instrument.upper() else (10 if "SENSEX" in ev.instrument.upper() else 500),
-                },
-                "underlying": ev.instrument,
-                "state": "armed" if ev.strength == "STRONG" else "watching",
-                "direction": "long" if is_long else "short",
-                "generated_at": f"{sim_date}T{ev.time_iso}+05:30",
-                "generated_at_ms": ev_ms,
-                "spot_at_eval": ev.entry,
-                "spot_level": ev.entry,
-                "level_type": "SUPPORT" if is_long else "RESISTANCE",
-                "distance_pct": 0.15,
-                "score": 88.0 if ev.strength == "STRONG" else 70.0,
-                "ltp": current_ltp,
-                "entry_premium": premium_est,
-                "stop_premium": round(premium_est * 0.7, 2),
-                "target_premium": round(premium_est * 1.5, 2),
-                "origin": "level_bounce" if is_long else "level_rejection",
-                "rejection_reason": None,
-            })
-
+        events = [ev for ev in self._stats.events if ev.strategy == "gamma_move"]
+        candidates = [_gamma_move_candidate(ev, sim_date) for ev in events]
+        names = sorted({ev.instrument for ev in events})
+        blockers = [
+            "replay has no 15-minute option open-interest tape — the trigger cannot fire",
+        ]
+        if not events:
+            blockers.append("no underlying is inside a confirmed level on this replay tape")
+        warnings.append(
+            "not validated: simulation shows the level filter only. "
+            "Do not read watching rows as entries."
+        )
         return {
-            "generated_at": f"{sim_date}T09:16:31+05:30",
-            "signals": signals,
+            "strategy": {**desc, "enabled": enabled},
+            "config": cfg_dict,
+            "scan": {"last_run_ms": now_ms, "total_seconds": 0.0},
+            "session": None,
+            "simulation": {"mode": "replay"},
+            "candidates": candidates,
             "positions": [],
-            "blockers": [],
-            "universe": {"underlyings": len(set(ev.instrument for ev in self._stats.events)) or 1},
-            "mode": {"is_paper": True},
+            "record": {
+                "trades": 0, "wins": 0, "losses": 0, "win_rate": None,
+                "consecutive_losses": 0, "consecutive_wins": 0,
+                "realised_inr": 0.0, "day_realised_inr": 0.0, "day": sim_date,
+                "verdict": "simulation replay — trigger not evaluated",
+            },
+            "orphan_positions": [],
+            "blockers": blockers,
+            "universe": {"underlyings": len(names), "sample": names[:10]},
+            "mode": {
+                "is_paper": True,
+                "auto_execute": False,
+                "note": "Replay simulation. Paper/live is the account's Trading Mode.",
+            },
+            "warnings": warnings,
         }
 
     def get_nifty_orb_signals_response(self) -> Dict[str, Any]:
@@ -2871,6 +2946,15 @@ class SimulationRunner:
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
+
+        # 4b. Gamma Move: shipped level+regime gates on the underlying.
+        # The 15m OI trigger cannot run on this tape, so strength stays WATCHING.
+        try:
+            gm = _gamma_move_watch_from_bars(history, close)
+            if gm:
+                signals_to_fire.append(gm)
+        except Exception as exc:
+            log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
 
         # 5. ATM Premium Imbalance: Canonical Opening Window Session Trade (max 1/day)
         is_open_window = "09:15:00" <= bar_time_str <= "09:30:00"

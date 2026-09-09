@@ -493,6 +493,47 @@ async def test_simulation_ideal_friction_mode(september_4_recorded_evidence):
     await simulation_runner.stop()
 
 
+def test_gamma_move_snapshot_matches_the_live_board_schema():
+    """Simulation must publish `candidates` + `config`, not a private `signals` blob.
+
+    The live adapter reads those keys. A sim payload that only has `signals`
+    makes Gamma Move disappear from the board during replay.
+    """
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="10:15:00", timestamp_ms=1788756300000,
+            strategy="gamma_move", instrument="RELIANCE",
+            direction="BULLISH", strength="WATCHING",
+            entry=1298.0, stop=1280.0, target=1320.0,
+            contract="RELIANCE26AUG1300CE", opt_type="CE", strike=1300.0,
+            spot=1298.0, premium_entry=53.0, premium_sl=37.0, premium_target=80.0,
+        ),
+        SimSignalEvent(
+            time_iso="10:16:00", timestamp_ms=1788756360000,
+            strategy="supertrend", instrument="NIFTY",
+            direction="BULLISH", strength="STRONG",
+            entry=24000.0, stop=23900.0, target=24200.0,
+        ),
+    ]
+    snap = simulation_runner.get_gamma_move_snapshot()
+    assert snap["strategy"]["id"] == "gamma_move"
+    assert snap["config"]["require_chain_max_oi"] is True
+    assert len(snap["candidates"]) == 1
+    row = snap["candidates"][0]
+    assert row["state"] == "watching"
+    assert row["metrics"] is None
+    assert "open-interest" in row["reason"]
+    assert any("open-interest" in b for b in snap["blockers"])
+    simulation_runner._stats.events = []
+
+
+def test_gamma_move_watch_needs_enough_history():
+    from app.services.simulation import _gamma_move_watch_from_bars
+    short = [{"open": 100, "high": 101, "low": 99, "close": 100, "time": i} for i in range(5)]
+    assert _gamma_move_watch_from_bars(short, 100.0) is None
+
+
 def test_adaptive_edge_snapshot_dynamic_ltp():
     """Verify get_adaptive_edge_snapshot dynamically tracks current spot and produces points delta."""
     from app.services.simulation import SimSignalEvent

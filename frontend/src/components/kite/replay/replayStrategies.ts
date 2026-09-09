@@ -27,6 +27,7 @@ export const REPLAY_STRATEGIES: readonly ReplayStrategy[] = [
   { id: 'atm_imbalance', label: 'ATM Imbalance', tone: 'var(--k-amber)' },
   { id: 'navigator', label: 'Navigator', tone: 'var(--k-emerald)' },
   { id: 'nifty_orb', label: 'NIFTY ORB', tone: 'var(--k-orange)' },
+  { id: 'gamma_move', label: 'Gamma Move', tone: 'var(--k-pink, #c45c8a)' },
 ] as const;
 
 const BY_ID = new Map(REPLAY_STRATEGIES.map((s) => [s.id, s]));

@@ -68,6 +68,23 @@ describe('gammaMoveToBoard', () => {
     expect(gammaMoveToBoard(null)).toEqual([]);
   });
 
+  it('does not throw when a simulation payload omits config or nested levels', () => {
+    const rows = gammaMoveToBoard({
+      candidates: [{
+        id: 'sim-1', state: 'watching', at_ms: 1, underlying: 'RELIANCE',
+        regime: 'up', reason: 'replay has no option open-interest tape',
+        instrument: { instrument_id: 'x', tradingsymbol: 'RELIANCE26AUG1300CE',
+          option_type: 'CE', strike: 1300, expiry: '2026-08-28', lot_size: 500,
+          tick_size: 0.05, exchange: 'NFO' },
+        level: { price: 1300, kind: 'resistance', touches: 2, distance_pct: 0.15 },
+        oi: 0, days_to_expiry: 2, spot: 1298, metrics: null,
+      }],
+    } as unknown as GammaMoveSnapshot);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('watching');
+    expect(rows[0].levels.entry).toBeNull();
+  });
+
   it('maps an armed candidate onto the shared contract', () => {
     const [s] = gammaMoveToBoard(snap());
     expect(s.engine).toBe('gamma_move');
