@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .config import (CALIBRATED_FIELDS, CALIBRATION, EXIT_POLICIES, GammaMoveConfig,
                      LEVEL_TIMEFRAMES, RESEARCH_ONLY_EXIT_POLICIES, SIZING_MODES,
-                     STOP_BASES, STOP_MODES, TRIGGER_TIMEFRAMES)
+                     SOURCE_GATES, STOP_BASES, STOP_MODES, TRIGGER_TIMEFRAMES)
 from .exit import (build_exit_event, exit_order_price, initial_stop, realised_inr,
                    should_exit, swing_low_stop, target_price, update_trail,
                    weekday_sessions_held)
@@ -26,7 +26,8 @@ CONTRACT_VERSION = "A310.2"
 
 __all__ = [
     "STRATEGY_ID", "STRATEGY_NAME", "CONTRACT_VERSION",
-    "GammaMoveConfig", "CALIBRATION", "CALIBRATED_FIELDS", "EXIT_POLICIES",
+    "GammaMoveConfig", "CALIBRATION", "CALIBRATED_FIELDS", "SOURCE_GATES",
+    "EXIT_POLICIES",
     "LEVEL_TIMEFRAMES", "TRIGGER_TIMEFRAMES", "STOP_BASES", "SIZING_MODES",
     "STOP_MODES", "RESEARCH_ONLY_EXIT_POLICIES",
     "GammaMoveStrategy", "SessionState", "Decision", "Intent", "Phase",
