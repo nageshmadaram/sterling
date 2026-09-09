@@ -156,3 +156,41 @@ def test_monte_carlo_resampling_on_sufficient_trades(sample_real_candles):
         assert result.monte_carlo.simulations == 500
         assert isinstance(result.monte_carlo.mean_return_pct, float)
         assert 0.0 <= result.monte_carlo.prob_profit_pct <= 100.0
+
+
+def test_adaptive_edge_v1_vs_v2_signals():
+    # Build series with 09:15 candle and high wick
+    dts = pd.date_range("2026-05-01 09:15:00", periods=30, freq="5min")
+    df = pd.DataFrame({
+        "open": [24500.0] * 30,
+        "high": [24550.0] * 30,
+        "low": [24490.0] * 30,
+        "close": [24510.0] * 30, # lower close, long upper wick
+        "volume": [50000.0] * 30,
+        "dt": dts,
+    })
+    # V1 generates signals indiscriminately
+    long_v1, _ = generate_strategy_signals(df, "adaptive_edge", {"strategy_version": "v1_baseline"})
+    long_v2, _ = generate_strategy_signals(df, "adaptive_edge", {"strategy_version": "v2_hardened"})
+    # First candle at 09:15 should be locked out in V2
+    assert not bool(long_v2.iloc[0])
+
+
+def test_adaptive_edge_comparison_run(sample_real_candles):
+    from app.engines.backtest.unified_engine import run_adaptive_edge_comparison
+    req = UnifiedBacktestRequest(
+        strategy="adaptive_edge",
+        symbol="NIFTY 50",
+        timeframe="5m",
+        starting_capital=150000.0,
+        num_lots=2,
+    )
+    res = run_adaptive_edge_comparison(sample_real_candles, req, data_source_label="TEST")
+    assert "v1" in res
+    assert "v2" in res
+    assert "comparison" in res
+    cmp = res["comparison"]
+    assert "net_pnl_delta_inr" in cmp
+    assert "toxic_trades_avoided" in cmp
+    assert "stagnation_exits" in cmp
+

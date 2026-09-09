@@ -10,8 +10,17 @@ let snapshotState: { data: AdaptiveEdgeSnapshot | undefined; isLoading: boolean;
   error: null,
 };
 
+let mockVersion = 'v2_hardened';
+const mockMutate = vi.fn((vars) => {
+  if (vars?.strategy_version) {
+    mockVersion = vars.strategy_version;
+  }
+});
+
 vi.mock('../../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeSnapshot: () => snapshotState,
+  useAdaptiveEdgeEngineConfig: () => ({ data: { config: { strategy_version: mockVersion } } }),
+  useSetAdaptiveEdgeEngineConfig: () => ({ mutate: mockMutate, isPending: false }),
 }));
 
 function makeSnapshot(): AdaptiveEdgeSnapshot {
@@ -209,5 +218,17 @@ describe('AdaptiveEdgeBoard — Spot / AE source toggles', () => {
     );
     expect(screen.getByText('NIFTY')).toBeInTheDocument();
     expect(screen.queryByText('BANKNIFTY')).not.toBeInTheDocument();
+  });
+
+  it('renders engine version toggle and switches version on click', () => {
+    mockVersion = 'v2_hardened';
+    render(<AdaptiveEdgeBoard />);
+
+    const versionBtn = screen.getByTestId('ae-board-version-toggle');
+    expect(versionBtn).toBeInTheDocument();
+    expect(versionBtn).toHaveTextContent('V2 HARDENED');
+
+    fireEvent.click(versionBtn);
+    expect(mockMutate).toHaveBeenCalledWith({ strategy_version: 'v1_baseline' });
   });
 });

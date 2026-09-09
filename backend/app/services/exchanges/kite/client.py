@@ -80,12 +80,13 @@ def _parse_kite_ts(ts_str) -> int:
 
 
 def _aggregate_4h(candles_1h: List[Candle]) -> List[Candle]:
-    """Group 1H candles into 4H buckets."""
+    """Group 1H candles into 4H buckets, partitioned by trading day in IST."""
     result: List[Candle] = []
     buf: List[Candle] = []
-    for c in candles_1h:
-        buf.append(c)
-        if len(buf) == 4:
+    curr_date = None
+
+    def _flush():
+        if buf:
             result.append(Candle(
                 timestamp_ms=buf[0].timestamp_ms,
                 open=buf[0].open,
@@ -94,7 +95,20 @@ def _aggregate_4h(candles_1h: List[Candle]) -> List[Candle]:
                 close=buf[-1].close,
                 volume=sum(x.volume for x in buf),
             ))
-            buf = []
+            buf.clear()
+
+    for c in candles_1h:
+        dt = datetime.fromtimestamp(c.timestamp_ms / 1000.0, tz=_IST)
+        c_date = dt.date()
+        if curr_date is not None and c_date != curr_date:
+            _flush()
+        curr_date = c_date
+        buf.append(c)
+        if len(buf) == 4:
+            _flush()
+    _flush()
+    return result
+
 class AsyncOrderRateLimiter:
     """Token-bucket rate limiter enforcing Zerodha Kite's 3.0 req/sec limit across concurrent order submissions."""
 
@@ -443,9 +457,17 @@ class KiteClient(TradingExchangeAdapter):
         exchange, tradingsymbol = self._split_symbol(symbol, kwargs.get("exchange"))
         txn = K.TXN_BUY if str(side).lower() in ("buy", "long") else K.TXN_SELL
         kite_ot = kwargs.get("kite_order_type")
-        if kite_ot is None:
-            kite_ot = K.ORDER_TYPE_LIMIT if str(order_type).lower().startswith("limit") else K.ORDER_TYPE_MARKET
         trigger_price = kwargs.get("trigger_price", stop_loss)
+        if kite_ot is None:
+            ot_lower = str(order_type).lower()
+            if ot_lower in ("sl", "stop_loss_limit", "stop_limit"):
+                kite_ot = K.ORDER_TYPE_SL
+            elif ot_lower in ("slm", "sl_m", "stop_loss", "stop_loss_market", "stop_market"):
+                kite_ot = K.ORDER_TYPE_SLM
+            elif ot_lower.startswith("limit"):
+                kite_ot = K.ORDER_TYPE_LIMIT
+            else:
+                kite_ot = K.ORDER_TYPE_MARKET
         validity = K.VALIDITY_IOC if str(time_in_force).lower() == "ioc" else K.VALIDITY_DAY
         return await self._place(
             variety=kwargs.get("variety", K.VARIETY_REGULAR),
@@ -464,25 +486,31 @@ class KiteClient(TradingExchangeAdapter):
         order_type: str = "market_order", limit_price: Optional[float] = None,
         stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
         exchange: str = K.EXCHANGE_NFO, tag: Optional[str] = None,
+        **kwargs,
     ) -> dict:
         """Place an option order. ``exchange`` is NFO for NSE-segment options
         (NIFTY/BANKNIFTY/FINNIFTY + equity options) or BFO for SENSEX/BSE options."""
+        product = kwargs.pop("product", K.PRODUCT_NRML)
         return await self.place_order(
             option_symbol, side, size, order_type=order_type, limit_price=limit_price,
-            exchange=exchange, product=K.PRODUCT_NRML, stop_loss=stop_loss, tag=tag, allow_amo=False,
+            exchange=exchange, product=product, stop_loss=stop_loss, tag=tag, allow_amo=False,
+            **kwargs,
         )
 
     async def place_order_future(
         self, tradingsymbol: str, side: str, size: float,
         order_type: str = "market_order", limit_price: Optional[float] = None,
         exchange: str = K.EXCHANGE_NFO, tag: Optional[str] = None,
+        **kwargs,
     ) -> dict:
         """Place a futures order (BUY or SELL). Two-sided: directional mode
         opens with BUY (long) or SELL (short) and exits with the opposite.
         Uses NRML product for overnight carry."""
+        product = kwargs.pop("product", K.PRODUCT_NRML)
         return await self.place_order(
             tradingsymbol, side, size, order_type=order_type, limit_price=limit_price,
-            exchange=exchange, product=K.PRODUCT_NRML, tag=tag, allow_amo=False,
+            exchange=exchange, product=product, tag=tag, allow_amo=False,
+            **kwargs,
         )
 
     async def cancel_order(self, order_id: str, product_id: int = 0, variety: str = K.VARIETY_REGULAR) -> dict:

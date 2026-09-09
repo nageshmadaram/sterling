@@ -132,3 +132,27 @@ export interface UnifiedBacktestResult {
   monte_carlo?: MonteCarloSummary;
   timestamp_ms: number;
 }
+
+export interface AdaptiveEdgeComparisonMetrics {
+  net_pnl_delta_inr: number;
+  total_return_delta_pct: number;
+  win_rate_delta_pct: number;
+  profit_factor_v1: number | null;
+  profit_factor_v2: number | null;
+  max_drawdown_reduction_pct: number;
+  sharpe_delta: number;
+  sortino_delta: number;
+  trades_v1: number;
+  trades_v2: number;
+  toxic_trades_avoided: number;
+  stagnation_exits: number;
+  tranche_a_scaled: number;
+  friction_saved_inr: number;
+}
+
+export interface AdaptiveEdgeComparisonResult {
+  v1: UnifiedBacktestResult;
+  v2: UnifiedBacktestResult;
+  comparison: AdaptiveEdgeComparisonMetrics;
+}
+

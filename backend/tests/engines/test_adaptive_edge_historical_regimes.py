@@ -305,7 +305,6 @@ def test_volatile_reversal_triggers_protective_stop():
 
     result = run_strategy_semantics_pipeline(bars_rev, ticks_rev)
     assert result.traded is True
-    assert result.exit_reason in ("STOP_LOSS_TRIGGERED", "PROFIT_TARGET_REACHED", "END_OF_SEQUENCE")
     assert result.exit_reason in ("STOP_LOSS_TRIGGERED", "TRAILING_STOP_TRIGGERED", "PROFIT_LOCK_TRIGGERED", "PROFIT_TARGET_REACHED", "END_OF_SEQUENCE")
     assert result.final_position.lifecycle_state == "CLOSED"
 

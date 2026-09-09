@@ -20,7 +20,7 @@ export function ReplayFooterChip() {
   const setOpen = useReplayStore((s) => s.setOpen);
   const state = useReplayState();
   const clock = useReplayStore((s) => s.status.current_time_iso);
-  const date = useReplayStore((s) => s.status.config?.date);
+  const date = useReplayStore((s) => s.status.current_date || s.status.config?.date);
   const speed = useReplayStore((s) => s.status.config?.speed);
   const signals = useReplayStore((s) => s.status.stats.signals_fired);
   const errorMsg = useReplayStore((s) => s.error?.message);

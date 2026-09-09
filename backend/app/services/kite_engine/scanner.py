@@ -884,6 +884,10 @@ class KiteEngineScanner:
             now_ms = int(time.time() * 1000)  # retention cutoff for ended signals
             rows: List[EngineSignalRow] = []
             prior_premium_snapshots = _prior_leg_snapshots(us.rows)
+            initial_active_confluence = {
+                r.underlying: r for r in us.rows
+                if getattr(r, "source", "") == "confluence" and getattr(r, "is_active", False)
+            }
             diag = ScanDiag(universe=len(universe),
                             indices=sum(1 for i in universe if i.is_index))
 
@@ -897,7 +901,12 @@ class KiteEngineScanner:
             # instead of waiting for the whole phase (spot / derivatives / confluence)
             # to finish. Defined up front so every phase's per-item loop can call it.
             def _flush() -> None:
-                us.rows = _compile_rows(rows)
+                active_conf_underlyings = {r.underlying for r in rows if getattr(r, "source", "") == "confluence"}
+                preserved = [
+                    conf_row for und, conf_row in initial_active_confluence.items()
+                    if und not in active_conf_underlyings
+                ]
+                us.rows = _compile_rows(rows + preserved)
                 us.generated_ms = int(time.time() * 1000)
                 model_rows = [r.model_dump() for r in us.rows]
                 state.save_signal_cache(uid, model_rows, us.generated_ms)
@@ -1166,10 +1175,10 @@ class KiteEngineScanner:
                 chain = chain_rows_for(option_rows, item.tradingsymbol, today)
                 ordered = sorted(moneyness, key=lambda m: _MONEYNESS_ORDER.get(m, 99))
                 latest_ts = candles[-1].timestamp_ms
-                prior_active_confluence = {
-                    r.underlying: r for r in us.rows
-                    if getattr(r, "source", "") == "confluence" and getattr(r, "is_active", False)
-                }
+                prior_active_confluence = dict(initial_active_confluence)
+                for r in rows:
+                    if getattr(r, "source", "") == "confluence" and getattr(r, "is_active", False):
+                        prior_active_confluence[r.underlying] = r
                 retained_rows = _retain_signals(eval_rows, now_ms)
 
                 # Confluence must exist on one bar; never join an old underlying
