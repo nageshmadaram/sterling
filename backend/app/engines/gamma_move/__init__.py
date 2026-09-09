@@ -31,8 +31,8 @@ from .models import (Candle, ExitEvent, GammaSignal, InstrumentRef, OICandle,
                      TriggerMetrics, align_to_tick, q2)
 from .regime import regime_allows, regime_of, regime_reason
 from .replay import replay_contract, summarise
-from .selection import (days_to_expiry, expiry_in_window, pick_strike, select_expiry,
-                        strikes_near_level)
+from .selection import (days_to_expiry, expiry_in_window, is_chain_wall, pick_strike,
+                        select_expiry, spot_through_or_at_strike, strikes_near_level)
 from .sizing import at_risk_inr, deployed_inr, lots_for, risk_multiplier, sizing_blocker
 from .strategy import Decision, GammaMoveStrategy, Intent, Phase, SessionState
 from .trigger import evaluate, evaluate_bar, session_day, slice_session, volume_baseline
@@ -52,7 +52,7 @@ __all__ = [
     "q2", "align_to_tick",
     "find_levels", "live_levels", "swing_pivots", "option_type_for",
     "select_expiry", "expiry_in_window", "days_to_expiry", "strikes_near_level",
-    "pick_strike",
+    "pick_strike", "is_chain_wall", "spot_through_or_at_strike",
     "evaluate", "evaluate_bar", "slice_session", "volume_baseline", "session_day",
     "regime_of", "regime_allows", "regime_reason",
     "swing_low_stop", "initial_stop", "target_price", "update_trail", "should_exit",
