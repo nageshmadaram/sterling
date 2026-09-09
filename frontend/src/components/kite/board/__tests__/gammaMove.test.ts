@@ -85,6 +85,9 @@ describe('gammaMoveToBoard', () => {
     expect(flags.some((l) => l.includes('0D'))).toBe(false);
     expect(flags).toContain('NO CHAIN');
     expect(rows[0].origin?.hint).toMatch(/open-interest tape/);
+    expect(rows[0].instrument.kind).toBe('equity');
+    expect(rows[0].instrument.quoteKey).toBe('NSE:RELIANCE');
+    expect(rows[0].instrument.quoteKey).not.toContain('NFO:RELIANCE');
   });
 
   it('does not throw when a simulation payload omits config or nested levels', () => {

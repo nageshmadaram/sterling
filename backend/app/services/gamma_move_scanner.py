@@ -135,11 +135,14 @@ def _spread_pct(q: dict) -> float | None:
     return (ask - bid) / mid * 100.0
 
 
-def _closed_daily(candles: list, today: date) -> list:
+def _closed_daily(candles: list, today: date, *, now: Optional[datetime] = None) -> list:
+    """Completed IST sessions only. Today's forming daily stays off until 15:30."""
     if not candles:
         return candles
+    now = now or datetime.now(_IST)
     last_day = datetime.fromtimestamp(candles[-1].ts_ms / 1000, _IST).date()
-    if last_day == today and len(candles) > 1:
+    session_done = (now.hour, now.minute) >= (15, 30)
+    if last_day == today and not session_done and len(candles) > 1:
         return candles[:-1]
     return candles
 
@@ -181,7 +184,9 @@ async def scan_levels(uid: str, cfg: GammaMoveConfig, client, *,
                                    cluster_pct=cfg.level_cluster_pct,
                                    min_touches=cfg.min_level_touches,
                                    window=cfg.level_lookback_days)
-        spots[name] = hist[-1].close
+        # Levels come from completed days. Spot is the latest print — yesterday's
+        # close would miss a 1% move that is the whole proximity gate.
+        spots[name] = candles[-1].close
         regimes[name] = regime_of(hist, cfg)
     if skipped:
         log.info("gamma_move stage A: %s of %s underlyings had no usable daily history",

@@ -33,18 +33,25 @@ const STATE_TO_STATUS: Record<string, BoardStatus> = {
   weakening: 'weakening', ended: 'ended', error: 'error',
 };
 
+function listedContract(i: GammaSignalRow['instrument'] | undefined): boolean {
+  return Boolean(i && i.option_type && i.expiry && i.strike != null && i.strike > 0);
+}
+
 function instrument(row: GammaSignalRow): BoardInstrument {
   const i = row.instrument || ({} as GammaSignalRow['instrument']);
+  const listed = listedContract(i);
+  const symbol = i.tradingsymbol || row.underlying;
   return {
-    symbol: i.tradingsymbol,
-    exchange: i.exchange || 'NFO',
-    kind: 'option',
+    symbol,
+    exchange: listed ? (i.exchange || 'NFO') : 'NSE',
+    kind: listed ? 'option' : 'equity',
     optionType: i.option_type,
     strike: i.strike,
     expiry: i.expiry,
     lotSize: i.lot_size,
     moneyness: null,
-    quoteKey: i.tradingsymbol ? `${i.exchange || 'NFO'}:${i.tradingsymbol}` : null,
+    // No listed option → do not mint NFO:RELIANCE. Chart the underlying.
+    quoteKey: symbol ? `${listed ? (i.exchange || 'NFO') : 'NSE'}:${symbol}` : null,
   };
 }
 

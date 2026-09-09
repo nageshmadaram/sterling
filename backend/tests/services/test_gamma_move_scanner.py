@@ -1,7 +1,7 @@
 """Stage B: the wall is the chain max, and a wide quote never becomes a candidate."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 import pytest
 
@@ -9,6 +9,7 @@ from app.engines.gamma_move import GammaMoveConfig, SpotLevel
 from app.services import gamma_move_scanner as scanner
 
 TODAY = date(2026, 9, 20)
+IST = timezone(timedelta(hours=5, minutes=30))
 LEVEL = SpotLevel(price=1300.0, kind="resistance", touches=3)
 
 
@@ -113,3 +114,22 @@ async def test_spread_inside_3_percent_is_kept(monkeypatch, cfg):
     })
     assert len(found) == 1
     assert found[0].instrument.tradingsymbol == "RELIANCE26SEP1300CE"
+
+
+def _daily(y, m, d, close, *, hh=0, mm=0):
+    from app.engines.gamma_move import Candle
+    ts = int(datetime(y, m, d, hh, mm, tzinfo=IST).timestamp() * 1000)
+    return Candle(ts_ms=ts, open=close, high=close, low=close, close=close)
+
+
+def test_closed_daily_drops_today_only_before_the_session_ends():
+    bars = [_daily(2026, 9, 18, 1290.0), _daily(2026, 9, 19, 1295.0),
+            _daily(2026, 9, 20, 1310.0)]
+    morning = datetime(2026, 9, 20, 10, 0, tzinfo=IST)
+    eod = datetime(2026, 9, 20, 15, 30, tzinfo=IST)
+    am = scanner._closed_daily(bars, TODAY, now=morning)
+    assert len(am) == 2
+    assert am[-1].close == 1295.0
+    pm = scanner._closed_daily(bars, TODAY, now=eod)
+    assert len(pm) == 3
+    assert pm[-1].close == 1310.0

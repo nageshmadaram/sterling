@@ -611,15 +611,15 @@ def _gamma_move_store_daily(symbol: str, asof_ts: Optional[float]) -> list:
     except Exception:
         return []
     since = int(asof_ts - 400 * 86400)
+    until = int(asof_ts)
     rows: list = []
     for res in ("1d", "day"):
         try:
-            rows = get_candles(symbol, res, limit=400, since=since) or []
+            rows = get_candles(symbol, res, limit=400, since=since, until=until) or []
         except Exception:
             rows = []
         if rows:
             break
-    rows = [b for b in rows if (_bar_epoch_seconds(b) or 0) <= float(asof_ts)]
     return _collapse_to_daily(rows, asof_ts)
 
 

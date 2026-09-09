@@ -19,6 +19,11 @@ def client(tmp_path, monkeypatch):
     from app.services import db
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "test.db"), raising=False)
     db.init()
+    from app.services.simulation import SimState, simulation_runner
+    simulation_runner._state = SimState.IDLE
+    simulation_runner._session_complete = False
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)

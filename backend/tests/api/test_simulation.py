@@ -619,6 +619,24 @@ def test_gamma_move_watch_five_minute_tape_is_not_a_daily_window():
     assert _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg) is None
 
 
+def test_gamma_move_store_daily_caps_at_the_asof_clock(monkeypatch):
+    """DESC LIMIT without until would return the newest bars in the store,
+    which can all sit after the replay clock."""
+    seen = {}
+
+    def fake(symbol, resolution, limit=500, since=None, until=None):
+        seen["until"] = until
+        seen["since"] = since
+        return []
+
+    monkeypatch.setattr("app.services.ohlcv_store.get_candles", fake)
+    from app.services.simulation import _gamma_move_store_daily
+    asof = 1_700_000_000
+    assert _gamma_move_store_daily("RELIANCE", asof) == []
+    assert seen["until"] == asof
+    assert seen["since"] < asof
+
+
 def test_gamma_move_watch_prefers_stored_daily_over_five_minute(monkeypatch):
     from app.engines.gamma_move import GammaMoveConfig
     from app.services import simulation as sim

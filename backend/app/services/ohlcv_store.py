@@ -105,42 +105,38 @@ def get_candles(
     resolution: str,
     limit: int = 500,
     since: Optional[int] = None,
+    until: Optional[int] = None,
 ) -> List[Dict]:
-    """Return up to `limit` stored candles in chronological order."""
+    """Return up to `limit` stored candles in chronological order.
+
+    ``until`` is inclusive. Without it, DESC LIMIT returns the newest bars in
+    the store — which can all sit after a replay clock.
+    """
     sym_u = symbol.upper()
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.row_factory = sqlite3.Row
-        if since is not None:
-            rows = conn.execute(
-                "SELECT time, open, high, low, close, volume "
-                "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
-                "ORDER BY time DESC LIMIT ?",
-                (sym_u, resolution, since, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT time, open, high, low, close, volume "
-                "FROM ohlcv WHERE symbol=? AND resolution=? "
-                "ORDER BY time DESC LIMIT ?",
-                (sym_u, resolution, limit),
-            ).fetchall()
-        if not rows and sym_u in INDEX_ALIASES:
-            alias = INDEX_ALIASES[sym_u]
+
+        def _query(name: str):
+            where = ["symbol=?", "resolution=?"]
+            args: list = [name, resolution]
             if since is not None:
-                rows = conn.execute(
-                    "SELECT time, open, high, low, close, volume "
-                    "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
-                    "ORDER BY time DESC LIMIT ?",
-                    (alias, resolution, since, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT time, open, high, low, close, volume "
-                    "FROM ohlcv WHERE symbol=? AND resolution=? "
-                    "ORDER BY time DESC LIMIT ?",
-                    (alias, resolution, limit),
-                ).fetchall()
+                where.append("time>=?")
+                args.append(since)
+            if until is not None:
+                where.append("time<=?")
+                args.append(until)
+            args.append(limit)
+            return conn.execute(
+                "SELECT time, open, high, low, close, volume "
+                f"FROM ohlcv WHERE {' AND '.join(where)} "
+                "ORDER BY time DESC LIMIT ?",
+                args,
+            ).fetchall()
+
+        rows = _query(sym_u)
+        if not rows and sym_u in INDEX_ALIASES:
+            rows = _query(INDEX_ALIASES[sym_u])
         conn.close()
         result = [dict(r) for r in rows]
         result.reverse()
