@@ -23,7 +23,7 @@ import time
 from typing import Dict, Optional, Tuple
 
 from app.core.logging import get_logger
-from app.engines.common.exit_counter import get_exit_threshold
+from app.engines.common.exit_counter import exit_needs_counter_signal, get_exit_threshold
 from app.services.kite_engine import positions as pos
 from app.services.kite_engine import protective_stop as pstop
 from app.services.kite_engine import state

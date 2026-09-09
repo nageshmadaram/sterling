@@ -98,7 +98,7 @@ export function ReplayTransport() {
         : state === 'error'
           ? { kind: 'retry' as const, icon: <Icons.Play size={16} />, label: 'Retry replay (Space)' }
           : state === 'loading'
-            ? { kind: 'play' as const, icon: <Icons.Spinner size={16} />, label: 'Starting replay' }
+            ? { kind: 'play' as const, icon: <Icons.Spinner size={16} />, label: 'Loading replay — click to cancel' }
             : { kind: 'play' as const, icon: <Icons.Play size={16} />, label: 'Start replay (Space)' };
 
   return (
@@ -130,7 +130,6 @@ export function ReplayTransport() {
         type="button"
         className="rd-tbtn rd-tbtn-primary"
         data-kind={primary.kind}
-        disabled={state === 'loading'}
         onClick={() => void transport.toggle()}
         aria-label={primary.label}
         title={primary.label}

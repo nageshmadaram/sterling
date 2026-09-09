@@ -36,6 +36,10 @@ vi.mock('../../../hooks/useUnifiedBacktest', () => ({
     mutate: mockMutate,
     isPending: false,
   }),
+  useRunAdaptiveEdgeComparison: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 function renderComponent() {
@@ -63,7 +67,7 @@ describe('UnifiedBacktestPane', () => {
     expect(screen.getByRole('button', { name: /Indices/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Selected F&O/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All F&O/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Run Backtest/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Run Backtest/i })[0]).toBeInTheDocument();
   });
 
   it('allows switching between Instrument scopes: Single, Indices, Selected F&O, and All F&O', () => {
@@ -97,7 +101,7 @@ describe('UnifiedBacktestPane', () => {
   it('clicking run backtest submits configured payload with universe and contract parameters', () => {
     renderComponent();
 
-    const runBtn = screen.getByRole('button', { name: /Run Backtest/i });
+    const runBtn = screen.getAllByRole('button', { name: /Run Backtest/i })[0];
     fireEvent.click(runBtn);
 
     expect(mockMutate).toHaveBeenCalledWith(

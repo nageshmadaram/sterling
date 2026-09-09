@@ -57,6 +57,9 @@ def _ts_cfg(c: EngineConfigModel) -> SterlingKiteEngineConfig:
         exit_aligned_trail=getattr(c, 'exit_aligned_trail', False),
         price_stop_exit=getattr(c, 'price_stop_exit', True),
         max_contract_staleness_bars=getattr(c, 'max_contract_staleness_bars', 0),
+        time_stop_bars=getattr(c, 'time_stop_bars', 0),
+        adx_min=getattr(c, 'adx_min', None),
+        atr_pct_min=getattr(c, 'atr_pct_min', None),
     )
 
 
@@ -1393,9 +1396,31 @@ def _new_trail_for_open(p, rows) -> Optional[float]:
     Re-translation trails INTO profit as the ST ratchets past the entry spot, and
     ratchets monotonically (only returns a value that tightens the current stop).
     """
-    for row in rows:
-        if row.underlying != p.underlying:
-            continue
+    same_underlying = [r for r in rows if getattr(r, "underlying", None) == p.underlying]
+    for row in same_underlying:
+        if len(same_underlying) > 1:
+            row_dir = str(getattr(row, "direction", "") or "").lower()
+            if row_dir in ("bull", "bullish", "long", "buy"):
+                row_dir = "long"
+            elif row_dir in ("bear", "bearish", "short", "sell"):
+                row_dir = "short"
+            p_dir = getattr(p, "signal_direction", None) or (p.direction if p.vehicle == "futures" else None)
+            if p_dir and row_dir and p_dir != row_dir:
+                has_sym = any(getattr(leg, "option_symbol", "") == p.symbol for leg in getattr(row, "legs", []))
+                if not has_sym:
+                    continue
+        row_dir = str(getattr(row, "direction", "") or "").lower()
+        if row_dir in ("bull", "bullish", "long", "buy"):
+            row_dir = "long"
+        elif row_dir in ("bear", "bearish", "short", "sell"):
+            row_dir = "short"
+        sig_dir = str(getattr(p, "signal_direction", "") or "").strip().lower()
+        p_dir = sig_dir or (p.direction if (p.vehicle == "futures" and len(same_underlying) > 1) else None)
+        if p_dir and row_dir and p_dir != row_dir:
+            has_sym = any(getattr(leg, "option_symbol", "") == p.symbol for leg in getattr(row, "legs", []))
+            if not has_sym:
+                continue
+
         if p.vehicle == "futures":
             new_sl = float(row.stop_loss or 0.0)
             if new_sl <= 0:
@@ -1724,12 +1749,19 @@ async def _update_open_position_trails(client, uid: str) -> None:
             _warn_if_red_count_stale(uid, p)
         if current_reds is not None:
             _red_stale_warned.discard((uid, p.symbol))
-            positions.update_health(uid, p.symbol, current_reds, getattr(p, 'exit_mode', None))
+            want_dir = positions.signal_direction_of(p)
+            has_counter = any(
+                r.underlying == p.underlying and getattr(r, "direction", "") != want_dir
+                and (getattr(r, "is_active", False) or getattr(r, "is_fresh", False))
+                for r in rows if getattr(r, "source", "") != "derivatives"
+            )
+            positions.update_health(uid, p.symbol, current_reds, getattr(p, 'exit_mode', None), counter_signal_fired=has_counter)
             if current_reds > 0:
                 mode = getattr(p, 'exit_mode', 'one_red')
-                from app.engines.common.exit_counter import get_exit_threshold
+                from app.engines.common.exit_counter import get_exit_threshold, exit_needs_counter_signal
                 thresh = get_exit_threshold(mode)
-                if current_reds >= thresh:
+                needs_counter = exit_needs_counter_signal(mode)
+                if current_reds >= thresh and (not needs_counter or has_counter):
                     state.log(uid, "info", f"Red count hit {current_reds}/{thresh} for open {p.symbol} under {mode} — monitor will consider for exit")
 
 

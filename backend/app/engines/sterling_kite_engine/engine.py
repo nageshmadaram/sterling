@@ -68,6 +68,11 @@ class SterlingKiteEngine:
         i = len(c) - 1
         if not (longs[i] or shorts[i]):
             return []  # latest closed bar is not a fresh transition
+        if self.cfg.adx_min is not None:
+            from app.engines.indicators.adx import adx as _adx
+            adx_arr = _adx(h, l, c, 14)
+            if i < len(adx_arr) and adx_arr[i] < float(self.cfg.adx_min):
+                return []
         direction = "long" if longs[i] else "short"
         trail = float(r.line(self.cfg.trail_target)[i])
         entry = float(c[i])
@@ -109,11 +114,9 @@ class SterlingKiteEngine:
                 self._positions.pop(underlying, None)
                 return ManageResult(underlying, pos.stop, exit=True, reason="raw price stop",
                                     red_count=red_count, green_lines=green_count)
-            entry_i = i
             # Retain full visible history for red count and trail checks across the window
             entry_i = 0
         longs, shorts = entry_transitions(r)
-        exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts)
         exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts, is_stock=is_stock)
         if exit_i is not None:
             self._positions.pop(underlying, None)

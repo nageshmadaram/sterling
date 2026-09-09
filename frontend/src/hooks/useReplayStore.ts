@@ -56,6 +56,8 @@ export interface ReplaySignal {
   premium_entry?: number | null;
   premium_sl?: number | null;
   premium_target?: number | null;
+  scan_origin?: string | null;
+  strategy_version?: string | null;
 }
 
 export interface ReplayTrade {
@@ -87,6 +89,9 @@ export interface ReplayTrade {
   spot_entry?: number | null;
   spot_stop?: number | null;
   spot_target?: number | null;
+  scan_origin?: string | null;
+  strategy_version?: string | null;
+  exit_reason?: string | null;
 }
 
 export interface ReplayStats {
@@ -139,6 +144,8 @@ export interface ReplayConfigEcho {
   index_spread_pct?: number;
   stock_spread_pct?: number;
   slippage_pct?: number;
+  adaptive_source?: 'both' | 'fno' | 'cash';
+  adaptive_version?: 'v2_hardened' | 'v1_baseline';
 }
 
 export interface ReplayStatus {
@@ -180,6 +187,7 @@ export interface ReplayDraft {
   resolution: string;
   strategies: string[];
   adaptiveSource: 'both' | 'ae_model' | 'spot_scan';
+  adaptiveVersion: 'v2_hardened' | 'v1_baseline';
   moneyness: string[];
   lots: number;
   frictionMode: 'realistic' | 'ideal';
@@ -261,6 +269,7 @@ export interface ReplayDraftPrefs {
   endTime?: string;
   strategies?: string[];
   adaptiveSource?: 'both' | 'ae_model' | 'spot_scan';
+  adaptiveVersion?: 'v2_hardened' | 'v1_baseline';
   moneyness?: string[];
   speed?: number;
   resolution?: string;
@@ -297,6 +306,9 @@ export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Pa
     if (parsed.adaptiveSource === 'both' || parsed.adaptiveSource === 'ae_model' || parsed.adaptiveSource === 'spot_scan') {
       out.adaptiveSource = parsed.adaptiveSource;
     }
+    if (parsed.adaptiveVersion === 'v2_hardened' || parsed.adaptiveVersion === 'v1_baseline') {
+      out.adaptiveVersion = parsed.adaptiveVersion;
+    }
     if (Array.isArray(parsed.moneyness) && parsed.moneyness.length) {
       out.moneyness = parsed.moneyness.filter((m): m is string => typeof m === 'string');
     }
@@ -325,6 +337,7 @@ export function persistDraft(draft: ReplayDraft) {
       endTime: draft.endTime,
       strategies: draft.strategies,
       adaptiveSource: draft.adaptiveSource,
+      adaptiveVersion: draft.adaptiveVersion,
       moneyness: draft.moneyness,
       speed: draft.speed,
       resolution: draft.resolution,
@@ -344,9 +357,16 @@ export function persistDraft(draft: ReplayDraft) {
 function initialDraft(): ReplayDraft {
   const d = getLastMarketWorkingDay();
   const saved = loadDraftPrefs();
+  // If saved date is older than 7 days from the latest completed market session,
+  // do not trap the user on a stale session date from an old test run.
+  const isStale = Boolean(
+    saved.date && (new Date(d).getTime() - new Date(saved.date).getTime() > 7 * 86400 * 1000)
+  );
+  const effectiveDate = (!isStale && saved.date) ? saved.date : d;
+  const effectiveEndDate = (!isStale && saved.endDate) ? saved.endDate : effectiveDate;
   return {
-    date: saved.date ?? d,
-    endDate: saved.endDate ?? saved.date ?? d,
+    date: effectiveDate,
+    endDate: effectiveEndDate,
     // Market open. 09:00 is pre-open and has no candles, so it opened every
     // replay on a dead stretch the user had to sit through.
     startTime: saved.startTime ?? '09:15:00',
@@ -357,6 +377,7 @@ function initialDraft(): ReplayDraft {
     resolution: saved.resolution ?? '5m',
     strategies: saved.strategies ?? ['all'],
     adaptiveSource: saved.adaptiveSource ?? 'both',
+    adaptiveVersion: saved.adaptiveVersion ?? 'v2_hardened',
     moneyness: saved.moneyness ?? ['ATM'],
     lots: saved.lots ?? 1,
     frictionMode: saved.frictionMode ?? 'realistic',
@@ -654,8 +675,8 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       // subscribers do not re-render on a pure progress tick.
       const prev = s.status.stats;
       const next = status.stats;
-      const events = sameRows(prev.events, next.events) ? prev.events : next.events;
-      const trades = sameRows(prev.trades, next.trades) ? prev.trades : next.trades;
+      const events = sameEvents(prev.events, next.events) ? prev.events : next.events;
+      const trades = sameTrades(prev.trades, next.trades) ? prev.trades : next.trades;
       return { status: { ...status, stats: { ...next, events, trades } }, error: null };
     }),
 
@@ -731,21 +752,32 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
 }));
 
 /**
- * Cheap "did this array change" test.
+ * Accurate "did trades or events change" equality tests.
  *
- * Length plus the last row's identity is enough: the ledger is append-only
- * within a session, and a seek truncates it (which changes the length).
+ * For trades, a trade status update (e.g. OPEN -> WIN/LOSS, exit price, PnL)
+ * maintains length and trade_id, so a full fingerprint comparison is required.
  */
-function sameRows<T extends { trade_id?: string; time_iso?: string }>(
-  a: readonly T[],
-  b: readonly T[],
-): boolean {
+function tradeFingerprint(t: any): string {
+  return `${t.trade_id}:${t.status}:${t.exit_time_iso}:${t.exit_price}:${t.pnl_usd}:${t.slippage}:${t.exit_reason}`;
+}
+
+function sameTrades(a: readonly any[], b: readonly any[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  if (!a.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (tradeFingerprint(a[i]) !== tradeFingerprint(b[i])) return false;
+  }
+  return true;
+}
+
+function sameEvents(a: readonly any[], b: readonly any[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   if (!a.length) return true;
   const x = a[a.length - 1];
   const y = b[b.length - 1];
-  return (x.trade_id ?? x.time_iso) === (y.trade_id ?? y.time_iso);
+  return x?.time_iso === y?.time_iso && x?.instrument === y?.instrument && x?.direction === y?.direction;
 }
 
 /* ── Selectors ────────────────────────────────────────────────────────────
@@ -809,32 +841,93 @@ export function matchInstrumentFilter(
   });
 }
 
+export function matchAdaptiveSource(
+  strategy: string,
+  scanOrigin: string | null | undefined,
+  instrumentOrUnderlying: string,
+  source: 'both' | 'ae_model' | 'spot_scan',
+): boolean {
+  if (source === 'both') return true;
+
+  let origin = scanOrigin;
+  if (!origin) {
+    if (strategy === 'spot_scan') {
+      origin = 'spot_scan';
+    } else if (strategy === 'adaptive_edge') {
+      const sym = (instrumentOrUnderlying || '').toUpperCase().replace(/^(NSE|BSE):/, '').trim();
+      const isIndex = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX)/i.test(sym);
+      origin = isIndex ? 'adaptive_edge' : 'spot_scan';
+    } else {
+      return true; // Non-AE strategies pass through
+    }
+  }
+
+  if (origin === 'spot_scan' && source === 'ae_model') return false;
+  if ((origin === 'adaptive_edge' || origin === 'ae_model') && source === 'spot_scan') return false;
+
+  return true;
+}
+
+export function matchAdaptiveVersion(
+  strategyVersion: string | null | undefined,
+  configuredVersion: 'v2_hardened' | 'v1_baseline' | string,
+): boolean {
+  if (!strategyVersion) return true; // Legacy or untagged trades pass through
+  const stratVer = String(strategyVersion).toLowerCase();
+  const cfgVer = String(configuredVersion || 'v2_hardened').toLowerCase();
+  const isStratV2 = stratVer.includes('v2');
+  const isCfgV2 = cfgVer.includes('v2');
+  return isStratV2 === isCfgV2;
+}
+
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
-  const strats = useReplayStore((s) => s.draft.strategies);
-  const instruments = useReplayStore((s) => s.draft.instruments);
+  const hasSessionData = useReplayStore(
+    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.events?.length ?? 0) > 0
+  );
+  const config = useReplayStore((s) => s.status.config);
+  const draft = useReplayStore((s) => s.draft);
+
+  const activeCfg = (hasSessionData && config) ? config : null;
+  const strats = activeCfg?.strategies ?? draft.strategies;
+  const instruments = activeCfg?.instruments ?? draft.instruments;
+  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
+  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
 
   return useMemo(() => {
     return events.filter((ev) => {
       if (!matchStrategyFilter(ev.strategy, strats)) return false;
+      if (!matchAdaptiveSource(ev.strategy, ev.scan_origin, ev.instrument, adaptiveSource)) return false;
+      if (!matchAdaptiveVersion(ev.strategy_version, adaptiveVersion)) return false;
       if (!instruments.length) return true;
       return matchInstrumentFilter(ev.instrument, instruments) || matchInstrumentFilter(ev.contract, instruments);
     });
-  }, [events, strats, instruments]);
+  }, [events, strats, instruments, adaptiveSource, adaptiveVersion]);
 }
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
-  const strats = useReplayStore((s) => s.draft.strategies);
-  const instruments = useReplayStore((s) => s.draft.instruments);
+  const hasSessionData = useReplayStore(
+    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.trades?.length ?? 0) > 0
+  );
+  const config = useReplayStore((s) => s.status.config);
+  const draft = useReplayStore((s) => s.draft);
+
+  const activeCfg = (hasSessionData && config) ? config : null;
+  const strats = activeCfg?.strategies ?? draft.strategies;
+  const instruments = activeCfg?.instruments ?? draft.instruments;
+  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
+  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
 
   return useMemo(() => {
     return trades.filter((t) => {
       if (!matchStrategyFilter(t.strategy, strats)) return false;
+      if (!matchAdaptiveSource(t.strategy, t.scan_origin, t.underlying, adaptiveSource)) return false;
+      if (!matchAdaptiveVersion(t.strategy_version, adaptiveVersion)) return false;
       if (!instruments.length) return true;
       return matchInstrumentFilter(t.underlying, instruments) || matchInstrumentFilter(t.symbol, instruments);
     });
-  }, [trades, strats, instruments]);
+  }, [trades, strats, instruments, adaptiveSource, adaptiveVersion]);
 }
 export const useReplayClock = () => useReplayStore((s) => s.status.current_time_iso);
 export const useReplayPct = () => useReplayStore((s) => s.status.progress_pct);
@@ -878,8 +971,13 @@ export const useReplayFocusMode = () => useReplayStore((s) => s.hostFocusMode);
    outside the dock and must not change. */
 
 export function getReplayNowMs(status: ReplayStatus): number | null {
-  if (status.state === 'idle' || !status.current_time_iso) return null;
-  const timeIso = status.current_time_iso.trim();
+  const isHoldingReplay =
+    status.state !== 'idle' ||
+    status.session_complete === true ||
+    (status.stats.trades.length > 0 || status.stats.events.length > 0);
+  if (!isHoldingReplay) return null;
+  const timeIso = status.current_time_iso ? status.current_time_iso.trim() : '15:30:00';
+  if (!timeIso) return null;
   if (timeIso.includes('T')) {
     if (timeIso.endsWith('Z') || timeIso.includes('+') || (timeIso.lastIndexOf('-') > timeIso.indexOf('T'))) {
       const ms = Date.parse(timeIso);
@@ -888,8 +986,10 @@ export function getReplayNowMs(status: ReplayStatus): number | null {
     const ms = Date.parse(`${timeIso}+05:30`);
     if (!Number.isNaN(ms)) return ms;
   }
-  if (!status.config?.date) return null;
-  const ms = Date.parse(`${status.config.date}T${timeIso}+05:30`);
+  const dateStr = status.current_date || (timeIso.includes('T') ? timeIso.split('T')[0] : status.config?.date);
+  if (!dateStr) return null;
+  const rawTime = timeIso.includes('T') ? timeIso.split('T')[1] : timeIso;
+  const ms = Date.parse(`${dateStr}T${rawTime}+05:30`);
   return Number.isNaN(ms) ? null : ms;
 }
 

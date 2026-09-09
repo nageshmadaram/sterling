@@ -123,8 +123,10 @@ class SimConfig(BaseModel):
     strategy: str = "all"              # "all" or specific strategy name
     strategies: List[str] = ["all"]    # list of selected strategies
     adaptive_source: str = "both"      # "both", "ae_model", "spot_scan"
+    adaptive_version: str = "v1_baseline"  # "v2_hardened", "v1_baseline"
     lots: int = 1                      # number of option/futures lots
     moneyness: str = "ATM"             # "ATM", "ITM1", "ITM2", "OTM1", "OTM2", "ALL"
+    max_hold_bars: int = 30            # max bars to hold position before timing out
     # ── Execution friction ────────────────────────────────────────────────
     # These are read by `_apply_friction`. Until 2026-09 they were declared
     # here and consumed nowhere, while the UI rendered a slippage column and
@@ -161,6 +163,7 @@ class SimSignalEvent(BaseModel):
     premium_sl: Optional[float] = None
     premium_target: Optional[float] = None
     scan_origin: Optional[str] = None
+    strategy_version: Optional[str] = None
 
 
 class SimTradeEvent(BaseModel):
@@ -206,8 +209,13 @@ class SimTradeEvent(BaseModel):
     #: used as the fixed offset for the trailing ratchet. Preserved even as
     #: spot_stop itself tightens.
     spot_initial_risk: Optional[float] = None
+    #: Initial underlying stop at trade creation, to distinguish hard stop hits from trailing stop hits.
+    spot_initial_stop: Optional[float] = None
+    #: Why the position closed: TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE.
+    exit_reason: Optional[str] = None
     bars_held: int = 0
     scan_origin: Optional[str] = None
+    strategy_version: Optional[str] = None
 
 
 class SimStats(BaseModel):
@@ -519,6 +527,10 @@ def _apply_friction(
     # and silently preferring the percent default would ignore what it asked for.
     bps = getattr(config, "slippage_bps", None) if config else None
     slip_pct = (bps / 100.0) if bps is not None else (config.slippage_pct if config else 0.25)
+    # V2 Hardened: Passive limit order execution models 50% slippage reduction
+    adaptive_ver = (getattr(config, "adaptive_version", None) or "v2_hardened").lower()
+    if adaptive_ver in ("v2_hardened", "v2"):
+        slip_pct *= 0.5
 
     half_spread = spread_pct / 200.0     # round-trip pct → one-sided fraction
     slip = slip_pct / 100.0
@@ -619,6 +631,7 @@ class SimulationRunner:
         self._last_frame_at = now
         self._publish("frame", {
             "t": self._current_time_iso,
+            "cur_date": self._current_date or (self._current_time_iso.split("T")[0] if "T" in self._current_time_iso else None),
             "pct": self._progress,
             "bars_played": self._bars_played,
             "bars_total": self._bars_total,
@@ -713,23 +726,66 @@ class SimulationRunner:
                 target = trade.spot_target
 
                 exit_spot: Optional[float] = None
+                exit_reason: Optional[str] = None
                 if stop is not None and target is not None:
                     if bullish:
                         # Stop first: the pessimistic read when one bar spans both,
                         # because a bar's high and low carry no ordering.
                         if low <= stop:
                             exit_spot = stop
+                            is_tsl = (
+                                trade.spot_initial_stop is not None
+                                and trade.spot_stop is not None
+                                and abs(trade.spot_stop - trade.spot_initial_stop) > 1e-4
+                            )
+                            exit_reason = "TRAILING_STOP" if is_tsl else "STOP_LOSS"
                         elif high >= target:
                             exit_spot = target
+                            exit_reason = "TARGET"
                     else:
                         if high >= stop:
                             exit_spot = stop
+                            is_tsl = (
+                                trade.spot_initial_stop is not None
+                                and trade.spot_stop is not None
+                                and abs(trade.spot_stop - trade.spot_initial_stop) > 1e-4
+                            )
+                            exit_reason = "TRAILING_STOP" if is_tsl else "STOP_LOSS"
                         elif low <= target:
                             exit_spot = target
+                            exit_reason = "TARGET"
 
                 timed_out = exit_spot is None and trade.bars_held >= self.MAX_HOLD_BARS
+                is_ae_v2 = (
+                    (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
+                ).lower() in ("v2_hardened", "v2")
+
+                # V2 Hardened Stagnation Decay Exit: If trade makes no meaningful progress (< 0.25R)
+                # after 4 bars (20m), exit early to protect capital against chop and theta decay.
+                if (
+                    exit_spot is None
+                    and is_ae_v2
+                    and trade.bars_held >= 4
+                    and trade.spot_initial_risk
+                    and trade.spot_initial_risk > 0
+                    and trade.spot_entry is not None
+                    and trade.spot_hwm is not None
+                ):
+                    favorable_dist = (trade.spot_hwm - trade.spot_entry) if bullish else (trade.spot_entry - trade.spot_hwm)
+                    r_multiple = favorable_dist / trade.spot_initial_risk
+                    if r_multiple < 0.25:
+                        exit_spot = close
+                        exit_reason = "STAGNATION_DECAY"
+
+                max_bars = (
+                    self._config.max_hold_bars
+                    if (self._config and getattr(self._config, "max_hold_bars", None))
+                    else self.MAX_HOLD_BARS
+                )
+                timed_out = exit_spot is None and trade.bars_held >= max_bars
                 if timed_out:
                     exit_spot = close
+                    exit_reason = "MAX_HOLD"
 
                 if exit_spot is None:
                     # Still open — mark it to this bar so unrealised P&L moves.
@@ -752,11 +808,17 @@ class SimulationRunner:
                         if bullish:
                             trade.spot_hwm = max(trade.spot_hwm, close)
                             new_stop = trade.spot_hwm - trade.spot_initial_risk
+                            # In V2, lock breakeven once price reaches >= 1.0R
+                            if is_ae_v2 and trade.spot_entry is not None and (trade.spot_hwm - trade.spot_entry) >= trade.spot_initial_risk:
+                                new_stop = max(new_stop, trade.spot_entry)
                             if new_stop > trade.spot_stop:
                                 trade.spot_stop = round(new_stop, 2)
                         else:
                             trade.spot_hwm = min(trade.spot_hwm, close)
                             new_stop = trade.spot_hwm + trade.spot_initial_risk
+                            # In V2, lock breakeven once price reaches >= 1.0R
+                            if is_ae_v2 and trade.spot_entry is not None and (trade.spot_entry - trade.spot_hwm) >= trade.spot_initial_risk:
+                                new_stop = min(new_stop, trade.spot_entry)
                             if new_stop < trade.spot_stop:
                                 trade.spot_stop = round(new_stop, 2)
                         # Re-derive the premium stop so the UI's SL column tracks
@@ -769,6 +831,7 @@ class SimulationRunner:
                     continue
 
                 self._close_position(trade, exit_spot, bar_dt)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason)
 
             if still_open:
                 self._open_by_symbol[k] = still_open
@@ -780,7 +843,13 @@ class SimulationRunner:
         res = self._config.resolution if self._config else "5m"
         return max(1, RESOLUTION_SECONDS.get(res, 300) // 60)
 
-    def _close_position(self, trade: SimTradeEvent, exit_spot: float, bar_dt) -> None:
+    def _close_position(
+        self,
+        trade: SimTradeEvent,
+        exit_spot: float,
+        bar_dt,
+        exit_reason: Optional[str] = None,
+    ) -> None:
         raw_exit = self._premium_for_spot(trade, exit_spot)
         _, fill_exit, friction_mode = _apply_friction(
             trade.raw_entry if trade.raw_entry is not None else trade.entry_price,
@@ -790,6 +859,7 @@ class SimulationRunner:
         )
 
         trade.exit_price = fill_exit
+        trade.exit_reason = exit_reason or trade.exit_reason or "MANUAL"
         is_multi = getattr(self, "_is_multi_day", False)
         trade.exit_time_iso = (
             bar_dt.strftime("%Y-%m-%dT%H:%M:%S")
@@ -837,11 +907,7 @@ class SimulationRunner:
         epoch = self._current_sim_epoch if getattr(self, "_current_sim_epoch", None) else time.time()
         bar_dt = datetime.fromtimestamp(epoch, tz=ist)
 
-        count = sum(len(v) for v in self._open_by_symbol.values())
-        if count:
-            log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
-        for sym, book in list(self._open_by_symbol.items()):
-            last_close = None
+        def _resolve_last_close(sym: str) -> Optional[float]:
             sym_u = sym.upper()
             canon = _canonical_symbol(sym)
             from app.services.ohlcv_store import INDEX_ALIASES
@@ -858,20 +924,36 @@ class SimulationRunner:
             if hasattr(self, "_bar_history"):
                 for s in target_syms:
                     if self._bar_history.get(s):
-                        last_close = float(self._bar_history[s][-1].get("close", 0.0))
-                        break
+                        return float(self._bar_history[s][-1].get("close", 0.0))
 
-            if last_close is None and hasattr(self, "_candles") and self._candles:
-                played_idx = getattr(self, "_bars_played", 0)
-                for b in reversed(self._candles[:played_idx]):
+            if hasattr(self, "_candles") and self._candles:
+                played_idx = getattr(self, "_bars_played", len(self._candles))
+                for b in reversed(self._candles[:max(1, played_idx)]):
                     if b.get("symbol", "").upper() in target_syms:
-                        last_close = float(b.get("close", 0.0))
-                        break
+                        return float(b.get("close", 0.0))
+            return None
 
+        exit_reason_label = "SESSION_CLOSE"
+
+        count = sum(len(v) for v in self._open_by_symbol.values())
+        if count:
+            log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
+
+        for sym, book in list(self._open_by_symbol.items()):
+            last_close = _resolve_last_close(sym)
             for trade in list(book):
                 exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
-                self._close_position(trade, exit_spot, bar_dt)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
         self._open_by_symbol = {}
+
+        # Sweep safety net: ensure NO trade in self._stats.trades is left with status == "OPEN"
+        for trade in self._stats.trades:
+            if trade.status == "OPEN":
+                last_close = _resolve_last_close(trade.underlying)
+                exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
+
+        self._recompute_totals()
 
     def _recompute_totals(self) -> None:
         """Re-derive every aggregate from the trade ledger.
@@ -1058,6 +1140,7 @@ class SimulationRunner:
         # completed session's signals and trades, which the dock rendered as
         # though the replay were live — results before you pressed play.
         self._session_complete = bool(self._stats.events or self._stats.trades)
+        self._publish_frame(force=True)
         self._publish_state()
         return self.status
 
@@ -1298,6 +1381,9 @@ class SimulationRunner:
         adaptive_src = (self._config.adaptive_source if self._config and hasattr(self._config, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
 
+        if is_spot and adaptive_src in ("ae_model", "ae"):
+            return
+
         if not allow_all:
             if strat_raw in cfg_strats:
                 if (strat_raw == "adaptive_edge" or is_spot) and adaptive_src in ("ae_model", "ae") and "adaptive_edge" in cfg_strats and len(cfg_strats) == 1:
@@ -1317,6 +1403,23 @@ class SimulationRunner:
             strat_to_emit = rec.get("strategy", "supertrend")
             if is_spot and adaptive_src in ("ae_model", "ae") and strat_to_emit == "adaptive_edge":
                 return
+
+        adaptive_ver = (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
+        is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge" and not is_spot)
+        if is_ae_signal and adaptive_ver in ("v2_hardened", "v2"):
+            # When user explicitly asks for spot scans, do not lock out spot scans
+            if not (is_spot and adaptive_src in ("spot_scan", "spot")):
+                rec_ms = rec.get("timestamp_ms") or 0
+                if rec_ms > 0:
+                    rec_dt = datetime.fromtimestamp(rec_ms / 1000, tz=ist)
+                    if rec_dt.hour == 9 and rec_dt.minute < 28:
+                        return
+                elif rec.get("time_iso"):
+                    iso_str = str(rec["time_iso"])
+                    time_str = iso_str.split("T")[1][:8] if "T" in iso_str else iso_str[:8]
+                    if "09:15:00" <= time_str < "09:28:00":
+                        return
 
         sym = rec["underlying"]
         from app.services.ohlcv_store import INDEX_ALIASES
@@ -1465,6 +1568,7 @@ class SimulationRunner:
             premium_sl=stop_prem,
             premium_target=tgt_prem,
             scan_origin="spot_scan",
+            strategy_version=adaptive_ver if strat_to_emit == "adaptive_edge" else None,
         )
         self._stats.signals_fired += 1
         self._stats.events.append(event)
@@ -1508,8 +1612,11 @@ class SimulationRunner:
             spot_target=target,
             spot_hwm=spot,
             spot_initial_risk=abs(spot - stop) if stop is not None else None,
+            spot_initial_stop=stop,
+            exit_reason=None,
             bars_held=0,
             scan_origin="spot_scan",
+            strategy_version=adaptive_ver if strat_to_emit == "adaptive_edge" else None,
         )
         self._stats.trades_entered += 1
         self._stats.trades.append(trade)
@@ -1568,6 +1675,11 @@ class SimulationRunner:
         )
         self._emitted_recorded_keys = set()
 
+        adaptive_src = getattr(cfg, "adaptive_source", "both") or "both"
+        if str(adaptive_src).lower() in ("spot_scan", "spot") and not self._recorded_signals:
+            log.info("No recorded spot scans for %s; replaying via AE Model.", range_label)
+            self._status_message = f"Notice: No recorded spot scans on {range_label}; replaying via AE Model."
+
         if not cfg.instruments:
             if self._recorded_signals:
                 # Real session with recorded signals: only replay the instruments that actually traded / fired signals
@@ -1607,16 +1719,27 @@ class SimulationRunner:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
                     instruments.append(rec["underlying"])
 
+        # Deduplicate and canonicalize symbols
+        instruments = list(dict.fromkeys([_canonical_symbol(s) for s in instruments if s]))
+
         self._status_message = f"⚡ Fetching historical candles for {range_label} from Zerodha Kite API..."
         warmup_start = start_epoch - 5 * 86400
-        await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch, session_start=start_epoch)
+
+        def _report_hydrate(msg: str):
+            self._status_message = msg
+            self._publish_state()
+
+        await _hydrate_missing_candles(
+            instruments, res, warmup_start, end_epoch,
+            session_start=start_epoch, on_progress=_report_hydrate
+        )
 
         # Pre-seed indicator history with pre-session bars so indicators are ready at 09:15 AM
         self._bar_history = {}
         self._in_session_bars = {}
         for sym in instruments:
-            prior_candles = ohlcv_get(sym, res, limit=50, since=warmup_start)
-            p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles if c["time"] < start_epoch]
+            prior_candles = ohlcv_get(sym, res, limit=50, until=start_epoch)
+            p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles]
             self._bar_history[sym] = p_bars[-50:]
 
         # Fetch candles for each instrument from local store
@@ -1638,6 +1761,8 @@ class SimulationRunner:
             log.warning("No candles available for simulation date %s", range_label)
             self._status_message = f"No real candles available for {range_label}; acquire historical data before replay"
             self._state = SimState.IDLE
+            self._publish_frame(force=True)
+            self._publish_state()
             return
 
         self._candles = all_bars
@@ -1745,6 +1870,21 @@ class SimulationRunner:
                 self._state = SimState.IDLE
                 self._close_all_open("reached session end")
                 self._session_complete = bool(self._stats.events or self._stats.trades)
+                if all_bars and bar_idx >= len(all_bars):
+                    self._progress = 100.0
+                    last_b = all_bars[-1]
+                    self._current_sim_epoch = float(last_b["time"])
+                    last_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
+                    self._current_time_iso = (
+                        last_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                        if is_multi_day
+                        else last_dt.strftime("%H:%M:%S")
+                    )
+                    last_time_str = last_dt.strftime("%H:%M:%S")
+                    if last_dt.time() < end_dt.time():
+                        self._status_message = f"Session completed at latest available bar ({last_time_str} IST)."
+                    else:
+                        self._status_message = f"Session completed ({self._stats.trades_entered} trades, P&L {self._stats.pnl:+,.2f})."
                 self._publish_frame(force=True)
                 self._publish_state()
                 log.info(
@@ -2163,6 +2303,15 @@ class SimulationRunner:
 
             entry_iso = f"{sim_date}T{ev.time_iso}+05:30" if ev.time_iso else None
             sig_id = f"ae_sim_{ev.instrument}_{ev.time_iso.replace(':', '')}_{i}"
+            if ev.time_iso:
+                if "T" in ev.time_iso:
+                    entry_iso = f"{ev.time_iso}+05:30" if ("+" not in ev.time_iso and not ev.time_iso.endswith("Z")) else ev.time_iso
+                else:
+                    entry_iso = f"{sim_date}T{ev.time_iso}+05:30"
+            else:
+                entry_iso = None
+            sig_time_str = ev.time_iso.split("T")[1] if "T" in (ev.time_iso or "") else (ev.time_iso or "")
+            sig_id = f"ae_sim_{ev.instrument}_{sig_time_str.replace(':', '')}_{i}"
 
             signals.append({
                 "id": sig_id,
@@ -2207,10 +2356,16 @@ class SimulationRunner:
         all_syms = list(dict.fromkeys([ev.instrument for ev in ae_events])) or ["NIFTY-I"]
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
+        has_spot_scans = any(s.get("scan_origin") == "spot_scan" for s in signals)
         if adaptive_src in ("ae_model", "ae"):
             signals = [s for s in signals if s.get("scan_origin") == "adaptive_edge"]
         elif adaptive_src in ("spot_scan", "spot"):
-            signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+            if has_spot_scans:
+                signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+            # Otherwise, fall back to all generated AE signals so the board is not left blank
+
+        adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
 
         default_sym = signals[0].get("underlying", "NIFTY-I") if signals else (ae_events[0].instrument if ae_events else "NIFTY-I")
         all_syms = list(dict.fromkeys([s.get("underlying", "NIFTY-I") for s in signals])) or [default_sym]
@@ -2521,19 +2676,62 @@ class SimulationRunner:
             spot_move = (curr_spot - ev.entry) if is_long else (ev.entry - curr_spot)
             current_ltp = round(max(0.05, premium_est + spot_move * 0.50), 2)
 
+            lot_sz = 15 if "NIFTY" in ev.instrument.upper() else (10 if "SENSEX" in ev.instrument.upper() else 500)
             signals.append({
+                "id": f"{ev.instrument}_{int(strike_val)}_{opt_type}_{ev_ms}",
                 "instrument": {
+                    "instrument_id": f"{ev.instrument}_{int(strike_val)}_{opt_type}",
                     "tradingsymbol": f"{ev.instrument}26AUG{int(strike_val)}{opt_type}",
                     "exchange": "BFO" if "SENSEX" in ev.instrument.upper() else "NFO",
                     "kind": "option",
                     "option_type": opt_type,
                     "strike": strike_val,
                     "expiry": sim_date,
-                    "lot_size": 15 if "NIFTY" in ev.instrument.upper() else (10 if "SENSEX" in ev.instrument.upper() else 500),
+                    "lot_size": lot_sz,
+                    "tick_size": 0.05,
                 },
                 "underlying": ev.instrument,
                 "state": "armed" if ev.strength == "STRONG" else "watching",
-                "direction": "long" if is_long else "short",
+                "direction": "long",
+                "at_ms": ev_ms,
+                "spot": ev.entry,
+                "regime": "up" if is_long else "down",
+                "reason": "Level bounce confirmed" if is_long else "Level rejection confirmed",
+                "exit_reason": None,
+                "entry_day": sim_date,
+                "level": {
+                    "price": ev.entry,
+                    "kind": "support" if is_long else "resistance",
+                    "touches": 3,
+                    "distance_pct": 0.15,
+                },
+                "oi": 1500000,
+                "days_to_expiry": 2,
+                "metrics": {
+                    "oi_drop_pct": 12.5,
+                    "volume_ratio": 2.4,
+                    "price_gain_pct": 8.5,
+                    "unwinding": True,
+                    "abnormal": True,
+                    "rising": True,
+                    "bars_confirmed": 2,
+                    "bars_required": 2,
+                    "triggered": True if ev.strength == "STRONG" else False,
+                },
+                "levels": {
+                    "ltp": current_ltp,
+                    "entry": premium_est,
+                    "stop": round(premium_est * 0.7, 2),
+                    "trail": None,
+                    "target": round(premium_est * 1.5, 2),
+                    "exit": None,
+                },
+                "sizing": {
+                    "lots": 1,
+                    "quantity": lot_sz,
+                    "at_risk_inr": round(premium_est * 0.3 * lot_sz, 2),
+                    "deployed_inr": round(premium_est * lot_sz, 2),
+                },
                 "generated_at": f"{sim_date}T{ev.time_iso}+05:30",
                 "generated_at_ms": ev_ms,
                 "spot_at_eval": ev.entry,
@@ -2549,13 +2747,57 @@ class SimulationRunner:
                 "rejection_reason": None,
             })
 
+        from app.services.gamma_move import get_config, descriptor
+        try:
+            cfg_obj = get_config()
+            cfg_dict = cfg_obj.as_dict()
+            desc = descriptor()
+            enabled = cfg_obj.enabled
+        except Exception:
+            cfg_dict = {}
+            desc = {}
+            enabled = True
+
+        underlyings_list = list(set(ev.instrument for ev in self._stats.events))
+        wins = len([t for t in self._stats.trades if (t.pnl_usd or 0) > 0])
+        losses = len([t for t in self._stats.trades if (t.pnl_usd or 0) < 0])
+        total_pnl = round(sum(float(t.pnl_usd or 0.0) for t in self._stats.trades), 2)
+
         return {
             "generated_at": f"{sim_date}T09:16:31+05:30",
+            "strategy": {**desc, "enabled": enabled},
+            "config": cfg_dict,
+            "scan": {"last_run_ms": now_ms, "total_seconds": 0.0},
+            "session": None,
+            "simulation": None,
+            "candidates": signals,
             "signals": signals,
             "positions": [],
+            "record": {
+                "trades": len(self._stats.trades),
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(wins / len(self._stats.trades) * 100.0, 1) if self._stats.trades else None,
+                "consecutive_losses": 0,
+                "consecutive_wins": 0,
+                "realised_inr": total_pnl,
+                "day_realised_inr": total_pnl,
+                "day": sim_date,
+                "verdict": "simulation replay",
+            },
+            "orphan_positions": [],
             "blockers": [],
             "universe": {"underlyings": len(set(ev.instrument for ev in self._stats.events)) or 1},
             "mode": {"is_paper": True},
+            "universe": {
+                "underlyings": len(underlyings_list) or 1,
+                "sample": underlyings_list[:10],
+            },
+            "mode": {
+                "is_paper": True,
+                "auto_execute": False,
+                "note": "Replay simulation mode",
+            },
         }
 
     def get_nifty_orb_signals_response(self) -> Dict[str, Any]:
@@ -2814,27 +3056,51 @@ class SimulationRunner:
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
         skip_ae_model = adaptive_src in ("spot_scan", "spot")
+        # If user requested spot_scan but session has no recorded signals, fall back to AE model
+        # rather than exiting silently with 0 trades.
+        skip_ae_model = (adaptive_src in ("spot_scan", "spot")) and has_recorded_today
+
+        has_recorded_ae = (
+            adaptive_src not in ("ae_model", "ae")
+            and has_recorded_today
+            and any(
+                r.get("underlying", "").upper() in sym_aliases
+                and (r.get("strategy") == "adaptive_edge" or r.get("is_spot_scan"))
+                for r in today_recorded
+            )
+        )
+
+        adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
+        is_ae_v2 = adaptive_ver in ("v2_hardened", "v2")
+        ae_toxic_lockout = is_ae_v2 and ("09:15:00" <= bar_time_str < "09:28:00")
 
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
-        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 15:
+        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 15:
             body = abs(close - opens)
             lower_wick = min(opens, close) - low
             upper_wick = high - max(opens, close)
+            bar_range = high - low
+            denom = max(bar_range, 1e-9)
+            long_body_ok = ((close - low) / denom) >= 0.60 if is_ae_v2 else True
+            short_body_ok = ((high - close) / denom) >= 0.60 if is_ae_v2 else True
             # Exhaustion oversold + pin bar rejection of lows (hammer)
-            if rsi <= 28 and lower_wick >= 2.0 * max(body, 0.05 * atr) and close > low + 0.4 * (high - low):
+            if rsi <= 28 and lower_wick >= 2.0 * max(body, 0.05 * atr) and close > low + 0.4 * (high - low) and long_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
                     "direction": "BULLISH",
                     "strength": "STRONG",
                 })
             # Exhaustion overbought + pin bar rejection of highs (shooting star)
-            elif rsi >= 72 and upper_wick >= 2.0 * max(body, 0.05 * atr) and close < low + 0.6 * (high - low):
+            elif rsi >= 72 and upper_wick >= 2.0 * max(body, 0.05 * atr) and close < low + 0.6 * (high - low) and short_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
-        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 20:
+        sym_bar_idx = len(history)
+        ae_active = sym_bar_idx < self._active_until_bar.get((sym, "adaptive_edge"), -1) if hasattr(self, "_active_until_bar") else False
+        if not ae_active and not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 20:
             from app.services.adaptive_edge_strategy import decide_from_candles
             from app.services.adaptive_edge import get_config as get_ae_config
             c_input = [
@@ -2849,7 +3115,17 @@ class SimulationRunner:
                 for b in history
             ]
             try:
+                import dataclasses
                 ae_cfg = get_ae_config()
+                if not getattr(self, "_cached_ae_cfg", None):
+                    from app.services.adaptive_edge import get_config as get_ae_config
+                    self._cached_ae_cfg = get_ae_config()
+                ae_cfg = self._cached_ae_cfg
+                target_version = "v2_hardened" if is_ae_v2 else "v1_baseline"
+                ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
+                if ae_cfg and ae_cfg.strategy_version != target_version:
+                    ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
+                    self._cached_ae_cfg = ae_cfg
                 dec = decide_from_candles(sym, c_input, ae_cfg, expiry=bar_dt.strftime("%Y-%m-%d"), spot=close)
                 if dec and dec.actionable:
                     signals_to_fire.append({
@@ -2965,7 +3241,7 @@ class SimulationRunner:
             strategy = sdef["strategy"]
             if not allow_all and strategy.lower() not in cfg_strats:
                 continue
-            if strategy.lower() == "adaptive_edge" and skip_ae_model:
+            if strategy.lower() == "adaptive_edge" and (skip_ae_model or ae_toxic_lockout):
                 continue
             direction = sdef["direction"]
             strength = sdef["strength"]
@@ -3012,7 +3288,8 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
-                scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
+                scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
+                strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)
@@ -3064,8 +3341,11 @@ class SimulationRunner:
                     spot_target=target,
                     spot_hwm=round(close, 2),
                     spot_initial_risk=abs(close - stop) if stop is not None else None,
+                    spot_initial_stop=stop,
+                    exit_reason=None,
                     bars_held=0,
-                    scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
+                    scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
+                    strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
                 )
                 self._stats.trades_entered += 1
                 self._stats.trades.append(trade)
@@ -3073,6 +3353,12 @@ class SimulationRunner:
                 # Suppress a re-entry on this key while the position is live.
                 # `_close_position` clears it on the bar that actually closes.
                 self._active_until_bar[key] = sym_bar_idx + self.MAX_HOLD_BARS
+                max_bars = (
+                    self._config.max_hold_bars
+                    if (self._config and getattr(self._config, "max_hold_bars", None))
+                    else self.MAX_HOLD_BARS
+                )
+                self._active_until_bar[key] = sym_bar_idx + max_bars
                 self._recompute_totals()
                 self._publish("trade", trade.model_dump())
 
@@ -3083,79 +3369,126 @@ async def _hydrate_missing_candles(
     start_epoch: int,
     end_epoch: int,
     session_start: Optional[int] = None,
+    on_progress: Optional[Any] = None,
 ) -> None:
-    """Fetch missing historical candles for selected replay date range from Zerodha Kite API."""
+    """Fetch missing historical candles for selected replay date range from Zerodha Kite API in safe chunks."""
     from app.services import ohlcv_store
-    from app.services.ohlcv_store import INDEX_ALIASES
+    from app.services.ohlcv_store import INDEX_ALIASES, RESOLUTION_SECONDS
+    from app.services.exchanges.kite import accounts as kite_accounts
+    from app.services.exchanges.kite.client import KiteClient
+
+    try:
+        from zoneinfo import ZoneInfo
+        ist_tz = ZoneInfo("Asia/Kolkata")
+    except ImportError:
+        from datetime import timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+
+    kite_accounts.bootstrap()
+    zerodha_acct = kite_accounts.get_active("default") or next(
+        (a for a in kite_accounts._accounts.values() if a.is_active and a.access_token),
+        None,
+    )
+    if not (zerodha_acct and zerodha_acct.access_token):
+        log.info("No active Kite account available; skipping remote historical candle hydration.")
+        return
 
     check_start = session_start if session_start is not None else start_epoch
+    res_sec = RESOLUTION_SECONDS.get(resolution, 300)
+    now_epoch = int(time.time())
+    is_today_in_range = (start_epoch <= now_epoch <= (end_epoch + 86400))
+    effective_target_end = min(end_epoch, now_epoch) if is_today_in_range else end_epoch
 
-    for sym in instruments:
-        existing = ohlcv_store.get_candles(sym, resolution, limit=5000, since=check_start)
-        in_range = [c for c in existing if check_start <= c["time"] <= end_epoch]
-        if len(in_range) >= 15:
-            continue  # Already cached locally
+    k_res_map = {
+        "1m": "minute",
+        "3m": "3minute",
+        "5m": "5minute",
+        "10m": "10minute",
+        "15m": "15minute",
+        "30m": "30minute",
+        "60m": "60minute",
+        "1h": "60minute",
+    }
+    k_res = k_res_map.get(resolution, "5minute")
+    # Kite enforces max 60-100 days per intraday request. Chunk into 60-day slices.
+    CHUNK_SEC = 60 * 86400
 
-        log.info("Missing local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, end_epoch)
-
-        try:
-            from app.services.exchanges.kite import accounts as kite_accounts
-            from app.services.exchanges.kite.client import KiteClient
-
-            token = KITE_TOKENS.get(sym.upper())
+    kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
+    try:
+        for idx, sym in enumerate(instruments):
+            canon_sym = _canonical_symbol(sym)
+            token = KITE_TOKENS.get(canon_sym.upper()) or KITE_TOKENS.get(sym.upper())
             if not token and sym.upper() in INDEX_ALIASES:
                 token = KITE_TOKENS.get(INDEX_ALIASES[sym.upper()])
+            if not token and canon_sym.upper() in INDEX_ALIASES:
+                token = KITE_TOKENS.get(INDEX_ALIASES[canon_sym.upper()])
+            if not token:
+                continue
 
-            if token:
-                kite_accounts.bootstrap()
-                zerodha_acct = kite_accounts.get_active("default") or next(
-                    (a for a in kite_accounts._accounts.values() if a.is_active and a.access_token),
-                    None,
-                )
-                if zerodha_acct and zerodha_acct.access_token:
-                    kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
+            cov = ohlcv_store.get_symbol_coverage(canon_sym, resolution)
+            fetch_ranges: List[Tuple[int, int]] = []
+            if not cov or (cov.get("count") or 0) == 0:
+                fetch_ranges.append((check_start, effective_target_end))
+            else:
+                cov_earliest = cov.get("earliest") or 0
+                cov_latest = cov.get("latest") or 0
+                if check_start < (cov_earliest - res_sec):
+                    fetch_ranges.append((check_start, cov_earliest))
+                if is_today_in_range:
+                    if cov_latest < (effective_target_end - res_sec * 2):
+                        fetch_ranges.append((cov_latest, effective_target_end))
+                else:
+                    if cov_latest < (effective_target_end - 900):
+                        fetch_ranges.append((cov_latest, effective_target_end))
+
+            if not fetch_ranges:
+                continue
+
+            if on_progress:
+                try:
+                    on_progress(f"⚡ Hydrating {canon_sym} ({idx + 1}/{len(instruments)})...")
+                except Exception:
+                    pass
+
+            log.info("Missing/stale local candles for %s [%s] ranges %s. Fetching from Zerodha Kite...", canon_sym, resolution, fetch_ranges)
+
+            for f_epoch, t_epoch in fetch_ranges:
+                cur_start = f_epoch
+                while cur_start < t_epoch:
+                    cur_end = min(cur_start + CHUNK_SEC, t_epoch)
+                    from_str = datetime.fromtimestamp(cur_start, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
+                    to_str = datetime.fromtimestamp(cur_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     try:
-                        from zoneinfo import ZoneInfo
-                        ist_tz = ZoneInfo("Asia/Kolkata")
-                    except ImportError:
-                        from datetime import timezone, timedelta
-                        ist_tz = timezone(timedelta(hours=5, minutes=30))
-                    from_str = datetime.fromtimestamp(start_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    to_str = datetime.fromtimestamp(end_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    k_res = "5minute" if resolution == "5m" else ("15minute" if resolution == "15m" else "60minute")
-                    k_res_map = {
-                        "1m": "minute",
-                        "3m": "3minute",
-                        "5m": "5minute",
-                        "10m": "10minute",
-                        "15m": "15minute",
-                        "30m": "30minute",
-                        "60m": "60minute",
-                        "1h": "60minute",
-                    }
-                    k_res = k_res_map.get(resolution, "5minute")
-                    hist_data = await kc.get_historical(token, k_res, from_str, to_str)
-                    if isinstance(hist_data, dict) and "candles" in hist_data:
-                        raw_list = hist_data["candles"]
-                        parsed_candles = []
-                        for row in raw_list:
-                            dt_c = datetime.fromisoformat(row[0])
-                            parsed_candles.append({
-                                "time": int(dt_c.timestamp()),
-                                "open": float(row[1]),
-                                "high": float(row[2]),
-                                "low": float(row[3]),
-                                "close": float(row[4]),
-                                "volume": float(row[5]) if len(row) > 5 else 0.0,
-                            })
-                        if parsed_candles:
-                            written = ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
-                            log.info("Hydrated %d real historical candles for %s from Zerodha Kite", written, sym)
-                            alias = INDEX_ALIASES.get(sym.upper())
-                            if alias and alias != sym.upper():
-                                ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
-        except Exception as exc:
-            log.warning("Failed to fetch Zerodha Kite historical candles for %s: %s", sym, exc)
+                        hist_data = await kc.get_historical(token, k_res, from_str, to_str)
+                        if isinstance(hist_data, dict) and "candles" in hist_data:
+                            raw_list = hist_data["candles"]
+                            parsed_candles = []
+                            for row in raw_list:
+                                dt_c = datetime.fromisoformat(row[0])
+                                if dt_c.tzinfo is None:
+                                    dt_c = dt_c.replace(tzinfo=ist_tz)
+                                parsed_candles.append({
+                                    "time": int(dt_c.timestamp()),
+                                    "open": float(row[1]),
+                                    "high": float(row[2]),
+                                    "low": float(row[3]),
+                                    "close": float(row[4]),
+                                    "volume": float(row[5]) if len(row) > 5 else 0.0,
+                                })
+                            if parsed_candles:
+                                ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
+                                if canon_sym != sym:
+                                    ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
+                                alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
+                                if alias and alias != canon_sym.upper():
+                                    ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
+                                log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
+                    except Exception as exc:
+                        log.warning("Failed chunk fetch for %s (%s to %s): %s", canon_sym, from_str, to_str, exc)
+                    cur_start = cur_end + 1
+                    await asyncio.sleep(0.1)
+    finally:
+        await kc.close()
 
 
 

@@ -33,10 +33,31 @@ def ist_now_ms() -> int:
     return int(datetime.now(_IST).timestamp() * 1000)
 
 
-def get_config() -> GammaMoveConfig:
+# ------------------------------------------------------------------ config
+
+def get_config(uid: str | None = None) -> GammaMoveConfig:
+    """The configuration currently in force.
+
+    Two different fallbacks, kept apart on purpose:
+
+    * **Nothing stored** -> the real defaults, whatever they are. A default is
+      what applies when nobody has said otherwise; hardcoding `enabled=False`
+      here used to make the shipped default a lie, because the dataclass said on
+      and this said off.
+    * **Stored but unreadable or invalid** -> defaults with the engine OFF. A
+      config that will not validate must never become a trading config, and the
+      failure would otherwise surface deep inside the engine mid-session. This
+      one is a safety fallback and stays.
+
+    A stored value always wins over a default. Changing a default must not
+      overrule an operator who deliberately set something.
+    """
+    key = f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY
     try:
         from app.services import db
-        raw = db.get_config(_CONFIG_KEY)
+        raw = db.get_config(key)
+        if not raw and uid:
+            raw = db.get_config(_CONFIG_KEY)
     except Exception:
         log.warning("%s: config store unavailable; running with defaults OFF", STRATEGY_ID)
         return GammaMoveConfig(enabled=False)
@@ -60,8 +81,9 @@ def get_config() -> GammaMoveConfig:
         return GammaMoveConfig(enabled=False)
 
 
-def set_config(values: dict[str, Any]) -> GammaMoveConfig:
-    current = get_config().as_dict()
+def set_config(values: dict[str, Any], uid: str | None = None) -> GammaMoveConfig:
+    """Persist a config change. Validation is the engine's, not a second copy."""
+    current = get_config(uid).as_dict()
     unknown = sorted(set(values) - set(current))
     if unknown:
         raise ValueError(f"Unknown {STRATEGY_ID} config fields: {', '.join(unknown)}")
@@ -74,7 +96,8 @@ def set_config(values: dict[str, Any]) -> GammaMoveConfig:
             current[key] = tuple(current[key])
     cfg = GammaMoveConfig(**current).validate()
     from app.services import db
-    db.set_config(_CONFIG_KEY, json.dumps(cfg.as_dict(), separators=(",", ":")))
+    target_key = f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY
+    db.set_config(target_key, json.dumps(cfg.as_dict(), separators=(",", ":")))
     return cfg
 
 

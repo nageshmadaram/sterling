@@ -39,6 +39,33 @@ describe('trade columns', () => {
     expect(headers).toContain('Slippage (INR)');
     expect(headers).toContain('Raw Entry');
   });
+
+  it('includes the Exit Reason column', () => {
+    const cols = tradeCsvColumns(false);
+    const exitReasonCol = cols.find((c) => c.header === 'Exit Reason');
+    expect(exitReasonCol).toBeDefined();
+    expect(exitReasonCol?.value({ exit_reason: 'TRAILING_STOP' } as never)).toBe('TRAILING_STOP');
+    expect(exitReasonCol?.value({} as never)).toBe('');
+  });
+
+  it('rounds Invested (INR) and PnL cleanly without float precision artifacts', () => {
+    const cols = tradeCsvColumns(false);
+    const investedCol = cols.find((c) => c.header === 'Invested (INR)')!;
+    const pnlUsdCol = cols.find((c) => c.header === 'PnL (INR)')!;
+    const pnlPctCol = cols.find((c) => c.header === 'PnL (%)')!;
+
+    // 8.13 * 6500 produces 52845.00000000001 in raw JavaScript
+    const trade = {
+      entry_price: 8.13,
+      quantity: 6500,
+      pnl_usd: 5720.000000000001,
+      pnl_pct: 10.820000000000002,
+    } as never;
+
+    expect(investedCol.value(trade)).toBe(52845);
+    expect(pnlUsdCol.value(trade)).toBe(5720);
+    expect(pnlPctCol.value(trade)).toBe(10.82);
+  });
 });
 
 describe('signal columns', () => {

@@ -1,5 +1,6 @@
 """Unified backtesting for Indian indices and equities."""
 from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -129,18 +130,11 @@ async def get_unified_presets() -> List[Dict[str, Any]]:
     ]
 
 
-@router.post("/unified/run")
-async def run_unified_backtest_endpoint(
+async def _load_backtest_candles(
     body: UnifiedBacktestRequest,
     request: Request,
-) -> UnifiedBacktestResult:
-    """
-    Executes an institutional backtest on real historical market data.
-    """
-    from app.core.rate_limit import check_backtest
-    check_backtest(request)
-
-    from app.engines.backtest.unified_engine import run_unified_backtest
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Resolves real historical candles or deterministically replayed series."""
     import numpy as np
     import pandas as pd
 
@@ -251,7 +245,41 @@ async def run_unified_backtest_endpoint(
             })
         candles = sim_candles
 
+    return candles, resolved_source
+
+
+@router.post("/unified/run")
+async def run_unified_backtest_endpoint(
+    body: UnifiedBacktestRequest,
+    request: Request,
+) -> UnifiedBacktestResult:
+    """Executes an institutional backtest on real historical market data."""
+    from app.core.rate_limit import check_backtest
+    check_backtest(request)
+
+    from app.engines.backtest.unified_engine import run_unified_backtest
+
+    candles, resolved_source = await _load_backtest_candles(body, request)
     try:
         return run_unified_backtest(candles=candles, req=body, data_source_label=resolved_source)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Backtest calculation error: {str(exc)}") from exc
+
+
+@router.post("/adaptive-edge/compare")
+async def run_adaptive_edge_comparison_endpoint(
+    body: UnifiedBacktestRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    """Runs A/B comparative simulation between V1 Legacy Baseline and V2 Production-Hardened."""
+    from app.core.rate_limit import check_backtest
+    check_backtest(request)
+
+    from app.engines.backtest.unified_engine import run_adaptive_edge_comparison
+
+    candles, resolved_source = await _load_backtest_candles(body, request)
+    try:
+        return run_adaptive_edge_comparison(candles=candles, req=body, data_source_label=resolved_source)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Adaptive Edge comparison error: {str(exc)}") from exc
+

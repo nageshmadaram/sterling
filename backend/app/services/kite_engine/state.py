@@ -157,7 +157,22 @@ def correlation_penalty(uid:str,new_asset:str,open_assets:list)->float:
     except Exception:return 1.0
 
 def save_signal_cache(uid:str,rows:list,generated_ms:int)->None:
-    try:db.set_config(f"kite_engine_signals_{uid}",json.dumps({"rows":rows,"generated_ms":generated_ms}))
+    try:
+        existing = load_signal_cache(uid)
+        merged_by_key = {}
+        if existing and existing[0]:
+            for r in existing[0]:
+                k = (r.get("underlying"), r.get("timestamp_ms"))
+                if k[0] and k[1]:
+                    merged_by_key[k] = r
+        for r in rows:
+            k = (r.get("underlying"), r.get("timestamp_ms"))
+            if k[0] and k[1]:
+                merged_by_key[k] = r
+            else:
+                merged_by_key[(r.get("underlying") or str(len(merged_by_key)), generated_ms)] = r
+        merged_rows = sorted(merged_by_key.values(), key=lambda x: x.get("timestamp_ms", 0))
+        db.set_config(f"kite_engine_signals_{uid}", json.dumps({"rows": merged_rows, "generated_ms": generated_ms}))
     except Exception:pass
 def load_signal_cache(uid:str):
     raw=db.get_config(f"kite_engine_signals_{uid}")
