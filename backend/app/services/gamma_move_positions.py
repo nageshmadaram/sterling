@@ -1,17 +1,4 @@
-"""Durable open-position registry for Gamma Move.
-
-Positions must survive a restart. Holding them only in memory means a crash
-while long leaves an option position at the broker that nothing is watching and
-nothing will ever exit -- and the process that comes back has no idea it exists.
-
-**Why this is not `kite_engine.positions`.** That registry is a good one and this
-module is modelled on it, but it is a single per-user store that the SuperTrend
-engine's own monitor manages. Registering Gamma Move positions there would put
-two engines in charge of one position: both would trail it, both would try to
-exit it, and the first to win would leave the other holding a stale row. So this
-keeps its own namespace, which is the same reason each engine has its own
-candidate cache rather than sharing one.
-"""
+"""Durable open-position registry for Gamma Move."""
 from __future__ import annotations
 
 import json
@@ -19,17 +6,22 @@ from dataclasses import asdict, fields
 from typing import Optional
 
 from app.core.logging import get_logger
-from app.engines.gamma_move import InstrumentRef, PositionState
+from app.engines.gamma_move import InstrumentRef, PositionState, TradeRecord
 
 log = get_logger(__name__)
 
 PENDING, OPEN, CLOSED, REJECTED = "pending", "open", "closed", "rejected"
 
 _cache: dict[str, dict[str, PositionState]] = {}
+_record_cache: dict[str, TradeRecord] = {}
 
 
 def _key(uid: str) -> str:
     return f"gamma_move_positions_{uid}"
+
+
+def _record_key(uid: str) -> str:
+    return f"gamma_move_record_{uid}"
 
 
 def _to_dict(p: PositionState) -> dict:
@@ -47,8 +39,6 @@ def _from_dict(d: dict) -> Optional[PositionState]:
         return PositionState(instrument=inst,
                              **{k: v for k, v in d.items() if k in known})
     except (TypeError, ValueError) as exc:
-        # A row written by an older build must not take the whole registry down
-        # with it -- one unreadable position is better than none.
         log.error("gamma_move: unreadable persisted position dropped (%s): %s", exc, d)
         return None
 
@@ -76,7 +66,6 @@ def persist(uid: str) -> None:
         db.set_config(_key(uid), json.dumps(
             [_to_dict(p) for p in _cache.get(uid, {}).values()], separators=(",", ":")))
     except Exception as exc:                                       # noqa: BLE001
-        # Loud: an unpersisted position is one a restart will not know about.
         log.error("gamma_move: FAILED to persist positions for %s: %s", uid, exc)
 
 
@@ -96,11 +85,6 @@ def open_positions(uid: str) -> list[PositionState]:
 
 def mark_filled(uid: str, symbol: str, fill_price: float, *,
                 gtt_id: int = 0) -> Optional[PositionState]:
-    """Record the real average fill and re-anchor the stop to it.
-
-    The stop was computed against the intended entry. If the fill came in worse,
-    keeping the old stop silently widens the risk past what was sized for.
-    """
     pos = get(uid, symbol)
     if pos is None:
         return None
@@ -138,14 +122,41 @@ def close(uid: str, symbol: str, reason: str = "") -> Optional[PositionState]:
 
 
 def forget_closed(uid: str) -> None:
-    """Drop closed rows once the session has recorded them."""
     live = {k: v for k, v in load(uid).items() if v.is_open}
     _cache[uid] = live
     persist(uid)
 
 
+def load_record(uid: str) -> TradeRecord:
+    if uid in _record_cache:
+        return _record_cache[uid]
+    rec = TradeRecord()
+    try:
+        from app.services import db
+        raw = db.get_config(_record_key(uid))
+        if raw:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+            rec = TradeRecord.from_dict(data if isinstance(data, dict) else {})
+    except Exception as exc:                                       # noqa: BLE001
+        log.error("gamma_move: trade record unreadable for %s: %s", uid, exc)
+    _record_cache[uid] = rec
+    return rec
+
+
+def save_record(uid: str, record: TradeRecord) -> TradeRecord:
+    _record_cache[uid] = record
+    try:
+        from app.services import db
+        db.set_config(_record_key(uid), json.dumps(record.as_dict(), separators=(",", ":")))
+    except Exception as exc:                                       # noqa: BLE001
+        log.error("gamma_move: FAILED to persist trade record for %s: %s", uid, exc)
+    return record
+
+
 def reset(uid: str = "") -> None:
     if uid:
         _cache.pop(uid, None)
+        _record_cache.pop(uid, None)
     else:
         _cache.clear()
+        _record_cache.clear()
