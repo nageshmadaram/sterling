@@ -36,13 +36,8 @@ from app.services.gamma_move import (ist_today, nfo_dump, stock_underlyings,
 log = get_logger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-#: Kite allows roughly 3 historical requests a second. Minimum-spacing, never a
-#: token bucket: a bucket with a burst allowance empties itself into the API in
-#: the first second of a cycle and then eats 429s for the rest of it. Same shape
-#: as ``kitelake/ratelimit.py::PacedRateLimiter``, which learned this the hard way.
 _HISTORICAL_RATE = 2.6
 _QUOTE_RATE = 0.8
-#: Kite accepts at most 500 instruments in one /quote call.
 _QUOTE_BATCH = 400
 
 
@@ -61,7 +56,6 @@ class Pacer:
             self._next = now + self._gap
 
 
-#: Stage A is the same for every user on a given day, so it is cached by day.
 _levels_cache: dict[tuple[str, str], tuple[dict, dict, dict]] = {}
 _scan_stats: dict[str, dict] = {}
 
@@ -120,11 +114,38 @@ async def _quote_batched(client, pacer: Pacer, keys: list) -> dict:
     return out
 
 
-# ------------------------------------------------------------------ Stage A
+def _quote_of(quotes: dict, key: str) -> dict:
+    return quotes.get(key) or quotes.get(key.split(":", 1)[-1]) or {}
+
+
+def _spread_pct(q: dict) -> float | None:
+    depth = q.get("depth") or {}
+    bids = depth.get("buy") or []
+    asks = depth.get("sell") or []
+    bid = ask = 0.0
+    if bids:
+        bid = float((bids[0] or {}).get("price") or 0.0)
+    if asks:
+        ask = float((asks[0] or {}).get("price") or 0.0)
+    if bid <= 0 or ask <= 0:
+        return None
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return None
+    return (ask - bid) / mid * 100.0
+
+
+def _closed_daily(candles: list, today: date) -> list:
+    if not candles:
+        return candles
+    last_day = datetime.fromtimestamp(candles[-1].ts_ms / 1000, _IST).date()
+    if last_day == today and len(candles) > 1:
+        return candles[:-1]
+    return candles
+
 
 async def scan_levels(uid: str, cfg: GammaMoveConfig, client, *,
                       today: Optional[date] = None) -> tuple[dict, dict, dict]:
-    """(levels_by_name, spot_by_name, regime_by_name). Cached per trading day."""
     day = (today or ist_today()).isoformat()
     key = (uid, day)
     if key in _levels_cache:
@@ -152,28 +173,38 @@ async def scan_levels(uid: str, cfg: GammaMoveConfig, client, *,
         if len(candles) < cfg.pivot_lookback * 2 + 10:
             skipped += 1
             continue
-        levels[name] = find_levels(candles, pivot_lookback=cfg.pivot_lookback,
+        hist = _closed_daily(candles, to_d)
+        if len(hist) < cfg.pivot_lookback * 2 + 10:
+            skipped += 1
+            continue
+        levels[name] = find_levels(hist, pivot_lookback=cfg.pivot_lookback,
                                    cluster_pct=cfg.level_cluster_pct,
                                    min_touches=cfg.min_level_touches,
                                    window=cfg.level_lookback_days)
-        spots[name] = candles[-1].close
-        regimes[name] = regime_of(candles, cfg)
+        spots[name] = hist[-1].close
+        regimes[name] = regime_of(hist, cfg)
     if skipped:
         log.info("gamma_move stage A: %s of %s underlyings had no usable daily history",
                  skipped, len(names))
-    _levels_cache.clear()                     # one day's worth is all that is useful
+    _levels_cache.clear()
     _levels_cache[key] = (levels, spots, regimes)
     return levels, spots, regimes
 
 
-# ------------------------------------------------------------------ Stage B
-
 async def scan_strikes(uid: str, cfg: GammaMoveConfig, client, levels: dict,
                        spots: dict, regimes: dict, *,
                        today: Optional[date] = None) -> list[StrikeCandidate]:
-    """Highest-OI strikes at levels spot is actually sitting on."""
     day = today or ist_today()
     rows = await nfo_dump(uid)
+
+    names = list(levels.keys())
+    eq_keys = [f"NSE:{n}" for n in names]
+    live_quotes = await _quote_batched(client, Pacer(_QUOTE_RATE), eq_keys) if eq_keys else {}
+    for name in names:
+        q = _quote_of(live_quotes, f"NSE:{name}")
+        ltp = float(q.get("last_price") or 0.0)
+        if ltp > 0:
+            spots[name] = ltp
 
     wanted: list[tuple[str, SpotLevel]] = []
     for name, lvls in levels.items():
@@ -189,14 +220,15 @@ async def scan_strikes(uid: str, cfg: GammaMoveConfig, client, levels: dict,
         return []
 
     by_name: dict[str, list] = {}
+    wanted_names = {w[0] for w in wanted}
     for r in rows:
         if r.get("segment") != "NFO-OPT":
             continue
         n = str(r.get("name") or "").upper()
-        if n in {w[0] for w in wanted}:
+        if n in wanted_names:
             by_name.setdefault(n, []).append(r)
 
-    pool: list[tuple[str, SpotLevel, InstrumentRef]] = []
+    pool: list[tuple[str, SpotLevel, InstrumentRef, bool]] = []
     for name, lv in wanted:
         expiry = select_expiry([str(r.get("expiry") or "")[:10] for r in by_name.get(name, [])],
                                day, cfg)
@@ -209,35 +241,55 @@ async def scan_strikes(uid: str, cfg: GammaMoveConfig, client, levels: dict,
             if str(r.get("instrument_type")) != want:
                 continue
             strike = float(r.get("strike") or 0)
-            if lv.price <= 0 or abs(strike - lv.price) / lv.price * 100 > cfg.strike_window_pct:
-                continue
-            pool.append((name, lv, to_instrument_ref(r)))
+            near = (lv.price > 0
+                    and abs(strike - lv.price) / lv.price * 100 <= cfg.strike_window_pct)
+            pool.append((name, lv, to_instrument_ref(r), near))
     if not pool:
         return []
 
     quotes = await _quote_batched(client, Pacer(_QUOTE_RATE),
-                                  [f"NFO:{i.tradingsymbol}" for _, _, i in pool])
+                                  [f"NFO:{i.tradingsymbol}" for _, _, i, _ in pool])
+
+    from app.engines.gamma_move import days_to_expiry
+    from app.engines.gamma_move.selection import is_chain_wall, spot_through_or_at_strike
+
+    chain_max: dict[tuple[str, str, str], int] = {}
+    for name, lv, inst, _near in pool:
+        q = _quote_of(quotes, f"NFO:{inst.tradingsymbol}")
+        oi = int(float(q.get("oi") or 0))
+        key_c = (name, inst.expiry[:10], inst.option_type)
+        if oi > chain_max.get(key_c, 0):
+            chain_max[key_c] = oi
 
     best: dict[tuple[str, float, str], StrikeCandidate] = {}
-    from app.engines.gamma_move import days_to_expiry
-    for name, lv, inst in pool:
-        q = quotes.get(f"NFO:{inst.tradingsymbol}") or {}
+    for name, lv, inst, near in pool:
+        if not near:
+            continue
+        q = _quote_of(quotes, f"NFO:{inst.tradingsymbol}")
         oi = int(float(q.get("oi") or 0))
         premium = float(q.get("last_price") or 0.0)
         volume = int(q.get("volume") or 0)
         if (oi < cfg.min_option_oi or volume < cfg.min_option_volume
                 or premium < cfg.min_option_premium):
             continue
+        spread = _spread_pct(q)
+        if spread is not None and cfg.max_spread_pct > 0 and spread > cfg.max_spread_pct:
+            continue
         dte = days_to_expiry(inst.expiry, day)
         if dte is None:
             continue
+        spot = spots.get(name) or 0.0
+        if getattr(cfg, "require_spot_through_strike", True) and not spot_through_or_at_strike(
+                spot, inst.strike, inst.option_type, cfg.level_proximity_pct):
+            continue
+        wall = chain_max.get((name, inst.expiry[:10], inst.option_type))
+        if not is_chain_wall(oi, wall, required=getattr(cfg, "require_chain_max_oi", True)):
+            continue
         key = (name, lv.price, inst.option_type)
         cand = StrikeCandidate(underlying=name, level=lv, instrument=inst, oi=oi,
-                               days_to_expiry=dte, spot=spots.get(name) or 0.0,
-                               premium=premium)
+                               days_to_expiry=dte, spot=spot, premium=premium,
+                               chain_oi_max=wall)
         cur = best.get(key)
-        # Highest OI wins; a tie breaks toward the strike nearer the level,
-        # because at equal open interest that is the one the break threatens.
         if cur is None or (oi, -abs(inst.strike - lv.price)) > \
                 (cur.oi, -abs(cur.instrument.strike - lv.price)):
             best[key] = cand
@@ -250,13 +302,10 @@ async def scan_strikes(uid: str, cfg: GammaMoveConfig, client, levels: dict,
     return out
 
 
-# ------------------------------------------------------------------ Stage C
-
 async def scan_triggers(uid: str, cfg: GammaMoveConfig, client,
                         candidates: list[StrikeCandidate], regimes: dict,
                         strategy: GammaMoveStrategy, *,
                         today: Optional[date] = None) -> list[GammaSignal]:
-    """Evaluate the entry rule on each surviving contract's own 15-minute bars."""
     day = today or ist_today()
     pacer = Pacer(_HISTORICAL_RATE)
     frm = (day - timedelta(days=10)).isoformat()
@@ -274,11 +323,8 @@ async def scan_triggers(uid: str, cfg: GammaMoveConfig, client,
     return out
 
 
-# ------------------------------------------------------------------- driver
-
 async def scan_once(uid: str, cfg: GammaMoveConfig, strategy: GammaMoveStrategy,
                     *, today: Optional[date] = None) -> list[GammaSignal]:
-    """A -> B -> C, with the request cost of each stage recorded for the board."""
     from app.services.exchanges.kite import accounts
     acct = accounts.get_active(uid)
     if not acct:

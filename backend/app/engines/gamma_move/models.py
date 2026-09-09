@@ -20,10 +20,21 @@ def q2(value: float) -> float:
     return round(float(value) + 0.0, 2)
 
 
-def align_to_tick(price: float, tick: float) -> float:
-    """Down to the nearest tradable tick. An unaligned limit price is rejected."""
+def align_to_tick(price: float, tick: float, *, side: str = "buy") -> float:
+    """Snap to a tradable tick.
+
+    Buys floor so a limit never pays more than the intended price. Sells
+    (exits) ceil so a limit never sells cheaper than the intended price.
+    An unaligned limit is rejected by the exchange; rounding the wrong way
+    is a fill at a price the stop was not sized for.
+    """
     t = float(tick or 0.05) or 0.05
-    return q2(int(round(float(price) / t)) * t)
+    raw = float(price) / t
+    if str(side).lower() in ("sell", "exit"):
+        snapped = int(raw) * t if raw == int(raw) else (int(raw) + 1) * t
+    else:
+        snapped = int(raw) * t
+    return q2(snapped)
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,10 @@ class StrikeCandidate:
     days_to_expiry: int
     spot: float
     premium: float = 0.0
+    #: Highest open interest on the same expiry + option type. None means the
+    #: caller did not look at the rest of the chain, so the wall check is skipped
+    #: rather than invented. The scanner always fills this.
+    chain_oi_max: int | None = None
 
     @property
     def option_type(self) -> OptionType:
@@ -158,8 +173,6 @@ class GammaSignal:
     exit_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
-        # A row that declines to trade and will not say why is the single
-        # most-repeated defect in this codebase's engines. Refuse to build one.
         if self.state in ("watching", "error") and not self.reason:
             raise ValueError(f"a '{self.state}' signal must carry a reason")
 
@@ -201,30 +214,17 @@ class PositionState:
     trail: Optional[float] = None
     high_water: float = 0.0
     sessions_held: int = 0
-    #: Claimed before any exit order is sent. Every exit path takes this, or two
-    #: paths will both flatten the same position.
     exiting: bool = False
-
-    # --- broker reality ----------------------------------------------------
-    #: PENDING until a fill is confirmed. A position is not "open" because we
-    #: sent an order -- it is open when the broker says it filled, and the two
-    #: are different often enough to matter.
     status: str = "pending"
     order_id: str = ""
-    #: Actual average fill. `entry` is the intended price; this is what happened.
-    #: Every risk number is recomputed from this once it is known.
     fill_price: float = 0.0
-    #: Broker-side GTT protecting this position. 0 = nothing at the broker, which
-    #: is only acceptable under stop_mode=monitor.
     gtt_id: int = 0
     stop_mode: str = "both"
-    #: The idempotency key the entry was sent under, so a retry after a timeout
-    #: cannot open the position twice.
     idempotency_key: str = ""
+    exit_reason: str = ""
 
     @property
     def effective_entry(self) -> float:
-        """The price risk is measured from: the real fill when we have one."""
         return self.fill_price if self.fill_price > 0 else self.entry
 
     @property
@@ -252,11 +252,8 @@ class TradeRecord:
     losses: int = 0
     consecutive_losses: int = 0
     consecutive_wins: int = 0
-    #: Whether size is currently cut. Latched, not derived from the live streak:
-    #: a single winner resets consecutive_losses, and deriving from that would
-    #: put full size back on after one good trade in the middle of a bad run --
-    #: which is the opposite of what the rule is for.
     descaled: bool = False
+    descale_step: int = 0
     realised_inr: float = 0.0
     day_realised_inr: float = 0.0
     day: str = ""
@@ -277,10 +274,13 @@ class TradeRecord:
             self.losses += 1
             self.consecutive_losses += 1
             self.consecutive_wins = 0
-        if self.consecutive_losses >= descale_after:
-            self.descaled = True
-        elif self.descaled and self.consecutive_wins >= rescale_after:
-            self.descaled = False
+        if pnl_inr < 0 and self.consecutive_losses > 0 and \
+                self.consecutive_losses % max(1, int(descale_after)) == 0:
+            self.descale_step = min(int(self.descale_step) + 1, 2)
+        elif pnl_inr >= 0 and self.descaled and self.consecutive_wins > 0 and \
+                self.consecutive_wins % max(1, int(rescale_after)) == 0:
+            self.descale_step = max(int(self.descale_step) - 1, 0)
+        self.descaled = self.descale_step > 0
         self.history.append({"pnl_inr": q2(pnl_inr), "day": day})
 
     def as_dict(self) -> dict:
@@ -289,7 +289,35 @@ class TradeRecord:
                 "consecutive_losses": self.consecutive_losses,
                 "consecutive_wins": self.consecutive_wins,
                 "descaled": self.descaled,
+                "descale_step": int(self.descale_step),
                 "realised_inr": q2(self.realised_inr),
                 "day_realised_inr": q2(self.day_realised_inr), "day": self.day,
+                "history": list(self.history),
                 "verdict": ("no realised trades yet" if not self.trades
                             else f"{self.wins}/{self.trades} winners")}
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "TradeRecord":
+        rec = cls()
+        if not d:
+            return rec
+        for name in ("trades", "wins", "losses", "consecutive_losses",
+                     "consecutive_wins", "descale_step"):
+            if name in d:
+                try:
+                    setattr(rec, name, int(d[name] or 0))
+                except (TypeError, ValueError):
+                    pass
+        rec.descale_step = max(0, min(int(rec.descale_step or 0), 2))
+        rec.descaled = rec.descale_step > 0
+        for name in ("realised_inr", "day_realised_inr"):
+            if name in d:
+                try:
+                    setattr(rec, name, float(d[name] or 0.0))
+                except (TypeError, ValueError):
+                    pass
+        rec.day = str(d.get("day") or "")
+        hist = d.get("history")
+        if isinstance(hist, list):
+            rec.history = list(hist)
+        return rec

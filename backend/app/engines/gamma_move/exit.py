@@ -8,6 +8,7 @@ evidence, and it is the only one live mode will run.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Optional, Sequence
 
 from .config import GammaMoveConfig
@@ -16,11 +17,6 @@ from .trigger import session_day
 
 
 def swing_low_stop(candles: Sequence[OICandle], cfg: GammaMoveConfig) -> Optional[float]:
-    """The option's own recent swing low.
-
-    Explicitly the option chart, not the underlying: "this is in that particular
-    strike -- I am not talking about that particular strike [spot]".
-    """
     if len(candles) < 2:
         return None
     window = list(candles)[-cfg.swing_lookback:]
@@ -30,12 +26,6 @@ def swing_low_stop(candles: Sequence[OICandle], cfg: GammaMoveConfig) -> Optiona
 
 def initial_stop(entry: float, candles: Sequence[OICandle],
                  cfg: GammaMoveConfig) -> Optional[float]:
-    """The stop to enter with, or None when no valid one exists.
-
-    The percent floor is not a second opinion -- it is a cap on how much of the
-    premium the swing low is allowed to put at risk. A swing low 70% below the
-    entry is a stop in name only, so the tighter of the two wins.
-    """
     if entry <= 0:
         return None
     swing = swing_low_stop(candles, cfg)
@@ -45,8 +35,6 @@ def initial_stop(entry: float, candles: Sequence[OICandle],
     else:
         stop = swing if swing is not None else floor
     if stop is None or stop <= 0 or stop >= entry:
-        # An inverted or zero stop is a rejected setup, never a trade entered
-        # with the stop quietly moved to somewhere it can be honoured.
         return None
     return q2(stop)
 
@@ -58,7 +46,6 @@ def target_price(entry: float, cfg: GammaMoveConfig) -> Optional[float]:
 
 
 def update_trail(pos: PositionState, ltp: float, cfg: GammaMoveConfig) -> Optional[float]:
-    """Ratchet the trail. Never loosens -- a trail that can fall is not a trail."""
     if cfg.exit_policy != "TRAILING_STOP" or cfg.trail_pct <= 0 or ltp <= 0:
         return pos.trail
     pos.high_water = max(pos.high_water, ltp)
@@ -70,19 +57,35 @@ def update_trail(pos: PositionState, ltp: float, cfg: GammaMoveConfig) -> Option
     return pos.trail
 
 
+def weekday_sessions_held(entry_day: str, today: str) -> int:
+    """Trading sessions elapsed after entry. Weekends do not count."""
+    try:
+        a = date.fromisoformat(str(entry_day)[:10])
+        b = date.fromisoformat(str(today)[:10])
+    except (TypeError, ValueError):
+        return 0
+    if b <= a:
+        return 0
+    n = 0
+    d = a + timedelta(days=1)
+    while d <= b:
+        if d.weekday() < 5:
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def should_exit(pos: PositionState, ltp: float, now_ms: int, today: str,
                 cfg: GammaMoveConfig, *, session_over: bool = False) -> Optional[str]:
-    """Why this position should close now, or None. Order is worst-first."""
     if ltp > 0 and pos.stop > 0 and ltp <= pos.stop:
         return "stop"
     if pos.trail is not None and ltp > 0 and ltp <= pos.trail:
         return "trail"
     if pos.target is not None and ltp > 0 and ltp >= pos.target:
         return "target"
-    # Sessions held, not wall-clock hours: the source counts trading days, and a
-    # weekend must not age a position by two.
     if today != pos.entry_day:
-        held = pos.sessions_held
+        held = weekday_sessions_held(pos.entry_day, today)
+        pos.sessions_held = held
         if held >= cfg.max_hold_days:
             return "time_stop"
     if session_over and cfg.close_at_session_end:
@@ -91,8 +94,7 @@ def should_exit(pos: PositionState, ltp: float, now_ms: int, today: str,
 
 
 def exit_order_price(ltp: float, tick: float) -> float:
-    """A marketable limit for the exit, aligned to the instrument's tick."""
-    return align_to_tick(max(ltp, tick), tick)
+    return align_to_tick(max(ltp, tick), tick, side="sell")
 
 
 def build_exit_event(pos: PositionState, reason: str, price: float,
@@ -101,5 +103,5 @@ def build_exit_event(pos: PositionState, reason: str, price: float,
 
 
 def realised_inr(pos: PositionState, exit_price: float) -> float:
-    """Gross rupees. Costs belong to the caller that knows the broker's charges."""
-    return q2((float(exit_price) - pos.entry) * pos.quantity)
+    basis = pos.effective_entry if getattr(pos, "effective_entry", 0) else pos.entry
+    return q2((float(exit_price) - float(basis)) * pos.quantity)
