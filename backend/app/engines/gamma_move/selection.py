@@ -56,10 +56,6 @@ def spot_through_or_at_strike(spot: float, strike: float, option_type: str,
     return float(spot) <= float(strike) * (1.0 + band)
 
 
-def _flag(cfg: GammaMoveConfig, name: str, default: bool = True) -> bool:
-    return bool(getattr(cfg, name, default))
-
-
 def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
                 underlying: str, oi_by_id: dict, premium_by_id: dict, spot: float,
                 today: date, cfg: GammaMoveConfig) -> Optional[StrikeCandidate]:
@@ -72,7 +68,7 @@ def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
         dte = days_to_expiry(c.expiry, today)
         if dte is None or not expiry_in_window(c.expiry, today, cfg):
             continue
-        if _flag(cfg, "require_spot_through_strike") and not spot_through_or_at_strike(
+        if cfg.require_spot_through_strike and not spot_through_or_at_strike(
                 spot, c.strike, c.option_type, cfg.level_proximity_pct):
             continue
         chain_max = max(
@@ -80,7 +76,7 @@ def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
              if x.option_type == c.option_type and x.expiry[:10] == c.expiry[:10]),
             default=0)
         if not is_chain_wall(oi, chain_max or None,
-                             required=_flag(cfg, "require_chain_max_oi")):
+                             required=cfg.require_chain_max_oi):
             continue
         cand = StrikeCandidate(underlying=underlying, level=level, instrument=c,
                                oi=oi, days_to_expiry=dte, spot=spot, premium=premium,

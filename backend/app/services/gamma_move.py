@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.engines.gamma_move import (CALIBRATION, CALIBRATED_FIELDS, CONTRACT_VERSION,
-                                    GammaMoveConfig, InstrumentRef, STRATEGY_ID,
-                                    STRATEGY_NAME)
+                                    GammaMoveConfig, InstrumentRef, SOURCE_GATES,
+                                    STRATEGY_ID, STRATEGY_NAME)
 
 log = get_logger(__name__)
 
@@ -138,6 +138,10 @@ def descriptor() -> dict:
         "source_aligned_at": "2026-09-09",
         "calibration": CALIBRATION,
         "calibrated_fields": sorted(CALIBRATED_FIELDS),
+        # Occupancy on one snapshot, not a measured edge. Published so the
+        # settings page can label the two source-rule toggles without mirroring
+        # a second copy of the numbers.
+        "source_gates": SOURCE_GATES,
         "headline_finding": (
             "Only the level filter is proven. A setup with spot inside its proximity "
             "band worked about twice as often as an average bar — the open-interest "

@@ -8,19 +8,24 @@ from __future__ import annotations
 
 import pytest
 
-from app.engines.gamma_move import GammaMoveConfig, InstrumentRef, PositionState
+from app.engines.gamma_move import (GammaMoveConfig, GammaSignal, InstrumentRef,
+                                    PositionState, TradeRecord)
 from app.services import gamma_move_positions as store
+from tests.engines.gamma_move.conftest import BASE_MS
 
 
 @pytest.fixture(autouse=True)
 def _db(tmp_path, monkeypatch):
     monkeypatch.setenv("STERLING_DB_PATH", str(tmp_path / "t.db"))
     from app.services import db
+    from app.services import gamma_move_runner as runner
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "t.db"), raising=False)
     db.init()
     store.reset()
+    runner.clear()
     yield
     store.reset()
+    runner.clear()
 
 
 def inst(symbol="RELIANCE26SEP1300CE") -> InstrumentRef:
@@ -218,4 +223,87 @@ class TestReconcile:
         assert orphans[0]["symbol"] == "NIFTY26SEP25000CE"
         assert orphans[0]["quantity"] == 50
         assert orphans[0]["entry_price"] == 120.0
+
+
+class TestSessionReuse:
+    def test_session_for_reuses_the_persisted_record_across_midnight(self, monkeypatch):
+        """A new Session at midnight would drop descale and the daily loss tally."""
+        from app.services import gamma_move_runner as runner
+        rec = TradeRecord(descale_step=2, trades=6, losses=6,
+                          day="2026-09-08", day_realised_inr=-4000.0)
+        store.save_record("u1", rec)
+        monkeypatch.setattr(runner, "_today_str", lambda: "2026-09-08")
+        s1 = runner.session_for("u1", GammaMoveConfig())
+        assert s1.strategy.state.record.descale_step == 2
+        monkeypatch.setattr(runner, "_today_str", lambda: "2026-09-09")
+        s2 = runner.session_for("u1", GammaMoveConfig())
+        assert s2 is s1
+        assert s2.strategy.state.record is s1.strategy.state.record
+        assert s2.strategy.state.record.descale_step == 2
+        assert s2.strategy.state.day == "2026-09-09"
+
+    def test_load_record_rebuilds_descale_from_dict(self):
+        rec = TradeRecord.from_dict({
+            "descale_step": 2, "trades": 6, "losses": 6,
+            "day": "2026-09-08", "day_realised_inr": -4000,
+        })
+        assert rec.descale_step == 2
+        assert rec.descaled is True
+        store.save_record("u1", rec)
+        store.reset()
+        back = store.load_record("u1")
+        assert back.descale_step == 2
+        assert back.descaled is True
+        assert back.day == "2026-09-08"
+
+
+class TestLiveSpreadGate:
+    def test_spread_of_3_1_percent_is_refused(self):
+        from app.services import gamma_move_runner as runner
+        cfg = GammaMoveConfig()
+        wide = {"depth": {"buy": [{"price": 100.0}], "sell": [{"price": 103.15}]}}
+        msg = runner.spread_blocks_entry(wide, cfg)
+        assert msg is not None
+        assert "spread" in msg.lower()
+
+    def test_spread_inside_3_percent_is_allowed(self):
+        from app.services import gamma_move_runner as runner
+        cfg = GammaMoveConfig()
+        tight = {"depth": {"buy": [{"price": 100.0}], "sell": [{"price": 102.9}]}}
+        assert runner.spread_blocks_entry(tight, cfg) is None
+
+    @pytest.mark.asyncio
+    async def test_arm_refuses_a_wide_live_quote(self, monkeypatch):
+        from app.engines.gamma_move import SpotLevel, StrikeCandidate
+        from app.services import gamma_move_runner as runner
+
+        cfg = GammaMoveConfig()
+        instrument = inst()
+        cand = StrikeCandidate(
+            underlying="RELIANCE",
+            level=SpotLevel(price=1300.0, kind="resistance", touches=3),
+            instrument=instrument, oi=6_000_000, days_to_expiry=9, spot=1298.0,
+            premium=53.0, chain_oi_max=6_000_000)
+        sig = GammaSignal(id="s-wide", candidate=cand, metrics=None, state="armed",
+                          at_ms=BASE_MS, regime="up", entry=53.0, stop=45.0,
+                          lots=1, quantity=500)
+        session = runner.session_for("u1", cfg)
+        session.signals[sig.id] = sig
+
+        class Client:
+            async def get_quote(self, keys):
+                return {"NFO:RELIANCE26SEP1300CE": {
+                    "depth": {"buy": [{"price": 50.0}], "sell": [{"price": 52.0}]},
+                }}
+
+            async def place_order(self, *a, **k):
+                raise AssertionError("must not place when the quote is wide")
+
+        async def _client(_uid):
+            return Client()
+
+        monkeypatch.setattr(runner, "_client", _client)
+        result = await runner.arm("u1", sig.id)
+        assert result["ok"] is False
+        assert "spread" in result["message"].lower()
 

@@ -284,6 +284,26 @@ export function GammaMoveSettings() {
           value={cfg.max_candidates} defaultValue={defaults.max_candidates}
           onChange={(v) => patch({ max_candidates: v })} min={1} max={100} step={1}
         />
+        <Field
+          label="Chain wall"
+          hint={`Source rule, not calibrated. ${strategy.source_gates?.require_chain_max_oi ?? 'The strike must be the highest open interest on that expiry and option type.'}`}
+        >
+          <Switch
+            checked={cfg.require_chain_max_oi !== false}
+            label="Require chain-max open interest"
+            onChange={() => patch({ require_chain_max_oi: cfg.require_chain_max_oi === false })}
+          />
+        </Field>
+        <Field
+          label="Spot through the wall"
+          hint={`Source rule, not calibrated. ${strategy.source_gates?.require_spot_through_strike ?? 'Spot must have broken through, or sit at, the wall.'}`}
+        >
+          <Switch
+            checked={cfg.require_spot_through_strike !== false}
+            label="Require spot through the wall"
+            onChange={() => patch({ require_spot_through_strike: cfg.require_spot_through_strike === false })}
+          />
+        </Field>
 
         {/* The same picker every other engine uses, reading and writing THIS
             strategy's selection. Edits join the draft like any other field, so

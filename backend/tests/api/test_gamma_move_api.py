@@ -42,6 +42,16 @@ def test_descriptor_publishes_identity_and_calibration(client):
         assert s["calibration"][field]
 
 
+def test_source_gates_are_published_as_occupancy_not_edge(client):
+    """Snapshot occupancy, not a measured edge. Must not sit in calibrated_fields."""
+    s = client.get("/config/gamma-move").json()["strategy"]
+    gates = s["source_gates"]
+    assert "require_chain_max_oi" in gates
+    assert "require_spot_through_strike" in gates
+    assert "require_chain_max_oi" not in s["calibrated_fields"]
+    assert "require_spot_through_strike" not in s["calibrated_fields"]
+
+
 def test_defaults_are_the_calibrated_values(client):
     d = client.get("/config/gamma-move").json()["defaults"]
     assert d["level_proximity_pct"] == 1.0
@@ -86,6 +96,24 @@ def test_partial_update_changes_only_what_was_sent(client):
                        json={"min_oi_drop_pct": 4.5}).json()["config"]
     assert after["min_oi_drop_pct"] == 4.5
     assert after["volume_spike_mult"] == before["volume_spike_mult"]
+
+
+def test_source_flags_round_trip_through_put(client):
+    """Settings PUT must store the two source gates, not drop them via getattr."""
+    defaults = client.get("/config/gamma-move").json()["defaults"]
+    assert defaults["require_chain_max_oi"] is True
+    assert defaults["require_spot_through_strike"] is True
+    r = client.put("/config/gamma-move", json={
+        "require_chain_max_oi": False,
+        "require_spot_through_strike": False,
+    })
+    assert r.status_code == 200, r.text
+    cfg = r.json()["config"]
+    assert cfg["require_chain_max_oi"] is False
+    assert cfg["require_spot_through_strike"] is False
+    again = client.get("/config/gamma-move").json()["config"]
+    assert again["require_chain_max_oi"] is False
+    assert again["require_spot_through_strike"] is False
 
 
 def test_unknown_key_is_refused_not_dropped(client):

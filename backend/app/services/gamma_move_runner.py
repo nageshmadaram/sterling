@@ -66,6 +66,22 @@ def auto_execute(uid: str) -> bool:
         return False
 
 
+def spread_blocks_entry(quote: dict, cfg: GammaMoveConfig) -> Optional[str]:
+    """Refuse a live quote whose bid/ask width exceeds ``max_spread_pct``.
+
+    Missing depth is not a refusal — the scanner already skipped unquoted
+    rows, and a tick with no book is not the same as a 3.1% book.
+    """
+    from app.services.gamma_move_scanner import _spread_pct
+    spread = _spread_pct(quote or {})
+    if spread is None:
+        return None
+    cap = float(cfg.max_spread_pct or 0.0)
+    if cap > 0 and spread > cap:
+        return f"spread {spread:.1f}% exceeds {cap:g}%"
+    return None
+
+
 def _safety(uid: str, idempotency_key: Optional[str]) -> tuple[bool, str]:
     try:
         from app.services.live_safety import assert_safe_to_trade
@@ -188,12 +204,23 @@ async def arm(uid: str, signal_id: str) -> dict:
         signal = session.signals.get(signal_id)
         if signal is None:
             return {"ok": False, "message": f"no signal {signal_id} in this session"}
+        inst = signal.candidate.instrument
+        client = await _client(uid)
+        try:
+            quotes = await client.get_quote([f"{inst.exchange}:{inst.tradingsymbol}"]) or {}
+        except Exception as exc:
+            session.note("error", f"quote failed for {inst.tradingsymbol}: {exc}")
+            return {"ok": False, "message": str(exc)}
+        q = quotes.get(f"{inst.exchange}:{inst.tradingsymbol}") or quotes.get(inst.tradingsymbol) or {}
+        why = spread_blocks_entry(q, cfg)
+        if why:
+            session.note("blocked", f"entry refused for {inst.tradingsymbol}: {why}")
+            return {"ok": False, "message": why}
         blocker = session.strategy.admit(signal, _today_str())
         if blocker:
             return {"ok": False, "message": blocker}
         if signal.entry is None or signal.quantity is None or signal.quantity <= 0:
             return {"ok": False, "message": "signal has no priced entry or size"}
-        inst = signal.candidate.instrument
         if positions_store.get(uid, inst.tradingsymbol) and \
                 positions_store.get(uid, inst.tradingsymbol).is_open:
             return {"ok": False, "message": f"already holding {inst.tradingsymbol}"}
@@ -203,7 +230,6 @@ async def arm(uid: str, signal_id: str) -> dict:
             session.note("blocked", f"entry refused for {inst.tradingsymbol}: {why}")
             return {"ok": False, "message": why}
         limit = align_to_tick(signal.entry, inst.tick_size, side="buy")
-        client = await _client(uid)
         try:
             res = await client.place_order(
                 f"{inst.exchange}:{inst.tradingsymbol}", "buy", float(signal.quantity),

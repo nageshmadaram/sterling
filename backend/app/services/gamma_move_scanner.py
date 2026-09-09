@@ -279,11 +279,11 @@ async def scan_strikes(uid: str, cfg: GammaMoveConfig, client, levels: dict,
         if dte is None:
             continue
         spot = spots.get(name) or 0.0
-        if getattr(cfg, "require_spot_through_strike", True) and not spot_through_or_at_strike(
+        if cfg.require_spot_through_strike and not spot_through_or_at_strike(
                 spot, inst.strike, inst.option_type, cfg.level_proximity_pct):
             continue
         wall = chain_max.get((name, inst.expiry[:10], inst.option_type))
-        if not is_chain_wall(oi, wall, required=getattr(cfg, "require_chain_max_oi", True)):
+        if not is_chain_wall(oi, wall, required=cfg.require_chain_max_oi):
             continue
         key = (name, lv.price, inst.option_type)
         cand = StrikeCandidate(underlying=name, level=lv, instrument=inst, oi=oi,

@@ -108,15 +108,15 @@ class GammaMoveStrategy:
                                reason=regime_reason(regime, candidate.option_type))  # type: ignore[arg-type]
 
         inst = candidate.instrument
-        if getattr(self.cfg, "require_spot_through_strike", True) and not spot_through_or_at_strike(
+        if self.cfg.require_spot_through_strike and not spot_through_or_at_strike(
                 candidate.spot, inst.strike, inst.option_type,
                 self.cfg.level_proximity_pct):
             side = "above" if inst.option_type == "CE" else "below"
             return GammaSignal(**base, metrics=None, state="watching",
                                reason=(f"spot {candidate.spot} has not broken {side} "
                                        f"the {inst.strike:g} wall"))
-        if not is_chain_wall(candidate.oi, getattr(candidate, "chain_oi_max", None),
-                             required=getattr(self.cfg, "require_chain_max_oi", True)):
+        if not is_chain_wall(candidate.oi, candidate.chain_oi_max,
+                             required=self.cfg.require_chain_max_oi):
             return GammaSignal(**base, metrics=None, state="watching",
                                reason=(f"strike OI {candidate.oi:,} is not the chain "
                                        f"wall ({candidate.chain_oi_max:,})"))

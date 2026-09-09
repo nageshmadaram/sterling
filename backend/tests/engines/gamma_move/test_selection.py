@@ -57,3 +57,20 @@ def test_evaluate_still_arms_the_wall_on_the_level(candidate):
     wall = replace(candidate, oi=6_000_000, chain_oi_max=6_000_000, spot=1298.0)
     sig = s.evaluate(wall, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
     assert sig.state == "armed"
+
+
+def test_wall_flag_off_allows_a_runner_up(candidate):
+    s = GammaMoveStrategy(GammaMoveConfig(
+        enabled=True, max_premium_at_risk_inr=60_000, require_chain_max_oi=False))
+    far = replace(candidate, oi=100_000, chain_oi_max=6_000_000)
+    sig = s.evaluate(far, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
+    assert sig.state == "armed"
+
+
+def test_through_flag_off_allows_spot_short_of_the_wall(candidate):
+    s = GammaMoveStrategy(GammaMoveConfig(
+        enabled=True, max_premium_at_risk_inr=60_000,
+        require_spot_through_strike=False))
+    far = replace(candidate, spot=1200.0)
+    sig = s.evaluate(far, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
+    assert sig.state == "armed"

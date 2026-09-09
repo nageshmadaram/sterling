@@ -149,6 +149,12 @@ class GammaMoveConfig:
     # --- strike -------------------------------------------------------------
     strike_window_pct: float = 2.0
     max_candidates: int = 25
+    #: Source rule, not calibrated. The strike must be the chain-max OI on the
+    #: same expiry and option type — a local max in a sampled window is not a wall.
+    require_chain_max_oi: bool = True
+    #: Source rule, not calibrated. Spot must have broken through (or sit at)
+    #: the wall, inside ``level_proximity_pct``.
+    require_spot_through_strike: bool = True
 
     # --- contracts ----------------------------------------------------------
     #: Same names, order and meaning as every other engine's contract settings.
