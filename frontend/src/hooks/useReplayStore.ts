@@ -56,6 +56,8 @@ export interface ReplaySignal {
   premium_entry?: number | null;
   premium_sl?: number | null;
   premium_target?: number | null;
+  scan_origin?: string | null;
+  strategy_version?: string | null;
 }
 
 export interface ReplayTrade {
@@ -87,6 +89,9 @@ export interface ReplayTrade {
   spot_entry?: number | null;
   spot_stop?: number | null;
   spot_target?: number | null;
+  scan_origin?: string | null;
+  strategy_version?: string | null;
+  exit_reason?: string | null;
 }
 
 export interface ReplayStats {
@@ -180,6 +185,7 @@ export interface ReplayDraft {
   resolution: string;
   strategies: string[];
   adaptiveSource: 'both' | 'ae_model' | 'spot_scan';
+  adaptiveVersion: 'v2_hardened' | 'v1_baseline';
   moneyness: string[];
   lots: number;
   frictionMode: 'realistic' | 'ideal';
@@ -261,6 +267,7 @@ export interface ReplayDraftPrefs {
   endTime?: string;
   strategies?: string[];
   adaptiveSource?: 'both' | 'ae_model' | 'spot_scan';
+  adaptiveVersion?: 'v2_hardened' | 'v1_baseline';
   moneyness?: string[];
   speed?: number;
   resolution?: string;
@@ -297,6 +304,9 @@ export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Pa
     if (parsed.adaptiveSource === 'both' || parsed.adaptiveSource === 'ae_model' || parsed.adaptiveSource === 'spot_scan') {
       out.adaptiveSource = parsed.adaptiveSource;
     }
+    if (parsed.adaptiveVersion === 'v2_hardened' || parsed.adaptiveVersion === 'v1_baseline') {
+      out.adaptiveVersion = parsed.adaptiveVersion;
+    }
     if (Array.isArray(parsed.moneyness) && parsed.moneyness.length) {
       out.moneyness = parsed.moneyness.filter((m): m is string => typeof m === 'string');
     }
@@ -325,6 +335,7 @@ export function persistDraft(draft: ReplayDraft) {
       endTime: draft.endTime,
       strategies: draft.strategies,
       adaptiveSource: draft.adaptiveSource,
+      adaptiveVersion: draft.adaptiveVersion,
       moneyness: draft.moneyness,
       speed: draft.speed,
       resolution: draft.resolution,
@@ -344,9 +355,16 @@ export function persistDraft(draft: ReplayDraft) {
 function initialDraft(): ReplayDraft {
   const d = getLastMarketWorkingDay();
   const saved = loadDraftPrefs();
+  // If saved date is older than 7 days from the latest completed market session,
+  // do not trap the user on a stale session date from an old test run.
+  const isStale = Boolean(
+    saved.date && (new Date(d).getTime() - new Date(saved.date).getTime() > 7 * 86400 * 1000)
+  );
+  const effectiveDate = (!isStale && saved.date) ? saved.date : d;
+  const effectiveEndDate = (!isStale && saved.endDate) ? saved.endDate : effectiveDate;
   return {
-    date: saved.date ?? d,
-    endDate: saved.endDate ?? saved.date ?? d,
+    date: effectiveDate,
+    endDate: effectiveEndDate,
     // Market open. 09:00 is pre-open and has no candles, so it opened every
     // replay on a dead stretch the user had to sit through.
     startTime: saved.startTime ?? '09:15:00',
@@ -357,6 +375,7 @@ function initialDraft(): ReplayDraft {
     resolution: saved.resolution ?? '5m',
     strategies: saved.strategies ?? ['all'],
     adaptiveSource: saved.adaptiveSource ?? 'both',
+    adaptiveVersion: saved.adaptiveVersion ?? 'v2_hardened',
     moneyness: saved.moneyness ?? ['ATM'],
     lots: saved.lots ?? 1,
     frictionMode: saved.frictionMode ?? 'realistic',
@@ -809,32 +828,79 @@ export function matchInstrumentFilter(
   });
 }
 
+export function matchAdaptiveSource(
+  strategy: string,
+  scanOrigin: string | null | undefined,
+  instrumentOrUnderlying: string,
+  source: 'both' | 'ae_model' | 'spot_scan',
+): boolean {
+  if (source === 'both') return true;
+
+  let origin = scanOrigin;
+  if (!origin) {
+    if (strategy === 'spot_scan') {
+      origin = 'spot_scan';
+    } else if (strategy === 'adaptive_edge') {
+      const sym = (instrumentOrUnderlying || '').toUpperCase().replace(/^(NSE|BSE):/, '').trim();
+      const isIndex = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX)/i.test(sym);
+      origin = isIndex ? 'adaptive_edge' : 'spot_scan';
+    } else {
+      return true; // Non-AE strategies pass through
+    }
+  }
+
+  if (origin === 'spot_scan' && source === 'ae_model') return false;
+  if ((origin === 'adaptive_edge' || origin === 'ae_model') && source === 'spot_scan') return false;
+
+  return true;
+}
+
+export function matchAdaptiveVersion(
+  strategyVersion: string | null | undefined,
+  configuredVersion: 'v2_hardened' | 'v1_baseline' | string,
+): boolean {
+  if (!strategyVersion) return true; // Legacy or untagged trades pass through
+  const stratVer = String(strategyVersion).toLowerCase();
+  const cfgVer = String(configuredVersion || 'v2_hardened').toLowerCase();
+  const isStratV2 = stratVer.includes('v2');
+  const isCfgV2 = cfgVer.includes('v2');
+  return isStratV2 === isCfgV2;
+}
+
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
   const strats = useReplayStore((s) => s.draft.strategies);
   const instruments = useReplayStore((s) => s.draft.instruments);
+  const adaptiveSource = useReplayStore((s) => s.draft.adaptiveSource ?? 'both');
+  const adaptiveVersion = useReplayStore((s) => s.draft.adaptiveVersion ?? 'v2_hardened');
 
   return useMemo(() => {
     return events.filter((ev) => {
       if (!matchStrategyFilter(ev.strategy, strats)) return false;
+      if (!matchAdaptiveSource(ev.strategy, ev.scan_origin, ev.instrument, adaptiveSource)) return false;
+      if (!matchAdaptiveVersion(ev.strategy_version, adaptiveVersion)) return false;
       if (!instruments.length) return true;
       return matchInstrumentFilter(ev.instrument, instruments) || matchInstrumentFilter(ev.contract, instruments);
     });
-  }, [events, strats, instruments]);
+  }, [events, strats, instruments, adaptiveSource, adaptiveVersion]);
 }
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
   const strats = useReplayStore((s) => s.draft.strategies);
   const instruments = useReplayStore((s) => s.draft.instruments);
+  const adaptiveSource = useReplayStore((s) => s.draft.adaptiveSource ?? 'both');
+  const adaptiveVersion = useReplayStore((s) => s.draft.adaptiveVersion ?? 'v2_hardened');
 
   return useMemo(() => {
     return trades.filter((t) => {
       if (!matchStrategyFilter(t.strategy, strats)) return false;
+      if (!matchAdaptiveSource(t.strategy, t.scan_origin, t.underlying, adaptiveSource)) return false;
+      if (!matchAdaptiveVersion(t.strategy_version, adaptiveVersion)) return false;
       if (!instruments.length) return true;
       return matchInstrumentFilter(t.underlying, instruments) || matchInstrumentFilter(t.symbol, instruments);
     });
-  }, [trades, strats, instruments]);
+  }, [trades, strats, instruments, adaptiveSource, adaptiveVersion]);
 }
 export const useReplayClock = () => useReplayStore((s) => s.status.current_time_iso);
 export const useReplayPct = () => useReplayStore((s) => s.status.progress_pct);

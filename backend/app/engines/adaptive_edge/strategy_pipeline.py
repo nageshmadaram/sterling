@@ -247,6 +247,34 @@ def evaluate_market_decision(
         and (cvd <= 0 or (struct.ib_complete and struct.ib_low and close < struct.ib_low))
         and (close < session_open or (struct.vwap is not None and close < struct.vwap))
     )
+    # Directional hypothesis - differentiated between V1 baseline and V2 hardened
+    strat_ver = getattr(config, "strategy_version", "v2_hardened") or "v2_hardened"
+    is_v2 = str(strat_ver).lower() in ("v2_hardened", "v2", "v2.0")
+
+    if is_v2:
+        # V2 Hardened: strict multi-condition confirmation (VWAP + POC + CVD + Session Open)
+        is_bullish = (
+            close >= effective_vwap
+            and close >= effective_poc
+            and (cvd >= 0 or (struct.ib_complete and struct.ib_high and close > struct.ib_high))
+            and (close > session_open or (struct.vwap is not None and close > struct.vwap))
+        )
+        is_bearish = (
+            close <= effective_vwap
+            and close <= effective_poc
+            and (cvd <= 0 or (struct.ib_complete and struct.ib_low and close < struct.ib_low))
+            and (close < session_open or (struct.vwap is not None and close < struct.vwap))
+        )
+    else:
+        # V1 Baseline: relaxed single-anchor confirmation
+        is_bullish = (
+            (close >= effective_vwap or close >= effective_poc)
+            and (close >= session_open or cvd >= 0)
+        )
+        is_bearish = (
+            (close <= effective_vwap or close <= effective_poc)
+            and (close <= session_open or cvd <= 0)
+        )
 
     if is_bullish and not is_bearish:
         direction = "BULLISH"

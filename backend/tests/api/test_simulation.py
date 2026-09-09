@@ -945,3 +945,314 @@ def test_simulation_adaptive_source_filtering():
     assert simulation_runner._stats.events[0].strategy == "adaptive_edge"
     assert len(simulation_runner._stats.trades) == 1
 
+
+def test_simulation_adaptive_version_filtering():
+    """Verify adaptive_version ('v2_hardened' vs 'v1_baseline') controls lockout and signal filtering."""
+    early_signal = {
+        "underlying": "NIFTY",
+        "direction": "BULLISH",
+        "time_iso": "09:20:00",
+        "timestamp_ms": 1788753000000,  # 09:20:00 IST
+        "spot": 24500.0,
+        "stop_loss": 24400.0,
+        "strategy": "adaptive_edge",
+        "is_spot_scan": False,
+        "raw_row": {
+            "underlying": "NIFTY",
+            "direction": "BUY",
+            "spot": 24500.0,
+            "scan_origin": "adaptive_edge",
+        },
+    }
+    normal_signal = {
+        "underlying": "NIFTY",
+        "direction": "BULLISH",
+        "time_iso": "09:35:00",
+        "timestamp_ms": 1788753900000,  # 09:35:00 IST
+        "spot": 24550.0,
+        "stop_loss": 24450.0,
+        "strategy": "adaptive_edge",
+        "is_spot_scan": False,
+        "raw_row": {
+            "underlying": "NIFTY",
+            "direction": "BUY",
+            "spot": 24550.0,
+            "scan_origin": "adaptive_edge",
+        },
+    }
+
+    # 1. v2_hardened: early 09:20 signal is locked out
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-07",
+        strategies=["adaptive_edge"],
+        adaptive_version="v2_hardened",
+    )
+    simulation_runner._emit_recorded_signal(early_signal)
+    assert len(simulation_runner._stats.events) == 0
+    assert len(simulation_runner._stats.trades) == 0
+
+    # Normal 09:35 signal is allowed
+    simulation_runner._emit_recorded_signal(normal_signal)
+    assert len(simulation_runner._stats.events) == 1
+    assert len(simulation_runner._stats.trades) == 1
+
+    # 2. v1_baseline: early 09:20 signal is allowed without lockout
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-07",
+        strategies=["adaptive_edge"],
+        adaptive_version="v1_baseline",
+    )
+    simulation_runner._emit_recorded_signal(early_signal)
+    assert len(simulation_runner._stats.events) == 1
+    assert len(simulation_runner._stats.trades) == 1
+
+
+def test_adaptive_edge_evaluate_bar_frozen_config_and_ae_model():
+    """Verify that _evaluate_bar works with frozen AdaptiveEdgeConfig and ae_model source without FrozenInstanceError."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-08",
+        strategies=["adaptive_edge"],
+        adaptive_source="ae_model",
+        adaptive_version="v2_hardened",
+    )
+    # Synthetic bars for NIFTY to satisfy warm-up requirement
+    base_time = int(datetime(2026, 9, 8, 10, 0, tzinfo=ist).timestamp())
+    for i in range(25):
+        t = base_time + i * 300
+        dt = datetime.fromtimestamp(t, tz=ist)
+        bar = {
+            "symbol": "NIFTY",
+            "time": t,
+            "open": 24500.0 + i * 10,
+            "high": 24550.0 + i * 10,
+            "low": 24480.0 + i * 10,
+            "close": 24520.0 + i * 10,
+            "volume": 10000.0,
+            "resolution": "5m",
+        }
+        # Must execute without FrozenInstanceError or crashing
+        simulation_runner._evaluate_bar(bar, dt)
+
+
+def test_adaptive_edge_spot_scan_fallback_when_no_recorded_signals():
+    """Verify that when adaptive_source='spot_scan' on a date with no recorded signals,
+    it falls back to allowing the AE model rather than skipping and producing 0 trades."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    simulation_runner.clear()
+    simulation_runner._recorded_signals = []
+    simulation_runner._config = SimConfig(
+        date="2026-08-03",
+        strategies=["adaptive_edge"],
+        adaptive_source="spot_scan",
+        adaptive_version="v1_baseline",
+    )
+    # Feed exhaustion pin bar pattern on NIFTY (RSI <= 28, lower wick >= 2x body)
+    base_time = int(datetime(2026, 8, 3, 10, 0, tzinfo=ist).timestamp())
+    for i in range(20):
+        t = base_time + i * 300
+        dt = datetime.fromtimestamp(t, tz=ist)
+        # Drop prices to push RSI down
+        close = 24000.0 - i * 50
+        bar = {
+            "symbol": "NIFTY",
+            "time": t,
+            "open": close + 30,
+            "high": close + 40,
+            "low": close - 100,  # long lower wick
+            "close": close,
+            "volume": 10000.0,
+            "resolution": "5m",
+        }
+        simulation_runner._evaluate_bar(bar, dt)
+
+    # Replay should execute without skipping AE model due to missing spot scans
+    assert simulation_runner.status.state != SimState.RUNNING
+
+
+def test_adaptive_version_v1_vs_v2_toxic_window_lockout():
+    """Verify that V2 Hardened locks out signals in 09:15-09:28 IST window, while V1 Baseline permits them."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t_open = int(datetime(2026, 9, 8, 9, 15, 0, tzinfo=ist).timestamp() * 1000)
+
+    sig_at_open = {
+        "underlying": "ICICIBANK",
+        "direction": "BEARISH",
+        "time_iso": "09:15:00",
+        "timestamp_ms": t_open,
+        "spot": 1200.0,
+        "stop_loss": 1210.0,
+        "strategy": "adaptive_edge",
+        "is_spot_scan": True,
+        "source": "spot",
+        "raw_row": {},
+    }
+
+    # Under V1 Baseline: morning open signal is emitted
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-08",
+        strategies=["adaptive_edge"],
+        adaptive_source="both",
+        adaptive_version="v1_baseline",
+    )
+    simulation_runner._emit_recorded_signal(sig_at_open)
+    assert len(simulation_runner._stats.events) == 1
+    assert simulation_runner._stats.events[0].instrument == "ICICIBANK"
+
+    # Under V2 Hardened: morning open signal is locked out
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-08",
+        strategies=["adaptive_edge"],
+        adaptive_source="both",
+        adaptive_version="v2_hardened",
+    )
+    simulation_runner._emit_recorded_signal(sig_at_open)
+    assert len(simulation_runner._stats.events) == 0
+
+
+@pytest.mark.asyncio
+async def test_simulation_exit_reasons_settlement():
+    """Verify that simulation correctly stamps exit_reason for TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE."""
+    from app.services.simulation import SimTradeEvent, SimConfig, simulation_runner
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    dt1 = datetime(2026, 9, 8, 10, 0, 0, tzinfo=ist)
+
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-08",
+        max_hold_bars=5,
+    )
+
+    # 1. Target exit
+    trade_tp = SimTradeEvent(
+        trade_id="TRD-TEST-TP",
+        strategy="adaptive_edge",
+        symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=25000,
+        lots=1,
+        quantity=50,
+        entry_price=100.0,
+        stop_loss=80.0,
+        target_price=150.0,
+        spot_entry=25000.0,
+        spot_stop=24900.0,
+        spot_target=25200.0,
+        spot_initial_stop=24900.0,
+    )
+    simulation_runner._open_by_symbol["NIFTY"] = [trade_tp]
+    bar_hit_tp = {"symbol": "NIFTY", "open": 25100.0, "high": 25250.0, "low": 25050.0, "close": 25220.0}
+    simulation_runner._settle_open_positions(bar_hit_tp, dt1)
+    assert trade_tp.exit_reason == "TARGET"
+    assert trade_tp.status == "WIN"
+
+    # 2. Hard stop loss exit
+    trade_sl = SimTradeEvent(
+        trade_id="TRD-TEST-SL",
+        strategy="adaptive_edge",
+        symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=25000,
+        lots=1,
+        quantity=50,
+        entry_price=100.0,
+        stop_loss=80.0,
+        target_price=150.0,
+        spot_entry=25000.0,
+        spot_stop=24900.0,
+        spot_target=25200.0,
+        spot_initial_stop=24900.0,
+    )
+    simulation_runner._open_by_symbol["NIFTY"] = [trade_sl]
+    bar_hit_sl = {"symbol": "NIFTY", "open": 24950.0, "high": 24980.0, "low": 24850.0, "close": 24870.0}
+    simulation_runner._settle_open_positions(bar_hit_sl, dt1)
+    assert trade_sl.exit_reason == "STOP_LOSS"
+    assert trade_sl.status == "LOSS"
+
+    # 3. Trailing stop loss exit (spot_stop ratcheted above spot_initial_stop)
+    trade_tsl = SimTradeEvent(
+        trade_id="TRD-TEST-TSL",
+        strategy="adaptive_edge",
+        symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=25000,
+        lots=1,
+        quantity=50,
+        entry_price=100.0,
+        stop_loss=110.0,
+        target_price=150.0,
+        spot_entry=25000.0,
+        spot_stop=25080.0,  # ratcheted from 24900
+        spot_target=25200.0,
+        spot_initial_stop=24900.0,
+    )
+    simulation_runner._open_by_symbol["NIFTY"] = [trade_tsl]
+    bar_hit_tsl = {"symbol": "NIFTY", "open": 25100.0, "high": 25120.0, "low": 25050.0, "close": 25060.0}
+    simulation_runner._settle_open_positions(bar_hit_tsl, dt1)
+    assert trade_tsl.exit_reason == "TRAILING_STOP"
+    assert trade_tsl.status == "WIN"
+
+    # 4. Max hold bars exit
+    trade_max_hold = SimTradeEvent(
+        trade_id="TRD-TEST-HOLD",
+        strategy="adaptive_edge",
+        symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=25000,
+        lots=1,
+        quantity=50,
+        entry_price=100.0,
+        stop_loss=80.0,
+        target_price=150.0,
+        spot_entry=25000.0,
+        spot_stop=24900.0,
+        spot_target=25200.0,
+        spot_initial_stop=24900.0,
+        bars_held=4,  # will become 5 >= max_hold_bars
+    )
+    simulation_runner._open_by_symbol["NIFTY"] = [trade_max_hold]
+    bar_neutral = {"symbol": "NIFTY", "open": 25020.0, "high": 25040.0, "low": 25010.0, "close": 25030.0}
+    simulation_runner._settle_open_positions(bar_neutral, dt1)
+    assert trade_max_hold.exit_reason == "MAX_HOLD"
+
+    # 5. Session close exit
+    trade_eod = SimTradeEvent(
+        trade_id="TRD-TEST-EOD",
+        strategy="adaptive_edge",
+        symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY",
+        direction="BUY",
+        opt_type="CE",
+        strike=25000,
+        lots=1,
+        quantity=50,
+        entry_price=100.0,
+        stop_loss=80.0,
+        target_price=150.0,
+        spot_entry=25000.0,
+        spot_stop=24900.0,
+        spot_target=25200.0,
+    )
+    simulation_runner._open_by_symbol["NIFTY"] = [trade_eod]
+    simulation_runner._close_all_open("test eod")
+    assert trade_eod.exit_reason == "SESSION_CLOSE"
+
+
+

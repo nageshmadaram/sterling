@@ -87,6 +87,7 @@ async def _place_protection(client, p) -> None:
     from app.services.kite_engine import protective_stop as stops
 
     ref_last_price = float(p.fill_price or 0.0)
+    ref_last_price = float(getattr(p, "current_price", None) or p.fill_price or 0.0)
     if p.direction == "long" and p.stop_premium > 0:
         # Sell stop: Kite requires trigger_premium < last_price
         ref_last_price = max(ref_last_price, p.stop_premium + 0.05)
@@ -100,6 +101,9 @@ async def _place_protection(client, p) -> None:
     if p.gtt_id:
         if not await stops.move_stop(client, trigger_id=p.gtt_id, **kwargs):
             p.protection_pending = True
+            positions.persist_strict(p.uid)
+        else:
+            p.protection_pending = False
             positions.persist_strict(p.uid)
         return
     p.protection_pending = True

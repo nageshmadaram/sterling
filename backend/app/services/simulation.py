@@ -123,8 +123,10 @@ class SimConfig(BaseModel):
     strategy: str = "all"              # "all" or specific strategy name
     strategies: List[str] = ["all"]    # list of selected strategies
     adaptive_source: str = "both"      # "both", "ae_model", "spot_scan"
+    adaptive_version: str = "v1_baseline"  # "v2_hardened", "v1_baseline"
     lots: int = 1                      # number of option/futures lots
     moneyness: str = "ATM"             # "ATM", "ITM1", "ITM2", "OTM1", "OTM2", "ALL"
+    max_hold_bars: int = 30            # max bars to hold position before timing out
     # ── Execution friction ────────────────────────────────────────────────
     # These are read by `_apply_friction`. Until 2026-09 they were declared
     # here and consumed nowhere, while the UI rendered a slippage column and
@@ -161,6 +163,7 @@ class SimSignalEvent(BaseModel):
     premium_sl: Optional[float] = None
     premium_target: Optional[float] = None
     scan_origin: Optional[str] = None
+    strategy_version: Optional[str] = None
 
 
 class SimTradeEvent(BaseModel):
@@ -206,8 +209,13 @@ class SimTradeEvent(BaseModel):
     #: used as the fixed offset for the trailing ratchet. Preserved even as
     #: spot_stop itself tightens.
     spot_initial_risk: Optional[float] = None
+    #: Initial underlying stop at trade creation, to distinguish hard stop hits from trailing stop hits.
+    spot_initial_stop: Optional[float] = None
+    #: Why the position closed: TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE.
+    exit_reason: Optional[str] = None
     bars_held: int = 0
     scan_origin: Optional[str] = None
+    strategy_version: Optional[str] = None
 
 
 class SimStats(BaseModel):
@@ -519,6 +527,10 @@ def _apply_friction(
     # and silently preferring the percent default would ignore what it asked for.
     bps = getattr(config, "slippage_bps", None) if config else None
     slip_pct = (bps / 100.0) if bps is not None else (config.slippage_pct if config else 0.25)
+    # V2 Hardened: Passive limit order execution models 50% slippage reduction
+    adaptive_ver = (getattr(config, "adaptive_version", None) or "v2_hardened").lower()
+    if adaptive_ver in ("v2_hardened", "v2"):
+        slip_pct *= 0.5
 
     half_spread = spread_pct / 200.0     # round-trip pct → one-sided fraction
     slip = slip_pct / 100.0
@@ -713,23 +725,66 @@ class SimulationRunner:
                 target = trade.spot_target
 
                 exit_spot: Optional[float] = None
+                exit_reason: Optional[str] = None
                 if stop is not None and target is not None:
                     if bullish:
                         # Stop first: the pessimistic read when one bar spans both,
                         # because a bar's high and low carry no ordering.
                         if low <= stop:
                             exit_spot = stop
+                            is_tsl = (
+                                trade.spot_initial_stop is not None
+                                and trade.spot_stop is not None
+                                and abs(trade.spot_stop - trade.spot_initial_stop) > 1e-4
+                            )
+                            exit_reason = "TRAILING_STOP" if is_tsl else "STOP_LOSS"
                         elif high >= target:
                             exit_spot = target
+                            exit_reason = "TARGET"
                     else:
                         if high >= stop:
                             exit_spot = stop
+                            is_tsl = (
+                                trade.spot_initial_stop is not None
+                                and trade.spot_stop is not None
+                                and abs(trade.spot_stop - trade.spot_initial_stop) > 1e-4
+                            )
+                            exit_reason = "TRAILING_STOP" if is_tsl else "STOP_LOSS"
                         elif low <= target:
                             exit_spot = target
+                            exit_reason = "TARGET"
 
                 timed_out = exit_spot is None and trade.bars_held >= self.MAX_HOLD_BARS
+                is_ae_v2 = (
+                    (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
+                ).lower() in ("v2_hardened", "v2")
+
+                # V2 Hardened Stagnation Decay Exit: If trade makes no meaningful progress (< 0.25R)
+                # after 4 bars (20m), exit early to protect capital against chop and theta decay.
+                if (
+                    exit_spot is None
+                    and is_ae_v2
+                    and trade.bars_held >= 4
+                    and trade.spot_initial_risk
+                    and trade.spot_initial_risk > 0
+                    and trade.spot_entry is not None
+                    and trade.spot_hwm is not None
+                ):
+                    favorable_dist = (trade.spot_hwm - trade.spot_entry) if bullish else (trade.spot_entry - trade.spot_hwm)
+                    r_multiple = favorable_dist / trade.spot_initial_risk
+                    if r_multiple < 0.25:
+                        exit_spot = close
+                        exit_reason = "STAGNATION_DECAY"
+
+                max_bars = (
+                    self._config.max_hold_bars
+                    if (self._config and getattr(self._config, "max_hold_bars", None))
+                    else self.MAX_HOLD_BARS
+                )
+                timed_out = exit_spot is None and trade.bars_held >= max_bars
                 if timed_out:
                     exit_spot = close
+                    exit_reason = "MAX_HOLD"
 
                 if exit_spot is None:
                     # Still open — mark it to this bar so unrealised P&L moves.
@@ -752,11 +807,17 @@ class SimulationRunner:
                         if bullish:
                             trade.spot_hwm = max(trade.spot_hwm, close)
                             new_stop = trade.spot_hwm - trade.spot_initial_risk
+                            # In V2, lock breakeven once price reaches >= 1.0R
+                            if is_ae_v2 and trade.spot_entry is not None and (trade.spot_hwm - trade.spot_entry) >= trade.spot_initial_risk:
+                                new_stop = max(new_stop, trade.spot_entry)
                             if new_stop > trade.spot_stop:
                                 trade.spot_stop = round(new_stop, 2)
                         else:
                             trade.spot_hwm = min(trade.spot_hwm, close)
                             new_stop = trade.spot_hwm + trade.spot_initial_risk
+                            # In V2, lock breakeven once price reaches >= 1.0R
+                            if is_ae_v2 and trade.spot_entry is not None and (trade.spot_entry - trade.spot_hwm) >= trade.spot_initial_risk:
+                                new_stop = min(new_stop, trade.spot_entry)
                             if new_stop < trade.spot_stop:
                                 trade.spot_stop = round(new_stop, 2)
                         # Re-derive the premium stop so the UI's SL column tracks
@@ -769,6 +830,7 @@ class SimulationRunner:
                     continue
 
                 self._close_position(trade, exit_spot, bar_dt)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason)
 
             if still_open:
                 self._open_by_symbol[k] = still_open
@@ -780,7 +842,13 @@ class SimulationRunner:
         res = self._config.resolution if self._config else "5m"
         return max(1, RESOLUTION_SECONDS.get(res, 300) // 60)
 
-    def _close_position(self, trade: SimTradeEvent, exit_spot: float, bar_dt) -> None:
+    def _close_position(
+        self,
+        trade: SimTradeEvent,
+        exit_spot: float,
+        bar_dt,
+        exit_reason: Optional[str] = None,
+    ) -> None:
         raw_exit = self._premium_for_spot(trade, exit_spot)
         _, fill_exit, friction_mode = _apply_friction(
             trade.raw_entry if trade.raw_entry is not None else trade.entry_price,
@@ -790,6 +858,7 @@ class SimulationRunner:
         )
 
         trade.exit_price = fill_exit
+        trade.exit_reason = exit_reason or trade.exit_reason or "MANUAL"
         is_multi = getattr(self, "_is_multi_day", False)
         trade.exit_time_iso = (
             bar_dt.strftime("%Y-%m-%dT%H:%M:%S")
@@ -871,6 +940,7 @@ class SimulationRunner:
             for trade in list(book):
                 exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
                 self._close_position(trade, exit_spot, bar_dt)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason="SESSION_CLOSE")
         self._open_by_symbol = {}
 
     def _recompute_totals(self) -> None:
@@ -1298,6 +1368,9 @@ class SimulationRunner:
         adaptive_src = (self._config.adaptive_source if self._config and hasattr(self._config, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
 
+        if is_spot and adaptive_src in ("ae_model", "ae"):
+            return
+
         if not allow_all:
             if strat_raw in cfg_strats:
                 if (strat_raw == "adaptive_edge" or is_spot) and adaptive_src in ("ae_model", "ae") and "adaptive_edge" in cfg_strats and len(cfg_strats) == 1:
@@ -1317,6 +1390,23 @@ class SimulationRunner:
             strat_to_emit = rec.get("strategy", "supertrend")
             if is_spot and adaptive_src in ("ae_model", "ae") and strat_to_emit == "adaptive_edge":
                 return
+
+        adaptive_ver = (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
+        is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge" and not is_spot)
+        if is_ae_signal and adaptive_ver in ("v2_hardened", "v2"):
+            # When user explicitly asks for spot scans, do not lock out spot scans
+            if not (is_spot and adaptive_src in ("spot_scan", "spot")):
+                rec_ms = rec.get("timestamp_ms") or 0
+                if rec_ms > 0:
+                    rec_dt = datetime.fromtimestamp(rec_ms / 1000, tz=ist)
+                    if rec_dt.hour == 9 and rec_dt.minute < 28:
+                        return
+                elif rec.get("time_iso"):
+                    iso_str = str(rec["time_iso"])
+                    time_str = iso_str.split("T")[1][:8] if "T" in iso_str else iso_str[:8]
+                    if "09:15:00" <= time_str < "09:28:00":
+                        return
 
         sym = rec["underlying"]
         from app.services.ohlcv_store import INDEX_ALIASES
@@ -1465,6 +1555,7 @@ class SimulationRunner:
             premium_sl=stop_prem,
             premium_target=tgt_prem,
             scan_origin="spot_scan",
+            strategy_version=adaptive_ver if strat_to_emit == "adaptive_edge" else None,
         )
         self._stats.signals_fired += 1
         self._stats.events.append(event)
@@ -1508,8 +1599,11 @@ class SimulationRunner:
             spot_target=target,
             spot_hwm=spot,
             spot_initial_risk=abs(spot - stop) if stop is not None else None,
+            spot_initial_stop=stop,
+            exit_reason=None,
             bars_held=0,
             scan_origin="spot_scan",
+            strategy_version=adaptive_ver if strat_to_emit == "adaptive_edge" else None,
         )
         self._stats.trades_entered += 1
         self._stats.trades.append(trade)
@@ -1568,6 +1662,11 @@ class SimulationRunner:
         )
         self._emitted_recorded_keys = set()
 
+        adaptive_src = getattr(cfg, "adaptive_source", "both") or "both"
+        if str(adaptive_src).lower() in ("spot_scan", "spot") and not self._recorded_signals:
+            log.info("No recorded spot scans for %s; replaying via AE Model.", range_label)
+            self._status_message = f"Notice: No recorded spot scans on {range_label}; replaying via AE Model."
+
         if not cfg.instruments:
             if self._recorded_signals:
                 # Real session with recorded signals: only replay the instruments that actually traded / fired signals
@@ -1617,6 +1716,8 @@ class SimulationRunner:
         for sym in instruments:
             prior_candles = ohlcv_get(sym, res, limit=50, since=warmup_start)
             p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles if c["time"] < start_epoch]
+            prior_candles = ohlcv_get(sym, res, limit=50, until=start_epoch)
+            p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles]
             self._bar_history[sym] = p_bars[-50:]
 
         # Fetch candles for each instrument from local store
@@ -2211,6 +2312,9 @@ class SimulationRunner:
             signals = [s for s in signals if s.get("scan_origin") == "adaptive_edge"]
         elif adaptive_src in ("spot_scan", "spot"):
             signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+
+        adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
 
         default_sym = signals[0].get("underlying", "NIFTY-I") if signals else (ae_events[0].instrument if ae_events else "NIFTY-I")
         all_syms = list(dict.fromkeys([s.get("underlying", "NIFTY-I") for s in signals])) or [default_sym]
@@ -2814,27 +2918,51 @@ class SimulationRunner:
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
         skip_ae_model = adaptive_src in ("spot_scan", "spot")
+        # If user requested spot_scan but session has no recorded signals, fall back to AE model
+        # rather than exiting silently with 0 trades.
+        skip_ae_model = (adaptive_src in ("spot_scan", "spot")) and has_recorded_today
+
+        has_recorded_ae = (
+            adaptive_src not in ("ae_model", "ae")
+            and has_recorded_today
+            and any(
+                r.get("underlying", "").upper() in sym_aliases
+                and (r.get("strategy") == "adaptive_edge" or r.get("is_spot_scan"))
+                for r in today_recorded
+            )
+        )
+
+        adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = str(adaptive_ver).lower()
+        is_ae_v2 = adaptive_ver in ("v2_hardened", "v2")
+        ae_toxic_lockout = is_ae_v2 and ("09:15:00" <= bar_time_str < "09:28:00")
 
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
-        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 15:
+        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 15:
             body = abs(close - opens)
             lower_wick = min(opens, close) - low
             upper_wick = high - max(opens, close)
+            bar_range = high - low
+            denom = max(bar_range, 1e-9)
+            long_body_ok = ((close - low) / denom) >= 0.60 if is_ae_v2 else True
+            short_body_ok = ((high - close) / denom) >= 0.60 if is_ae_v2 else True
             # Exhaustion oversold + pin bar rejection of lows (hammer)
-            if rsi <= 28 and lower_wick >= 2.0 * max(body, 0.05 * atr) and close > low + 0.4 * (high - low):
+            if rsi <= 28 and lower_wick >= 2.0 * max(body, 0.05 * atr) and close > low + 0.4 * (high - low) and long_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
                     "direction": "BULLISH",
                     "strength": "STRONG",
                 })
             # Exhaustion overbought + pin bar rejection of highs (shooting star)
-            elif rsi >= 72 and upper_wick >= 2.0 * max(body, 0.05 * atr) and close < low + 0.6 * (high - low):
+            elif rsi >= 72 and upper_wick >= 2.0 * max(body, 0.05 * atr) and close < low + 0.6 * (high - low) and short_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
-        if not skip_ae_model and not has_recorded_ae and is_ae_symbol and len(history) >= 20:
+        sym_bar_idx = len(history)
+        ae_active = sym_bar_idx < self._active_until_bar.get((sym, "adaptive_edge"), -1) if hasattr(self, "_active_until_bar") else False
+        if not ae_active and not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 20:
             from app.services.adaptive_edge_strategy import decide_from_candles
             from app.services.adaptive_edge import get_config as get_ae_config
             c_input = [
@@ -2849,7 +2977,10 @@ class SimulationRunner:
                 for b in history
             ]
             try:
+                import dataclasses
                 ae_cfg = get_ae_config()
+                target_version = "v2_hardened" if is_ae_v2 else "v1_baseline"
+                ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
                 dec = decide_from_candles(sym, c_input, ae_cfg, expiry=bar_dt.strftime("%Y-%m-%d"), spot=close)
                 if dec and dec.actionable:
                     signals_to_fire.append({
@@ -2965,7 +3096,7 @@ class SimulationRunner:
             strategy = sdef["strategy"]
             if not allow_all and strategy.lower() not in cfg_strats:
                 continue
-            if strategy.lower() == "adaptive_edge" and skip_ae_model:
+            if strategy.lower() == "adaptive_edge" and (skip_ae_model or ae_toxic_lockout):
                 continue
             direction = sdef["direction"]
             strength = sdef["strength"]
@@ -3012,7 +3143,8 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
-                scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
+                scan_origin="adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan",
+                strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)
@@ -3064,8 +3196,11 @@ class SimulationRunner:
                     spot_target=target,
                     spot_hwm=round(close, 2),
                     spot_initial_risk=abs(close - stop) if stop is not None else None,
+                    spot_initial_stop=stop,
+                    exit_reason=None,
                     bars_held=0,
-                    scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
+                    scan_origin="adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan",
+                    strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
                 )
                 self._stats.trades_entered += 1
                 self._stats.trades.append(trade)
@@ -3073,6 +3208,12 @@ class SimulationRunner:
                 # Suppress a re-entry on this key while the position is live.
                 # `_close_position` clears it on the bar that actually closes.
                 self._active_until_bar[key] = sym_bar_idx + self.MAX_HOLD_BARS
+                max_bars = (
+                    self._config.max_hold_bars
+                    if (self._config and getattr(self._config, "max_hold_bars", None))
+                    else self.MAX_HOLD_BARS
+                )
+                self._active_until_bar[key] = sym_bar_idx + max_bars
                 self._recompute_totals()
                 self._publish("trade", trade.model_dump())
 

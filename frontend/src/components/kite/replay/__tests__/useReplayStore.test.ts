@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
 import {
   DEFAULT_STATUS,
   MIN_DOCK_HEIGHT,
@@ -7,8 +8,11 @@ import {
   getReplayNowMs,
   loadDraftPrefs,
   loadPrefs,
+  matchAdaptiveSource,
   matchInstrumentFilter,
   matchStrategyFilter,
+  useFilteredReplayEvents,
+  useFilteredReplayTrades,
   useReplayStore,
 } from '../../../../hooks/useReplayStore';
 import { draftToConfig } from '../../../../hooks/useReplayTransport';
@@ -385,6 +389,108 @@ describe('draft preferences persistence', () => {
     );
     const loaded = loadDraftPrefs(localStorage);
     expect(loaded.adaptiveSource).toBe('spot_scan');
+  });
+
+  it('handles adaptiveVersion persistence and draftToConfig translation', () => {
+    const s = () => useReplayStore.getState();
+    expect(s().draft.adaptiveVersion).toBe('v2_hardened');
+
+    s().setDraft({ adaptiveVersion: 'v1_baseline' });
+    expect(s().draft.adaptiveVersion).toBe('v1_baseline');
+
+    const cfg = draftToConfig(s().draft);
+    expect(cfg.adaptive_version).toBe('v1_baseline');
+
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        strategies: ['adaptive_edge'],
+        adaptiveVersion: 'v1_baseline',
+      }),
+    );
+    const loaded = loadDraftPrefs(localStorage);
+    expect(loaded.adaptiveVersion).toBe('v1_baseline');
+  });
+
+  describe('adaptiveSource filtering', () => {
+    it('matches both, ae_model, and spot_scan sources correctly', () => {
+      // Both matches everything
+      expect(matchAdaptiveSource('adaptive_edge', 'spot_scan', 'ICICIBANK', 'both')).toBe(true);
+      expect(matchAdaptiveSource('adaptive_edge', 'adaptive_edge', 'NIFTY', 'both')).toBe(true);
+
+      // spot_scan source matches spot_scan and blocks ae_model
+      expect(matchAdaptiveSource('adaptive_edge', 'spot_scan', 'ICICIBANK', 'spot_scan')).toBe(true);
+      expect(matchAdaptiveSource('adaptive_edge', 'adaptive_edge', 'NIFTY', 'spot_scan')).toBe(false);
+
+      // ae_model source matches ae_model and blocks spot_scan
+      expect(matchAdaptiveSource('adaptive_edge', 'adaptive_edge', 'NIFTY', 'ae_model')).toBe(true);
+      expect(matchAdaptiveSource('adaptive_edge', 'spot_scan', 'ICICIBANK', 'ae_model')).toBe(false);
+
+      // Fallback inference when scan_origin is missing
+      expect(matchAdaptiveSource('adaptive_edge', undefined, 'RELIANCE', 'spot_scan')).toBe(true);
+      expect(matchAdaptiveSource('adaptive_edge', undefined, 'NIFTY', 'spot_scan')).toBe(false);
+      expect(matchAdaptiveSource('adaptive_edge', undefined, 'NIFTY', 'ae_model')).toBe(true);
+      expect(matchAdaptiveSource('adaptive_edge', undefined, 'RELIANCE', 'ae_model')).toBe(false);
+
+      // Non-AE strategies pass through
+      expect(matchAdaptiveSource('scalp_pnl', undefined, 'NIFTY', 'ae_model')).toBe(true);
+      expect(matchAdaptiveSource('scalp_pnl', undefined, 'NIFTY', 'spot_scan')).toBe(true);
+    });
+
+    it('useFilteredReplayEvents and useFilteredReplayTrades filter based on draft.adaptiveSource', () => {
+      const spotSignal = makeSignal({
+        strategy: 'adaptive_edge',
+        instrument: 'ICICIBANK',
+        scan_origin: 'spot_scan',
+      });
+      const aeSignal = makeSignal({
+        strategy: 'adaptive_edge',
+        instrument: 'NIFTY',
+        scan_origin: 'adaptive_edge',
+      });
+
+      const spotTrade = makeTrade({
+        trade_id: 'TRD-SPOT',
+        strategy: 'adaptive_edge',
+        underlying: 'ICICIBANK',
+        scan_origin: 'spot_scan',
+      });
+      const aeTrade = makeTrade({
+        trade_id: 'TRD-AE',
+        strategy: 'adaptive_edge',
+        underlying: 'NIFTY',
+        scan_origin: 'adaptive_edge',
+      });
+
+      act(() => {
+        useReplayStore.getState().appendSignals([spotSignal, aeSignal]);
+        useReplayStore.getState().upsertTrades([spotTrade, aeTrade]);
+        useReplayStore.getState().setDraft({ adaptiveSource: 'both' });
+      });
+
+      const { result: eventsBoth } = renderHook(() => useFilteredReplayEvents());
+      const { result: tradesBoth } = renderHook(() => useFilteredReplayTrades());
+      expect(eventsBoth.current).toHaveLength(2);
+      expect(tradesBoth.current).toHaveLength(2);
+
+      // Select 'spot_scan'
+      act(() => {
+        useReplayStore.getState().setDraft({ adaptiveSource: 'spot_scan' });
+      });
+      expect(eventsBoth.current).toHaveLength(1);
+      expect(eventsBoth.current[0].instrument).toBe('ICICIBANK');
+      expect(tradesBoth.current).toHaveLength(1);
+      expect(tradesBoth.current[0].underlying).toBe('ICICIBANK');
+
+      // Select 'ae_model'
+      act(() => {
+        useReplayStore.getState().setDraft({ adaptiveSource: 'ae_model' });
+      });
+      expect(eventsBoth.current).toHaveLength(1);
+      expect(eventsBoth.current[0].instrument).toBe('NIFTY');
+      expect(tradesBoth.current).toHaveLength(1);
+      expect(tradesBoth.current[0].underlying).toBe('NIFTY');
+    });
   });
 });
 

@@ -1,5 +1,9 @@
 import React, { memo } from 'react';
-import { useReplayStore } from '../../../hooks/useReplayStore';
+import {
+  useFilteredReplayEvents,
+  useFilteredReplayTrades,
+  useReplayStore,
+} from '../../../hooks/useReplayStore';
 import { ABSENT, fmtInt, fmtPct, fmtSignedInr } from './replayFormat';
 
 /**
@@ -12,18 +16,40 @@ import { ABSENT, fmtInt, fmtPct, fmtSignedInr } from './replayFormat';
  * styled like the table header row for consistency.
  */
 export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
-  const pnl = useReplayStore((s) => s.status.stats.pnl);
-  const wins = useReplayStore((s) => s.status.stats.wins);
-  const losses = useReplayStore((s) => s.status.stats.losses);
-  const signals = useReplayStore((s) => s.status.stats.signals_fired);
-  const drag = useReplayStore((s) => s.status.stats.slippage_total);
-  const trades = useReplayStore((s) => s.status.stats.trades);
+  const rawPnl = useReplayStore((s) => s.status.stats.pnl);
+  const rawWins = useReplayStore((s) => s.status.stats.wins);
+  const rawLosses = useReplayStore((s) => s.status.stats.losses);
+  const rawSignals = useReplayStore((s) => s.status.stats.signals_fired);
+  const rawDrag = useReplayStore((s) => s.status.stats.slippage_total);
+  const rawTrades = useReplayStore((s) => s.status.stats.trades);
+  const rawEvents = useReplayStore((s) => s.status.stats.events);
   const unrealised = useReplayStore((s) => s.status.unrealised_pnl);
   const openPositions = useReplayStore((s) => s.status.open_positions);
 
-  const decided = wins + losses;
+  const trades = useFilteredReplayTrades();
+  const events = useFilteredReplayEvents();
+  const isNarrowed = trades.length !== rawTrades.length || events.length !== rawEvents.length;
+
   const closed = trades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
-  const openCount = openPositions ?? (trades.length - closed.length);
+  const pnl = isNarrowed
+    ? Number(closed.reduce((sum, t) => sum + (t.pnl_usd || 0), 0).toFixed(2))
+    : rawPnl;
+  const wins = isNarrowed ? closed.filter((t) => t.status === 'WIN').length : rawWins;
+  const losses = isNarrowed ? closed.filter((t) => t.status === 'LOSS').length : rawLosses;
+  const signals = isNarrowed ? events.length : rawSignals;
+  const drag = isNarrowed
+    ? trades.some((t) => t.slippage != null)
+      ? Number(trades.reduce((sum, t) => sum + (t.slippage || 0), 0).toFixed(2))
+      : null
+    : rawDrag;
+  const openTrades = trades.filter((t) => t.status === 'OPEN');
+  const filteredUnrealised = openTrades.length > 0
+    ? Number(openTrades.reduce((sum, t) => sum + (t.pnl_usd || 0), 0).toFixed(2))
+    : 0;
+  const effectiveUnrealised = isNarrowed ? filteredUnrealised : unrealised;
+
+  const decided = wins + losses;
+  const openCount = isNarrowed ? openTrades.length : (openPositions ?? (trades.length - closed.length));
   const winRate = decided > 0 ? (wins / decided) * 100 : null;
   const pnlTone = trades.length === 0 && pnl === 0 ? 'dim' : pnl > 0 ? 'profit' : pnl < 0 ? 'loss' : 'dim';
 
@@ -54,9 +80,9 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
         <span className="rd-metric-label">Open</span>
         <span
           className="rd-metric-value"
-          data-tone={unrealised == null || unrealised === 0 ? 'dim' : unrealised > 0 ? 'profit' : 'loss'}
+          data-tone={effectiveUnrealised == null || effectiveUnrealised === 0 ? 'dim' : effectiveUnrealised > 0 ? 'profit' : 'loss'}
         >
-          {unrealised == null || openCount === 0 ? ABSENT : fmtSignedInr(unrealised)}
+          {effectiveUnrealised == null || openCount === 0 ? ABSENT : fmtSignedInr(effectiveUnrealised)}
         </span>
       </span>
       <span className="rd-metric-sep" aria-hidden>·</span>

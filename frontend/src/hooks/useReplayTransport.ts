@@ -36,7 +36,17 @@ async function confirmStarted(): Promise<boolean> {
     const status = await syncReplayStatus();
     if (!status) continue;
     if (status.state === 'running' || status.state === 'paused') return true;
-    if (status.state === 'idle') return false;
+    if (status.state === 'idle') {
+      if (
+        (status.bars_played ?? 0) > 0 ||
+        status.session_complete === true ||
+        (status.stats?.trades?.length ?? 0) > 0 ||
+        (status.stats?.events?.length ?? 0) > 0
+      ) {
+        return true;
+      }
+      return false;
+    }
   }
   return false;
 }
@@ -93,6 +103,7 @@ export function draftToConfig(draft: ReplayDraft) {
     stock_spread_pct: draft.stockSpreadPct,
     slippage_pct: draft.slippagePct,
     adaptive_source: draft.adaptiveSource ?? 'both',
+    adaptive_version: draft.adaptiveVersion ?? 'v2_hardened',
   };
 }
 

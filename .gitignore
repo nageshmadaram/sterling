@@ -42,6 +42,8 @@ frontend/sterling_paper.db
 backend/sterling.db
 sterling.db
 market_data.db
+kite_engine.db
+*.db
 backend/server.pid
 *.pyc
 __pycache__/
