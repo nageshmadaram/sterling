@@ -57,8 +57,6 @@ class SessionState:
         self.day = today
         self.trades_today = 0
         self.halt_reason = ""
-        for pos in self.positions.values():
-            pos.sessions_held += 1
 
 
 class GammaMoveStrategy:
