@@ -36,7 +36,7 @@ def cfg_for_unscanned_chain(cfg: GammaMoveConfig) -> GammaMoveConfig:
 async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
                         cfg: Optional[GammaMoveConfig] = None) -> dict:
     """Replay one option contract over the last ``days`` of its own history."""
-    cfg = cfg or get_config()
+    cfg = cfg or get_config(uid)
     from app.services.exchanges.kite import accounts
     from app.services.gamma_move_scanner import Pacer, _historical, _to_candles
 

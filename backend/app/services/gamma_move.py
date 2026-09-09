@@ -187,26 +187,27 @@ def descriptor() -> dict:
 
 
 async def snapshot(uid: str) -> dict:
-    cfg = get_config()
-    from app.services.gamma_move_runner import session_status, scan_state
+    cfg = get_config(uid)
+    from app.services.gamma_move_runner import session_status, scan_state, session_for
     from app.services.gamma_move_sim import state as _sim_state
+
+    session = session_status(uid)
+    if not session or not session.get("candidates"):
+        session_for(uid, cfg)
+        session = session_status(uid) or {}
 
     out: dict[str, Any] = {
         "strategy": {**descriptor(), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
         "scan": scan_state(uid),
-        "session": session_status(uid),
+        "session": session,
         "simulation": _sim_state(uid),
-        "candidates": [],
-        "positions": [],
-        "record": {"trades": 0, "verdict": "no realised trades yet"},
+        "candidates": session.get("candidates") or [],
+        "positions": session.get("positions") or [],
+        "record": session.get("record") or {"trades": 0, "verdict": "no realised trades yet"},
         "orphan_positions": [],
         "blockers": [],
     }
-    session = session_status(uid) or {}
-    out["candidates"] = session.get("candidates") or []
-    out["positions"] = session.get("positions") or []
-    out["record"] = session.get("record") or out["record"]
 
     from app.services.gamma_move_runner import auto_execute, is_paper
     paper, auto = is_paper(uid), auto_execute(uid)

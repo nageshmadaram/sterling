@@ -27,7 +27,19 @@ def expiry_in_window(expiry: str, today: date, cfg: GammaMoveConfig) -> bool:
 def select_expiry(expiries: Sequence[str], today: date,
                   cfg: GammaMoveConfig) -> Optional[str]:
     ok = sorted({e[:10] for e in expiries if expiry_in_window(e, today, cfg)})
-    return ok[0] if ok else None
+    if ok:
+        return ok[0]
+    if cfg.expiry_selection in ("nearest", "any"):
+        min_dte = 1 if cfg.avoid_expiry_day else 0
+        upcoming = []
+        for e in expiries:
+            d = days_to_expiry(e, today)
+            if d is not None and min_dte <= d <= 35:
+                upcoming.append((d, e[:10]))
+        if upcoming:
+            upcoming.sort()
+            return upcoming[0][1]
+    return None
 
 
 def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
@@ -40,7 +52,8 @@ def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
             and abs(c.strike - level.price) / level.price * 100.0 <= cfg.strike_window_pct]
 
 
-def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
+def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool,
+                  tolerance: float = 0.10) -> bool:
     """True when this strike is the wall, or the gate is off.
 
     Unmeasured (``chain_oi_max is None``) is not a wall. Returning True here
@@ -51,7 +64,8 @@ def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
         return True
     if chain_oi_max is None:
         return False
-    return int(oi) >= int(chain_oi_max)
+    thresh = int(chain_oi_max * (1.0 - max(0.0, min(0.5, tolerance))))
+    return int(oi) >= thresh
 
 
 def spot_through_or_at_strike(spot: float, strike: float, option_type: str,
@@ -68,13 +82,18 @@ def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
                 underlying: str, oi_by_id: dict, premium_by_id: dict, spot: float,
                 today: date, cfg: GammaMoveConfig) -> Optional[StrikeCandidate]:
     best: Optional[StrikeCandidate] = None
+    target_expiry = select_expiry([c.expiry for c in contracts], today, cfg)
+    if not target_expiry:
+        return None
     for c in strikes_near_level(contracts, level, cfg):
+        if c.expiry[:10] != target_expiry:
+            continue
         oi = int(oi_by_id.get(c.instrument_id) or 0)
         premium = float(premium_by_id.get(c.instrument_id) or 0.0)
         if oi < cfg.min_option_oi or premium < cfg.min_option_premium:
             continue
         dte = days_to_expiry(c.expiry, today)
-        if dte is None or not expiry_in_window(c.expiry, today, cfg):
+        if dte is None:
             continue
         if cfg.require_spot_through_strike and not spot_through_or_at_strike(
                 spot, c.strike, c.option_type, cfg.level_proximity_pct):

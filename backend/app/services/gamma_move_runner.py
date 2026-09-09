@@ -128,11 +128,22 @@ class Session:
 
 def session_for(uid: str, cfg: Optional[GammaMoveConfig] = None) -> Session:
     """Reuse the in-memory session across midnight."""
-    cfg = cfg or get_config()
+    cfg = cfg or get_config(uid)
     s = _sessions.get(uid)
     if s is None:
         s = _sessions[uid] = Session(uid, cfg)
         s.strategy.state.record = positions_store.load_record(uid)
+        from app.services import db
+        try:
+            raw = db.get_config(f"gamma_move_signals:{uid}")
+            if raw:
+                import json
+                rows = json.loads(raw) if isinstance(raw, str) else raw
+                for r in rows:
+                    sig = GammaSignal.from_dict(r)
+                    s.signals[sig.id] = sig
+        except Exception as exc:
+            log.debug("gamma_move: signal hydration failed for %s: %s", uid, exc)
     s.cfg = cfg
     s.strategy.cfg = cfg
     s.strategy.state.roll(_today_str())
@@ -158,12 +169,19 @@ async def scan_once(uid: str) -> dict:
     if _replay_owns_the_board():
         return {"scanned": 0, "armed": 0, "signals": [],
                 "message": "replay is driving this board — live scan is off"}
-    cfg = get_config()
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         from app.services.gamma_move_scanner import scan_once as _scan
         signals = await _scan(uid, cfg, session.strategy)
         session.signals = {s.id: s for s in signals}
+        from app.services import db
+        try:
+            import json
+            db.set_config(f"gamma_move_signals:{uid}",
+                          json.dumps([s.as_dict() for s in signals], separators=(",", ":")))
+        except Exception as exc:
+            log.warning("gamma_move: could not persist scan signals for %s: %s", uid, exc)
         await _subscribe_watched(uid, session)
         armed = [s for s in signals if s.state == "armed"]
         return {"scanned": len(signals), "armed": len(armed),
@@ -211,7 +229,7 @@ async def release_subscriptions(uid: str) -> None:
 async def arm(uid: str, signal_id: str) -> dict:
     if _replay_owns_the_board():
         return {"ok": False, "message": "replay is driving this board — live entry is off"}
-    cfg = get_config()
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         signal = session.signals.get(signal_id)
@@ -309,7 +327,7 @@ async def _place_protection(uid: str, client, pos, cfg) -> int:
 async def adopt(uid: str, symbol: str, quantity: int, entry_price: float) -> dict:
     if _replay_owns_the_board():
         return {"ok": False, "message": "replay is driving this board — live adopt is off"}
-    cfg = get_config()
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         match = next((s for s in session.signals.values()
@@ -365,7 +383,7 @@ async def orphan_positions(uid: str, cfg: GammaMoveConfig) -> list[dict]:
 
 
 async def reconcile(uid: str) -> dict:
-    cfg = get_config()
+    cfg = get_config(uid)
     session = session_for(uid, cfg)
     restored = 0
     for sym, pos in positions_store.load(uid).items():
@@ -530,15 +548,20 @@ def _kite_user_ids() -> list[str]:
 
 
 async def scan_all_once() -> dict[str, str]:
-    cfg = get_config()
-    out: dict[str, str] = {}
-    if not cfg.enabled:
-        return {"*": "disabled"}
     if _replay_owns_the_board():
         return {"*": "replay is driving this board — live scan is off"}
-    if not _is_market_open(cfg):
-        return {"*": "outside session"}
-    for uid in _kite_user_ids():
+    uids = _kite_user_ids()
+    if not uids:
+        return {"*": "no active accounts"}
+    out: dict[str, str] = {}
+    for uid in uids:
+        cfg = get_config(uid)
+        if not cfg.enabled:
+            out[uid] = "disabled"
+            continue
+        if not _is_market_open(cfg):
+            out[uid] = "outside session"
+            continue
         try:
             res = await scan_once(uid)
             note = f"{res['armed']} armed of {res['scanned']}"

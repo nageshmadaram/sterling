@@ -325,3 +325,57 @@ class TestLiveSpreadGate:
         assert result["ok"] is False
         assert "spread" in result["message"].lower()
 
+
+class TestSignalPersistenceAndHydration:
+    @pytest.mark.asyncio
+    async def test_signals_persisted_and_hydrated_across_restarts(self, monkeypatch):
+        from app.engines.gamma_move import SpotLevel, StrikeCandidate
+        from app.services import gamma_move_runner as runner
+
+        instrument = inst()
+        cand = StrikeCandidate(
+            underlying="RELIANCE",
+            level=SpotLevel(price=1300.0, kind="resistance", touches=3),
+            instrument=instrument, oi=6_000_000, days_to_expiry=9, spot=1298.0,
+            premium=53.0, chain_oi_max=6_000_000)
+        sig = GammaSignal(id="s-persist-1", candidate=cand, metrics=None, state="armed",
+                          at_ms=BASE_MS, regime="up", entry=53.0, stop=45.0,
+                          lots=1, quantity=500)
+
+        async def fake_scan(_uid, _cfg, _strategy):
+            return [sig]
+
+        async def _fake_sub(*a, **k):
+            pass
+
+        async def _fake_dump(_uid):
+            return []
+
+        from app.services import gamma_move_scanner, gamma_move
+        monkeypatch.setattr(gamma_move_scanner, "scan_once", fake_scan)
+        monkeypatch.setattr(runner, "_subscribe_watched", _fake_sub)
+        monkeypatch.setattr(gamma_move, "nfo_dump", _fake_dump)
+
+        res = await runner.scan_once("u1")
+        assert res["scanned"] == 1
+        assert res["signals"][0]["id"] == "s-persist-1"
+
+        # Simulate full server restart / memory wipe
+        runner.clear("u1")
+
+        # Session hydration on restart
+        session = runner.session_for("u1")
+        assert "s-persist-1" in session.signals
+        hydrated = session.signals["s-persist-1"]
+        assert hydrated.id == "s-persist-1"
+        assert hydrated.candidate.underlying == "RELIANCE"
+        assert hydrated.candidate.oi == 6_000_000
+
+        # Snapshot hydration on restart
+        runner.clear("u1")
+        from app.services.gamma_move import snapshot
+        snap = await snapshot("u1")
+        assert len(snap["candidates"]) == 1
+        assert snap["candidates"][0]["id"] == "s-persist-1"
+
+

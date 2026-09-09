@@ -83,3 +83,36 @@ def test_through_flag_off_allows_spot_short_of_the_wall(candidate):
     far = replace(candidate, spot=1200.0)
     sig = s.evaluate(far, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
     assert sig.state == "armed"
+
+
+def test_select_expiry_fallback_mid_month():
+    from app.engines.gamma_move import select_expiry
+    today = date(2026, 9, 10)
+    expiries = ["2026-09-29", "2026-10-29"]
+    cfg = GammaMoveConfig(expiry_dte_max=14, expiry_selection="nearest")
+    # 2026-09-29 is 19 DTE (>14), but nearest fallback picks it
+    picked = select_expiry(expiries, today, cfg)
+    assert picked == "2026-09-29"
+
+
+def test_is_chain_wall_tolerance():
+    # 94% of chain max qualifies under 10% tolerance
+    assert is_chain_wall(1_553_725, 1_652_050, required=True, tolerance=0.10)
+    # 85% of chain max fails under 10% tolerance
+    assert not is_chain_wall(1_400_000, 1_652_050, required=True, tolerance=0.10)
+
+
+def test_signal_serialization_roundtrip(candidate):
+    from app.engines.gamma_move import GammaSignal
+    s = GammaMoveStrategy(GammaMoveConfig(enabled=True, max_premium_at_risk_inr=60_000))
+    wall = replace(candidate, oi=6_000_000, chain_oi_max=6_000_000, spot=1298.0)
+    sig = s.evaluate(wall, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
+    d = sig.as_dict()
+    reconstituted = GammaSignal.from_dict(d)
+    assert reconstituted.id == sig.id
+    assert reconstituted.state == sig.state
+    assert reconstituted.candidate.underlying == sig.candidate.underlying
+    assert reconstituted.candidate.oi == sig.candidate.oi
+    assert reconstituted.candidate.chain_oi_max == sig.candidate.chain_oi_max
+    assert reconstituted.entry == sig.entry
+    assert reconstituted.stop == sig.stop
