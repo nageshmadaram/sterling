@@ -57,8 +57,8 @@ class SessionState:
         self.day = today
         self.trades_today = 0
         self.halt_reason = ""
-        for pos in self.positions.values():
-            pos.sessions_held += 1
+        # Do not increment sessions_held here. Weekends are not sessions, and
+        # should_exit already sets it from weekday_sessions_held(entry_day, today).
 
 
 class GammaMoveStrategy:
