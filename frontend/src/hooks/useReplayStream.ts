@@ -99,6 +99,7 @@ function applyStatus(next: ReplayStatus, wasDelta: boolean) {
     state: next.state,
     config: next.config,
     current_time_iso: next.current_time_iso,
+    current_date: next.current_date ?? (next.current_time_iso?.includes('T') ? next.current_time_iso.split('T')[0] : store.status.current_date),
     progress_pct: next.progress_pct,
     bars_played: next.bars_played,
     bars_total: next.bars_total,
@@ -252,8 +253,10 @@ export function useReplayStream(enabled: boolean): void {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data);
           const store = useReplayStore.getState();
+          const curDate = d.cur_date ?? (d.t && typeof d.t === 'string' && d.t.includes('T') ? d.t.split('T')[0] : store.status.current_date);
           store.applyFrame({
             current_time_iso: d.t ?? store.status.current_time_iso,
+            current_date: curDate,
             progress_pct: d.pct ?? store.status.progress_pct,
             bars_played: d.bars_played ?? store.status.bars_played,
             bars_total: d.bars_total ?? store.status.bars_total,

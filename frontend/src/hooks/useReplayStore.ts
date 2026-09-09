@@ -986,8 +986,10 @@ export function getReplayNowMs(status: ReplayStatus): number | null {
     const ms = Date.parse(`${timeIso}+05:30`);
     if (!Number.isNaN(ms)) return ms;
   }
-  if (!status.config?.date) return null;
-  const ms = Date.parse(`${status.config.date}T${timeIso}+05:30`);
+  const dateStr = status.current_date || (timeIso.includes('T') ? timeIso.split('T')[0] : status.config?.date);
+  if (!dateStr) return null;
+  const rawTime = timeIso.includes('T') ? timeIso.split('T')[1] : timeIso;
+  const ms = Date.parse(`${dateStr}T${rawTime}+05:30`);
   return Number.isNaN(ms) ? null : ms;
 }
 

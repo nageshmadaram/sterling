@@ -631,6 +631,7 @@ class SimulationRunner:
         self._last_frame_at = now
         self._publish("frame", {
             "t": self._current_time_iso,
+            "cur_date": self._current_date or (self._current_time_iso.split("T")[0] if "T" in self._current_time_iso else None),
             "pct": self._progress,
             "bars_played": self._bars_played,
             "bars_total": self._bars_total,
@@ -2302,6 +2303,15 @@ class SimulationRunner:
 
             entry_iso = f"{sim_date}T{ev.time_iso}+05:30" if ev.time_iso else None
             sig_id = f"ae_sim_{ev.instrument}_{ev.time_iso.replace(':', '')}_{i}"
+            if ev.time_iso:
+                if "T" in ev.time_iso:
+                    entry_iso = f"{ev.time_iso}+05:30" if ("+" not in ev.time_iso and not ev.time_iso.endswith("Z")) else ev.time_iso
+                else:
+                    entry_iso = f"{sim_date}T{ev.time_iso}+05:30"
+            else:
+                entry_iso = None
+            sig_time_str = ev.time_iso.split("T")[1] if "T" in (ev.time_iso or "") else (ev.time_iso or "")
+            sig_id = f"ae_sim_{ev.instrument}_{sig_time_str.replace(':', '')}_{i}"
 
             signals.append({
                 "id": sig_id,
@@ -2346,10 +2356,13 @@ class SimulationRunner:
         all_syms = list(dict.fromkeys([ev.instrument for ev in ae_events])) or ["NIFTY-I"]
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
+        has_spot_scans = any(s.get("scan_origin") == "spot_scan" for s in signals)
         if adaptive_src in ("ae_model", "ae"):
             signals = [s for s in signals if s.get("scan_origin") == "adaptive_edge"]
         elif adaptive_src in ("spot_scan", "spot"):
-            signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+            if has_spot_scans:
+                signals = [s for s in signals if s.get("scan_origin") == "spot_scan"]
+            # Otherwise, fall back to all generated AE signals so the board is not left blank
 
         adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
         adaptive_ver = str(adaptive_ver).lower()
@@ -3104,8 +3117,15 @@ class SimulationRunner:
             try:
                 import dataclasses
                 ae_cfg = get_ae_config()
+                if not getattr(self, "_cached_ae_cfg", None):
+                    from app.services.adaptive_edge import get_config as get_ae_config
+                    self._cached_ae_cfg = get_ae_config()
+                ae_cfg = self._cached_ae_cfg
                 target_version = "v2_hardened" if is_ae_v2 else "v1_baseline"
                 ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
+                if ae_cfg and ae_cfg.strategy_version != target_version:
+                    ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
+                    self._cached_ae_cfg = ae_cfg
                 dec = decide_from_candles(sym, c_input, ae_cfg, expiry=bar_dt.strftime("%Y-%m-%d"), spot=close)
                 if dec and dec.actionable:
                     signals_to_fire.append({
@@ -3268,7 +3288,7 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
-                scan_origin="adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan",
+                scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
                 strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
             )
             self._stats.signals_fired += 1
@@ -3324,7 +3344,7 @@ class SimulationRunner:
                     spot_initial_stop=stop,
                     exit_reason=None,
                     bars_held=0,
-                    scan_origin="adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan",
+                    scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
                     strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
                 )
                 self._stats.trades_entered += 1
