@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from .config import (CALIBRATED_FIELDS, CALIBRATION, EXIT_POLICIES, GammaMoveConfig,
                      LEVEL_TIMEFRAMES, RESEARCH_ONLY_EXIT_POLICIES, SIZING_MODES,
-                     SOURCE_GATES, STOP_BASES, STOP_MODES, TRIGGER_TIMEFRAMES)
+                     STOP_BASES, STOP_MODES, TRIGGER_TIMEFRAMES)
+from .source_gates import SOURCE_GATES
 from .exit import (build_exit_event, exit_order_price, initial_stop, realised_inr,
                    should_exit, swing_low_stop, target_price, update_trail,
                    weekday_sessions_held)
