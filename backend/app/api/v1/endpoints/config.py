@@ -489,6 +489,10 @@ async def gamma_move_adopt(body: dict = Body(...),
     if not symbol or quantity <= 0 or entry_price <= 0:
         raise HTTPException(status_code=422,
                             detail="symbol, a positive quantity and entry_price are required")
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live adopt is off")
     from app.services.gamma_move_runner import adopt
     return await adopt(uid, symbol, quantity, entry_price)
 

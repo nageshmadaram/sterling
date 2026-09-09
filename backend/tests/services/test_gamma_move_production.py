@@ -40,6 +40,24 @@ def pos(**kw) -> PositionState:
     return PositionState(**base)
 
 
+class TestReplayOwnsLive:
+    def test_scan_once_is_a_no_op_while_replay_owns_the_board(self, monkeypatch):
+        import asyncio
+        from app.services import gamma_move_runner as runner
+        monkeypatch.setattr(runner, "_replay_owns_the_board", lambda: True)
+        out = asyncio.run(runner.scan_once("u1"))
+        assert out["scanned"] == 0
+        assert "replay" in out["message"]
+
+    def test_arm_is_refused_while_replay_owns_the_board(self, monkeypatch):
+        import asyncio
+        from app.services import gamma_move_runner as runner
+        monkeypatch.setattr(runner, "_replay_owns_the_board", lambda: True)
+        out = asyncio.run(runner.arm("u1", "s1"))
+        assert out["ok"] is False
+        assert "replay" in out["message"]
+
+
 class TestDurability:
     def test_a_position_survives_a_restart(self):
         """The whole point. A crash while long must not lose the position — the

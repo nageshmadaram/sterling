@@ -24,15 +24,24 @@ def test_pe_needs_spot_at_or_through_the_strike():
     assert not spot_through_or_at_strike(1330.0, 1300.0, "PE", 1.0)
 
 
-def test_chain_wall_skips_when_unmeasured():
-    assert is_chain_wall(100, None, required=True)
+def test_chain_wall_refuses_when_unmeasured():
+    assert not is_chain_wall(100, None, required=True)
     assert not is_chain_wall(100, 500, required=True)
     assert is_chain_wall(500, 500, required=True)
     assert is_chain_wall(100, 500, required=False)
+    assert is_chain_wall(100, None, required=False)
 
 
 def triggering():
     return quiet_session() + [bar(0, 24, oi=96_000, volume=5_000, close=53.0)]
+
+
+def test_evaluate_refuses_when_the_wall_was_never_measured(candidate):
+    s = GammaMoveStrategy(GammaMoveConfig(enabled=True, max_premium_at_risk_inr=60_000))
+    unmeasured = replace(candidate, chain_oi_max=None)
+    sig = s.evaluate(unmeasured, triggering(), now_ms=BASE_MS, today=TODAY, regime="up")
+    assert sig.state == "watching"
+    assert "not measured" in (sig.reason or "")
 
 
 def test_evaluate_refuses_a_strike_that_is_not_the_wall(candidate):

@@ -117,9 +117,11 @@ class GammaMoveStrategy:
                                        f"the {inst.strike:g} wall"))
         if not is_chain_wall(candidate.oi, candidate.chain_oi_max,
                              required=self.cfg.require_chain_max_oi):
-            return GammaSignal(**base, metrics=None, state="watching",
-                               reason=(f"strike OI {candidate.oi:,} is not the chain "
-                                       f"wall ({candidate.chain_oi_max:,})"))
+            wall = candidate.chain_oi_max
+            reason = ("chain wall was not measured — refuse rather than skip"
+                      if wall is None else
+                      f"strike OI {candidate.oi:,} is not the chain wall ({wall:,})")
+            return GammaSignal(**base, metrics=None, state="watching", reason=reason)
 
         closed = closed_bars(bars, self.cfg, now_ms)
         metrics = evaluate_trigger(closed, self.cfg, now_ms=now_ms)

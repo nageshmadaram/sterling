@@ -97,8 +97,9 @@ class StrikeCandidate:
     spot: float
     premium: float = 0.0
     #: Highest open interest on the same expiry + option type. None means the
-    #: caller did not look at the rest of the chain, so the wall check is skipped
-    #: rather than invented. The scanner always fills this.
+    #: caller did not look at the rest of the chain. The wall check then refuses
+    #: (when required) rather than inventing a pass. The scanner always fills this;
+    #: replay turns the requirement off and labels the skip.
     chain_oi_max: int | None = None
 
     @property

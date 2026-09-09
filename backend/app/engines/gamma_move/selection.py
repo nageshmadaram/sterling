@@ -41,8 +41,16 @@ def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
 
 
 def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
-    if not required or chain_oi_max is None:
+    """True when this strike is the wall, or the gate is off.
+
+    Unmeasured (``chain_oi_max is None``) is not a wall. Returning True here
+    used to silently pass every strike; callers that have no chain must turn
+    ``required`` off and say so.
+    """
+    if not required:
         return True
+    if chain_oi_max is None:
+        return False
     return int(oi) >= int(chain_oi_max)
 
 

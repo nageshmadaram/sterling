@@ -24,9 +24,9 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 def cfg_for_unscanned_chain(cfg: GammaMoveConfig) -> GammaMoveConfig:
     """Wall gate needs a full as-of chain. Without one, skip it and say so.
 
-    ``is_chain_wall(..., chain_oi_max=None, required=True)`` returns True, so
-    leaving the flag on would silently pass every strike. Study replay already
-    labels this; live ``replay_symbol`` must do the same.
+    ``is_chain_wall(..., chain_oi_max=None, required=True)`` now refuses, so
+    leaving the flag on would watch every strike and never arm. Study replay
+    already labels this; live ``replay_symbol`` must do the same.
     """
     if cfg.require_chain_max_oi:
         return replace(cfg, require_chain_max_oi=False)

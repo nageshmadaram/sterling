@@ -146,7 +146,18 @@ def clear(uid: Optional[str] = None) -> None:
         _sessions.clear()
 
 
+def _replay_owns_the_board() -> bool:
+    try:
+        from app.services.simulation import simulation_runner
+        return bool(simulation_runner.has_session_view)
+    except Exception:
+        return False
+
+
 async def scan_once(uid: str) -> dict:
+    if _replay_owns_the_board():
+        return {"scanned": 0, "armed": 0, "signals": [],
+                "message": "replay is driving this board — live scan is off"}
     cfg = get_config()
     async with _lock_for(uid):
         session = session_for(uid, cfg)
@@ -198,6 +209,8 @@ async def release_subscriptions(uid: str) -> None:
 
 
 async def arm(uid: str, signal_id: str) -> dict:
+    if _replay_owns_the_board():
+        return {"ok": False, "message": "replay is driving this board — live entry is off"}
     cfg = get_config()
     async with _lock_for(uid):
         session = session_for(uid, cfg)
@@ -294,6 +307,8 @@ async def _place_protection(uid: str, client, pos, cfg) -> int:
 
 
 async def adopt(uid: str, symbol: str, quantity: int, entry_price: float) -> dict:
+    if _replay_owns_the_board():
+        return {"ok": False, "message": "replay is driving this board — live adopt is off"}
     cfg = get_config()
     async with _lock_for(uid):
         session = session_for(uid, cfg)
@@ -519,6 +534,8 @@ async def scan_all_once() -> dict[str, str]:
     out: dict[str, str] = {}
     if not cfg.enabled:
         return {"*": "disabled"}
+    if _replay_owns_the_board():
+        return {"*": "replay is driving this board — live scan is off"}
     if not _is_market_open(cfg):
         return {"*": "outside session"}
     for uid in _kite_user_ids():
