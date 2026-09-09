@@ -1722,9 +1722,7 @@ class SimulationRunner:
         instruments = list(dict.fromkeys([_canonical_symbol(s) for s in instruments if s]))
 
         self._status_message = f"⚡ Fetching historical candles for {range_label} from Zerodha Kite API..."
-        self._publish_state()
         warmup_start = start_epoch - 5 * 86400
-        await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch, session_start=start_epoch)
 
         def _report_hydrate(msg: str):
             self._status_message = msg
@@ -1739,8 +1737,6 @@ class SimulationRunner:
         self._bar_history = {}
         self._in_session_bars = {}
         for sym in instruments:
-            prior_candles = ohlcv_get(sym, res, limit=50, since=warmup_start)
-            p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles if c["time"] < start_epoch]
             prior_candles = ohlcv_get(sym, res, limit=50, until=start_epoch)
             p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles]
             self._bar_history[sym] = p_bars[-50:]

@@ -130,7 +130,6 @@ export function ReplayTransport() {
         type="button"
         className="rd-tbtn rd-tbtn-primary"
         data-kind={primary.kind}
-        disabled={state === 'loading'}
         onClick={() => void transport.toggle()}
         aria-label={primary.label}
         title={primary.label}
