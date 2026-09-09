@@ -65,9 +65,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 payload = json.loads(data)
                 action = payload.get("action")
                 channel = payload.get("channel")
-                
-                if action == "subscribe" and channel:
-                    stream_manager.subscribe(websocket, channel)
                 if isinstance(channel, str):
                     channel = channel.strip()
                     # Sanitize: allow only safe channel identifier tokens

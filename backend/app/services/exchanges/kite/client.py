@@ -457,9 +457,17 @@ class KiteClient(TradingExchangeAdapter):
         exchange, tradingsymbol = self._split_symbol(symbol, kwargs.get("exchange"))
         txn = K.TXN_BUY if str(side).lower() in ("buy", "long") else K.TXN_SELL
         kite_ot = kwargs.get("kite_order_type")
-        if kite_ot is None:
-            kite_ot = K.ORDER_TYPE_LIMIT if str(order_type).lower().startswith("limit") else K.ORDER_TYPE_MARKET
         trigger_price = kwargs.get("trigger_price", stop_loss)
+        if kite_ot is None:
+            ot_lower = str(order_type).lower()
+            if ot_lower in ("sl", "stop_loss_limit", "stop_limit"):
+                kite_ot = K.ORDER_TYPE_SL
+            elif ot_lower in ("slm", "sl_m", "stop_loss", "stop_loss_market", "stop_market"):
+                kite_ot = K.ORDER_TYPE_SLM
+            elif ot_lower.startswith("limit"):
+                kite_ot = K.ORDER_TYPE_LIMIT
+            else:
+                kite_ot = K.ORDER_TYPE_MARKET
         validity = K.VALIDITY_IOC if str(time_in_force).lower() == "ioc" else K.VALIDITY_DAY
         return await self._place(
             variety=kwargs.get("variety", K.VARIETY_REGULAR),
