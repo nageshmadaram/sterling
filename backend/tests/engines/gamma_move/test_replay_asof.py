@@ -43,3 +43,16 @@ def test_a_daily_bar_stamped_at_session_open_is_still_an_eod_close():
     ]
     assert _spot_asof(stamped, _ms(2026, 8, 26, 10, 0)) == 1290.0
     assert _spot_asof(stamped, _ms(2026, 8, 26, 15, 30)) == 1300.0
+
+
+def test_unscanned_chain_disables_the_wall_gate_explicitly():
+    """replay_symbol has no as-of chain. Leaving require_chain_max_oi on would
+    silently pass every strike because is_chain_wall treats None as skip."""
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.gamma_move_replay import cfg_for_unscanned_chain
+    shipped = GammaMoveConfig()
+    assert shipped.require_chain_max_oi is True
+    got = cfg_for_unscanned_chain(shipped)
+    assert got.require_chain_max_oi is False
+    already = GammaMoveConfig(require_chain_max_oi=False)
+    assert cfg_for_unscanned_chain(already).require_chain_max_oi is False

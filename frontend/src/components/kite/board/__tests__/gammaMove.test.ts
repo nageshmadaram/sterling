@@ -68,6 +68,25 @@ describe('gammaMoveToBoard', () => {
     expect(gammaMoveToBoard(null)).toEqual([]);
   });
 
+  it('does not invent 0D to expiry when the replay has no chain', () => {
+    const rows = gammaMoveToBoard({
+      candidates: [{
+        id: 'sim-1', state: 'watching', at_ms: 1, underlying: 'RELIANCE',
+        regime: 'up', reason: 'replay has no option open-interest tape',
+        instrument: { instrument_id: 'RELIANCE', tradingsymbol: 'RELIANCE',
+          option_type: 'CE', strike: null, expiry: null, lot_size: null,
+          tick_size: 0.05, exchange: 'NFO' },
+        level: { price: 1290, kind: 'resistance', touches: 3, distance_pct: 0.62 },
+        oi: 0, days_to_expiry: null, spot: 1298, metrics: null,
+      }],
+    } as unknown as GammaMoveSnapshot);
+    expect(rows).toHaveLength(1);
+    const flags = (rows[0].flags || []).map((f) => f.label);
+    expect(flags.some((l) => l.includes('0D'))).toBe(false);
+    expect(flags).toContain('NO CHAIN');
+    expect(rows[0].origin?.hint).toMatch(/open-interest tape/);
+  });
+
   it('does not throw when a simulation payload omits config or nested levels', () => {
     const rows = gammaMoveToBoard({
       candidates: [{

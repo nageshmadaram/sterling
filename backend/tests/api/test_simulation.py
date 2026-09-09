@@ -506,8 +506,8 @@ def test_gamma_move_snapshot_matches_the_live_board_schema():
             strategy="gamma_move", instrument="RELIANCE",
             direction="BULLISH", strength="WATCHING",
             entry=1298.0, stop=1280.0, target=1320.0,
-            contract="RELIANCE26AUG1300CE", opt_type="CE", strike=1300.0,
-            spot=1298.0, premium_entry=53.0, premium_sl=37.0, premium_target=80.0,
+            opt_type="CE", spot=1298.0,
+            level_price=1290.0, level_kind="resistance", level_touches=3,
         ),
         SimSignalEvent(
             time_iso="10:16:00", timestamp_ms=1788756360000,
@@ -523,6 +523,11 @@ def test_gamma_move_snapshot_matches_the_live_board_schema():
     row = snap["candidates"][0]
     assert row["state"] == "watching"
     assert row["metrics"] is None
+    assert row["days_to_expiry"] is None
+    assert row["instrument"]["expiry"] is None
+    assert row["instrument"]["strike"] is None
+    assert row["level"]["price"] == 1290.0
+    assert row["level"]["price"] != 1300
     assert "open-interest" in row["reason"]
     assert any("open-interest" in b for b in snap["blockers"])
     simulation_runner._stats.events = []
@@ -532,6 +537,77 @@ def test_gamma_move_watch_needs_enough_history():
     from app.services.simulation import _gamma_move_watch_from_bars
     short = [{"open": 100, "high": 101, "low": 99, "close": 100, "time": i} for i in range(5)]
     assert _gamma_move_watch_from_bars(short, 100.0) is None
+
+
+def _gm_daily_pivots(n=80):
+    """Daily IST closes with two confirmed 105 resistances, matching the engine test series."""
+    from datetime import datetime, timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start = datetime(2026, 4, 1, 15, 30, tzinfo=ist)
+    out = []
+    for i in range(n):
+        high = 105.0 if i in (10, 30, 50) else 101.0
+        low = 95.0 if i in (20, 40, 60) else 99.0
+        ts = (start + timedelta(days=i)).timestamp()
+        out.append({"open": 100.0, "high": high, "low": low, "close": 100.0,
+                    "time": ts, "volume": 1000, "symbol": "RELIANCE"})
+    return out
+
+
+def test_gamma_move_watch_skips_index_underlyings():
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    bars = _gm_daily_pivots()
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="NIFTY", cfg=cfg) is None
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="BANKNIFTY", cfg=cfg) is None
+
+
+def test_gamma_move_watch_five_minute_tape_is_not_a_daily_window():
+    """120 five-minute bars are not 120 daily bars. Do not invent intraday 'levels'."""
+    from datetime import datetime, timedelta, timezone
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start = datetime(2026, 8, 26, 9, 15, tzinfo=ist)
+    bars = []
+    for i in range(80):
+        high = 105.0 if i in (10, 30, 50) else 101.0
+        low = 95.0 if i in (20, 40, 60) else 99.0
+        ts = (start + timedelta(minutes=5 * i)).timestamp()
+        bars.append({"open": 100.0, "high": high, "low": low, "close": 100.0,
+                     "time": ts, "volume": 1000, "symbol": "RELIANCE"})
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg) is None
+
+
+def test_gamma_move_watch_emits_on_a_confirmed_daily_stock_level():
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    bars = _gm_daily_pivots()
+    got = _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg)
+    assert got is not None
+    assert got["strategy"] == "gamma_move"
+    assert got["strength"] == "WATCHING"
+    assert got["level_kind"] in ("resistance", "support")
+    assert got["level_price"] > 0
+    assert abs(got["level_price"] - 105.0) / 105.0 * 100 < 2.0
+
+
+def test_collapse_to_daily_drops_a_forming_session():
+    from datetime import datetime, timedelta, timezone
+    from app.services.simulation import _collapse_to_daily
+    ist = timezone(timedelta(hours=5, minutes=30))
+    closed = datetime(2026, 8, 25, 15, 30, tzinfo=ist).timestamp()
+    morning = datetime(2026, 8, 26, 10, 0, tzinfo=ist).timestamp()
+    bars = [
+        {"open": 1, "high": 2, "low": 1, "close": 2, "time": closed, "volume": 1},
+        {"open": 2, "high": 3, "low": 2, "close": 3, "time": morning, "volume": 1},
+    ]
+    got = _collapse_to_daily(bars, morning)
+    assert len(got) == 1
+    assert got[0]["close"] == 2
 
 
 def test_asof_symbol_bars_drops_future_prints():

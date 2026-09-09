@@ -174,11 +174,12 @@ export interface GammaSignalRow {
   entry_day: string | null;
   instrument: {
     instrument_id: string; tradingsymbol: string; option_type: 'CE' | 'PE';
-    strike: number; expiry: string; lot_size: number; tick_size: number; exchange: string;
+    strike: number | null; expiry: string | null; lot_size: number | null;
+    tick_size: number; exchange: string;
   };
   level: { price: number; kind: 'support' | 'resistance'; touches: number; distance_pct: number };
   oi: number;
-  days_to_expiry: number;
+  days_to_expiry: number | null;
   spot: number;
   metrics: TriggerMetrics | null;
   /** Every level is nullable: a missing number must render as "—", never as 0. */

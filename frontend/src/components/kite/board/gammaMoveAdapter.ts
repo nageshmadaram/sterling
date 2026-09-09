@@ -59,7 +59,7 @@ function originOf(row: GammaSignalRow): BoardOrigin | undefined {
   const m = row.metrics;
   if (!m) {
     return { label: 'NO DATA', tone: 'dim',
-             hint: 'Not enough of today’s bars to judge the trigger yet.' };
+             hint: row.reason || 'Not enough of today’s bars to judge the trigger yet.' };
   }
   const detail = `Open interest ${m.oi_drop_pct >= 0 ? 'fell' : 'rose'} `
     + `${Math.abs(m.oi_drop_pct).toFixed(2)}% on the last bar, volume ran `
@@ -98,12 +98,21 @@ function flagsOf(row: GammaSignalRow, proximityPct: number): BoardOrigin[] {
       : `Spot ${n(row.spot)} is ${d.toFixed(2)}% from the nearest ${level.kind}, `
         + `outside the ${proximityPct}% band where the edge was measured.`,
   });
-  out.push({
-    label: `${row.days_to_expiry ?? '—'}D TO EXPIRY`,
-    tone: 'dim',
-    hint: 'The strategy is only defined for the last week or two of a contract; '
-      + 'earlier in the cycle open interest does not behave this way.',
-  });
+  if (row.days_to_expiry == null) {
+    out.push({
+      label: 'NO CHAIN',
+      tone: 'dim',
+      hint: 'Replay has no option chain, so expiry and the wall strike are unknown. '
+        + 'This row is the daily level filter only.',
+    });
+  } else {
+    out.push({
+      label: `${row.days_to_expiry}D TO EXPIRY`,
+      tone: 'dim',
+      hint: 'The strategy is only defined for the last week or two of a contract; '
+        + 'earlier in the cycle open interest does not behave this way.',
+    });
+  }
   if (row.regime && row.regime !== 'unknown') {
     out.push({
       label: `TREND ${row.regime.toUpperCase()}`,
@@ -203,9 +212,9 @@ function contractSection(row: GammaSignalRow): BoardSection {
       { label: 'Strike', value: n(row.instrument.strike, 0) },
       { label: 'Type', value: row.instrument.option_type },
       { label: 'Expiry', value: row.instrument.expiry || '—' },
-      { label: 'Days left', value: String(row.days_to_expiry) },
+      { label: 'Days left', value: row.days_to_expiry == null ? '—' : String(row.days_to_expiry) },
       { label: 'Open interest', value: row.oi ? row.oi.toLocaleString('en-IN') : '—' },
-      { label: 'Lot size', value: String(row.instrument.lot_size) },
+      { label: 'Lot size', value: row.instrument.lot_size == null ? '—' : String(row.instrument.lot_size) },
     ],
   };
 }

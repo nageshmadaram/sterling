@@ -6,7 +6,7 @@ configurable speeds, allowing users to watch strategies execute on
 past trading days as if they were live.
 """
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import time
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -161,6 +161,10 @@ class SimSignalEvent(BaseModel):
     premium_sl: Optional[float] = None
     premium_target: Optional[float] = None
     scan_origin: Optional[str] = None
+    # Gamma Move level filter only. Absent on every other engine.
+    level_price: Optional[float] = None
+    level_kind: Optional[str] = None
+    level_touches: Optional[int] = None
 
 
 class SimTradeEvent(BaseModel):
@@ -341,6 +345,10 @@ def _is_index(symbol: str) -> bool:
     if ":" in s:
         s = s.split(":")[-1].strip()
     return s in INDEX_SYMBOLS or _canonical_symbol(symbol) in INDEX_SYMBOLS
+
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+_SESSION_END = (15, 30)  # NSE cash close. A forming daily bar is not a close.
 
 
 INDEX_LOT_SIZES = {
@@ -528,26 +536,97 @@ def _asof_symbol_bars(candles: list, sym: str, bar_time: Any) -> list:
     return out
 
 
-def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[str, Any]]:
-    """Level+regime gate on underlying bars. Never STRONG — no option OI tape."""
+def _bar_epoch_seconds(bar: dict) -> Optional[float]:
+    raw = bar.get("time") or bar.get("timestamp")
+    if raw is None:
+        return None
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return ts / 1000.0 if ts > 10_000_000_000 else ts
+
+
+def _gamma_move_in_universe(symbol: str, cfg: Any) -> bool:
+    """Source universe is stock options. Indices only if `scan_indices` names them."""
+    if _is_index(symbol):
+        wanted = {str(n).upper() for n in (getattr(cfg, "scan_indices", ()) or ())}
+        return bool(wanted) and (
+            _canonical_symbol(symbol) in wanted or str(symbol).upper() in wanted)
+    if not getattr(cfg, "stock_contracts", True):
+        return False
+    if getattr(cfg, "scan_all_stocks", True):
+        return True
+    wanted = {str(n).upper() for n in (getattr(cfg, "scan_stocks", ()) or ())}
+    return str(symbol).upper() in wanted or _canonical_symbol(symbol) in wanted
+
+
+def _collapse_to_daily(history: list, asof_ts: Optional[float] = None) -> list:
+    """One completed IST session per row. Today's forming bar stays off until 15:30."""
+    buckets: Dict[Any, dict] = {}
+    order: list = []
+    for b in history:
+        ts = _bar_epoch_seconds(b)
+        if ts is None:
+            continue
+        day = datetime.fromtimestamp(ts, _IST).date()
+        o, h, l, c = (float(b.get("open") or 0), float(b.get("high") or 0),
+                      float(b.get("low") or 0), float(b.get("close") or 0))
+        vol = float(b.get("volume") or 0)
+        if day not in buckets:
+            buckets[day] = {"open": o, "high": h, "low": l, "close": c,
+                            "volume": vol, "time": ts}
+            order.append(day)
+            continue
+        d = buckets[day]
+        d["high"] = max(d["high"], h)
+        d["low"] = min(d["low"], l) if d["low"] else l
+        d["close"] = c
+        d["volume"] += vol
+    if not order:
+        return []
+    asof = asof_ts if asof_ts is not None else _bar_epoch_seconds(history[-1])
+    if asof is not None:
+        asof_dt = datetime.fromtimestamp(asof, _IST)
+        session_done = (asof_dt.hour, asof_dt.minute) >= _SESSION_END
+        if asof_dt.date() == order[-1] and not session_done and len(order) > 1:
+            order = order[:-1]
+        elif asof_dt.date() == order[-1] and not session_done and len(order) == 1:
+            return []
+    out = []
+    for day in order:
+        row = dict(buckets[day])
+        row["time"] = datetime(day.year, day.month, day.day, 15, 30, tzinfo=_IST).timestamp()
+        out.append(row)
+    return out
+
+
+def _gamma_move_watch_from_bars(history: list, close: float, *,
+                                symbol: str = "",
+                                cfg: Any = None) -> Optional[Dict[str, Any]]:
+    """Daily level+regime gate on a stock. Never STRONG — no option OI tape."""
     from app.engines.gamma_move import (
         Candle, GammaMoveConfig, find_levels, live_levels, option_type_for,
         regime_allows, regime_of,
     )
-    from app.services.gamma_move import get_config
-    try:
-        cfg = get_config()
-    except Exception:
-        cfg = GammaMoveConfig()
+    if cfg is None:
+        try:
+            from app.services.gamma_move import get_config
+            cfg = get_config()
+        except Exception:
+            cfg = GammaMoveConfig()
     if not cfg.enabled:
         return None
+    if symbol and not _gamma_move_in_universe(symbol, cfg):
+        return None
+    daily = _collapse_to_daily(history)
+    need = cfg.pivot_lookback * 2 + 10
+    if len(daily) < need:
+        return None
     candles: list = []
-    for b in history:
-        try:
-            ts = float(b.get("time") or b.get("timestamp") or 0)
-            ts_ms = int(ts * 1000) if ts < 10_000_000_000 else int(ts)
-        except (TypeError, ValueError):
-            ts_ms = 0
+    for b in daily:
+        ts = _bar_epoch_seconds(b) or 0.0
+        ts_ms = int(ts * 1000)
         candles.append(Candle(
             ts_ms=ts_ms,
             open=float(b.get("open") or 0),
@@ -556,8 +635,6 @@ def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[st
             close=float(b.get("close") or 0),
             volume=int(float(b.get("volume") or 0)),
         ))
-    if len(candles) < cfg.pivot_lookback * 2 + 10:
-        return None
     levels = find_levels(
         candles,
         pivot_lookback=cfg.pivot_lookback,
@@ -568,6 +645,7 @@ def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[st
     near = live_levels(levels, close, cfg.level_proximity_pct)
     if not near:
         return None
+    regime = "unknown"
     if cfg.regime_enabled:
         regime = regime_of(candles, cfg)
         near = [lv for lv in near if regime_allows(regime, option_type_for(lv), cfg)]  # type: ignore[arg-type]
@@ -578,50 +656,53 @@ def _gamma_move_watch_from_bars(history: list, close: float) -> Optional[Dict[st
         "strategy": "gamma_move",
         "direction": "BULLISH" if want == "CE" else "BEARISH",
         "strength": "WATCHING",
+        "level_price": float(near[0].price),
+        "level_kind": near[0].kind,
+        "level_touches": int(near[0].touches),
+        "regime": regime,
     }
 
 
 def _gamma_move_candidate(ev: "SimSignalEvent", sim_date: str) -> Dict[str, Any]:
     opt = ev.opt_type or ("CE" if ev.direction.upper() in ("BULLISH", "LONG", "BUY") else "PE")
-    kind = "resistance" if opt == "CE" else "support"
-    strike = float(ev.strike or ev.entry or 0)
+    kind = ev.level_kind or ("resistance" if opt == "CE" else "support")
     spot = float(ev.spot or ev.entry or 0)
-    premium = float(ev.premium_entry or 0)
-    dist = abs(spot - strike) / strike * 100.0 if strike else 0.0
-    symbol = ev.contract or f"{ev.instrument}{opt}"
+    level_px = float(ev.level_price) if ev.level_price else spot
+    dist = abs(spot - level_px) / level_px * 100.0 if level_px else 0.0
+    underlying = ev.instrument
     return {
-        "id": f"{symbol}@{kind}:{int(strike)}",
+        "id": f"{underlying}@{kind}:{int(level_px)}",
         "state": "watching",
         "at_ms": ev.timestamp_ms,
-        "underlying": ev.instrument,
+        "underlying": underlying,
         "regime": "up" if opt == "CE" else "down",
         "reason": "replay has no option open-interest tape — trigger cannot fire",
         "exit_reason": None,
         "entry_day": sim_date,
         "instrument": {
-            "instrument_id": symbol,
-            "tradingsymbol": symbol,
+            "instrument_id": underlying,
+            "tradingsymbol": underlying,
             "exchange": "NFO",
             "option_type": opt,
-            "strike": strike,
-            "expiry": sim_date,
-            "lot_size": 25 if ev.instrument.upper() in (
-                "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX") else 500,
+            "strike": None,
+            "expiry": None,
+            "lot_size": None,
             "tick_size": 0.05,
         },
         "level": {
-            "price": strike, "kind": kind, "touches": 2, "distance_pct": round(dist, 2),
+            "price": level_px, "kind": kind,
+            "touches": ev.level_touches or 0, "distance_pct": round(dist, 2),
         },
         "oi": 0,
-        "days_to_expiry": 0,
+        "days_to_expiry": None,
         "spot": spot,
         "metrics": None,
         "levels": {
-            "ltp": premium or None,
-            "entry": premium or None,
-            "stop": ev.premium_sl,
+            "ltp": None,
+            "entry": None,
+            "stop": None,
             "trail": None,
-            "target": ev.premium_target,
+            "target": None,
             "exit": None,
         },
         "sizing": {"lots": None, "quantity": None, "at_risk_inr": None, "deployed_inr": None},
@@ -2635,9 +2716,10 @@ class SimulationRunner:
         names = sorted({ev.instrument for ev in events})
         blockers = [
             "replay has no 15-minute option open-interest tape — the trigger cannot fire",
+            "levels are confirmed daily swings on stocks only — a short 5-minute tape emits nothing",
         ]
         if not events:
-            blockers.append("no underlying is inside a confirmed level on this replay tape")
+            blockers.append("no underlying is inside a confirmed daily level on this replay tape")
         warnings.append(
             "not validated: simulation shows the level filter only. "
             "Do not read watching rows as entries."
@@ -2981,12 +3063,19 @@ class SimulationRunner:
                     "strength": "STRONG",
                 })
 
-        # 4b. Gamma Move: shipped level+regime gates on the underlying.
+        # 4b. Gamma Move: shipped daily level+regime gates on a stock.
         # The 15m OI trigger cannot run on this tape, so strength stays WATCHING.
         try:
             asof = _asof_symbol_bars(getattr(self, "_candles", None) or [],
                                      sym, bar.get("time"))
-            gm = _gamma_move_watch_from_bars(asof or history, close)
+            tape = asof or history
+            warmup = list(self._bar_history.get(sym) or [])
+            if warmup and tape is not warmup:
+                seen = {(_bar_epoch_seconds(b), b.get("open"), b.get("close")) for b in tape}
+                merged = [b for b in warmup
+                          if (_bar_epoch_seconds(b), b.get("open"), b.get("close")) not in seen]
+                tape = merged + list(tape)
+            gm = _gamma_move_watch_from_bars(tape, close, symbol=sym)
             if gm:
                 signals_to_fire.append(gm)
         except Exception as exc:
@@ -3112,6 +3201,7 @@ class SimulationRunner:
 
             leg = _option_contract(sym, close, direction, self._config, sim_date=bar_dt.strftime("%Y-%m-%d"))
             is_multi = getattr(self, "_is_multi_day", False)
+            gm_watch = strategy == "gamma_move"
             event = SimSignalEvent(
                 time_iso=bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi else bar_dt.strftime("%H:%M:%S"),
                 timestamp_ms=int(bar_dt.timestamp() * 1000),
@@ -3122,17 +3212,20 @@ class SimulationRunner:
                 entry=round(close, 2),
                 stop=stop,
                 target=target,
-                contract=leg["contract"],
+                contract=None if gm_watch else leg["contract"],
                 spot=round(close, 2),
-                strike=leg["strike"],
-                opt_type=leg["opt_type"],
+                strike=None if gm_watch else leg["strike"],
+                opt_type=sdef.get("opt_type") or leg["opt_type"],
                 # The premium ladder, in option terms rather than underlying
                 # terms. Declared on `main` but never populated there; filling
                 # it is the difference between a field and a promise.
-                premium_entry=leg["premium"],
-                premium_sl=_premium_at(leg, close, stop),
-                premium_target=_premium_at(leg, close, target),
+                premium_entry=None if gm_watch else leg["premium"],
+                premium_sl=None if gm_watch else _premium_at(leg, close, stop),
+                premium_target=None if gm_watch else _premium_at(leg, close, target),
                 scan_origin="adaptive_edge" if strategy == "adaptive_edge" else None,
+                level_price=sdef.get("level_price"),
+                level_kind=sdef.get("level_kind"),
+                level_touches=sdef.get("level_touches"),
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)

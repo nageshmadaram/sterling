@@ -6,6 +6,7 @@ evidence about the shipped code rather than about a parallel implementation.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -18,6 +19,18 @@ from app.services.gamma_move import get_config, ist_today, nfo_dump, to_instrume
 
 log = get_logger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def cfg_for_unscanned_chain(cfg: GammaMoveConfig) -> GammaMoveConfig:
+    """Wall gate needs a full as-of chain. Without one, skip it and say so.
+
+    ``is_chain_wall(..., chain_oi_max=None, required=True)`` returns True, so
+    leaving the flag on would silently pass every strike. Study replay already
+    labels this; live ``replay_symbol`` must do the same.
+    """
+    if cfg.require_chain_max_oi:
+        return replace(cfg, require_chain_max_oi=False)
+    return cfg
 
 
 async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
@@ -85,6 +98,7 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
     cand = StrikeCandidate(underlying=underlying, level=near[0], instrument=inst,
                            oi=0, days_to_expiry=dte, spot=spot,
                            premium=bars[-1].close)
+    cfg = cfg_for_unscanned_chain(cfg)
     regime = regime_of(spot_candles, cfg)
     regimes = {datetime.fromtimestamp(b.ts_ms / 1000, _IST).strftime("%Y-%m-%d"): regime
                for b in bars}
@@ -100,6 +114,6 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
         "the level is today's, held fixed across the window — a clean walk-forward "
         "would rediscover it bar by bar")
     result["caveats"].append(
-        "chain_oi_max is unset on this path, so the wall gate is skipped unless "
-        "the live scanner already filled it")
+        "wall_gate=skipped — no as-of full-chain OI; require_chain_max_oi was "
+        "turned off rather than silently passing every strike")
     return result
