@@ -25,8 +25,9 @@ def test_get_publishes_config_defaults_and_vocabularies():
     assert set(payload["config"]) == set(AdaptiveEdgeConfig().as_dict())
     assert payload["defaults"] == AdaptiveEdgeConfig().as_dict()
     for name in ("decision_timeframe", "data_source", "exit_policy",
-                 "sizing_mode", "stop_mode", "expiry_selection"):
+                 "sizing_mode", "stop_mode", "expiry_selection", "strategy_version"):
         assert payload["vocabularies"][name], f"{name} vocabulary must be published"
+    assert payload["config"]["strategy_version"] == "v2_hardened"
 
 
 def test_get_publishes_the_expiry_window_controls():
@@ -58,6 +59,23 @@ def test_put_refuses_an_unknown_setting():
 
 def test_put_refuses_an_empty_change():
     assert _client().put("/api/v1/config/adaptive-edge", json={}).status_code == 422
+
+
+def test_put_strategy_version_toggle():
+    client = _client()
+    res = client.put("/api/v1/config/adaptive-edge", json={"strategy_version": "v1_baseline"})
+    assert res.status_code == 200
+    assert res.json()["config"]["strategy_version"] == "v1_baseline"
+    # Switch back to v2_hardened
+    res2 = client.put("/api/v1/config/adaptive-edge", json={"strategy_version": "v2_hardened"})
+    assert res2.status_code == 200
+    assert res2.json()["config"]["strategy_version"] == "v2_hardened"
+
+
+def test_put_refuses_invalid_strategy_version():
+    client = _client()
+    res = client.put("/api/v1/config/adaptive-edge", json={"strategy_version": "invalid_v99"})
+    assert res.status_code == 422
 
 
 def test_put_refuses_a_config_that_would_disable_the_strategy_silently():

@@ -84,3 +84,26 @@ def test_run_unified_backtest_endpoint_truedata_source():
     assert "equity_curve" in data
     assert "trades" in data
     assert data["starting_capital"] == 150000.0
+
+
+def test_run_adaptive_edge_compare_endpoint():
+    client = get_client()
+    payload = {
+        "strategy": "adaptive_edge",
+        "symbol": "NIFTY 50",
+        "data_source": "kite",
+        "timeframe": "5m",
+        "lookback_days": 10,
+        "starting_capital": 150000.0,
+        "num_lots": 2,
+    }
+    res = client.post("/api/v1/backtest/adaptive-edge/compare", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert "v1" in data
+    assert "v2" in data
+    assert "comparison" in data
+    cmp = data["comparison"]
+    for key in ("net_pnl_delta_inr", "win_rate_delta_pct", "profit_factor_v1", "profit_factor_v2", "max_drawdown_reduction_pct", "toxic_trades_avoided"):
+        assert key in cmp
+

@@ -175,6 +175,8 @@ def resolve_exit(
         candidates.append((trail_j, f"trail breach ({side} {level:.2f})"))
     if time_j is not None:
         candidates.append((time_j, "time decay exit (momentum stalled > 18 bars)"))
+    if getattr(cfg, "time_stop_bars", 0) > 0 and (last_idx - entry_i) >= cfg.time_stop_bars:
+        candidates.append((entry_i + cfg.time_stop_bars, f"time stop exit ({cfg.time_stop_bars} bars)"))
 
     if not candidates:
         return None, ""

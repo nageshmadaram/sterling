@@ -20,6 +20,116 @@ function InertNote({ replacement }: { replacement: string }) {
   );
 }
 
+function EngineVersionSection() {
+  const { data } = useAdaptiveEdgeEngineConfig();
+  const save = useSetAdaptiveEdgeEngineConfig();
+  const [draft, setDraft] = React.useState<Record<string, unknown> | null>(null);
+
+  React.useEffect(() => {
+    if (data?.config && draft === null) setDraft({ ...data.config });
+  }, [data, draft]);
+
+  if (!data || !draft) return null;
+
+  const activeVersion = String(draft.strategy_version ?? 'v2_hardened');
+  const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
+  const setVersion = (v: 'v1_baseline' | 'v2_hardened') => setDraft({ ...draft, strategy_version: v });
+
+  return (
+    <Section
+      title="Strategy Engine Version"
+      description="Select between the V1 Legacy baseline model and the V2 Production-Hardened institutional model."
+      summary={activeVersion === 'v2_hardened' ? 'V2 Production-Hardened (Active)' : 'V1 Legacy Baseline (Active)'}
+      defaultOpen
+      persistKey="ae-engine-version"
+    >
+      <div style={{ display: 'flex', gap: 10, padding: '6px 0 12px' }}>
+        <button
+          type="button"
+          onClick={() => setVersion('v2_hardened')}
+          style={{
+            flex: 1,
+            padding: '10px 14px',
+            borderRadius: 7,
+            border: `1.5px solid ${activeVersion === 'v2_hardened' ? 'var(--k-brand)' : 'var(--k-border)'}`,
+            background: activeVersion === 'v2_hardened' ? 'var(--k-tint-warm-2, rgba(255, 87, 34, 0.08))' : 'var(--k-bg)',
+            color: activeVersion === 'v2_hardened' ? 'var(--k-brand)' : 'var(--k-text)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>V2 Production-Hardened</span>
+            <span
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: 'var(--k-green-bg, #e8f5e9)',
+                color: 'var(--k-green, #2e7d32)',
+                fontWeight: 750,
+              }}
+            >
+              RECOMMENDED
+            </span>
+          </div>
+          <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
+            09:15–09:28 morning lockout · 50/50 scaled 1.5R exit + BE+ ratchet · 4-bar stagnation stop · wick rejection filter · passive limit pegging.
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setVersion('v1_baseline')}
+          style={{
+            flex: 1,
+            padding: '10px 14px',
+            borderRadius: 7,
+            border: `1.5px solid ${activeVersion === 'v1_baseline' ? 'var(--k-brand)' : 'var(--k-border)'}`,
+            background: activeVersion === 'v1_baseline' ? 'var(--k-tint-warm-2, rgba(255, 87, 34, 0.08))' : 'var(--k-bg)',
+            color: activeVersion === 'v1_baseline' ? 'var(--k-brand)' : 'var(--k-text)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: 13 }}>V1 Legacy Baseline</span>
+            <span
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 4,
+                background: 'var(--k-surface-sunken, #f5f5f5)',
+                color: MUTED,
+                fontWeight: 600,
+              }}
+            >
+              LEGACY
+            </span>
+          </div>
+          <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
+            Standard volume surge · all-or-nothing single targets · unrestricted morning hours · standard market slippage.
+          </div>
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, paddingTop: 6 }}>
+        <button
+          type="button"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate(draft, { onSuccess: () => setDraft(null) })}
+          style={{ ...inputStyle, cursor: dirty ? 'pointer' : 'default', opacity: dirty ? 1 : 0.5, width: 'auto', padding: '6px 14px' }}
+        >
+          {save.isPending ? 'Saving…' : 'Apply Version'}
+        </button>
+        {dirty ? <span style={{ color: MUTED, fontSize: 11.5, alignSelf: 'center' }}>Unsaved version change</span> : null}
+      </div>
+    </Section>
+  );
+}
+
 function EngineRiskSection() {
   const { data } = useAdaptiveEdgeEngineConfig();
   const save = useSetAdaptiveEdgeEngineConfig();
@@ -301,6 +411,7 @@ export function AdaptiveEdgeSettingsPanel() {
         <InertNote replacement=" Use Risk and session for the live stop and target." />
           </Section>
 
+        <EngineVersionSection />
         <EngineRiskSection />
 
         <Section

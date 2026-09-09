@@ -166,4 +166,16 @@ describe('GammaMoveBoard', () => {
     render(<GammaMoveBoard nowMs={Date.now()} />);
     expect(screen.getByText(/kite is down/)).toBeTruthy();
   });
+
+  it('renders gracefully when config is undefined in snapshot', () => {
+    snap.data = {
+      universe: { underlyings: 150 },
+      mode: { is_paper: true, auto_execute: false },
+      candidates: [],
+      positions: [],
+      blockers: [],
+    };
+    render(<GammaMoveBoard nowMs={Date.now()} />);
+    expect(screen.getByText(/150 names/)).toBeTruthy();
+  });
 });

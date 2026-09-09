@@ -26,6 +26,7 @@ from .config import (
     PARAMETER_PROVENANCE,
     SIZING_MODES,
     STOP_MODES,
+    STRATEGY_VERSIONS,
 )
 
 from .execution_ordering import (

@@ -117,6 +117,12 @@ def _account_daily_pnl_inr(uid:str|None)->float|None:
 
 def daily_loss_state(positions=None, *, uid:str|None=None):
     pnl=_account_daily_pnl_inr(uid) if uid else daily_realized_pnl_inr(positions or [])
+    pnl_pos = daily_realized_pnl_inr(positions or [])
+    if uid:
+        pnl_acct = _account_daily_pnl_inr(uid)
+        pnl = min(pnl_acct, pnl_pos) if pnl_acct is not None else pnl_pos
+    else:
+        pnl = pnl_pos
     # The account's own thresholds when it has any, the process default otherwise.
     # Read per call rather than cached: this runs a few times a minute at most, and
     # a threshold someone has just tightened has to bind on the next order, not

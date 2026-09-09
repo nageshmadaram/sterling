@@ -99,6 +99,7 @@ function applyStatus(next: ReplayStatus, wasDelta: boolean) {
     state: next.state,
     config: next.config,
     current_time_iso: next.current_time_iso,
+    current_date: next.current_date ?? (next.current_time_iso?.includes('T') ? next.current_time_iso.split('T')[0] : store.status.current_date),
     progress_pct: next.progress_pct,
     bars_played: next.bars_played,
     bars_total: next.bars_total,
@@ -172,8 +173,13 @@ export function useReplayStream(enabled: boolean): void {
      */
     const armWatchdog = () => {
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      const state = useReplayStore.getState().status.state;
+      if (state === 'paused' || state === 'idle') return;
+
       watchdogRef.current = setTimeout(() => {
         if (stoppedRef.current) return;
+        const currState = useReplayStore.getState().status.state;
+        if (currState === 'paused' || currState === 'idle') return;
         closeStream();
         void poll();
       }, SSE_SILENCE_MS);
@@ -247,8 +253,10 @@ export function useReplayStream(enabled: boolean): void {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data);
           const store = useReplayStore.getState();
+          const curDate = d.cur_date ?? (d.t && typeof d.t === 'string' && d.t.includes('T') ? d.t.split('T')[0] : store.status.current_date);
           store.applyFrame({
             current_time_iso: d.t ?? store.status.current_time_iso,
+            current_date: curDate,
             progress_pct: d.pct ?? store.status.progress_pct,
             bars_played: d.bars_played ?? store.status.bars_played,
             bars_total: d.bars_total ?? store.status.bars_total,
@@ -331,13 +339,33 @@ export function useReplayStream(enabled: boolean): void {
       void poll();
     };
 
+    let unsub: (() => void) | null = null;
     if (enabled) {
       void boot();
       document.addEventListener('visibilitychange', onVisibility);
+      unsub = useReplayStore.subscribe((curr, prev) => {
+        const curState = curr.status.state;
+        const prevState = prev.status.state;
+        if (curState !== prevState) {
+          if (curState === 'running') {
+            if (!esRef.current && curr.status.capabilities?.stream) {
+              openStream();
+            } else {
+              armWatchdog();
+            }
+          } else if (curState === 'paused' || curState === 'idle') {
+            if (watchdogRef.current) {
+              clearTimeout(watchdogRef.current);
+              watchdogRef.current = null;
+            }
+          }
+        }
+      });
     }
 
     return () => {
       stoppedRef.current = true;
+      if (unsub) unsub();
       clearTimer();
       closeStream();
       document.removeEventListener('visibilitychange', onVisibility);

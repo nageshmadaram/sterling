@@ -156,8 +156,21 @@ function contractSection(row: OIWallFlowSignalRow): BoardSection {
 }
 
 function toSignal(row: OIWallFlowSignalRow, position?: OIWallFlowPositionRow): BoardSignal {
-  const lv = row.levels;
+  const lv = row.levels || {
+    ltp: (row as any).ltp ?? null,
+    entry: (row as any).entry_premium ?? (row as any).entry ?? null,
+    stop: (row as any).stop_premium ?? (row as any).stop ?? null,
+    trail: null,
+    target: (row as any).target_premium ?? (row as any).target ?? null,
+    exit: (row as any).exit ?? null,
+  };
   const plan = row.plan;
+  const sz = row.sizing || {
+    lots: (row as any).lots ?? null,
+    quantity: (row as any).quantity ?? null,
+    at_risk_inr: (row as any).at_risk_inr ?? null,
+    deployed_inr: (row as any).deployed_inr ?? null,
+  };
   return {
     id: row.id,
     engine: 'oi_wall_flow',
@@ -167,18 +180,18 @@ function toSignal(row: OIWallFlowSignalRow, position?: OIWallFlowPositionRow): B
     status: STATE_TO_STATUS[row.state] ?? 'watching',
     atMs: row.at_ms || null,
     levels: {
-      ltp: price(lv.ltp),
-      entry: price(position?.effective_entry ?? position?.entry ?? lv.entry),
-      stop: price(position?.stop ?? lv.stop),
+      ltp: price(lv?.ltp),
+      entry: price(position?.effective_entry ?? position?.entry ?? lv?.entry),
+      stop: price(position?.stop ?? lv?.stop),
       trail: null,
-      target: price(position?.target ?? lv.target),
-      exit: price(lv.exit),
+      target: price(position?.target ?? lv?.target),
+      exit: price(lv?.exit),
     },
     sizing: {
-      lots: position?.lots ?? row.sizing.lots ?? null,
-      quantity: position?.quantity ?? row.sizing.quantity ?? null,
-      atRiskInr: row.sizing.at_risk_inr ?? null,
-      deployedInr: row.sizing.deployed_inr ?? null,
+      lots: position?.lots ?? sz?.lots ?? null,
+      quantity: position?.quantity ?? sz?.quantity ?? null,
+      atRiskInr: sz?.at_risk_inr ?? null,
+      deployedInr: sz?.deployed_inr ?? null,
     },
     score: row.bias ? Math.min(100, Math.abs(row.bias.score) * 10) : null,
     reason: row.reason ?? plan?.reason ?? null,

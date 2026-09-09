@@ -975,6 +975,30 @@ async def clear_daily_loss(user: UserContext = Depends(get_current_user)):
     return _daily_loss_payload(user.user_id)
 
 
+@router.get("/risk/retries")
+async def get_retries(user: UserContext = Depends(get_current_user)):
+    """Inspect failed orders enqueued for retry."""
+    return [
+        {
+            "id": r.id,
+            "payload": r.payload,
+            "attempt": r.attempt,
+            "max_attempts": r.max_attempts,
+            "last_error": r.last_error,
+            "enqueued_ms": r.enqueued_ms,
+            "poison": r.poison,
+        }
+        for r in live_safety.list_retries(include_poison=True)
+    ]
+
+
+@router.delete("/risk/retries")
+async def clear_retries(user: UserContext = Depends(get_current_user)):
+    """Clear all items from the retry queue."""
+    live_safety.clear_retries()
+    return {"cleared": True}
+
+
 # ─── Orders ───────────────────────────────────────────────────────────────────
 @router.get("/orders")
 async def orders(user: UserContext = Depends(get_current_user)):
@@ -1000,11 +1024,12 @@ async def order_trades(order_id: str, user: UserContext = Depends(get_current_us
 def _safety_gate(user: UserContext, idem_parts) -> str:
     """Kill-switch / daily-loss / idempotency gate. Returns the idempotency key."""
     idem_key = live_safety.make_idempotency_key(*idem_parts)
-    # Kite uses INR risk controls; kill-switch and idempotency always apply.
+    # Kite uses INR risk controls; kill-switch, daily-loss and idempotency always apply.
     decision = live_safety.assert_safe_to_trade(
         positions=[],
         idempotency_key=idem_key,
-        check_daily_loss=False,
+        check_daily_loss=True,
+        uid=user.user_id,
     )
     if not decision.allowed:
         if decision.code == "duplicate_order":

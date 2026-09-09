@@ -30,9 +30,17 @@ RESOLUTION_SECONDS: Dict[str, int] = {
 }
 
 
+def _get_connection(timeout: float = 30.0) -> sqlite3.Connection:
+    conn = sqlite3.connect(_DB_PATH, timeout=timeout)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
 def init_ohlcv_table() -> None:
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS ohlcv (
                 symbol     TEXT    NOT NULL,
@@ -51,18 +59,21 @@ def init_ohlcv_table() -> None:
             "ON ohlcv(symbol, resolution, time)"
         )
         conn.commit()
-        conn.close()
         log.info("OHLCV table ready: %s", _DB_PATH)
     except Exception as exc:
         log.warning("OHLCV table init failed: %s", exc)
+    finally:
+        if conn:
+            conn.close()
 
 
 def upsert_candles(symbol: str, resolution: str, candles: List[Dict]) -> int:
     """Bulk-upsert candles. Returns number of rows written."""
     if not candles:
         return 0
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         conn.executemany(
             "INSERT OR REPLACE INTO ohlcv "
             "(symbol, resolution, time, open, high, low, close, volume) "
@@ -80,11 +91,13 @@ def upsert_candles(symbol: str, resolution: str, candles: List[Dict]) -> int:
         )
         conn.commit()
         written = conn.total_changes
-        conn.close()
         return written
     except Exception as exc:
         log.warning("OHLCV upsert failed [%s/%s]: %s", symbol, resolution, exc)
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 
 INDEX_ALIASES: Dict[str, str] = {
@@ -113,44 +126,85 @@ def get_candles(
     the store — which can all sit after a replay clock.
     """
     sym_u = symbol.upper()
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         conn.row_factory = sqlite3.Row
-
-        def _query(name: str):
-            where = ["symbol=?", "resolution=?"]
-            args: list = [name, resolution]
-            if since is not None:
-                where.append("time>=?")
-                args.append(since)
-            if until is not None:
-                where.append("time<=?")
-                args.append(until)
-            args.append(limit)
-            return conn.execute(
+        if since is not None and until is not None:
+            rows = conn.execute(
                 "SELECT time, open, high, low, close, volume "
-                f"FROM ohlcv WHERE {' AND '.join(where)} "
+                "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? AND time<? "
                 "ORDER BY time DESC LIMIT ?",
-                args,
+                (sym_u, resolution, since, until, limit),
             ).fetchall()
-
-        rows = _query(sym_u)
+        elif until is not None:
+            rows = conn.execute(
+                "SELECT time, open, high, low, close, volume "
+                "FROM ohlcv WHERE symbol=? AND resolution=? AND time<? "
+                "ORDER BY time DESC LIMIT ?",
+                (sym_u, resolution, until, limit),
+            ).fetchall()
+        elif since is not None:
+            rows = conn.execute(
+                "SELECT time, open, high, low, close, volume "
+                "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
+                "ORDER BY time DESC LIMIT ?",
+                (sym_u, resolution, since, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT time, open, high, low, close, volume "
+                "FROM ohlcv WHERE symbol=? AND resolution=? "
+                "ORDER BY time DESC LIMIT ?",
+                (sym_u, resolution, limit),
+            ).fetchall()
         if not rows and sym_u in INDEX_ALIASES:
-            rows = _query(INDEX_ALIASES[sym_u])
-        conn.close()
+            alias = INDEX_ALIASES[sym_u]
+            if since is not None and until is not None:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? AND time<? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, since, until, limit),
+                ).fetchall()
+            elif until is not None:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? AND time<? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, until, limit),
+                ).fetchall()
+            elif since is not None:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? AND time>=? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, since, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT time, open, high, low, close, volume "
+                    "FROM ohlcv WHERE symbol=? AND resolution=? "
+                    "ORDER BY time DESC LIMIT ?",
+                    (alias, resolution, limit),
+                ).fetchall()
         result = [dict(r) for r in rows]
         result.reverse()
         return result
     except Exception as exc:
         log.warning("OHLCV get failed: %s", exc)
         return []
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_latest_time(symbol: str, resolution: str) -> Optional[int]:
     """Unix timestamp (seconds) of the newest stored candle, or None."""
     sym_u = symbol.upper()
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         row = conn.execute(
             "SELECT MAX(time) FROM ohlcv WHERE symbol=? AND resolution=?",
             (sym_u, resolution),
@@ -160,16 +214,19 @@ def get_latest_time(symbol: str, resolution: str) -> Optional[int]:
                 "SELECT MAX(time) FROM ohlcv WHERE symbol=? AND resolution=?",
                 (INDEX_ALIASES[sym_u], resolution),
             ).fetchone()
-        conn.close()
         return int(row[0]) if row and row[0] is not None else None
     except Exception:
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_earliest_time(symbol: str, resolution: str) -> Optional[int]:
     sym_u = symbol.upper()
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         row = conn.execute(
             "SELECT MIN(time) FROM ohlcv WHERE symbol=? AND resolution=?",
             (sym_u, resolution),
@@ -179,10 +236,12 @@ def get_earliest_time(symbol: str, resolution: str) -> Optional[int]:
                 "SELECT MIN(time) FROM ohlcv WHERE symbol=? AND resolution=?",
                 (INDEX_ALIASES[sym_u], resolution),
             ).fetchone()
-        conn.close()
         return int(row[0]) if row and row[0] is not None else None
     except Exception:
         return None
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_symbol_coverage(symbol: str, resolution: str) -> Optional[Dict]:
@@ -195,8 +254,9 @@ def get_symbol_coverage(symbol: str, resolution: str) -> Optional[Dict]:
     index-served, effectively instant.
     """
     sym_u = symbol.upper()
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         row = conn.execute(
             "SELECT COUNT(*), MIN(time), MAX(time) FROM ohlcv "
             "WHERE symbol = ? AND resolution = ?",
@@ -208,30 +268,32 @@ def get_symbol_coverage(symbol: str, resolution: str) -> Optional[Dict]:
                 "WHERE symbol = ? AND resolution = ?",
                 (INDEX_ALIASES[sym_u], resolution),
             ).fetchone()
-        conn.close()
+        if not row or not row[0]:
+            return None
+        return {
+            "symbol": symbol,
+            "resolution": resolution,
+            "count": row[0],
+            "earliest": row[1],
+            "latest": row[2],
+        }
     except Exception:
         return None
-    if not row or not row[0]:
-        return None
-    return {
-        "symbol": symbol,
-        "resolution": resolution,
-        "count": row[0],
-        "earliest": row[1],
-        "latest": row[2],
-    }
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_status() -> List[Dict]:
     """Coverage summary — count, earliest and latest per symbol/resolution."""
+    conn = None
     try:
-        conn = sqlite3.connect(_DB_PATH)
+        conn = _get_connection()
         rows = conn.execute(
             "SELECT symbol, resolution, COUNT(*) as count, "
             "MIN(time) as earliest, MAX(time) as latest "
             "FROM ohlcv GROUP BY symbol, resolution ORDER BY symbol, resolution"
         ).fetchall()
-        conn.close()
         return [
             {
                 "symbol": r[0], "resolution": r[1],
@@ -241,3 +303,6 @@ def get_status() -> List[Dict]:
         ]
     except Exception:
         return []
+    finally:
+        if conn:
+            conn.close()

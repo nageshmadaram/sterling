@@ -107,6 +107,37 @@ def test_place_order_blocked_by_kill_switch(client):
     assert r.json()["detail"]["code"] == "kill_switch"
 
 
+def test_place_order_blocked_by_daily_loss(client, monkeypatch):
+    _add_account(client, paper=True)
+    cfg = live_safety.DailyLossConfig(enabled=True, soft_warn_inr=-500.0, hard_halt_inr=-1000.0)
+    live_safety.configure_daily_loss(cfg, uid="default")
+    from app.services.kite_engine import state
+    monkeypatch.setattr(state, "daily_realized_pnl_strict", lambda uid: -1500.0)
+    r = client.post("/api/v1/kite/orders", json={
+        "tradingsymbol": "INFY", "exchange": "NSE", "transaction_type": "BUY",
+        "quantity": 1, "order_type": "MARKET", "product": "CNC",
+    })
+    assert r.status_code == 423
+    assert r.json()["detail"]["code"] == "daily_loss_halt"
+    live_safety.clear_daily_loss("default")
+
+
+def test_get_and_clear_safety_retries(client):
+    live_safety.clear_retries()
+    item = live_safety.enqueue_retry({"symbol": "NIFTY26AUG24500CE"}, "rate_limited")
+    r = client.get("/api/v1/kite/risk/retries")
+    assert r.status_code == 200
+    retries = r.json()
+    assert len(retries) == 1
+    assert retries[0]["id"] == item.id
+    assert retries[0]["last_error"] == "rate_limited"
+
+    r_del = client.delete("/api/v1/kite/risk/retries")
+    assert r_del.status_code == 200
+    assert r_del.json()["cleared"] is True
+    assert client.get("/api/v1/kite/risk/retries").json() == []
+
+
 def test_paper_holdings_and_positions_empty(client):
     _add_account(client, paper=True)
     assert client.get("/api/v1/kite/holdings").json() == []

@@ -95,7 +95,9 @@ def strategy_config_for(cfg: AdaptiveEdgeConfig, *, symbol: str,
     number.
     """
     stop_points = max(1.0, spot * (cfg.stop_percent / 100.0)) if spot > 0 else cfg.stop_percent
+    strat_ver = getattr(cfg, "strategy_version", "v2_hardened") or "v2_hardened"
     return StrategyConfig(
+        strategy_version=str(strat_ver),
         symbol=symbol,
         tick_size=0.05,
         execution_cost=max(0.0, cfg.fee_rate * max(spot, 1.0)),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, Tuple
+from typing import Literal, Optional, Tuple
 
 from app.engines.common.exit_counter import ExitMode  # shared for unification with directional
 
@@ -88,6 +89,12 @@ class SterlingKiteEngineConfig:
     max_contract_staleness_bars: int = 0
     #: Enforce a 3-day (18 hourly bars) time-decay exit on stock options if momentum stalls
     theta_time_stop: bool = True
+    #: Hard time-stop cap in bars (e.g. 48 for ~8 trading days on 1H). 0 = off.
+    time_stop_bars: int = 0
+    #: Minimum ADX threshold to allow entry (e.g. 25.0). None = off.
+    adx_min: Optional[float] = None
+    #: Minimum ATR percentile threshold (e.g. 50.0). None = off.
+    atr_pct_min: Optional[float] = None
 
     @property
     def warmup(self) -> int:

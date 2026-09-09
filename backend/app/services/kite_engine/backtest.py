@@ -200,7 +200,7 @@ def _stats_from_trades(trades: List[BacktestTrade], starting_capital: float) -> 
 
 
 def _exit_bar(r, entry_i: int, want: int, longs, shorts, exit_mode: str, n: int,
-              cfg: SterlingKiteEngineConfig, trail_target: str) -> tuple:
+              cfg: SterlingKiteEngineConfig, trail_target: str, is_stock: bool = False) -> tuple:
     """First exit bar after ``entry_i``, using the SAME rule the live engine runs.
 
     Delegates to ``sterling_kite_engine.exits.resolve_exit`` so the replay cannot drift
@@ -212,7 +212,7 @@ def _exit_bar(r, entry_i: int, want: int, longs, shorts, exit_mode: str, n: int,
     """
     effective = replace(cfg, exit_mode=exit_mode, trail_target=trail_target)
     direction = "long" if want == 1 else "short"
-    exit_i, reason = exits.resolve_exit(r, direction, entry_i, n - 1, effective, longs, shorts)
+    exit_i, reason = exits.resolve_exit(r, direction, entry_i, n - 1, effective, longs, shorts, is_stock=is_stock)
     if exit_i is None:
         return n - 1, "series end"
     return int(exit_i), reason
@@ -234,6 +234,7 @@ def replay_premium_series(
     direction_label: str = "long",
     side: str = "long",
     entry_from: Optional[str] = None,
+    is_stock: bool = False,
 ) -> BacktestRun:
     """Replay the ST on a PREMIUM series (the 'real' mode, and the inner loop the
     'synthetic' mode reuses on its modeled premium series). BUY on a fresh up-
@@ -293,7 +294,7 @@ def replay_premium_series(
         if entry_i >= n:
             break
         entry_px = float(o[entry_i])
-        exit_signal_i, reason = _exit_bar(r, signal_i, want, longs, shorts, exit_mode, n, cfg, trail_target)
+        exit_signal_i, reason = _exit_bar(r, signal_i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock)
         if reason.startswith("trail breach"):
             exit_i = exit_signal_i
             # Gap-aware stop: resting stop fills no better than the opening gap.
@@ -364,6 +365,7 @@ def run_synthetic(
     qty: int,
     costs: OptionCosts,
     starting_capital: float,
+    is_stock: bool = False,
 ) -> BacktestRun:
     """Synthetic mode: ST on the UNDERLYING decides direction/entries; the option
     premium each bar is modeled with BS. For each entry we pick an ATM(+offset)
@@ -396,7 +398,7 @@ def run_synthetic(
         strike = round(spot0 * (1.0 + sign * moneyness_offset_pct / 100.0), 0)
         # exit bar = red-count over the 3 STs (the live exit_mode rule)
         want = 1 if is_long else -1
-        exit_i, reason = _exit_bar(r, i, want, longs, shorts, exit_mode, n, cfg, trail_target)
+        exit_i, reason = _exit_bar(r, i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock)
         # model premium at entry and exit
         held = exit_i - i
         entry_dte = dte_days

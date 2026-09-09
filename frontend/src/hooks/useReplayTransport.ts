@@ -14,7 +14,7 @@ const API = '/api/v1/simulation';
 type ApiError = { code: string; message: string };
 
 /** How long a freshly started replay may stay in `loading` before we say so. */
-const START_CONFIRM_MS = 12000;
+const START_CONFIRM_MS = 120000;
 const START_CONFIRM_STEP_MS = 700;
 
 /**
@@ -36,7 +36,17 @@ async function confirmStarted(): Promise<boolean> {
     const status = await syncReplayStatus();
     if (!status) continue;
     if (status.state === 'running' || status.state === 'paused') return true;
-    if (status.state === 'idle') return false;
+    if (status.state === 'idle') {
+      if (
+        (status.bars_played ?? 0) > 0 ||
+        status.session_complete === true ||
+        (status.stats?.trades?.length ?? 0) > 0 ||
+        (status.stats?.events?.length ?? 0) > 0
+      ) {
+        return true;
+      }
+      return false;
+    }
   }
   return false;
 }
@@ -93,6 +103,7 @@ export function draftToConfig(draft: ReplayDraft) {
     stock_spread_pct: draft.stockSpreadPct,
     slippage_pct: draft.slippagePct,
     adaptive_source: draft.adaptiveSource ?? 'both',
+    adaptive_version: draft.adaptiveVersion ?? 'v2_hardened',
   };
 }
 
@@ -168,7 +179,11 @@ export function useReplayTransport(): ReplayTransport {
       queryClient?.invalidateQueries();
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
       if (!(await confirmStarted())) {
-        const msg = useReplayStore.getState().status.status_message;
+        const current = useReplayStore.getState().status;
+        const msg = current.status_message;
+        if (current.state === 'loading') {
+          useReplayStore.getState().setStatus({ ...current, state: 'idle' });
+        }
         fail(
           'start_stalled',
           msg || 'The replay was accepted but never started playing. Check that the engine is running.',
@@ -192,7 +207,11 @@ export function useReplayTransport(): ReplayTransport {
           queryClient?.invalidateQueries();
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
           if (!(await confirmStarted())) {
-            const msg = useReplayStore.getState().status.status_message;
+            const current = useReplayStore.getState().status;
+            const msg = current.status_message;
+            if (current.state === 'loading') {
+              useReplayStore.getState().setStatus({ ...current, state: 'idle' });
+            }
             fail(
               'start_stalled',
               msg || 'The replay was accepted but never started playing. Check that the engine is running.',
@@ -226,10 +245,16 @@ export function useReplayTransport(): ReplayTransport {
   const pause = useCallback(async () => {
     const store = useReplayStore.getState();
     const before = store.status;
+    if (before.state === 'paused' || before.state === 'idle') {
+      return;
+    }
     store.setStatus({ ...before, state: 'paused' });      // optimistic
     try {
       store.setStatus(await call('/pause'));
     } catch (err: any) {
+      if (err?.api?.code === 'not_running') {
+        return;
+      }
       store.setStatus(before);                             // revert
       fail(err?.api?.code ?? 'pause_failed', err?.api?.message || 'Could not pause the replay.');
     }
@@ -238,22 +263,29 @@ export function useReplayTransport(): ReplayTransport {
   const resume = useCallback(async () => {
     const store = useReplayStore.getState();
     const before = store.status;
+    if (before.state === 'running') {
+      return;
+    }
     store.setStatus({ ...before, state: 'running' });
     try {
       store.setStatus(await call('/resume'));
     } catch (err: any) {
+      if (err?.api?.code === 'not_paused') {
+        return;
+      }
       store.setStatus(before);
       fail(err?.api?.code ?? 'resume_failed', err?.api?.message || 'Could not resume the replay.');
     }
   }, [fail]);
 
   const toggle = useCallback(async () => {
-    const { status, error } = useReplayStore.getState();
-    if (error) return start();
+    const { status } = useReplayStore.getState();
+    useReplayStore.getState().setError(null);
     if (status.state === 'running') return pause();
     if (status.state === 'paused') return resume();
-    if (status.state === 'idle') return start();
-  }, [pause, resume, start]);
+    if (status.state === 'loading') return stop();
+    return start();
+  }, [pause, resume, start, stop]);
 
   const setSpeed = useCallback(async (speed: number) => {
     const store = useReplayStore.getState();
@@ -274,7 +306,7 @@ export function useReplayTransport(): ReplayTransport {
 
   const seek = useCallback(async (body: Record<string, unknown>) => {
     const store = useReplayStore.getState();
-    if (store.status.state === 'idle') return;
+    if (store.status.state === 'idle' || !store.status.bars_total) return;
     try {
       const status = await call('/seek', body);
       store.setStatus(status);
@@ -282,6 +314,9 @@ export function useReplayTransport(): ReplayTransport {
       queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-snapshot'] });
       queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-positions'] });
     } catch (err: any) {
+      if (err?.api?.code === 'not_running') {
+        return;
+      }
       fail(err?.api?.code ?? 'seek_failed', err?.api?.message || 'Could not move the replay position.');
     }
   }, [fail, queryClient]);
