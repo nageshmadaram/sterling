@@ -144,6 +144,8 @@ export interface ReplayConfigEcho {
   index_spread_pct?: number;
   stock_spread_pct?: number;
   slippage_pct?: number;
+  adaptive_source?: 'both' | 'fno' | 'cash';
+  adaptive_version?: 'v2_hardened' | 'v1_baseline';
 }
 
 export interface ReplayStatus {
@@ -673,8 +675,8 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       // subscribers do not re-render on a pure progress tick.
       const prev = s.status.stats;
       const next = status.stats;
-      const events = sameRows(prev.events, next.events) ? prev.events : next.events;
-      const trades = sameRows(prev.trades, next.trades) ? prev.trades : next.trades;
+      const events = sameEvents(prev.events, next.events) ? prev.events : next.events;
+      const trades = sameTrades(prev.trades, next.trades) ? prev.trades : next.trades;
       return { status: { ...status, stats: { ...next, events, trades } }, error: null };
     }),
 
@@ -750,21 +752,32 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
 }));
 
 /**
- * Cheap "did this array change" test.
+ * Accurate "did trades or events change" equality tests.
  *
- * Length plus the last row's identity is enough: the ledger is append-only
- * within a session, and a seek truncates it (which changes the length).
+ * For trades, a trade status update (e.g. OPEN -> WIN/LOSS, exit price, PnL)
+ * maintains length and trade_id, so a full fingerprint comparison is required.
  */
-function sameRows<T extends { trade_id?: string; time_iso?: string }>(
-  a: readonly T[],
-  b: readonly T[],
-): boolean {
+function tradeFingerprint(t: any): string {
+  return `${t.trade_id}:${t.status}:${t.exit_time_iso}:${t.exit_price}:${t.pnl_usd}:${t.slippage}:${t.exit_reason}`;
+}
+
+function sameTrades(a: readonly any[], b: readonly any[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  if (!a.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (tradeFingerprint(a[i]) !== tradeFingerprint(b[i])) return false;
+  }
+  return true;
+}
+
+function sameEvents(a: readonly any[], b: readonly any[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   if (!a.length) return true;
   const x = a[a.length - 1];
   const y = b[b.length - 1];
-  return (x.trade_id ?? x.time_iso) === (y.trade_id ?? y.time_iso);
+  return x?.time_iso === y?.time_iso && x?.instrument === y?.instrument && x?.direction === y?.direction;
 }
 
 /* ── Selectors ────────────────────────────────────────────────────────────
@@ -869,10 +882,15 @@ export function matchAdaptiveVersion(
 
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
-  const strats = useReplayStore((s) => s.draft.strategies);
-  const instruments = useReplayStore((s) => s.draft.instruments);
-  const adaptiveSource = useReplayStore((s) => s.draft.adaptiveSource ?? 'both');
-  const adaptiveVersion = useReplayStore((s) => s.draft.adaptiveVersion ?? 'v2_hardened');
+  const isActiveOrComplete = useReplayStore((s) => s.status.state !== 'idle' || s.status.session_complete === true);
+  const config = useReplayStore((s) => s.status.config);
+  const draft = useReplayStore((s) => s.draft);
+
+  const activeCfg = (isActiveOrComplete && config) ? config : null;
+  const strats = activeCfg?.strategies ?? draft.strategies;
+  const instruments = activeCfg?.instruments ?? draft.instruments;
+  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
+  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
 
   return useMemo(() => {
     return events.filter((ev) => {
@@ -887,10 +905,15 @@ export function useFilteredReplayEvents(): ReplaySignal[] {
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
-  const strats = useReplayStore((s) => s.draft.strategies);
-  const instruments = useReplayStore((s) => s.draft.instruments);
-  const adaptiveSource = useReplayStore((s) => s.draft.adaptiveSource ?? 'both');
-  const adaptiveVersion = useReplayStore((s) => s.draft.adaptiveVersion ?? 'v2_hardened');
+  const isActiveOrComplete = useReplayStore((s) => s.status.state !== 'idle' || s.status.session_complete === true);
+  const config = useReplayStore((s) => s.status.config);
+  const draft = useReplayStore((s) => s.draft);
+
+  const activeCfg = (isActiveOrComplete && config) ? config : null;
+  const strats = activeCfg?.strategies ?? draft.strategies;
+  const instruments = activeCfg?.instruments ?? draft.instruments;
+  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
+  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
 
   return useMemo(() => {
     return trades.filter((t) => {
@@ -944,7 +967,9 @@ export const useReplayFocusMode = () => useReplayStore((s) => s.hostFocusMode);
    outside the dock and must not change. */
 
 export function getReplayNowMs(status: ReplayStatus): number | null {
-  if (status.state === 'idle' || !status.current_time_iso) return null;
+  if (!status.current_time_iso) return null;
+  const isHoldingReplay = status.state !== 'idle' || status.session_complete === true || (status.stats.trades.length > 0 || status.stats.events.length > 0);
+  if (!isHoldingReplay) return null;
   const timeIso = status.current_time_iso.trim();
   if (timeIso.includes('T')) {
     if (timeIso.endsWith('Z') || timeIso.includes('+') || (timeIso.lastIndexOf('-') > timeIso.indexOf('T'))) {

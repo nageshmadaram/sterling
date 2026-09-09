@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReplayTrade,
   useFilteredReplayTrades,
@@ -27,7 +27,7 @@ import { strategyKey, strategyLabel, strategyTone } from './replayStrategies';
 import { useVirtualRows } from './useVirtualRows';
 import * as Icons from './ReplayIcons';
 
-const ROW_H = 28;
+const ROW_H = 40;
 const VIRTUALISE_ABOVE = 200;
 
 export type TradeGroupBy = 'none' | 'date' | 'strategy' | 'contract';
@@ -329,6 +329,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       return true;
     }
   });
+  const handleToggleInvested = useCallback(() => setShowInvested((s) => !s), []);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -658,7 +659,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                           t={t}
                           hasFriction={hasFriction}
                           showInvested={showInvested}
-                          onToggleInvested={() => setShowInvested((s) => !s)}
+                          onToggleInvested={handleToggleInvested}
                           colSpanBase={cols}
                         />
                       ))}
@@ -673,7 +674,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                       t={t}
                       hasFriction={hasFriction}
                       showInvested={showInvested}
-                      onToggleInvested={() => setShowInvested((s) => !s)}
+                      onToggleInvested={handleToggleInvested}
                       colSpanBase={cols}
                     />
                   ))}

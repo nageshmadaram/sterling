@@ -71,6 +71,7 @@ class OpenPosition:
     exit_reason: str = ""
     exit_mode: str = "one_red"  # exit counter chosen at entry time (one_red/two_red/three_red/three_red_signal)
     current_red_count: int = 0  # latest computed red ST lines against this position (updated on scans)
+    counter_signal_fired: bool = False  # fresh counter-signal observed for this underlying (for three_red_signal exit)
     #: When ``current_red_count`` was last refreshed from a live scan row. The count is
     #: only as good as its age: when the signal that opened a position ends and no row of
     #: that direction is emitted again, there is nothing to refresh it from and it holds
@@ -349,7 +350,10 @@ def update_stop(uid: str, symbol: str, stop_premium: float, gtt_id: Optional[int
     _persist(uid)
     return p
 
-def update_health(uid: str, symbol: str, red_count: int, exit_mode: Optional[str] = None) -> Optional[OpenPosition]:
+def update_health(
+    uid: str, symbol: str, red_count: int,
+    exit_mode: Optional[str] = None, counter_signal_fired: Optional[bool] = None,
+) -> Optional[OpenPosition]:
     """Update live red count health for a position (from scan regime). Persisted for UI."""
     p = _load(uid).get(symbol)
     if p is None:
@@ -358,6 +362,8 @@ def update_health(uid: str, symbol: str, red_count: int, exit_mode: Optional[str
     p.red_count_ms = int(time.time() * 1000)
     if exit_mode:
         p.exit_mode = exit_mode
+    if counter_signal_fired is not None:
+        p.counter_signal_fired = bool(counter_signal_fired)
     _persist(uid)
     return p
 

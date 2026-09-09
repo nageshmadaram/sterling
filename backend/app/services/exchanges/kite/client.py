@@ -464,25 +464,31 @@ class KiteClient(TradingExchangeAdapter):
         order_type: str = "market_order", limit_price: Optional[float] = None,
         stop_loss: Optional[float] = None, take_profit: Optional[float] = None,
         exchange: str = K.EXCHANGE_NFO, tag: Optional[str] = None,
+        **kwargs,
     ) -> dict:
         """Place an option order. ``exchange`` is NFO for NSE-segment options
         (NIFTY/BANKNIFTY/FINNIFTY + equity options) or BFO for SENSEX/BSE options."""
+        product = kwargs.pop("product", K.PRODUCT_NRML)
         return await self.place_order(
             option_symbol, side, size, order_type=order_type, limit_price=limit_price,
-            exchange=exchange, product=K.PRODUCT_NRML, stop_loss=stop_loss, tag=tag, allow_amo=False,
+            exchange=exchange, product=product, stop_loss=stop_loss, tag=tag, allow_amo=False,
+            **kwargs,
         )
 
     async def place_order_future(
         self, tradingsymbol: str, side: str, size: float,
         order_type: str = "market_order", limit_price: Optional[float] = None,
         exchange: str = K.EXCHANGE_NFO, tag: Optional[str] = None,
+        **kwargs,
     ) -> dict:
         """Place a futures order (BUY or SELL). Two-sided: directional mode
         opens with BUY (long) or SELL (short) and exits with the opposite.
         Uses NRML product for overnight carry."""
+        product = kwargs.pop("product", K.PRODUCT_NRML)
         return await self.place_order(
             tradingsymbol, side, size, order_type=order_type, limit_price=limit_price,
-            exchange=exchange, product=K.PRODUCT_NRML, tag=tag, allow_amo=False,
+            exchange=exchange, product=product, tag=tag, allow_amo=False,
+            **kwargs,
         )
 
     async def cancel_order(self, order_id: str, product_id: int = 0, variety: str = K.VARIETY_REGULAR) -> dict:

@@ -172,8 +172,13 @@ export function useReplayStream(enabled: boolean): void {
      */
     const armWatchdog = () => {
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      const state = useReplayStore.getState().status.state;
+      if (state === 'paused' || state === 'idle') return;
+
       watchdogRef.current = setTimeout(() => {
         if (stoppedRef.current) return;
+        const currState = useReplayStore.getState().status.state;
+        if (currState === 'paused' || currState === 'idle') return;
         closeStream();
         void poll();
       }, SSE_SILENCE_MS);
@@ -331,13 +336,33 @@ export function useReplayStream(enabled: boolean): void {
       void poll();
     };
 
+    let unsub: (() => void) | null = null;
     if (enabled) {
       void boot();
       document.addEventListener('visibilitychange', onVisibility);
+      unsub = useReplayStore.subscribe((curr, prev) => {
+        const curState = curr.status.state;
+        const prevState = prev.status.state;
+        if (curState !== prevState) {
+          if (curState === 'running') {
+            if (!esRef.current && curr.status.capabilities?.stream) {
+              openStream();
+            } else {
+              armWatchdog();
+            }
+          } else if (curState === 'paused' || curState === 'idle') {
+            if (watchdogRef.current) {
+              clearTimeout(watchdogRef.current);
+              watchdogRef.current = null;
+            }
+          }
+        }
+      });
     }
 
     return () => {
       stoppedRef.current = true;
+      if (unsub) unsub();
       clearTimer();
       closeStream();
       document.removeEventListener('visibilitychange', onVisibility);

@@ -301,8 +301,7 @@ export function useReplayTransport(): ReplayTransport {
 
   const seek = useCallback(async (body: Record<string, unknown>) => {
     const store = useReplayStore.getState();
-    if (store.status.state === 'idle') return;
-    if (store.status.state === 'idle' && !store.status.bars_total) return;
+    if (store.status.state === 'idle' || !store.status.bars_total) return;
     try {
       const status = await call('/seek', body);
       store.setStatus(status);

@@ -3332,6 +3332,12 @@ async def _hydrate_missing_candles(
                         parsed_candles = []
                         for row in raw_list:
                             dt_c = datetime.fromisoformat(row[0])
+                            if dt_c.tzinfo is None:
+                                try:
+                                    from zoneinfo import ZoneInfo
+                                    dt_c = dt_c.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+                                except ImportError:
+                                    dt_c = dt_c.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
                             parsed_candles.append({
                                 "time": int(dt_c.timestamp()),
                                 "open": float(row[1]),
