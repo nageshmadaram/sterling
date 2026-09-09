@@ -1,21 +1,4 @@
-"""The Gamma Move state machine.
-
-Pure: it takes data and returns an intent. It never touches a broker, a socket
-or a clock of its own. That is what lets the replay in ``replay.py`` exercise
-exactly the code the live runner uses, rather than a second implementation that
-drifts.
-
-The order of the gates is the strategy's whole economics, not a style choice:
-
-    expiry window -> level proximity -> strike -> regime -> trigger
-
-Levels and expiry are decided from data that is already cached or costs one
-bulk quote for the entire universe. The trigger needs a paced per-contract
-historical call. Putting the cheap, highly selective filters first is what turns
-a 1,800-request scan into a 25-request one -- and, separately, the level filter
-is the gate the measured edge actually lives behind, so a scan that reached the
-trigger without it would be spending its request budget on baseline setups.
-"""
+"""The Gamma Move state machine."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -30,8 +13,8 @@ from .levels import live_levels, option_type_for
 from .models import (Candle, GammaSignal, OICandle, PositionState, SpotLevel,
                      StrikeCandidate, TradeRecord, q2)
 from .regime import regime_allows, regime_of, regime_reason
-from .selection import expiry_in_window
-from .trigger import evaluate as evaluate_trigger
+from .selection import expiry_in_window, is_chain_wall, spot_through_or_at_strike
+from .trigger import closed_bars, evaluate as evaluate_trigger
 
 
 class Phase(str, Enum):
@@ -52,7 +35,6 @@ class Intent(str, Enum):
 
 @dataclass
 class Decision:
-    """What the engine wants done, and the row that explains it."""
     intent: Intent
     signal: Optional[GammaSignal] = None
     reason: str = ""
@@ -70,7 +52,6 @@ class SessionState:
     halt_reason: str = ""
 
     def roll(self, today: str) -> None:
-        """A new trading day resets what is per-day and keeps what is not."""
         if self.day == today:
             return
         self.day = today
@@ -81,23 +62,16 @@ class SessionState:
 
 
 class GammaMoveStrategy:
-    """Evaluates candidates into decisions. Holds no I/O."""
-
     def __init__(self, cfg: GammaMoveConfig, state: Optional[SessionState] = None):
         self.cfg = cfg
         self.state = state or SessionState()
 
-    # ------------------------------------------------------------ discovery
     def levels_for(self, spot_candles: Sequence[Candle], spot: float,
                    levels: Sequence[SpotLevel]) -> list[SpotLevel]:
         return live_levels(levels, spot, self.cfg.level_proximity_pct)
 
     def screen(self, *, underlying: str, spot: float, levels: Sequence[SpotLevel],
                spot_candles: Sequence[Candle], today: date) -> tuple[list, Optional[str]]:
-        """Levels this underlying is sitting on, or the reason it is not a candidate.
-
-        Runs before any per-contract request is made, which is the point.
-        """
         near = self.levels_for(spot_candles, spot, levels)
         if not near:
             return [], (f"spot {q2(spot)} is not within "
@@ -112,11 +86,9 @@ class GammaMoveStrategy:
                 return [], regime_reason(regime, next(iter(kinds)) if kinds else "CE")  # type: ignore[arg-type]
         return list(near), None
 
-    # -------------------------------------------------------------- trigger
     def evaluate(self, candidate: StrikeCandidate, bars: Sequence[OICandle],
                  *, now_ms: int, today: date, regime: str = "unknown",
                  signal_id: Optional[str] = None) -> GammaSignal:
-        """One candidate, one verdict. Always returns a row -- never silence."""
         sid = signal_id or (f"{candidate.instrument.tradingsymbol}"
                             f"@{candidate.level.kind}:{int(candidate.level.price)}")
         base = dict(id=sid, candidate=candidate, at_ms=now_ms, regime=regime,
@@ -135,7 +107,22 @@ class GammaMoveStrategy:
             return GammaSignal(**base, metrics=None, state="watching",
                                reason=regime_reason(regime, candidate.option_type))  # type: ignore[arg-type]
 
-        metrics = evaluate_trigger(bars, self.cfg)
+        inst = candidate.instrument
+        if getattr(self.cfg, "require_spot_through_strike", True) and not spot_through_or_at_strike(
+                candidate.spot, inst.strike, inst.option_type,
+                self.cfg.level_proximity_pct):
+            side = "above" if inst.option_type == "CE" else "below"
+            return GammaSignal(**base, metrics=None, state="watching",
+                               reason=(f"spot {candidate.spot} has not broken {side} "
+                                       f"the {inst.strike:g} wall"))
+        if not is_chain_wall(candidate.oi, getattr(candidate, "chain_oi_max", None),
+                             required=getattr(self.cfg, "require_chain_max_oi", True)):
+            return GammaSignal(**base, metrics=None, state="watching",
+                               reason=(f"strike OI {candidate.oi:,} is not the chain "
+                                       f"wall ({candidate.chain_oi_max:,})"))
+
+        closed = closed_bars(bars, self.cfg, now_ms)
+        metrics = evaluate_trigger(closed, self.cfg, now_ms=now_ms)
         if metrics is None:
             return GammaSignal(**base, metrics=None, state="watching",
                                reason="not enough of today's bars to judge the trigger")
@@ -143,8 +130,8 @@ class GammaMoveStrategy:
             return GammaSignal(**base, metrics=metrics, state="watching",
                                reason=metrics.shortfall() or "trigger incomplete")
 
-        entry = q2(bars[-1].close)
-        stop = exits.initial_stop(entry, bars, self.cfg)
+        entry = q2(closed[-1].close) if closed else q2(bars[-1].close)
+        stop = exits.initial_stop(entry, closed or bars, self.cfg)
         if stop is None:
             return GammaSignal(**base, metrics=metrics, state="watching",
                                reason="no valid stop: the recent swing low is not below entry")
@@ -163,9 +150,7 @@ class GammaMoveStrategy:
             at_risk_inr=sizing.at_risk_inr(entry, stop, qty),
             deployed_inr=sizing.deployed_inr(entry, qty))
 
-    # ------------------------------------------------------------- lifecycle
     def admit(self, signal: GammaSignal, today: str) -> Optional[str]:
-        """Why this armed signal may not be entered right now, or None."""
         self.state.roll(today)
         if self.state.halt_reason:
             return f"halted: {self.state.halt_reason}"
@@ -199,13 +184,10 @@ class GammaMoveStrategy:
 
     def on_price(self, pos: PositionState, ltp: float, now_ms: int, today: str,
                  *, session_over: bool = False) -> Decision:
-        """One position, one price. Returns EXIT or NONE."""
         exits.update_trail(pos, ltp, self.cfg)
         reason = exits.should_exit(pos, ltp, now_ms, today, self.cfg,
                                    session_over=session_over)
         if reason and not pos.exiting:
-            # The claim is taken here, once, so target/stop/time/session cannot
-            # each send their own order for the same position.
             pos.exiting = True
             return Decision(intent=Intent.EXIT, exit_position=pos, exit_reason=reason)
         return Decision(intent=Intent.NONE)
