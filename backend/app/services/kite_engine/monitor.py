@@ -894,16 +894,13 @@ async def on_tick(uid: str, token: int, ltp: float, *, client) -> Optional[str]:
             reds = getattr(p, 'current_red_count', 0)
             mode = getattr(p, 'exit_mode', 'one_red')
             thresh = get_exit_threshold(mode)
-            needs_counter = exit_needs_counter_signal(mode)
-            counter_fired = getattr(p, 'counter_signal_fired', False)
-            red_exit = (reds >= thresh) and (not needs_counter or counter_fired)
+            red_exit = reds >= thresh
             if price_exit or red_exit or target_exit:
                 if price_exit:
                     close_reason = (f"trail breach @ ₹{ltp:.2f} "
                                     f"{'≤' if p.direction == 'long' else '≥'} ₹{p.stop_premium:.2f}")
                 elif red_exit:
-                    extra_note = " + counter signal" if needs_counter else ""
-                    close_reason = f"red count exit {reds}/{thresh}{extra_note} ({mode})"
+                    close_reason = f"red count exit {reds}/{thresh} ({mode})"
                 else:
                     close_reason = (f"target reached @ ₹{ltp:.2f} "
                                     f"{'≥' if p.direction == 'long' else '≤'} ₹{target:.2f}")

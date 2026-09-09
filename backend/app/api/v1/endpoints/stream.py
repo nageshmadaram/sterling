@@ -34,6 +34,12 @@ class StreamManager:
         if websocket not in self.active_connections[channel]:
             self.active_connections[channel].append(websocket)
 
+    def unsubscribe(self, websocket: WebSocket, channel: str):
+        if channel in self.active_connections and websocket in self.active_connections[channel]:
+            self.active_connections[channel].remove(websocket)
+            if not self.active_connections[channel]:
+                del self.active_connections[channel]
+
     async def broadcast_to_channel(self, channel: str, message: dict):
         if channel in self.active_connections:
             dead_connections = []
@@ -62,6 +68,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 if action == "subscribe" and channel:
                     stream_manager.subscribe(websocket, channel)
+                if isinstance(channel, str):
+                    channel = channel.strip()
+                    # Sanitize: allow only safe channel identifier tokens
+                    if channel and all(c.isalnum() or c in ":_-" for c in channel):
+                        if action == "subscribe":
+                            stream_manager.subscribe(websocket, channel)
+                        elif action == "unsubscribe":
+                            stream_manager.unsubscribe(websocket, channel)
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:

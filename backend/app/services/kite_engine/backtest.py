@@ -200,7 +200,7 @@ def _stats_from_trades(trades: List[BacktestTrade], starting_capital: float) -> 
 
 
 def _exit_bar(r, entry_i: int, want: int, longs, shorts, exit_mode: str, n: int,
-              cfg: SterlingKiteEngineConfig, trail_target: str, *, is_stock: bool = False) -> tuple:
+              cfg: SterlingKiteEngineConfig, trail_target: str, is_stock: bool = False) -> tuple:
     """First exit bar after ``entry_i``, using the SAME rule the live engine runs.
 
     Delegates to ``sterling_kite_engine.exits.resolve_exit`` so the replay cannot drift
@@ -294,7 +294,7 @@ def replay_premium_series(
         if entry_i >= n:
             break
         entry_px = float(o[entry_i])
-        exit_signal_i, reason = _exit_bar(r, signal_i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock=is_stock)
+        exit_signal_i, reason = _exit_bar(r, signal_i, want, longs, shorts, exit_mode, n, cfg, trail_target, is_stock)
         if reason.startswith("trail breach"):
             exit_i = exit_signal_i
             # Gap-aware stop: resting stop fills no better than the opening gap.

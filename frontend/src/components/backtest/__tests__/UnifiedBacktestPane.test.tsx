@@ -67,7 +67,6 @@ describe('UnifiedBacktestPane', () => {
     expect(screen.getByRole('button', { name: /Indices/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Selected F&O/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All F&O/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Run Backtest/i })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Run Backtest/i })[0]).toBeInTheDocument();
   });
 

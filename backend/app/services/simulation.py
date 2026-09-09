@@ -1131,7 +1131,6 @@ class SimulationRunner:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
-        self._close_all_open("stopped")
         self._state = SimState.IDLE
         self._task = None
         self._open_by_symbol = {}

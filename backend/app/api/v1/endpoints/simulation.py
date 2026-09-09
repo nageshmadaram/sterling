@@ -74,16 +74,22 @@ async def clear_sim():
 
 @router.post("/pause", response_model=SimStatus)
 async def pause_sim():
-    if simulation_runner.status.state == SimState.RUNNING:
-        return await simulation_runner.pause()
-    return simulation_runner.status
+    if simulation_runner.status.state != SimState.RUNNING:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "not_running", "message": "Replay is not running."},
+        )
+    return await simulation_runner.pause()
 
 
 @router.post("/resume", response_model=SimStatus)
 async def resume_sim():
-    if simulation_runner.status.state == SimState.PAUSED:
-        return await simulation_runner.resume()
-    return simulation_runner.status
+    if simulation_runner.status.state != SimState.PAUSED:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "not_paused", "message": "Replay is not paused."},
+        )
+    return await simulation_runner.resume()
 
 
 class SeekBody(BaseModel):
@@ -102,8 +108,11 @@ async def set_speed(body: SpeedBody):
 
 @router.post("/seek", response_model=SimStatus)
 async def seek_sim(body: SeekBody):
-    if simulation_runner.status.state == SimState.IDLE and not getattr(simulation_runner, "_candles", None):
-        return simulation_runner.status
+    if simulation_runner.status.state == SimState.IDLE:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "not_running", "message": "Replay is not running."},
+        )
     # Precedence: named action, then the absolute forms, then the relative one.
     if body.action == "jump_start":
         return simulation_runner.jump_start()

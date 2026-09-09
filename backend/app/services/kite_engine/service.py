@@ -1393,22 +1393,19 @@ def _new_trail_for_open(p, rows) -> Optional[float]:
     Re-translation trails INTO profit as the ST ratchets past the entry spot, and
     ratchets monotonically (only returns a value that tightens the current stop).
     """
-    want_dir = str(positions.signal_direction_of(p) if hasattr(positions, "signal_direction_of") else getattr(p, "direction", "")).lower()
-    if want_dir in ("bull", "bullish", "long", "buy"):
-        want_dir = "long"
-    elif want_dir in ("bear", "bearish", "short", "sell"):
-        want_dir = "short"
-
-    for row in rows:
-        if row.underlying != p.underlying:
-            continue
-        row_dir = str(getattr(row, "direction", "") or "").lower()
-        if row_dir in ("bull", "bullish", "long", "buy"):
-            row_dir = "long"
-        elif row_dir in ("bear", "bearish", "short", "sell"):
-            row_dir = "short"
-        if want_dir and row_dir and want_dir != row_dir:
-            continue
+    same_underlying = [r for r in rows if getattr(r, "underlying", None) == p.underlying]
+    for row in same_underlying:
+        if len(same_underlying) > 1:
+            row_dir = str(getattr(row, "direction", "") or "").lower()
+            if row_dir in ("bull", "bullish", "long", "buy"):
+                row_dir = "long"
+            elif row_dir in ("bear", "bearish", "short", "sell"):
+                row_dir = "short"
+            p_dir = getattr(p, "signal_direction", None) or (p.direction if p.vehicle == "futures" else None)
+            if p_dir and row_dir and p_dir != row_dir:
+                has_sym = any(getattr(leg, "option_symbol", "") == p.symbol for leg in getattr(row, "legs", []))
+                if not has_sym:
+                    continue
         if p.vehicle == "futures":
             new_sl = float(row.stop_loss or 0.0)
             if new_sl <= 0:

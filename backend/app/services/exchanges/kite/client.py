@@ -80,12 +80,13 @@ def _parse_kite_ts(ts_str) -> int:
 
 
 def _aggregate_4h(candles_1h: List[Candle]) -> List[Candle]:
-    """Group 1H candles into 4H buckets."""
+    """Group 1H candles into 4H buckets, partitioned by trading day in IST."""
     result: List[Candle] = []
     buf: List[Candle] = []
-    for c in candles_1h:
-        buf.append(c)
-        if len(buf) == 4:
+    curr_date = None
+
+    def _flush():
+        if buf:
             result.append(Candle(
                 timestamp_ms=buf[0].timestamp_ms,
                 open=buf[0].open,
@@ -94,7 +95,20 @@ def _aggregate_4h(candles_1h: List[Candle]) -> List[Candle]:
                 close=buf[-1].close,
                 volume=sum(x.volume for x in buf),
             ))
-            buf = []
+            buf.clear()
+
+    for c in candles_1h:
+        dt = datetime.fromtimestamp(c.timestamp_ms / 1000.0, tz=_IST)
+        c_date = dt.date()
+        if curr_date is not None and c_date != curr_date:
+            _flush()
+        curr_date = c_date
+        buf.append(c)
+        if len(buf) == 4:
+            _flush()
+    _flush()
+    return result
+
 class AsyncOrderRateLimiter:
     """Token-bucket rate limiter enforcing Zerodha Kite's 3.0 req/sec limit across concurrent order submissions."""
 
