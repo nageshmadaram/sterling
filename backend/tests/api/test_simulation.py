@@ -1255,4 +1255,72 @@ async def test_simulation_exit_reasons_settlement():
     assert trade_eod.exit_reason == "SESSION_CLOSE"
 
 
+@pytest.mark.asyncio
+async def test_pause_resume_seek_idempotent_no_400_error():
+    """Verify that /pause, /resume, and /seek are idempotent and never throw 400 not_running."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.v1.endpoints.simulation import router
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api/v1")
+    client = TestClient(test_app)
+
+    # Ensure runner is idle
+    await simulation_runner.stop()
+    assert simulation_runner.status.state == SimState.IDLE
+
+    # 1. Calling /pause when IDLE must return 200 OK (idempotent, not 400)
+    resp = client.post("/api/v1/simulation/pause")
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "idle"
+
+    # 2. Calling /resume when IDLE must return 200 OK
+    resp = client.post("/api/v1/simulation/resume")
+    assert resp.status_code == 200
+
+    # 3. Calling /seek when IDLE must return 200 OK
+    resp = client.post("/api/v1/simulation/seek", json={"to_pct": 50.0})
+    assert resp.status_code == 200
+
+    # 4. Calling /seek with bars_offset when IDLE must return 200 OK
+    resp = client.post("/api/v1/simulation/seek", json={"bars_offset": 5})
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stop_squares_off_all_open_positions():
+    """Verify that stop() cleanly squares off any active positions so trades are never left in OPEN status."""
+    from app.services.simulation import SimTradeEvent
+    simulation_runner.clear()
+    trade = SimTradeEvent(
+        trade_id="TRD-TEST-STOP-SQUAREOFF",
+        strategy="adaptive_edge",
+        symbol="RELIANCE26SEP2800CE",
+        underlying="RELIANCE",
+        direction="BUY",
+        opt_type="CE",
+        strike=2800,
+        lots=1,
+        quantity=250,
+        entry_price=10.0,
+        stop_loss=8.0,
+        target_price=15.0,
+        spot_entry=2800.0,
+        status="OPEN",
+    )
+    simulation_runner._stats.trades.append(trade)
+    simulation_runner._open_by_symbol["RELIANCE"] = [trade]
+
+    # Stop simulation
+    status = await simulation_runner.stop()
+
+    assert trade.status in ("WIN", "LOSS")
+    assert trade.status != "OPEN"
+    assert trade.exit_price is not None
+    assert trade.exit_reason == "SESSION_CLOSE"
+    assert status.open_positions == 0
+
+
+
 

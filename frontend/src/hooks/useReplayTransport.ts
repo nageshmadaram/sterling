@@ -237,10 +237,16 @@ export function useReplayTransport(): ReplayTransport {
   const pause = useCallback(async () => {
     const store = useReplayStore.getState();
     const before = store.status;
+    if (before.state === 'paused' || before.state === 'idle') {
+      return;
+    }
     store.setStatus({ ...before, state: 'paused' });      // optimistic
     try {
       store.setStatus(await call('/pause'));
     } catch (err: any) {
+      if (err?.api?.code === 'not_running') {
+        return;
+      }
       store.setStatus(before);                             // revert
       fail(err?.api?.code ?? 'pause_failed', err?.api?.message || 'Could not pause the replay.');
     }
@@ -249,10 +255,16 @@ export function useReplayTransport(): ReplayTransport {
   const resume = useCallback(async () => {
     const store = useReplayStore.getState();
     const before = store.status;
+    if (before.state === 'running') {
+      return;
+    }
     store.setStatus({ ...before, state: 'running' });
     try {
       store.setStatus(await call('/resume'));
     } catch (err: any) {
+      if (err?.api?.code === 'not_paused') {
+        return;
+      }
       store.setStatus(before);
       fail(err?.api?.code ?? 'resume_failed', err?.api?.message || 'Could not resume the replay.');
     }
@@ -261,6 +273,10 @@ export function useReplayTransport(): ReplayTransport {
   const toggle = useCallback(async () => {
     const { status, error } = useReplayStore.getState();
     if (error) return start();
+    if (error) {
+      useReplayStore.getState().setError(null);
+      return start();
+    }
     if (status.state === 'running') return pause();
     if (status.state === 'paused') return resume();
     if (status.state === 'idle') return start();
@@ -286,6 +302,7 @@ export function useReplayTransport(): ReplayTransport {
   const seek = useCallback(async (body: Record<string, unknown>) => {
     const store = useReplayStore.getState();
     if (store.status.state === 'idle') return;
+    if (store.status.state === 'idle' && !store.status.bars_total) return;
     try {
       const status = await call('/seek', body);
       store.setStatus(status);
@@ -293,6 +310,9 @@ export function useReplayTransport(): ReplayTransport {
       queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-snapshot'] });
       queryClient?.invalidateQueries({ queryKey: ['adaptive-edge-engine-positions'] });
     } catch (err: any) {
+      if (err?.api?.code === 'not_running') {
+        return;
+      }
       fail(err?.api?.code ?? 'seek_failed', err?.api?.message || 'Could not move the replay position.');
     }
   }, [fail, queryClient]);

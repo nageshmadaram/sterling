@@ -911,6 +911,7 @@ class SimulationRunner:
             log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
         for sym, book in list(self._open_by_symbol.items()):
             last_close = None
+        def _resolve_last_close(sym: str) -> Optional[float]:
             sym_u = sym.upper()
             canon = _canonical_symbol(sym)
             from app.services.ohlcv_store import INDEX_ALIASES
@@ -929,19 +930,43 @@ class SimulationRunner:
                     if self._bar_history.get(s):
                         last_close = float(self._bar_history[s][-1].get("close", 0.0))
                         break
+                        return float(self._bar_history[s][-1].get("close", 0.0))
 
             if last_close is None and hasattr(self, "_candles") and self._candles:
                 played_idx = getattr(self, "_bars_played", 0)
                 for b in reversed(self._candles[:played_idx]):
+            if hasattr(self, "_candles") and self._candles:
+                played_idx = getattr(self, "_bars_played", len(self._candles))
+                for b in reversed(self._candles[:max(1, played_idx)]):
                     if b.get("symbol", "").upper() in target_syms:
                         last_close = float(b.get("close", 0.0))
                         break
+                        return float(b.get("close", 0.0))
+            return None
 
+        exit_reason_label = "SESSION_CLOSE"
+
+        count = sum(len(v) for v in self._open_by_symbol.values())
+        if count:
+            log.info("Replay squaring off %d position(s) at session close (%s).", count, reason)
+
+        for sym, book in list(self._open_by_symbol.items()):
+            last_close = _resolve_last_close(sym)
             for trade in list(book):
                 exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
                 self._close_position(trade, exit_spot, bar_dt)
                 self._close_position(trade, exit_spot, bar_dt, exit_reason="SESSION_CLOSE")
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
         self._open_by_symbol = {}
+
+        # Sweep safety net: ensure NO trade in self._stats.trades is left with status == "OPEN"
+        for trade in self._stats.trades:
+            if trade.status == "OPEN":
+                last_close = _resolve_last_close(trade.underlying)
+                exit_spot = last_close if (last_close and last_close > 0) else (trade.spot_entry or trade.entry_price)
+                self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
+
+        self._recompute_totals()
 
     def _recompute_totals(self) -> None:
         """Re-derive every aggregate from the trade ledger.
@@ -1120,6 +1145,7 @@ class SimulationRunner:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
+        self._close_all_open("stopped")
         self._state = SimState.IDLE
         self._task = None
         self._open_by_symbol = {}
@@ -1128,6 +1154,7 @@ class SimulationRunner:
         # completed session's signals and trades, which the dock rendered as
         # though the replay were live — results before you pressed play.
         self._session_complete = bool(self._stats.events or self._stats.trades)
+        self._publish_frame(force=True)
         self._publish_state()
         return self.status
 
@@ -1846,6 +1873,21 @@ class SimulationRunner:
                 self._state = SimState.IDLE
                 self._close_all_open("reached session end")
                 self._session_complete = bool(self._stats.events or self._stats.trades)
+                if all_bars and bar_idx >= len(all_bars):
+                    self._progress = 100.0
+                    last_b = all_bars[-1]
+                    self._current_sim_epoch = float(last_b["time"])
+                    last_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=ist)
+                    self._current_time_iso = (
+                        last_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                        if is_multi_day
+                        else last_dt.strftime("%H:%M:%S")
+                    )
+                    last_time_str = last_dt.strftime("%H:%M:%S")
+                    if last_dt.time() < end_dt.time():
+                        self._status_message = f"Session completed at latest available bar ({last_time_str} IST)."
+                    else:
+                        self._status_message = f"Session completed ({self._stats.trades_entered} trades, P&L {self._stats.pnl:+,.2f})."
                 self._publish_frame(force=True)
                 self._publish_state()
                 log.info(
@@ -3228,16 +3270,44 @@ async def _hydrate_missing_candles(
     """Fetch missing historical candles for selected replay date range from Zerodha Kite API."""
     from app.services import ohlcv_store
     from app.services.ohlcv_store import INDEX_ALIASES
+    from app.services.ohlcv_store import INDEX_ALIASES, RESOLUTION_SECONDS
 
     check_start = session_start if session_start is not None else start_epoch
+    res_sec = RESOLUTION_SECONDS.get(resolution, 300)
+    now_epoch = int(time.time())
+    is_today_in_range = (start_epoch <= now_epoch <= (end_epoch + 86400))
+    effective_target_end = min(end_epoch, now_epoch) if is_today_in_range else end_epoch
 
     for sym in instruments:
         existing = ohlcv_store.get_candles(sym, resolution, limit=5000, since=check_start)
+        existing = ohlcv_store.get_candles(sym, resolution, limit=10000, since=check_start)
         in_range = [c for c in existing if check_start <= c["time"] <= end_epoch]
         if len(in_range) >= 15:
             continue  # Already cached locally
 
         log.info("Missing local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, end_epoch)
+        span_sec = max(0, effective_target_end - check_start)
+        expected_bars = max(1, span_sec // res_sec)
+
+        needs_fetch = False
+        if not in_range:
+            needs_fetch = True
+        elif is_today_in_range:
+            # If today is in range, cache is stale if the last bar is older than 2 candle intervals
+            last_cached_time = in_range[-1]["time"]
+            if last_cached_time < (effective_target_end - res_sec * 2):
+                needs_fetch = True
+        else:
+            # Historical session: require at least 70% of expected bars or last candle within 15m of end
+            if len(in_range) < max(5, int(expected_bars * 0.70)):
+                needs_fetch = True
+            elif in_range[-1]["time"] < (end_epoch - 900):
+                needs_fetch = True
+
+        if not needs_fetch:
+            continue
+
+        log.info("Missing/stale local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, effective_target_end)
 
         try:
             from app.services.exchanges.kite import accounts as kite_accounts
@@ -3264,6 +3334,7 @@ async def _hydrate_missing_candles(
                     from_str = datetime.fromtimestamp(start_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     to_str = datetime.fromtimestamp(end_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     k_res = "5minute" if resolution == "5m" else ("15minute" if resolution == "15m" else "60minute")
+                    to_str = datetime.fromtimestamp(effective_target_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     k_res_map = {
                         "1m": "minute",
                         "3m": "3minute",
