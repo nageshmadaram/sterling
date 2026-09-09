@@ -16,12 +16,6 @@ def days_to_expiry(expiry: str, today: date) -> Optional[int]:
 
 
 def expiry_in_window(expiry: str, today: date, cfg: GammaMoveConfig) -> bool:
-    """The source's "only the last week or two" rule, as a closed interval.
-
-    NSE stock options are monthly-only -- there is no weekly stock series -- so
-    this window is roughly the 15th of the month onward, and outside it the
-    engine is meant to find nothing rather than to trade a worse setup.
-    """
     dte = days_to_expiry(expiry, today)
     if dte is None:
         return False
@@ -32,14 +26,12 @@ def expiry_in_window(expiry: str, today: date, cfg: GammaMoveConfig) -> bool:
 
 def select_expiry(expiries: Sequence[str], today: date,
                   cfg: GammaMoveConfig) -> Optional[str]:
-    """The soonest expiry inside the window, or None if none qualifies."""
     ok = sorted({e[:10] for e in expiries if expiry_in_window(e, today, cfg)})
     return ok[0] if ok else None
 
 
 def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
                        cfg: GammaMoveConfig) -> list[InstrumentRef]:
-    """Contracts of the right type whose strike sits near the level."""
     want = "CE" if level.kind == "resistance" else "PE"
     if level.price <= 0:
         return []
@@ -49,7 +41,6 @@ def strikes_near_level(contracts: Sequence[InstrumentRef], level: SpotLevel,
 
 
 def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
-    """True when this strike is the chain's heaviest open interest."""
     if not required or chain_oi_max is None:
         return True
     return int(oi) >= int(chain_oi_max)
@@ -57,7 +48,6 @@ def is_chain_wall(oi: int, chain_oi_max: int | None, *, required: bool) -> bool:
 
 def spot_through_or_at_strike(spot: float, strike: float, option_type: str,
                               proximity_pct: float) -> bool:
-    """Writers cover when spot has broken through the wall, or is on it."""
     if spot <= 0 or strike <= 0:
         return False
     band = max(0.0, float(proximity_pct)) / 100.0
@@ -73,7 +63,6 @@ def _flag(cfg: GammaMoveConfig, name: str, default: bool = True) -> bool:
 def pick_strike(contracts: Sequence[InstrumentRef], level: SpotLevel, *,
                 underlying: str, oi_by_id: dict, premium_by_id: dict, spot: float,
                 today: date, cfg: GammaMoveConfig) -> Optional[StrikeCandidate]:
-    """The highest-open-interest strike at the level -- the source's R4 pick."""
     best: Optional[StrikeCandidate] = None
     for c in strikes_near_level(contracts, level, cfg):
         oi = int(oi_by_id.get(c.instrument_id) or 0)
