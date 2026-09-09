@@ -13,15 +13,17 @@ from .models import TradeRecord
 
 
 def risk_multiplier(record: TradeRecord, cfg: GammaMoveConfig) -> float:
-    """1.0 normally, ``descale_factor`` while size is cut.
+    """1.0 normally, then ``descale_factor`` then ``descale_factor ** 2``.
 
-    Reads the record's latched ``descaled`` flag rather than re-deriving from
-    the live streak. Deriving is wrong and subtly so: a single winner resets
-    ``consecutive_losses``, so a run of three losses followed by one small win
-    would restore full size immediately -- the opposite of the rule, and exactly
-    when the account can least afford it.
+    The later source segment (46:22–60:00) is a two-step ladder: after two or
+    three losers cut 1% to 0.5%, and if the losing streak continues cut again
+    to 0.25%. Reads the record's latched ``descale_step`` rather than the live
+    streak. Deriving from the streak is wrong and subtly so: a single winner
+    resets ``consecutive_losses``, so a run of three losses followed by one
+    small win would restore full size immediately -- the opposite of the rule.
     """
-    return cfg.descale_factor if record.descaled else 1.0
+    step = max(0, min(int(getattr(record, "descale_step", 0) or 0), 2))
+    return float(cfg.descale_factor) ** step
 
 
 def lots_for(entry: float, stop: float, lot_size: int, cfg: GammaMoveConfig,
