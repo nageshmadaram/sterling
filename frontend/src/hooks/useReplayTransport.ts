@@ -14,7 +14,7 @@ const API = '/api/v1/simulation';
 type ApiError = { code: string; message: string };
 
 /** How long a freshly started replay may stay in `loading` before we say so. */
-const START_CONFIRM_MS = 12000;
+const START_CONFIRM_MS = 120000;
 const START_CONFIRM_STEP_MS = 700;
 
 /**
@@ -179,7 +179,11 @@ export function useReplayTransport(): ReplayTransport {
       queryClient?.invalidateQueries();
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
       if (!(await confirmStarted())) {
-        const msg = useReplayStore.getState().status.status_message;
+        const current = useReplayStore.getState().status;
+        const msg = current.status_message;
+        if (current.state === 'loading') {
+          useReplayStore.getState().setStatus({ ...current, state: 'idle' });
+        }
         fail(
           'start_stalled',
           msg || 'The replay was accepted but never started playing. Check that the engine is running.',
@@ -203,7 +207,11 @@ export function useReplayTransport(): ReplayTransport {
           queryClient?.invalidateQueries();
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
           if (!(await confirmStarted())) {
-            const msg = useReplayStore.getState().status.status_message;
+            const current = useReplayStore.getState().status;
+            const msg = current.status_message;
+            if (current.state === 'loading') {
+              useReplayStore.getState().setStatus({ ...current, state: 'idle' });
+            }
             fail(
               'start_stalled',
               msg || 'The replay was accepted but never started playing. Check that the engine is running.',
@@ -271,16 +279,13 @@ export function useReplayTransport(): ReplayTransport {
   }, [fail]);
 
   const toggle = useCallback(async () => {
-    const { status, error } = useReplayStore.getState();
-    if (error) return start();
-    if (error) {
-      useReplayStore.getState().setError(null);
-      return start();
-    }
+    const { status } = useReplayStore.getState();
+    useReplayStore.getState().setError(null);
     if (status.state === 'running') return pause();
     if (status.state === 'paused') return resume();
-    if (status.state === 'idle') return start();
-  }, [pause, resume, start]);
+    if (status.state === 'loading') return stop();
+    return start();
+  }, [pause, resume, start, stop]);
 
   const setSpeed = useCallback(async (speed: number) => {
     const store = useReplayStore.getState();

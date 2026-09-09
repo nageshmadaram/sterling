@@ -1718,9 +1718,22 @@ class SimulationRunner:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
                     instruments.append(rec["underlying"])
 
+        # Deduplicate and canonicalize symbols
+        instruments = list(dict.fromkeys([_canonical_symbol(s) for s in instruments if s]))
+
         self._status_message = f"⚡ Fetching historical candles for {range_label} from Zerodha Kite API..."
+        self._publish_state()
         warmup_start = start_epoch - 5 * 86400
         await _hydrate_missing_candles(instruments, res, warmup_start, end_epoch, session_start=start_epoch)
+
+        def _report_hydrate(msg: str):
+            self._status_message = msg
+            self._publish_state()
+
+        await _hydrate_missing_candles(
+            instruments, res, warmup_start, end_epoch,
+            session_start=start_epoch, on_progress=_report_hydrate
+        )
 
         # Pre-seed indicator history with pre-session bars so indicators are ready at 09:15 AM
         self._bar_history = {}
@@ -1751,6 +1764,8 @@ class SimulationRunner:
             log.warning("No candles available for simulation date %s", range_label)
             self._status_message = f"No real candles available for {range_label}; acquire historical data before replay"
             self._state = SimState.IDLE
+            self._publish_frame(force=True)
+            self._publish_state()
             return
 
         self._candles = all_bars
@@ -3338,11 +3353,29 @@ async def _hydrate_missing_candles(
     start_epoch: int,
     end_epoch: int,
     session_start: Optional[int] = None,
+    on_progress: Optional[Any] = None,
 ) -> None:
-    """Fetch missing historical candles for selected replay date range from Zerodha Kite API."""
+    """Fetch missing historical candles for selected replay date range from Zerodha Kite API in safe chunks."""
     from app.services import ohlcv_store
-    from app.services.ohlcv_store import INDEX_ALIASES
     from app.services.ohlcv_store import INDEX_ALIASES, RESOLUTION_SECONDS
+    from app.services.exchanges.kite import accounts as kite_accounts
+    from app.services.exchanges.kite.client import KiteClient
+
+    try:
+        from zoneinfo import ZoneInfo
+        ist_tz = ZoneInfo("Asia/Kolkata")
+    except ImportError:
+        from datetime import timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+
+    kite_accounts.bootstrap()
+    zerodha_acct = kite_accounts.get_active("default") or next(
+        (a for a in kite_accounts._accounts.values() if a.is_active and a.access_token),
+        None,
+    )
+    if not (zerodha_acct and zerodha_acct.access_token):
+        log.info("No active Kite account available; skipping remote historical candle hydration.")
+        return
 
     check_start = session_start if session_start is not None else start_epoch
     res_sec = RESOLUTION_SECONDS.get(resolution, 300)
@@ -3350,96 +3383,96 @@ async def _hydrate_missing_candles(
     is_today_in_range = (start_epoch <= now_epoch <= (end_epoch + 86400))
     effective_target_end = min(end_epoch, now_epoch) if is_today_in_range else end_epoch
 
-    for sym in instruments:
-        existing = ohlcv_store.get_candles(sym, resolution, limit=10000, since=check_start)
-        in_range = [c for c in existing if check_start <= c["time"] <= end_epoch]
+    k_res_map = {
+        "1m": "minute",
+        "3m": "3minute",
+        "5m": "5minute",
+        "10m": "10minute",
+        "15m": "15minute",
+        "30m": "30minute",
+        "60m": "60minute",
+        "1h": "60minute",
+    }
+    k_res = k_res_map.get(resolution, "5minute")
+    # Kite enforces max 60-100 days per intraday request. Chunk into 60-day slices.
+    CHUNK_SEC = 60 * 86400
 
-        span_sec = max(0, effective_target_end - check_start)
-        expected_bars = max(1, span_sec // res_sec)
-
-        needs_fetch = False
-        if not in_range:
-            needs_fetch = True
-        elif is_today_in_range:
-            # If today is in range, cache is stale if the last bar is older than 2 candle intervals
-            last_cached_time = in_range[-1]["time"]
-            if last_cached_time < (effective_target_end - res_sec * 2):
-                needs_fetch = True
-        else:
-            # Historical session: require at least 70% of expected bars or last candle within 15m of end
-            if len(in_range) < max(5, int(expected_bars * 0.70)):
-                needs_fetch = True
-            elif in_range[-1]["time"] < (end_epoch - 900):
-                needs_fetch = True
-
-        if not needs_fetch:
-            continue
-
-        log.info("Missing/stale local candles for %s [%s] on range %d-%d. Triggering Zerodha Kite fetch...", sym, resolution, start_epoch, effective_target_end)
-
-        try:
-            from app.services.exchanges.kite import accounts as kite_accounts
-            from app.services.exchanges.kite.client import KiteClient
-
-            token = KITE_TOKENS.get(sym.upper())
+    kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
+    try:
+        for idx, sym in enumerate(instruments):
+            canon_sym = _canonical_symbol(sym)
+            token = KITE_TOKENS.get(canon_sym.upper()) or KITE_TOKENS.get(sym.upper())
             if not token and sym.upper() in INDEX_ALIASES:
                 token = KITE_TOKENS.get(INDEX_ALIASES[sym.upper()])
+            if not token and canon_sym.upper() in INDEX_ALIASES:
+                token = KITE_TOKENS.get(INDEX_ALIASES[canon_sym.upper()])
+            if not token:
+                continue
 
-            if token:
-                kite_accounts.bootstrap()
-                zerodha_acct = kite_accounts.get_active("default") or next(
-                    (a for a in kite_accounts._accounts.values() if a.is_active and a.access_token),
-                    None,
-                )
-                if zerodha_acct and zerodha_acct.access_token:
-                    kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
+            cov = ohlcv_store.get_symbol_coverage(canon_sym, resolution)
+            fetch_ranges: List[Tuple[int, int]] = []
+            if not cov or (cov.get("count") or 0) == 0:
+                fetch_ranges.append((check_start, effective_target_end))
+            else:
+                cov_earliest = cov.get("earliest") or 0
+                cov_latest = cov.get("latest") or 0
+                if check_start < (cov_earliest - res_sec):
+                    fetch_ranges.append((check_start, cov_earliest))
+                if is_today_in_range:
+                    if cov_latest < (effective_target_end - res_sec * 2):
+                        fetch_ranges.append((cov_latest, effective_target_end))
+                else:
+                    if cov_latest < (effective_target_end - 900):
+                        fetch_ranges.append((cov_latest, effective_target_end))
+
+            if not fetch_ranges:
+                continue
+
+            if on_progress:
+                try:
+                    on_progress(f"⚡ Hydrating {canon_sym} ({idx + 1}/{len(instruments)})...")
+                except Exception:
+                    pass
+
+            log.info("Missing/stale local candles for %s [%s] ranges %s. Fetching from Zerodha Kite...", canon_sym, resolution, fetch_ranges)
+
+            for f_epoch, t_epoch in fetch_ranges:
+                cur_start = f_epoch
+                while cur_start < t_epoch:
+                    cur_end = min(cur_start + CHUNK_SEC, t_epoch)
+                    from_str = datetime.fromtimestamp(cur_start, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
+                    to_str = datetime.fromtimestamp(cur_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     try:
-                        from zoneinfo import ZoneInfo
-                        ist_tz = ZoneInfo("Asia/Kolkata")
-                    except ImportError:
-                        from datetime import timezone, timedelta
-                        ist_tz = timezone(timedelta(hours=5, minutes=30))
-                    from_str = datetime.fromtimestamp(start_epoch, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    to_str = datetime.fromtimestamp(effective_target_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    k_res_map = {
-                        "1m": "minute",
-                        "3m": "3minute",
-                        "5m": "5minute",
-                        "10m": "10minute",
-                        "15m": "15minute",
-                        "30m": "30minute",
-                        "60m": "60minute",
-                        "1h": "60minute",
-                    }
-                    k_res = k_res_map.get(resolution, "5minute")
-                    hist_data = await kc.get_historical(token, k_res, from_str, to_str)
-                    if isinstance(hist_data, dict) and "candles" in hist_data:
-                        raw_list = hist_data["candles"]
-                        parsed_candles = []
-                        for row in raw_list:
-                            dt_c = datetime.fromisoformat(row[0])
-                            if dt_c.tzinfo is None:
-                                try:
-                                    from zoneinfo import ZoneInfo
-                                    dt_c = dt_c.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
-                                except ImportError:
-                                    dt_c = dt_c.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
-                            parsed_candles.append({
-                                "time": int(dt_c.timestamp()),
-                                "open": float(row[1]),
-                                "high": float(row[2]),
-                                "low": float(row[3]),
-                                "close": float(row[4]),
-                                "volume": float(row[5]) if len(row) > 5 else 0.0,
-                            })
-                        if parsed_candles:
-                            written = ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
-                            log.info("Hydrated %d real historical candles for %s from Zerodha Kite", written, sym)
-                            alias = INDEX_ALIASES.get(sym.upper())
-                            if alias and alias != sym.upper():
-                                ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
-        except Exception as exc:
-            log.warning("Failed to fetch Zerodha Kite historical candles for %s: %s", sym, exc)
+                        hist_data = await kc.get_historical(token, k_res, from_str, to_str)
+                        if isinstance(hist_data, dict) and "candles" in hist_data:
+                            raw_list = hist_data["candles"]
+                            parsed_candles = []
+                            for row in raw_list:
+                                dt_c = datetime.fromisoformat(row[0])
+                                if dt_c.tzinfo is None:
+                                    dt_c = dt_c.replace(tzinfo=ist_tz)
+                                parsed_candles.append({
+                                    "time": int(dt_c.timestamp()),
+                                    "open": float(row[1]),
+                                    "high": float(row[2]),
+                                    "low": float(row[3]),
+                                    "close": float(row[4]),
+                                    "volume": float(row[5]) if len(row) > 5 else 0.0,
+                                })
+                            if parsed_candles:
+                                ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
+                                if canon_sym != sym:
+                                    ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
+                                alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
+                                if alias and alias != canon_sym.upper():
+                                    ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
+                                log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
+                    except Exception as exc:
+                        log.warning("Failed chunk fetch for %s (%s to %s): %s", canon_sym, from_str, to_str, exc)
+                    cur_start = cur_end + 1
+                    await asyncio.sleep(0.1)
+    finally:
+        await kc.close()
 
 
 
