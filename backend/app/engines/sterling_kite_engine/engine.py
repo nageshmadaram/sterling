@@ -109,11 +109,9 @@ class SterlingKiteEngine:
                 self._positions.pop(underlying, None)
                 return ManageResult(underlying, pos.stop, exit=True, reason="raw price stop",
                                     red_count=red_count, green_lines=green_count)
-            entry_i = i
             # Retain full visible history for red count and trail checks across the window
             entry_i = 0
         longs, shorts = entry_transitions(r)
-        exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts)
         exit_i, reason = resolve_exit(r, pos.direction, entry_i, i, self.cfg, longs, shorts, is_stock=is_stock)
         if exit_i is not None:
             self._positions.pop(underlying, None)

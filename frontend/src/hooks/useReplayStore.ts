@@ -882,11 +882,13 @@ export function matchAdaptiveVersion(
 
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
-  const isActiveOrComplete = useReplayStore((s) => s.status.state !== 'idle' || s.status.session_complete === true);
+  const hasSessionData = useReplayStore(
+    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.events?.length ?? 0) > 0
+  );
   const config = useReplayStore((s) => s.status.config);
   const draft = useReplayStore((s) => s.draft);
 
-  const activeCfg = (isActiveOrComplete && config) ? config : null;
+  const activeCfg = (hasSessionData && config) ? config : null;
   const strats = activeCfg?.strategies ?? draft.strategies;
   const instruments = activeCfg?.instruments ?? draft.instruments;
   const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
@@ -905,11 +907,13 @@ export function useFilteredReplayEvents(): ReplaySignal[] {
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
-  const isActiveOrComplete = useReplayStore((s) => s.status.state !== 'idle' || s.status.session_complete === true);
+  const hasSessionData = useReplayStore(
+    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.trades?.length ?? 0) > 0
+  );
   const config = useReplayStore((s) => s.status.config);
   const draft = useReplayStore((s) => s.draft);
 
-  const activeCfg = (isActiveOrComplete && config) ? config : null;
+  const activeCfg = (hasSessionData && config) ? config : null;
   const strats = activeCfg?.strategies ?? draft.strategies;
   const instruments = activeCfg?.instruments ?? draft.instruments;
   const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';

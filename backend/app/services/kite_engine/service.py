@@ -1406,6 +1406,18 @@ def _new_trail_for_open(p, rows) -> Optional[float]:
                 has_sym = any(getattr(leg, "option_symbol", "") == p.symbol for leg in getattr(row, "legs", []))
                 if not has_sym:
                     continue
+        row_dir = str(getattr(row, "direction", "") or "").lower()
+        if row_dir in ("bull", "bullish", "long", "buy"):
+            row_dir = "long"
+        elif row_dir in ("bear", "bearish", "short", "sell"):
+            row_dir = "short"
+        sig_dir = str(getattr(p, "signal_direction", "") or "").strip().lower()
+        p_dir = sig_dir or (p.direction if (p.vehicle == "futures" and len(same_underlying) > 1) else None)
+        if p_dir and row_dir and p_dir != row_dir:
+            has_sym = any(getattr(leg, "option_symbol", "") == p.symbol for leg in getattr(row, "legs", []))
+            if not has_sym:
+                continue
+
         if p.vehicle == "futures":
             new_sl = float(row.stop_loss or 0.0)
             if new_sl <= 0:
