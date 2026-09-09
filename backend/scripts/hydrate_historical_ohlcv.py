@@ -43,9 +43,15 @@ async def main():
         try:
             hist_data = await kc.get_historical(tok, "5minute", from_str, to_str)
             raw_list = hist_data.get("candles", []) if isinstance(hist_data, dict) else []
-            parsed_candles = []
+            try:
+                from zoneinfo import ZoneInfo
+                ist = ZoneInfo("Asia/Kolkata")
+            except ImportError:
+                ist = timezone(timedelta(hours=5, minutes=30))
             for row in raw_list:
                 dt_c = datetime.fromisoformat(row[0])
+                if dt_c.tzinfo is None:
+                    dt_c = dt_c.replace(tzinfo=ist)
                 parsed_candles.append({
                     "time": int(dt_c.timestamp()),
                     "open": float(row[1]),

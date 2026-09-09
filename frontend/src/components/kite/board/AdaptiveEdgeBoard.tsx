@@ -6,7 +6,11 @@
  * sidebar view, where the point is that all three engines read the same way.
  */
 import React from 'react';
-import { useAdaptiveEdgeSnapshot } from '../../../hooks/useAdaptiveEdge';
+import {
+  useAdaptiveEdgeEngineConfig,
+  useAdaptiveEdgeSnapshot,
+  useSetAdaptiveEdgeEngineConfig,
+} from '../../../hooks/useAdaptiveEdge';
 import { rowsFromSnapshot } from '../AdaptiveEdgePanel';
 import { adaptiveEdgeToBoard } from './adaptiveEdgeAdapter';
 import { BOARD_COLUMNS, DEFAULT_SORT, SignalBoard } from './SignalBoard';
@@ -36,6 +40,8 @@ export function AdaptiveEdgeBoard({
   // Buy/Sell and the chart, built from the signal alone — same on every board.
   const rowActions = useBoardRowActions({ onOpenChart });
   const snapshot = useAdaptiveEdgeSnapshot();
+  const { data: engineCfg } = useAdaptiveEdgeEngineConfig();
+  const setEngineCfg = useSetAdaptiveEdgeEngineConfig();
   const rawSignals = React.useMemo(
     () => (snapshot.data ? adaptiveEdgeToBoard(rowsFromSnapshot(snapshot.data)) : []),
     [snapshot.data],
@@ -173,10 +179,59 @@ export function AdaptiveEdgeBoard({
     </div>
   );
 
+  const currentVersion = engineCfg?.config?.strategy_version === 'v1_baseline' ? 'v1_baseline' : 'v2_hardened';
+  const isV2 = currentVersion === 'v2_hardened';
+
+  const versionToggle = (
+    <button
+      type="button"
+      title={`Adaptive Edge Engine: ${isV2 ? 'V2 Production-Hardened (Click to switch to V1 Legacy)' : 'V1 Legacy Baseline (Click to switch to V2 Hardened)'}`}
+      data-testid="ae-board-version-toggle"
+      onClick={() => {
+        if (!setEngineCfg.isPending && engineCfg?.config) {
+          setEngineCfg.mutate({
+            ...engineCfg.config,
+            strategy_version: isV2 ? 'v1_baseline' : 'v2_hardened',
+          });
+        }
+      }}
+      style={{
+        border: `1px solid ${isV2 ? 'rgba(46, 125, 50, 0.4)' : k.border}`,
+        background: isV2 ? 'rgba(46, 125, 50, 0.12)' : k.surfaceHover,
+        color: isV2 ? 'var(--k-green, #2e7d32)' : k.dim,
+        fontWeight: 750,
+        borderRadius: 4,
+        padding: '0 8px',
+        height: 22,
+        fontSize: 9.5,
+        letterSpacing: '.04em',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        boxSizing: 'border-box',
+        flexShrink: 0,
+        transition: 'all 0.12s ease',
+      }}
+    >
+      <span
+        style={{
+          width: 5,
+          height: 5,
+          borderRadius: '50%',
+          background: isV2 ? 'var(--k-green, #2e7d32)' : 'var(--k-amber, #f57c00)',
+          display: 'inline-block',
+        }}
+      />
+      {isV2 ? 'V2 HARDENED' : 'V1 LEGACY'}
+    </button>
+  );
+
   return (
     <div>
       <BoardFilters view={view} columns={BOARD_COLUMNS}>
         {sourceToggles}
+        {versionToggle}
       </BoardFilters>
       <SignalBoard
         renderTrade={rowActions.renderTrade}

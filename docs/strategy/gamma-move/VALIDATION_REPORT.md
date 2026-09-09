@@ -9,16 +9,6 @@
 
 > **The entry trigger alone has no measurable edge. The level filter does.**
 
-Bars passing all three of the source's entry conditions reached a 30% favourable
-excursion within two sessions **24.7%** of the time [20.9, 28.9], against an
-unconditional baseline of **21.7%** [21.5, 21.9]. Those intervals overlap: on
-this sample, the triple that the whole strategy is named for does not separate
-from simply picking a bar at random.
-
-The same triple, restricted to bars where spot sat within 1% of a confirmed
-support or resistance level, reached **46.2%** [31.6, 61.4] — a lower bound above
-the baseline's upper bound.
-
 So the strategy's distinctive claim, that open-interest unwinding predicts a
 gamma move, is **not** what the data supports. What the data supports is a much
 older idea: things happen at levels. The engine ships with the trigger intact,

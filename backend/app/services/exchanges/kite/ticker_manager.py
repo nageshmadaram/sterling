@@ -92,6 +92,15 @@ def _make_broadcaster(user_id: str):
                 await owf_runner.on_ticks(user_id, ticks)
         except Exception as exc:  # never let this kill the tick loop
             log.debug("OI Wall Flow on_ticks failed for %s: %s", user_id, exc)
+        # Then Gamma Move: trailing stop and market-exit triggers both fire on
+        # ticks, and must not depend on a UI being connected.
+        try:
+            from app.services import gamma_move_positions as gm_positions
+            from app.services import gamma_move_runner as gm_runner
+            if gm_positions.open_positions(user_id):
+                await gm_runner.on_ticks(user_id, ticks)
+        except Exception as exc:  # never let this kill the tick loop
+            log.debug("Gamma Move on_ticks failed for %s: %s", user_id, exc)
         try:
             from app.api.v1.endpoints.stream import stream_manager
             await stream_manager.broadcast_to_channel(

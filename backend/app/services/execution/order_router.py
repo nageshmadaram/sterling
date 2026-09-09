@@ -31,7 +31,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
+from app.core.logging import get_logger
 from app.services import live_safety
+
+log = get_logger(__name__)
 
 
 # ─── Modes ────────────────────────────────────────────────────────────────
@@ -295,19 +298,31 @@ class OrderRouter:
         side = self._side(req)
         symbol = self._symbol_for(req, inst)
 
+        # Mark pending idempotency immediately before dispatching to adapter to prevent race conditions (TOCTOU)
+        live_safety.record_idempotency(idem_key, "PENDING")
+
+        extra_kwargs: Dict[str, Any] = {}
+        if req.stop_loss is not None:
+            extra_kwargs["trigger_price"] = req.stop_loss
+            if req.order_type in ("sl", "sl-m", "slm", "stop", "stop_loss", "stop_market") or req.reduce_only:
+                extra_kwargs["kite_order_type"] = "SL" if req.limit_price else "SL-M"
+
         try:
             if req.instrument_type == "options":
                 if not req.option_symbol:
+                    if getattr(live_safety, "_IDEMPOTENCY_CACHE", None) is not None:
+                        live_safety._IDEMPOTENCY_CACHE.pop(idem_key, None)
                     return self._reject(req, "missing_option_symbol",
                                         "Options orders require option_symbol", now_ms)
                 order = await self.adapter.place_order_option(
                     option_symbol=req.option_symbol,
-                    side="buy",                     # always buy for options
+                    side="buy" if not req.reduce_only else "sell",
                     size=req.size,
                     order_type=self._api_order_type(req.order_type),
                     limit_price=req.limit_price,
                     stop_loss=req.stop_loss,
                     take_profit=req.take_profit,
+                    **extra_kwargs,
                 )
                 symbol = req.option_symbol
             else:
@@ -323,8 +338,11 @@ class OrderRouter:
                     stop_loss=req.stop_loss,
                     take_profit=req.take_profit,
                     trail_amount=req.trail_amount,
+                    **extra_kwargs,
                 )
         except Exception as exc:
+            if getattr(live_safety, "_IDEMPOTENCY_CACHE", None) is not None:
+                live_safety._IDEMPOTENCY_CACHE.pop(idem_key, None)
             retry = live_safety.enqueue_retry(
                 payload={
                     "underlying": req.underlying,

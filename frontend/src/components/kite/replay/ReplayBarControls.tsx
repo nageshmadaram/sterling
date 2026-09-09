@@ -340,11 +340,13 @@ export function ReplayStrategyDropdown() {
   const count = allStrategies ? REPLAY_STRATEGIES.length : draft.strategies.length;
   const adaptiveSource = draft.adaptiveSource ?? 'both';
   const aeSuffix = adaptiveSource === 'both' ? 'Both' : adaptiveSource === 'ae_model' ? 'AE' : 'Spot';
+  const adaptiveVersion = draft.adaptiveVersion ?? 'v2_hardened';
+  const aeVerSuffix = adaptiveVersion === 'v2_hardened' ? 'V2' : 'V1';
   const displayLabel = allStrategies
     ? 'All'
     : count === 1
       ? (draft.strategies[0] === 'adaptive_edge'
-          ? `Adaptive Edge (${aeSuffix})`
+          ? `Adaptive Edge (${aeVerSuffix} · ${aeSuffix})`
           : strategyLabel(draft.strategies[0]))
       : `${count} active`;
 
@@ -372,7 +374,7 @@ export function ReplayStrategyDropdown() {
         onOpenChange={setOpen}
         label="Select strategies"
         anchorRef={anchor}
-        width={260}
+        width={280}
         align="start"
       >
         <div className="rd-drop-menu" role="dialog" aria-label="Strategy selection">
@@ -405,49 +407,101 @@ export function ReplayStrategyDropdown() {
                 </label>
                 {isAe && active && (
                   <div
-                    className="rd-drop-sub-pills"
                     style={{
                       display: 'flex',
+                      flexDirection: 'column',
                       gap: '4px',
                       padding: '2px 0 6px 28px',
                     }}
-                    role="group"
-                    aria-label="Adaptive Edge Source"
                   >
-                    {[
-                      { id: 'both', label: 'Both' },
-                      { id: 'ae_model', label: 'AE Model' },
-                      { id: 'spot_scan', label: 'Spot Scan' },
-                    ].map((opt) => {
-                      const sel = (draft.adaptiveSource ?? 'both') === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className="rd-btn rd-btn-sm"
-                          data-active={sel}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setDraft({ adaptiveSource: opt.id as 'both' | 'ae_model' | 'spot_scan' });
-                          }}
-                          style={{
-                            fontSize: '10.5px',
-                            padding: '2px 7px',
-                            height: '22px',
-                            lineHeight: '18px',
-                            borderRadius: '4px',
-                            border: `1px solid ${sel ? 'var(--k-cyan)' : 'var(--k-border)'}`,
-                            background: sel ? 'rgba(0, 180, 216, 0.16)' : 'transparent',
-                            color: sel ? 'var(--k-cyan)' : 'var(--k-dim)',
-                            fontWeight: sel ? 700 : 500,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ fontSize: '9.5px', color: 'var(--k-dim)', width: '44px', flexShrink: 0 }}>Version:</span>
+                      <div
+                        className="rd-drop-sub-pills"
+                        style={{ display: 'flex', gap: '4px' }}
+                        role="group"
+                        aria-label="Adaptive Edge Version"
+                      >
+                        {[
+                          { id: 'v2_hardened', label: 'V2 Hardened' },
+                          { id: 'v1_baseline', label: 'V1 Legacy' },
+                        ].map((opt) => {
+                          const sel = (draft.adaptiveVersion ?? 'v2_hardened') === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              className="rd-btn rd-btn-sm"
+                              data-active={sel}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDraft({ adaptiveVersion: opt.id as 'v2_hardened' | 'v1_baseline' });
+                              }}
+                              style={{
+                                fontSize: '10px',
+                                padding: '2px 6px',
+                                height: '20px',
+                                lineHeight: '16px',
+                                borderRadius: '4px',
+                                border: `1px solid ${sel ? 'var(--k-cyan)' : 'var(--k-border)'}`,
+                                background: sel ? 'rgba(0, 180, 216, 0.16)' : 'transparent',
+                                color: sel ? 'var(--k-cyan)' : 'var(--k-dim)',
+                                fontWeight: sel ? 700 : 500,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ fontSize: '9.5px', color: 'var(--k-dim)', width: '44px', flexShrink: 0 }}>Source:</span>
+                      <div
+                        className="rd-drop-sub-pills"
+                        style={{ display: 'flex', gap: '4px' }}
+                        role="group"
+                        aria-label="Adaptive Edge Source"
+                      >
+                        {[
+                          { id: 'both', label: 'Both' },
+                          { id: 'ae_model', label: 'AE Model' },
+                          { id: 'spot_scan', label: 'Spot Scan' },
+                        ].map((opt) => {
+                          const sel = (draft.adaptiveSource ?? 'both') === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              className="rd-btn rd-btn-sm"
+                              data-active={sel}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDraft({ adaptiveSource: opt.id as 'both' | 'ae_model' | 'spot_scan' });
+                              }}
+                              style={{
+                                fontSize: '10px',
+                                padding: '2px 6px',
+                                height: '20px',
+                                lineHeight: '16px',
+                                borderRadius: '4px',
+                                border: `1px solid ${sel ? 'var(--k-cyan)' : 'var(--k-border)'}`,
+                                background: sel ? 'rgba(0, 180, 216, 0.16)' : 'transparent',
+                                color: sel ? 'var(--k-cyan)' : 'var(--k-dim)',
+                                fontWeight: sel ? 700 : 500,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

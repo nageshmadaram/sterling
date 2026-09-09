@@ -46,27 +46,30 @@ def black_scholes_greeks(
     """
     is_call = str(option_type).upper().startswith("C")
     t = max(dte_days, 0.0) / 365.0
-    # Degenerate: expired or no vol → delta is the intrinsic sign, rest ~0.
+    # Degenerate: expired or no vol → delta is the intrinsic sign (or ±0.5 ATM), rest ~0.
     if t <= 0 or iv <= 0 or spot <= 0 or strike <= 0:
         if is_call:
-            delta = 1.0 if spot > strike else 0.0
+            delta = 1.0 if spot > strike else (0.5 if spot == strike else 0.0)
         else:
-            delta = -1.0 if spot < strike else 0.0
+            delta = -1.0 if spot < strike else (-0.5 if spot == strike else 0.0)
         return Greeks(delta=delta, gamma=0.0, theta=0.0, vega=0.0, solved=False)
 
-    sig_rt = iv * math.sqrt(t)
+    t = max(t, 1e-5)
+    sqrt_t = math.sqrt(t)
+    sig_rt = max(iv * sqrt_t, 1e-8)
     d1 = (math.log(spot / strike) + (rate + 0.5 * iv * iv) * t) / sig_rt
     d2 = d1 - sig_rt
     pdf = _norm_pdf(d1)
 
     delta = _norm_cdf(d1) if is_call else _norm_cdf(d1) - 1.0
     gamma = pdf / (spot * sig_rt)
-    vega = spot * pdf * math.sqrt(t) / 100.0
+    vega = spot * pdf * sqrt_t / 100.0
+    denom_theta = max(2.0 * sqrt_t, 1e-6)
     if is_call:
-        theta = (-spot * pdf * iv / (2 * math.sqrt(t))
+        theta = (-spot * pdf * iv / denom_theta
                  - rate * strike * math.exp(-rate * t) * _norm_cdf(d2)) / 365.0
     else:
-        theta = (-spot * pdf * iv / (2 * math.sqrt(t))
+        theta = (-spot * pdf * iv / denom_theta
                  + rate * strike * math.exp(-rate * t) * _norm_cdf(-d2)) / 365.0
     return Greeks(delta=delta, gamma=gamma, theta=theta, vega=vega)
 
@@ -154,6 +157,15 @@ def implied_vol(*, price: float, spot: float, strike: float, dte_days: float,
 
     # Robust fallback: bracketed bisection always converges.
     lo, hi = 1e-3, 5.0
+    price_lo = bs_price(spot=spot, strike=strike, dte_days=dte_days, iv=lo,
+                        option_type=option_type, rate=rate)
+    price_hi = bs_price(spot=spot, strike=strike, dte_days=dte_days, iv=hi,
+                        option_type=option_type, rate=rate)
+    if price < price_lo:
+        return lo if abs(price - price_lo) < 0.05 else 0.0
+    if price > price_hi:
+        return 0.0
+
     for _ in range(64):
         mid = 0.5 * (lo + hi)
         if bs_price(spot=spot, strike=strike, dte_days=dte_days, iv=mid,

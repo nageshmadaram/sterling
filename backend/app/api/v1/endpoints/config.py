@@ -643,6 +643,7 @@ async def get_adaptive_edge_config() -> dict:
     from app.engines.adaptive_edge.config import (
         DATA_SOURCES, DECISION_TIMEFRAMES, EXIT_POLICIES, SIZING_MODES,
         STOP_MODES, AdaptiveEdgeConfig,
+        STOP_MODES, STRATEGY_VERSIONS, AdaptiveEdgeConfig,
     )
     from app.engines.option_contracts import EXPIRY_SELECTIONS, EXPIRY_SERIES
     from app.services.kite_engine.stock_registry import HIGH_LIQUIDITY_STOCK_NAMES
@@ -653,6 +654,7 @@ async def get_adaptive_edge_config() -> dict:
         "config": cfg.as_dict(),
         "defaults": AdaptiveEdgeConfig().as_dict(),
         "vocabularies": {
+            "strategy_version": sorted(STRATEGY_VERSIONS),
             "decision_timeframe": sorted(DECISION_TIMEFRAMES),
             "data_source": sorted(DATA_SOURCES),
             "exit_policy": sorted(EXIT_POLICIES),

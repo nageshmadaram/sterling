@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReplayTrade,
   useFilteredReplayTrades,
@@ -27,7 +27,7 @@ import { strategyKey, strategyLabel, strategyTone } from './replayStrategies';
 import { useVirtualRows } from './useVirtualRows';
 import * as Icons from './ReplayIcons';
 
-const ROW_H = 28;
+const ROW_H = 40;
 const VIRTUALISE_ABOVE = 200;
 
 export type TradeGroupBy = 'none' | 'date' | 'strategy' | 'contract';
@@ -98,6 +98,21 @@ const TradeRow = memo(function TradeRow({
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: strategyTone(t.strategy) }}>
           <span className="rd-dot-tone" />
           <span style={{ color: 'var(--k-text)', fontWeight: 600 }}>{strategyLabel(t.strategy)}</span>
+          {(t.strategy === 'adaptive_edge' || t.scan_origin) && (
+            <span
+              style={{
+                fontSize: '9.5px',
+                fontWeight: 600,
+                padding: '1px 4px',
+                borderRadius: '3px',
+                background: 'rgba(255, 255, 255, 0.06)',
+                color: t.scan_origin === 'spot_scan' ? 'var(--k-amber, #f59e0b)' : 'var(--k-cyan, #00b4d8)',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {t.scan_origin === 'spot_scan' ? 'Spot' : 'AE'}
+            </span>
+          )}
         </span>
       </td>
       <td>
@@ -177,6 +192,51 @@ const TradeRow = memo(function TradeRow({
         <span className="rd-status-chip" data-tone={open ? 'open' : win ? 'win' : 'loss'}>
           {t.status}
         </span>
+        {t.exit_reason && (
+          <span
+            className="rd-sub"
+            style={{
+              display: 'block',
+              fontSize: '10px',
+              fontWeight: 600,
+              marginTop: '2px',
+              textTransform: 'uppercase',
+              color:
+                t.exit_reason === 'TRAILING_STOP'
+                  ? 'var(--k-cyan, #06b6d4)'
+                  : t.exit_reason === 'TARGET'
+                  ? 'var(--k-green, #10b981)'
+                  : t.exit_reason === 'STOP_LOSS'
+                  ? 'var(--k-red, #ef4444)'
+                  : 'var(--k-dim)',
+            }}
+            title={
+              t.exit_reason === 'TRAILING_STOP'
+                ? 'Trailing Stop Loss: Ratcheted stop triggered (profit locked)'
+                : t.exit_reason === 'TARGET'
+                ? 'Target: Take-profit reached'
+                : t.exit_reason === 'STOP_LOSS'
+                ? 'Stop Loss: Initial protective stop hit'
+                : t.exit_reason === 'MAX_HOLD'
+                ? 'Max Hold: Intraday bar time limit reached'
+                : t.exit_reason === 'SESSION_CLOSE'
+                ? 'Session Close: Intraday market close square-off'
+                : t.exit_reason
+            }
+          >
+            {t.exit_reason === 'TRAILING_STOP'
+              ? 'TSL'
+              : t.exit_reason === 'TARGET'
+              ? 'TARGET'
+              : t.exit_reason === 'STOP_LOSS'
+              ? 'SL'
+              : t.exit_reason === 'MAX_HOLD'
+              ? 'TIME'
+              : t.exit_reason === 'SESSION_CLOSE'
+              ? 'EOD'
+              : t.exit_reason}
+          </span>
+        )}
       </td>
       <td
         data-align="right"
@@ -250,6 +310,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
     : rawDrag;
   const transport = useReplayTransport();
   const state = useReplayState();
+  const barsPlayed = useReplayStore((s) => s.status.bars_played);
   const cfg = useReplayStore((s) => s.status.config);
   const draft = useReplayStore((s) => s.draft);
   const multiDay = Boolean(
@@ -268,6 +329,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       return true;
     }
   });
+  const handleToggleInvested = useCallback(() => setShowInvested((s) => !s), []);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -396,10 +458,12 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
     return (
       <EmptyState
         icon={<Icons.Trades size={20} />}
-        title={state === 'idle' ? 'No replay loaded' : 'No entries yet'}
+        title={state === 'idle' ? (barsPlayed > 0 ? 'No trades executed' : 'No replay loaded') : 'No entries yet'}
         detail={
           state === 'idle'
-            ? 'Pick a session and press play.'
+            ? barsPlayed > 0
+              ? `${fmtInt(barsPlayed)} bars replayed. No setups met execution criteria during this session.`
+              : 'Pick a session and press play.'
             : 'Strong signals open positions automatically.'
         }
         action={
@@ -595,7 +659,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                           t={t}
                           hasFriction={hasFriction}
                           showInvested={showInvested}
-                          onToggleInvested={() => setShowInvested((s) => !s)}
+                          onToggleInvested={handleToggleInvested}
                           colSpanBase={cols}
                         />
                       ))}
@@ -610,7 +674,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                       t={t}
                       hasFriction={hasFriction}
                       showInvested={showInvested}
-                      onToggleInvested={() => setShowInvested((s) => !s)}
+                      onToggleInvested={handleToggleInvested}
                       colSpanBase={cols}
                     />
                   ))}
