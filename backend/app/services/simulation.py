@@ -164,6 +164,11 @@ class SimSignalEvent(BaseModel):
     premium_target: Optional[float] = None
     scan_origin: Optional[str] = None
     strategy_version: Optional[str] = None
+    # Gamma Move level filter only. Absent on every other engine.
+    level_price: Optional[float] = None
+    level_kind: Optional[str] = None
+    level_touches: Optional[int] = None
+    regime: Optional[str] = None
 
 
 class SimTradeEvent(BaseModel):
@@ -2390,7 +2395,11 @@ class SimulationRunner:
                     if inst.upper() == v.upper():
                         allowed_syms.add(k)
 
-        ae_events = self._events_for("adaptive_edge", "spot_scan")
+        has_pure_ae = any(ev.strategy == "adaptive_edge" for ev in self._stats.events)
+        if has_pure_ae:
+            ae_events = self._events_for("adaptive_edge", "spot_scan")
+        else:
+            ae_events = self._events_for("adaptive_edge", "supertrend", "spot_scan")
 
         if allowed_syms:
             ae_events = [ev for ev in ae_events if ev.instrument in allowed_syms or ev.instrument.upper() in allowed_syms]
@@ -2988,21 +2997,44 @@ class SimulationRunner:
             })
 
         from app.services.gamma_move import get_config, descriptor
+        sim_date = self._config.date if self._config else ""
+        from app.services.gamma_move import descriptor, get_config
         try:
             cfg_obj = get_config()
             cfg_dict = cfg_obj.as_dict()
             desc = descriptor()
             enabled = cfg_obj.enabled
+            warnings = list(cfg_obj.warnings())
         except Exception:
             cfg_dict = {}
             desc = {}
             enabled = True
+            cfg_dict, desc, enabled, warnings = {}, {}, True, []
 
         underlyings_list = list(set(ev.instrument for ev in self._stats.events))
         wins = len([t for t in self._stats.trades if (t.pnl_usd or 0) > 0])
         losses = len([t for t in self._stats.trades if (t.pnl_usd or 0) < 0])
         total_pnl = round(sum(float(t.pnl_usd or 0.0) for t in self._stats.trades), 2)
 
+        events = self._events_for("gamma_move")
+        latest: Dict[Tuple[str, str], Any] = {}
+        for ev in events:
+            key = (ev.instrument, getattr(ev, "level_kind", None) or ev.direction)
+            prev = latest.get(key)
+            if prev is None or ev.timestamp_ms >= prev.timestamp_ms:
+                latest[key] = ev
+        candidates = [_gamma_move_candidate(ev, sim_date) for ev in latest.values()]
+        names = sorted({ev.instrument for ev in latest.values()})
+        blockers = [
+            "replay has no 15-minute option open-interest tape — the trigger cannot fire",
+            "levels are confirmed daily swings on stocks only — a short 5-minute tape emits nothing",
+        ]
+        if not events:
+            blockers.append("no underlying is inside a confirmed daily level on this replay tape")
+        warnings.append(
+            "not validated: simulation shows the level filter only. "
+            "Do not read watching rows as entries."
+        )
         return {
             "generated_at": f"{sim_date}T09:16:31+05:30",
             "strategy": {**desc, "enabled": enabled},
@@ -3012,6 +3044,8 @@ class SimulationRunner:
             "simulation": None,
             "candidates": signals,
             "signals": signals,
+            "simulation": {"mode": "replay"},
+            "candidates": candidates,
             "positions": [],
             "record": {
                 "trades": len(self._stats.trades),
@@ -3024,6 +3058,10 @@ class SimulationRunner:
                 "day_realised_inr": total_pnl,
                 "day": sim_date,
                 "verdict": "simulation replay",
+                "trades": 0, "wins": 0, "losses": 0, "win_rate": None,
+                "consecutive_losses": 0, "consecutive_wins": 0,
+                "realised_inr": 0.0, "day_realised_inr": 0.0, "day": sim_date,
+                "verdict": "simulation replay — trigger not evaluated",
             },
             "orphan_positions": [],
             "blockers": [],
@@ -3033,11 +3071,15 @@ class SimulationRunner:
                 "underlyings": len(underlyings_list) or 1,
                 "sample": underlyings_list[:10],
             },
+            "blockers": blockers,
+            "universe": {"underlyings": len(names), "sample": names[:10]},
             "mode": {
                 "is_paper": True,
                 "auto_execute": False,
                 "note": "Replay simulation mode",
+                "note": "Replay simulation. Paper/live is the account's Trading Mode.",
             },
+            "warnings": warnings,
         }
 
     def get_nifty_orb_signals_response(self) -> Dict[str, Any]:

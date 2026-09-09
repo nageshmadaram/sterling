@@ -38,15 +38,17 @@ function listedContract(i: GammaSignalRow['instrument'] | undefined): boolean {
 }
 
 function instrument(row: GammaSignalRow): BoardInstrument {
-  const i = row.instrument || ({} as any);
+  const i = row.instrument || ({} as GammaSignalRow['instrument']);
+  const listed = listedContract(i);
+  const symbol = i.tradingsymbol || row.underlying;
   return {
-    symbol: i.tradingsymbol || (row as any).symbol || '',
-    exchange: i.exchange || 'NFO',
-    kind: 'option',
-    optionType: i.option_type || ((row as any).option_type ?? 'CE'),
-    strike: i.strike ?? (row as any).strike ?? 0,
-    expiry: i.expiry || (row as any).expiry || '',
-    lotSize: i.lot_size ?? (row as any).lot_size ?? 1,
+    symbol,
+    exchange: listed ? (i.exchange || 'NFO') : 'NSE',
+    kind: listed ? 'option' : 'equity',
+    optionType: i.option_type,
+    strike: i.strike,
+    expiry: i.expiry,
+    lotSize: i.lot_size,
     moneyness: null,
     // No listed option → do not mint NFO:RELIANCE. Chart the underlying.
     quoteKey: symbol ? `${listed ? (i.exchange || 'NFO') : 'NSE'}:${symbol}` : null,
@@ -88,25 +90,29 @@ function originOf(row: GammaSignalRow): BoardOrigin | undefined {
  */
 function flagsOf(row: GammaSignalRow, proximityPct: number): BoardOrigin[] {
   const out: BoardOrigin[] = [];
-  const levelObj = row.level || {
-    distance_pct: (row as any).distance_pct ?? 0,
-    kind: (row as any).level_type?.toLowerCase() === 'support' ? 'support' : 'resistance',
-    price: (row as any).spot_level ?? row.spot ?? 0,
-    touches: 1,
+  const level = row.level || {
+    price: row.spot, kind: 'resistance' as const, touches: 0, distance_pct: 0,
   };
-  const d = levelObj.distance_pct ?? 0;
+  const d = level.distance_pct;
   const inside = d <= proximityPct;
   out.push({
-    label: `${d.toFixed(2)}% FROM ${levelObj.kind === 'resistance' ? 'RES' : 'SUP'}`,
+    label: `${d.toFixed(2)}% FROM ${level.kind === 'resistance' ? 'RES' : 'SUP'}`,
     tone: inside ? 'green' : 'dim',
     hint: inside
-      ? `Spot ${n(row.spot)} is within ${proximityPct}% of a ${levelObj.kind} at `
-        + `${n(levelObj.price)} touched ${levelObj.touches} times. This is the only `
+      ? `Spot ${n(row.spot)} is within ${proximityPct}% of a ${level.kind} at `
+        + `${n(level.price)} touched ${level.touches} times. This is the only `
         + 'filter that measurably separated from baseline.'
-      : `Spot ${n(row.spot)} is ${d.toFixed(2)}% from the nearest ${levelObj.kind}, `
+      : `Spot ${n(row.spot)} is ${d.toFixed(2)}% from the nearest ${level.kind}, `
         + `outside the ${proximityPct}% band where the edge was measured.`,
   });
-  if (row.days_to_expiry != null) {
+  if (row.days_to_expiry == null) {
+    out.push({
+      label: 'NO CHAIN',
+      tone: 'dim',
+      hint: 'Replay has no option chain, so expiry and the wall strike are unknown. '
+        + 'This row is the daily level filter only.',
+    });
+  } else {
     out.push({
       label: `${row.days_to_expiry}D TO EXPIRY`,
       tone: 'dim',
@@ -116,7 +122,7 @@ function flagsOf(row: GammaSignalRow, proximityPct: number): BoardOrigin[] {
   }
   if (row.regime && row.regime !== 'unknown') {
     out.push({
-      label: `TREND ${String(row.regime).toUpperCase()}`,
+      label: `TREND ${row.regime.toUpperCase()}`,
       tone: row.regime === 'up' ? 'green' : 'amber',
       hint: 'SuperTrend on the underlying. Calls need an uptrend, puts a downtrend. '
         + 'Measured at multiplier 2.0 — at the conventional 3.0 the gate inverted.',
@@ -158,10 +164,10 @@ function triggerSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']):
     return { title: 'Trigger', layout: 'rows',
              summary: 'Not enough of today’s bars to evaluate.', stats: [] };
   }
-  const minOi = cfg?.min_oi_drop_pct ?? 10;
-  const volMult = cfg?.volume_spike_mult ?? 1.5;
+  const minOi = cfg?.min_oi_drop_pct ?? 3.0;
+  const volMult = cfg?.volume_spike_mult ?? 2.5;
   const volLookback = cfg?.volume_lookback ?? 20;
-  const minGain = cfg?.min_price_gain_pct ?? 5;
+  const minGain = cfg?.min_price_gain_pct ?? 2.0;
   return {
     title: 'Trigger',
     layout: 'rows',
@@ -184,24 +190,21 @@ function triggerSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']):
 }
 
 function levelSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']): BoardSection {
-  const prox = cfg?.level_proximity_pct ?? 1.5;
+  const prox = cfg?.level_proximity_pct ?? 1.0;
   const tf = cfg?.level_timeframe ?? 'day';
-  const levelObj = row.level || {
-    distance_pct: (row as any).distance_pct ?? 0,
-    kind: (row as any).level_type?.toLowerCase() === 'support' ? 'support' : 'resistance',
-    price: (row as any).spot_level ?? row.spot ?? 0,
-    touches: 1,
+  const level = row.level || {
+    distance_pct: 0, kind: 'resistance' as const, price: row.spot ?? 0, touches: 0,
   };
   return {
     title: 'Level',
     layout: 'tiles',
-    summary: `${row.underlying} spot ${n(row.spot)} against a ${levelObj.kind} at `
-      + `${n(levelObj.price)}.`,
+    summary: `${row.underlying} spot ${n(row.spot)} against a ${level.kind} at `
+      + `${n(level.price)}.`,
     stats: [
-      { label: 'Level', value: n(levelObj.price) },
-      { label: 'Kind', value: levelObj.kind },
-      { label: 'Touches', value: String(levelObj.touches) },
-      { label: 'Distance', value: `${(levelObj.distance_pct ?? 0).toFixed(2)}%`,
+      { label: 'Level', value: n(level.price) },
+      { label: 'Kind', value: level.kind },
+      { label: 'Touches', value: String(level.touches) },
+      { label: 'Distance', value: `${(level.distance_pct ?? 0).toFixed(2)}%`,
         hint: `the measured edge is inside ${prox}%` },
       { label: 'Timeframe', value: tf },
     ],
@@ -209,17 +212,16 @@ function levelSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']): B
 }
 
 function contractSection(row: GammaSignalRow): BoardSection {
-  const i = row.instrument || ({} as any);
   return {
     title: 'Contract',
     layout: 'tiles',
     stats: [
-      { label: 'Strike', value: n(i.strike, 0) },
-      { label: 'Type', value: i.option_type || '—' },
-      { label: 'Expiry', value: i.expiry || '—' },
-      { label: 'Days left', value: String(row.days_to_expiry ?? '—') },
+      { label: 'Strike', value: n(row.instrument.strike, 0) },
+      { label: 'Type', value: row.instrument.option_type },
+      { label: 'Expiry', value: row.instrument.expiry || '—' },
+      { label: 'Days left', value: row.days_to_expiry == null ? '—' : String(row.days_to_expiry) },
       { label: 'Open interest', value: row.oi ? row.oi.toLocaleString('en-IN') : '—' },
-      { label: 'Lot size', value: String(i.lot_size ?? '—') },
+      { label: 'Lot size', value: row.instrument.lot_size == null ? '—' : String(row.instrument.lot_size) },
     ],
   };
 }
@@ -227,18 +229,10 @@ function contractSection(row: GammaSignalRow): BoardSection {
 function toSignal(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config'],
                   position?: GammaPositionRow): BoardSignal {
   const lv = row.levels || {
-    ltp: (row as any).ltp ?? null,
-    entry: (row as any).entry_premium ?? (row as any).entry ?? null,
-    stop: (row as any).stop_premium ?? (row as any).stop ?? null,
-    trail: (row as any).trail ?? null,
-    target: (row as any).target_premium ?? (row as any).target ?? null,
-    exit: (row as any).exit ?? null,
+    ltp: null, entry: null, stop: null, trail: null, target: null, exit: null,
   };
   const sz = row.sizing || {
-    lots: (row as any).lots ?? null,
-    quantity: (row as any).quantity ?? null,
-    at_risk_inr: (row as any).at_risk_inr ?? null,
-    deployed_inr: (row as any).deployed_inr ?? null,
+    lots: null, quantity: null, at_risk_inr: null, deployed_inr: null,
   };
   return {
     id: row.id,
@@ -275,7 +269,7 @@ function toSignal(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config'],
     score: null,
     reason: row.reason ?? row.exit_reason ?? null,
     origin: originOf(row),
-    flags: [...flagsOf(row, cfg?.level_proximity_pct ?? 1.5),
+    flags: [...flagsOf(row, cfg?.level_proximity_pct ?? 1.0),
             ...(position ? positionFlags(position) : [])],
     underlyingPrice: price(row.spot),
     sections: [triggerSection(row, cfg), levelSection(row, cfg), contractSection(row)],
@@ -286,7 +280,7 @@ export function gammaMoveToBoard(snapshot?: GammaMoveSnapshot | null): BoardSign
   if (!snapshot) return [];
   const cfg = snapshot.config;
   const positions = new Map((snapshot.positions ?? []).map((p) => [p.signal_id, p]));
-  const rows = snapshot.candidates ?? (snapshot as any).signals ?? [];
+  const rows = snapshot.candidates ?? [];
   const seen = new Set<string>();
   const out: BoardSignal[] = [];
 
