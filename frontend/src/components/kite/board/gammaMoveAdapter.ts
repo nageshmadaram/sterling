@@ -139,12 +139,17 @@ function positionFlags(p: GammaPositionRow): BoardOrigin[] {
 }
 
 function triggerSection(row: GammaSignalRow, cfg: GammaMoveSnapshot['config']): BoardSection {
+function triggerSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']): BoardSection {
   const m = row.metrics;
   const mark = (ok: boolean) => (ok ? '✓' : '✗');
   if (!m) {
     return { title: 'Trigger', layout: 'rows',
              summary: 'Not enough of today’s bars to evaluate.', stats: [] };
   }
+  const minOi = cfg?.min_oi_drop_pct ?? 10;
+  const volMult = cfg?.volume_spike_mult ?? 1.5;
+  const volLookback = cfg?.volume_lookback ?? 20;
+  const minGain = cfg?.min_price_gain_pct ?? 5;
   return {
     title: 'Trigger',
     layout: 'rows',
@@ -155,18 +160,24 @@ function triggerSection(row: GammaSignalRow, cfg: GammaMoveSnapshot['config']): 
       { label: `${mark(m.unwinding)} OI unwinding`,
         value: `${m.oi_drop_pct.toFixed(2)}%`,
         hint: `needs ≥ ${cfg.min_oi_drop_pct}%` },
+        hint: `needs ≥ ${minOi}%` },
       { label: `${mark(m.abnormal)} Volume`,
         value: `${m.volume_ratio.toFixed(2)}×`,
         hint: `needs ≥ ${cfg.volume_spike_mult}× the ${cfg.volume_lookback}-bar mean` },
+        hint: `needs ≥ ${volMult}× the ${volLookback}-bar mean` },
       { label: `${mark(m.rising)} Premium`,
         value: `${m.price_gain_pct >= 0 ? '+' : ''}${m.price_gain_pct.toFixed(2)}%`,
         hint: `needs ≥ ${cfg.min_price_gain_pct}%` },
+        hint: `needs ≥ ${minGain}%` },
       { label: 'Bars confirmed', value: `${m.bars_confirmed}/${m.bars_required}` },
     ],
   };
 }
 
 function levelSection(row: GammaSignalRow, cfg: GammaMoveSnapshot['config']): BoardSection {
+function levelSection(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config']): BoardSection {
+  const prox = cfg?.level_proximity_pct ?? 1.5;
+  const tf = cfg?.level_timeframe ?? 'day';
   return {
     title: 'Level',
     layout: 'tiles',
@@ -179,6 +190,8 @@ function levelSection(row: GammaSignalRow, cfg: GammaMoveSnapshot['config']): Bo
       { label: 'Distance', value: `${row.level.distance_pct.toFixed(2)}%`,
         hint: `the measured edge is inside ${cfg.level_proximity_pct}%` },
       { label: 'Timeframe', value: cfg.level_timeframe },
+        hint: `the measured edge is inside ${prox}%` },
+      { label: 'Timeframe', value: tf },
     ],
   };
 }
@@ -199,6 +212,7 @@ function contractSection(row: GammaSignalRow): BoardSection {
 }
 
 function toSignal(row: GammaSignalRow, cfg: GammaMoveSnapshot['config'],
+function toSignal(row: GammaSignalRow, cfg?: GammaMoveSnapshot['config'],
                   position?: GammaPositionRow): BoardSignal {
   const lv = row.levels;
   return {
@@ -237,6 +251,7 @@ function toSignal(row: GammaSignalRow, cfg: GammaMoveSnapshot['config'],
     reason: row.reason ?? row.exit_reason ?? null,
     origin: originOf(row),
     flags: [...flagsOf(row, cfg.level_proximity_pct),
+    flags: [...flagsOf(row, cfg?.level_proximity_pct ?? 1.5),
             ...(position ? positionFlags(position) : [])],
     underlyingPrice: price(row.spot),
     sections: [triggerSection(row, cfg), levelSection(row, cfg), contractSection(row)],
@@ -248,6 +263,7 @@ export function gammaMoveToBoard(snapshot?: GammaMoveSnapshot | null): BoardSign
   const cfg = snapshot.config;
   const positions = new Map((snapshot.positions ?? []).map((p) => [p.signal_id, p]));
   const rows = snapshot.candidates ?? [];
+  const rows = snapshot.candidates ?? (snapshot as any).signals ?? [];
   const seen = new Set<string>();
   const out: BoardSignal[] = [];
 

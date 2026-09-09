@@ -2680,13 +2680,57 @@ class SimulationRunner:
                 "rejection_reason": None,
             })
 
+        from app.services.gamma_move import get_config, descriptor
+        try:
+            cfg_obj = get_config()
+            cfg_dict = cfg_obj.as_dict()
+            desc = descriptor()
+            enabled = cfg_obj.enabled
+        except Exception:
+            cfg_dict = {}
+            desc = {}
+            enabled = True
+
+        underlyings_list = list(set(ev.instrument for ev in self._stats.events))
+        wins = len([t for t in self._stats.trades if (t.pnl_usd or 0) > 0])
+        losses = len([t for t in self._stats.trades if (t.pnl_usd or 0) < 0])
+        total_pnl = round(sum(float(t.pnl_usd or 0.0) for t in self._stats.trades), 2)
+
         return {
             "generated_at": f"{sim_date}T09:16:31+05:30",
+            "strategy": {**desc, "enabled": enabled},
+            "config": cfg_dict,
+            "scan": {"last_run_ms": now_ms, "total_seconds": 0.0},
+            "session": None,
+            "simulation": None,
+            "candidates": signals,
             "signals": signals,
             "positions": [],
+            "record": {
+                "trades": len(self._stats.trades),
+                "wins": wins,
+                "losses": losses,
+                "win_rate": round(wins / len(self._stats.trades) * 100.0, 1) if self._stats.trades else None,
+                "consecutive_losses": 0,
+                "consecutive_wins": 0,
+                "realised_inr": total_pnl,
+                "day_realised_inr": total_pnl,
+                "day": sim_date,
+                "verdict": "simulation replay",
+            },
+            "orphan_positions": [],
             "blockers": [],
             "universe": {"underlyings": len(set(ev.instrument for ev in self._stats.events)) or 1},
             "mode": {"is_paper": True},
+            "universe": {
+                "underlyings": len(underlyings_list) or 1,
+                "sample": underlyings_list[:10],
+            },
+            "mode": {
+                "is_paper": True,
+                "auto_execute": False,
+                "note": "Replay simulation mode",
+            },
         }
 
     def get_nifty_orb_signals_response(self) -> Dict[str, Any]:
