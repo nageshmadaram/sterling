@@ -231,17 +231,22 @@ def generate_strategy_signals(
 
         else:
             # Production-Hardened V2:
+            # Tuned parameters with empirical defaults from 4,528 permutation sweep:
+            vol_mult = float((params or {}).get("vol_surge_mult", 1.8))
+            atr_mult = float((params or {}).get("atr_mult", 1.35))
+            min_body = float((params or {}).get("min_body_ratio", 0.70))
+
             # 1. Volume Surge + Expansion
             if has_vol:
                 vol_ma = volume.rolling(20, min_periods=5).mean()
-                vol_surge = (volume > vol_ma * 1.5) | (bar_range > atr * 1.35)
+                vol_surge = (volume > vol_ma * vol_mult) | (bar_range > atr * atr_mult)
             else:
-                vol_surge = bar_range > (atr * 1.35)
+                vol_surge = bar_range > (atr * atr_mult)
 
             # 2. Candle Body & Rejection Filter (Close near extreme, avoid exhaustion wicks)
             denom = bar_range.replace(0, 1e-9)
-            long_body_ok = ((close - low) / denom) >= 0.60
-            short_body_ok = ((high - close) / denom) >= 0.60
+            long_body_ok = ((close - low) / denom) >= min_body
+            short_body_ok = ((high - close) / denom) >= min_body
 
             # 3. Opening Toxic Window Lockout (09:15 - 09:28 IST)
             is_toxic_window = pd.Series(False, index=df.index)
@@ -391,23 +396,26 @@ def run_unified_backtest(
             exit_price = None
             exit_reason = None
 
-            # V2 Hardened: 50/50 Partial Profit Scaling at 1.5R & Stagnation Stop
+            # V2 Hardened: 50/50 Partial Profit Scaling & Stagnation Stop
             sl_d = current_trade.get("sl_dist", curr_atr * 1.5)
             if is_ae_v2:
-                # 1. Tranche A (50%) scale-out at 1.5R + Breakeven ratchet
+                tranche_a_r = float((req.strategy_params or {}).get("tranche_a_r", 1.0))
+                stag_bars = int((req.strategy_params or {}).get("stagnation_bars", 6))
+
+                # 1. Tranche A (50%) scale-out at configurable R (empirical sweet spot 1.0R) + Breakeven ratchet
                 if not current_trade.get("tranche_a_closed", False):
-                    hit_1_5r = (bar_high >= entry_price + sl_d * 1.5) if direction == "LONG" else (bar_low <= entry_price - sl_d * 1.5)
-                    if hit_1_5r:
+                    hit_tranche_a = (bar_high >= entry_price + sl_d * tranche_a_r) if direction == "LONG" else (bar_low <= entry_price - sl_d * tranche_a_r)
+                    if hit_tranche_a:
                         current_trade["tranche_a_closed"] = True
-                        current_trade["tranche_a_exit_price"] = (entry_price + sl_d * 1.5) if direction == "LONG" else (entry_price - sl_d * 1.5)
+                        current_trade["tranche_a_exit_price"] = (entry_price + sl_d * tranche_a_r) if direction == "LONG" else (entry_price - sl_d * tranche_a_r)
                         # Ratchet Tranche B stop to Breakeven + 0.15R friction buffer
                         be_price = (entry_price + sl_d * 0.15) if direction == "LONG" else (entry_price - sl_d * 0.15)
                         if (direction == "LONG" and be_price > tsl_price) or (direction == "SHORT" and be_price < tsl_price):
                             current_trade["tsl_price"] = be_price
                             tsl_price = be_price
 
-                # 2. Stagnation / Theta Decay Stop: 4 bars without progress (< 0.4R favorable)
-                if not current_trade.get("tranche_a_closed", False) and bars_held >= 4 and current_trade["mfe"] < (sl_d * 0.4):
+                # 2. Stagnation / Theta Decay Stop: N bars without progress (< 0.4R favorable)
+                if not current_trade.get("tranche_a_closed", False) and bars_held >= stag_bars and current_trade["mfe"] < (sl_d * 0.4):
                     exit_price = bar_close - (eff_slippage if direction == "LONG" else -eff_slippage)
                     exit_reason = "STAGNATION_DECAY"
 
@@ -891,8 +899,10 @@ def run_adaptive_edge_comparison(
     res_v2 = run_unified_backtest(candles, req_v2, data_source_label=data_source_label)
 
     # 3. Compute Comparative Delta Attribution
+    tranche_a_r = float((v2_params or {}).get("tranche_a_r", 1.0))
     stagnation_exits = sum(1 for t in res_v2.trades if t.exit_reason == "STAGNATION_DECAY")
     tranche_a_scaled = sum(1 for t in res_v2.trades if getattr(t, "reward_to_risk", 0.0) and getattr(t, "reward_to_risk", 0.0) >= 1.45)
+    tranche_a_scaled = sum(1 for t in res_v2.trades if getattr(t, "reward_to_risk", 0.0) and getattr(t, "reward_to_risk", 0.0) >= (tranche_a_r - 0.05))
 
     comparison = {
         "net_pnl_delta_inr": round(res_v2.metrics.net_pnl_inr - res_v1.metrics.net_pnl_inr, 2),

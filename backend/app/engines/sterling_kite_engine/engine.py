@@ -68,6 +68,11 @@ class SterlingKiteEngine:
         i = len(c) - 1
         if not (longs[i] or shorts[i]):
             return []  # latest closed bar is not a fresh transition
+        if self.cfg.adx_min is not None:
+            from app.engines.indicators.adx import adx as _adx
+            adx_arr = _adx(h, l, c, 14)
+            if i < len(adx_arr) and adx_arr[i] < float(self.cfg.adx_min):
+                return []
         direction = "long" if longs[i] else "short"
         trail = float(r.line(self.cfg.trail_target)[i])
         entry = float(c[i])
