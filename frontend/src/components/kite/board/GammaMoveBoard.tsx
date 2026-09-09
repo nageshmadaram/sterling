@@ -138,11 +138,9 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
             <strong style={{ color: data.mode?.is_paper === false ? k.green : k.amber }}>
               {data.mode?.is_paper === false ? 'LIVE' : 'PAPER'}
             </strong>{' · '}
-            <strong style={{ color: k.text }}>
             <strong style={{ color: data.mode?.auto_execute ? k.text : k.dim }}>
               {data.mode?.auto_execute ? 'AUTO' : 'MANUAL'}
             </strong>
-            {data.config.enabled ? '' : ' · disabled'}
             {(data?.config?.enabled ?? data?.strategy?.enabled) !== false ? '' : ' · disabled'}
           </span>
         )}
