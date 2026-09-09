@@ -85,6 +85,10 @@ class StrikeCandidate:
     days_to_expiry: int
     spot: float
     premium: float = 0.0
+    #: Highest open interest on the same expiry + option type. None means the
+    #: caller did not look at the rest of the chain, so the wall check is skipped
+    #: rather than invented. The scanner always fills this.
+    chain_oi_max: int | None = None
 
     @property
     def option_type(self) -> OptionType:
@@ -257,6 +261,10 @@ class TradeRecord:
     #: put full size back on after one good trade in the middle of a bad run --
     #: which is the opposite of what the rule is for.
     descaled: bool = False
+    #: 0 = full size, 1 = first cut (x0.5), 2 = second cut (x0.25).
+    #: The later source segment is explicit: 1% → 0.5% → 0.25% after a
+    #: continuing losing streak, not a single latch at half size.
+    descale_step: int = 0
     realised_inr: float = 0.0
     day_realised_inr: float = 0.0
     day: str = ""
@@ -277,10 +285,15 @@ class TradeRecord:
             self.losses += 1
             self.consecutive_losses += 1
             self.consecutive_wins = 0
-        if self.consecutive_losses >= descale_after:
-            self.descaled = True
-        elif self.descaled and self.consecutive_wins >= rescale_after:
-            self.descaled = False
+        # Step the ladder only on crossing the threshold, not on every extra
+        # loss after it — otherwise one long losing run would slam to 0.25
+        # on the fourth fill rather than waiting for another full streak.
+        if self.consecutive_losses == descale_after:
+            self.descale_step = min(int(self.descale_step) + 1, 2)
+            self.descaled = self.descale_step > 0
+        elif self.descaled and self.consecutive_wins == rescale_after:
+            self.descale_step = max(int(self.descale_step) - 1, 0)
+            self.descaled = self.descale_step > 0
         self.history.append({"pnl_inr": q2(pnl_inr), "day": day})
 
     def as_dict(self) -> dict:
@@ -289,6 +302,7 @@ class TradeRecord:
                 "consecutive_losses": self.consecutive_losses,
                 "consecutive_wins": self.consecutive_wins,
                 "descaled": self.descaled,
+                "descale_step": int(self.descale_step),
                 "realised_inr": q2(self.realised_inr),
                 "day_realised_inr": q2(self.day_realised_inr), "day": self.day,
                 "verdict": ("no realised trades yet" if not self.trades
