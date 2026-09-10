@@ -104,6 +104,23 @@ export const PCR_CSS = `
 .kite-pcr .kp-tape li{font-size:12px;margin:0 0 8px;padding:0 0 8px;border-bottom:1px solid var(--k-border);line-height:1.4}
 .kite-pcr .kp-tape li:last-child{margin:0;padding:0;border:0}
 .kite-pcr .kp-tape b{font-weight:600}
+.kite-pcr .kp-tape-head{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.kite-pcr .kp-tape-chips{display:flex;flex-wrap:wrap;gap:4px}
+.kite-pcr .kp-tape-chip{border:1px solid var(--k-border);background:var(--k-bg);color:var(--k-dim);padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;border-radius:2px;transition:all .15s ease}
+.kite-pcr .kp-tape-chip:hover{color:var(--k-text);border-color:var(--k-dim)}
+.kite-pcr .kp-tape-chip[data-on="true"]{border-color:var(--k-orange);background:var(--k-orange);color:#fff}
+.kite-pcr .kp-tape-all{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+.kite-pcr .kp-tape-idx-group{padding-bottom:10px;border-bottom:1px solid var(--k-border)}
+.kite-pcr .kp-tape-idx-group:last-child{padding-bottom:0;border-bottom:0}
+.kite-pcr .kp-tape-idx-title{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:700;color:var(--k-text)}
+.kite-pcr .kp-tile-tape{margin-top:6px;padding:8px 10px;background:var(--k-surface-hover);border:1px solid var(--k-border);display:flex;flex-direction:column;gap:6px}
+.kite-pcr .kp-tile-tape-title{display:flex;align-items:center;justify-content:space-between;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--k-dim)}
+.kite-pcr .kp-tile-tape-list{display:flex;flex-direction:column;gap:6px}
+.kite-pcr .kp-tile-tape-item{font-size:11.5px;line-height:1.35;border-top:1px solid var(--k-border);padding-top:5px}
+.kite-pcr .kp-tile-tape-item:first-child{border-top:0;padding-top:0}
+.kite-pcr .kp-tile-tape-top{display:flex;align-items:center;gap:6px}
+.kite-pcr .kp-tile-tape-path{font-variant-numeric:tabular-nums;color:var(--k-dim);font-size:11px}
+.kite-pcr .kp-tile-tape-why{margin-top:2px;font-size:11px}
 .kite-pcr .kp-legend li{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.4;margin:0 0 7px;color:var(--k-text)}
 .kite-pcr .kp-swatch{flex:0 0 12px;width:12px;height:12px;margin-top:3px}
 .kite-pcr .kp-foot{margin:10px 0 0;font-size:11px;color:var(--k-dim)}

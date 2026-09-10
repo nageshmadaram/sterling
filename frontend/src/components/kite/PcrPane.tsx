@@ -10,6 +10,7 @@ import {
   expiryKind,
   flowPath,
   formatExpiry,
+  formatHhmm12,
   formatPcr,
   hhmmToMinutes,
   isValidPrint,
@@ -34,7 +35,7 @@ import { underlyingQuoteKey } from "./board/boardTypes";
 import { PCR_CSS } from "./pcrCss";
 import {
   IndexTile, Path, ideaKind, playHint, moveTxt, stanceLab, fmtLtp, nowMinutes,
-  type DeskRow, type TileField, type SectionId, type ColId, type Prefs,
+  type DeskRow, type FlowTapeItem, type TileField, type SectionId, type ColId, type Prefs,
   SECTIONS, TABLE_COLS, loadPrefs, savePrefs, expiryLong,
 } from "./pcrWidgets";
 
@@ -43,6 +44,7 @@ export function PcrPane() {
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState<PcrIndex>("NIFTY");
   const [metric, setMetric] = useState<PcrMetric>("oi");
+  const [tapeIndex, setTapeIndex] = useState<"ALL" | PcrIndex>("ALL");
   const [now, setNow] = useState<Date | null>(null);
   const [liveIso, setLiveIso] = useState("");
   const [sessionIso, setSessionIso] = useState("");
@@ -160,6 +162,57 @@ export function PcrPane() {
   const grid = boards?.[index] ?? [];
   const axis = boards?.NIFTY ?? boards?.[PCR_INDICES[0].id] ?? [];
 
+  const indexTapes = useMemo(() => {
+    const out: Record<PcrIndex, FlowTapeItem[]> = {
+      NIFTY: [],
+      BANKNIFTY: [],
+      FINNIFTY: [],
+      SENSEX: [],
+      MIDCPNIFTY: [],
+    };
+    if (!metricBoards) return out;
+    for (const u of PCR_INDICES) {
+      const row = metricBoards.oi[u.id] ?? [];
+      const list: FlowTapeItem[] = [];
+      for (const s of row) {
+        if (!isValidPrint(s.pcr, "oi")) continue;
+        if (s.delta == null || Math.abs(s.delta) < FLOW_MOVE_MIN) continue;
+        const line = describeFlow(u.short, s.hhmm, s.pcr, s.delta, "oi");
+        list.push({
+          id: `${u.id}-${s.hhmm}`,
+          name: line.name,
+          action: line.action,
+          why: line.why,
+          clock: line.clock,
+          hhmm: line.hhmm,
+          from: line.from,
+          to: line.to,
+          move: line.move,
+        });
+      }
+      list.sort((a, b) => hhmmToMinutes(b.hhmm) - hhmmToMinutes(a.hhmm));
+      if (list.length === 0) {
+        const last = lastValidSlot(row, "oi");
+        if (last && last.pcr != null && isValidPrint(last.pcr, "oi")) {
+          const act = liveAction(last.pcr);
+          list.push({
+            id: `${u.id}-${last.hhmm}-latest`,
+            name: u.short,
+            action: act,
+            why: `Current PCR is ${last.pcr.toFixed(2)}. Waiting on 15m delta moves.`,
+            clock: formatHhmm12(last.hhmm),
+            hhmm: last.hhmm,
+            from: last.pcr,
+            to: last.pcr,
+            move: last.delta ?? 0,
+          });
+        }
+      }
+      out[u.id] = list;
+    }
+    return out;
+  }, [metricBoards]);
+
   const deskRows = useMemo(() => {
     if (!metricBoards) return [];
     return PCR_INDICES.map((u) => {
@@ -217,9 +270,10 @@ export function PcrPane() {
         insight,
         flowAction,
         flowWhy,
+        tape: indexTapes[u.id] ?? [],
       };
     });
-  }, [metricBoards, payload, sessionIso, todayIso, liveQuotes]);
+  }, [metricBoards, payload, sessionIso, todayIso, liveQuotes, indexTapes]);
   const picked = prefs.indices;
   const pathOn = prefs.path;
   const showAll = picked.length === PCR_INDICES.length;
@@ -512,21 +566,95 @@ export function PcrPane() {
               ) : null}
               {showSec("tape") ? (
                 <aside className="kp-card kp-tape">
-                  <p className="kp-kicker">Flow tape</p>
-                  {tape.length ? (
-                    <ul>
-                      {tape.map((e) => (
-                        <li key={e.id}>
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                            <b>{e.name} · <span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span></b>
-                            <span className="kp-sub">{e.clock}</span>
-                          </div>
-                          <div className="kp-sub" style={{ marginTop: 3 }}>{e.why}</div>
-                        </li>
+                  <div className="kp-tape-head">
+                    <p className="kp-kicker" style={{ margin: 0 }}>Flow tape</p>
+                    <div className="kp-tape-chips" role="tablist" aria-label="Tape index filter">
+                      <button
+                        type="button"
+                        className="kp-tape-chip"
+                        data-on={tapeIndex === "ALL"}
+                        onClick={() => setTapeIndex("ALL")}
+                      >
+                        All
+                      </button>
+                      {PCR_INDICES.map((u) => (
+                        <button
+                          key={u.id}
+                          type="button"
+                          className="kp-tape-chip"
+                          data-on={tapeIndex === u.id}
+                          onClick={() => setTapeIndex(u.id)}
+                        >
+                          {u.short}
+                        </button>
                       ))}
-                    </ul>
+                    </div>
+                  </div>
+                  {tapeIndex !== "ALL" ? (
+                    (() => {
+                      const items = indexTapes[tapeIndex] ?? [];
+                      const targetIdx = PCR_INDICES.find((u) => u.id === tapeIndex);
+                      return items.length ? (
+                        <ul>
+                          {items.slice(0, 12).map((e) => (
+                            <li key={e.id}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                                <b>
+                                  {e.name} · <span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span>
+                                </b>
+                                <span className="kp-sub">
+                                  {e.from != null && e.to != null ? `${e.from.toFixed(2)} → ${e.to.toFixed(2)} · ` : ""}
+                                  {e.clock}
+                                </span>
+                              </div>
+                              <div className="kp-sub" style={{ marginTop: 3 }}>{e.why}</div>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="kp-sub" style={{ marginTop: 10 }}>
+                          Quiet book for {targetIdx?.short ?? tapeIndex} — waiting on 15m delta moves.
+                        </p>
+                      );
+                    })()
                   ) : (
-                    <p className="kp-sub" style={{ marginTop: 10 }}>Quiet book — no 6-tick PCR jumps yet.</p>
+                    <div className="kp-tape-all">
+                      {(cols.length ? cols : PCR_INDICES).map((u) => {
+                        const items = indexTapes[u.id] ?? [];
+                        const top = items[0];
+                        return (
+                          <div key={u.id} className="kp-tape-idx-group">
+                            <div className="kp-tape-idx-title">
+                              <span>{u.short}</span>
+                              {top ? (
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span className={`kp-act ${ideaKind(top.action)}`}>{top.action}</span>
+                                  <span className="kp-sub">{top.clock}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                            {items.length ? (
+                              <ul>
+                                {items.slice(0, 3).map((e) => (
+                                  <li key={e.id}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                                      <b><span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span></b>
+                                      <span className="kp-sub">
+                                        {e.from != null && e.to != null ? `${e.from.toFixed(2)} → ${e.to.toFixed(2)} · ` : ""}
+                                        {e.clock}
+                                      </span>
+                                    </div>
+                                    <div className="kp-sub" style={{ marginTop: 3 }}>{e.why}</div>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="kp-sub" style={{ margin: "4px 0 0" }}>Quiet book</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                 </aside>
               ) : null}

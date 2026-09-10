@@ -67,6 +67,7 @@ export const TILE_FIELDS = [
   { id: "bias", label: "Bias" },
   { id: "conviction", label: "Conviction" },
   { id: "regime", label: "Regime" },
+  { id: "tape", label: "Flow tape" },
   { id: "delta", label: "Δ 15m" },
   { id: "spot", label: "Spot" },
   { id: "pain", label: "Max pain" },
@@ -162,6 +163,18 @@ export function loadPrefs(): Prefs {
   }
 }
 
+export type FlowTapeItem = {
+  id: string;
+  name: string;
+  action: PcrAction;
+  why: string;
+  clock: string;
+  hhmm: string;
+  from?: number | null;
+  to?: number | null;
+  move?: number;
+};
+
 export type DeskRow = {
   id: PcrIndex;
   name: string;
@@ -184,6 +197,7 @@ export type DeskRow = {
   insight: PcrRead;
   flowAction?: PcrAction;
   flowWhy?: string;
+  tape?: FlowTapeItem[];
 };
 
 export function IndexTile({ row, show }: { row: DeskRow; show: (id: TileField) => boolean }) {
@@ -261,6 +275,29 @@ export function IndexTile({ row, show }: { row: DeskRow; show: (id: TileField) =
               <div className="val">{row.insight.regime}</div>
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {show("tape") && row.tape && row.tape.length > 0 ? (
+        <div className="kp-tile-tape">
+          <div className="kp-tile-tape-title">
+            <span>Flow tape</span>
+            <span className="kp-sub">{row.tape[0].clock}</span>
+          </div>
+          <div className="kp-tile-tape-list">
+            {row.tape.slice(0, 2).map((e) => (
+              <div key={e.id} className="kp-tile-tape-item">
+                <div className="kp-tile-tape-top">
+                  <span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span>
+                  <span className="kp-tile-tape-path">
+                    {e.from != null && e.to != null ? `${e.from.toFixed(2)} → ${e.to.toFixed(2)}` : ""}
+                    {e.move != null ? ` (${e.move > 0 ? "+" : ""}${e.move.toFixed(2)})` : ""}
+                  </span>
+                  <span className="kp-sub" style={{ marginLeft: "auto" }}>{e.clock}</span>
+                </div>
+                <div className="kp-sub kp-tile-tape-why">{e.why}</div>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
       <div className="kp-stats">

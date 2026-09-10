@@ -343,7 +343,7 @@ export type FlowLine = {
   why: string;
 };
 
-export const FLOW_MOVE_MIN = 0.06;
+export const FLOW_MOVE_MIN = 0.003;
 /** Rising PCR only becomes CE once it is at/above 1.00. */
 export const CE_PCR_MIN = 1;
 /** Falling PCR only becomes PE once it is at/below 0.90. */
