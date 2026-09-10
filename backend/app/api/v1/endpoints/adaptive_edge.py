@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.logging import get_logger
 from app.engines.adaptive_edge.execution_gate import evaluate_execution_gate
 from app.engines.adaptive_edge.formula_registry import FORMULAS, FormulaStatus
 from app.engines.adaptive_edge.option_ladder import (
@@ -19,6 +22,8 @@ from app.engines.adaptive_edge.option_ladder import (
 )
 from app.engines.adaptive_edge.production_readiness import production_readiness
 from app.services import db
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/adaptive-edge", tags=["adaptive-edge"])
 CONFIG_KEY = "adaptive_edge_settings"
@@ -246,7 +251,11 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
 
     # Initialize historical cache (< today_iso) once
     if not _HISTORICAL_CACHE["initialized"]:
-        hist_legs = list(artifact.get("legs") or [])
+        hist_legs = [dict(x) for x in (artifact.get("legs") or [])]
+        for l in hist_legs:
+            if l.get("session_date") and l.get("session_date") < today_iso:
+                l["flattened"] = True
+                l["quantity"] = 0
         hist_dates = set((l.get("symbol"), l.get("session_date")) for l in hist_legs if l.get("symbol") and l.get("session_date"))
         for idx_name in scan_idx_list:
             tape = INDEX_TO_TAPE.get(idx_name, idx_name)
@@ -359,7 +368,8 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
         try:
             candles = get_candles(idx_name, "5m", limit=150)
             today_candles = [c for c in candles if datetime.fromtimestamp(c["time"], ist).strftime("%Y-%m-%d") == today_iso]
-            if len(today_candles) >= 25:
+            eval_candles = today_candles if len(today_candles) >= 25 else (candles[-max(40, len(today_candles)):] if len(today_candles) >= 3 and len(candles) >= 40 else [])
+            if eval_candles:
                 c_list = [
                     {
                         "timestamp_ms": c["time"] * 1000,
@@ -369,14 +379,14 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
                         "close": c["close"],
                         "volume": c.get("volume", 0),
                     }
-                    for c in today_candles
+                    for c in eval_candles
                 ]
-                dec = decide_from_candles(idx_name, c_list, ae_cfg, expiry=today_iso, spot=today_candles[-1]["close"])
+                dec = decide_from_candles(idx_name, c_list, ae_cfg, expiry=today_iso, spot=eval_candles[-1]["close"])
                 if dec and dec.actionable:
-                    entry_bar_idx = min(15, len(today_candles) - 1)
-                    entry_t = datetime.fromtimestamp(today_candles[entry_bar_idx]["time"], tz=ist)
+                    entry_bar = today_candles[min(15, len(today_candles) - 1)] if today_candles else eval_candles[-1]
+                    entry_t = datetime.fromtimestamp(entry_bar["time"], tz=ist)
                     side = "BUY" if dec.direction == "BULLISH" else "SELL"
-                    spot = today_candles[entry_bar_idx]["close"]
+                    spot = entry_bar["close"]
                     legs.append({
                         "symbol": tape,
                         "side": side,
@@ -443,11 +453,96 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
     return res
 
 
+_INDEX_TOKENS = {
+    "NIFTY 50": 256265,
+    "NIFTY BANK": 260105,
+    "NIFTY FIN SERVICE": 257801,
+    "SENSEX": 265,
+}
+_LAST_SYNC_TS: float = 0.0
+
+
+async def _sync_live_5m_candles_if_needed(scan_idx_list: list[str]) -> None:
+    global _LAST_SYNC_TS
+    now_ts = time.time()
+    if now_ts - _LAST_SYNC_TS < 60.0:
+        return
+
+    from app.services.ohlcv_store import get_candles, upsert_candles
+    from app.services.exchanges.kite import accounts as kite_accounts
+    from app.schemas.instruments import InstrumentMeta
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    today_iso = datetime.now(ist).strftime("%Y-%m-%d")
+
+    needed: list[str] = []
+    for idx_name in scan_idx_list:
+        candles = get_candles(idx_name, "5m", limit=30)
+        today_c = [c for c in candles if datetime.fromtimestamp(c["time"], ist).strftime("%Y-%m-%d") == today_iso]
+        if len(today_c) < 3:
+            needed.append(idx_name)
+
+    if not needed:
+        return
+
+    _LAST_SYNC_TS = now_ts
+
+    if not getattr(kite_accounts, "_loaded", False):
+        kite_accounts.bootstrap()
+
+    acct = kite_accounts.get_active("default")
+    if not acct or not acct.connected:
+        acct = next((a for a in getattr(kite_accounts, "_accounts", {}).values() if a.connected), None)
+
+    if not acct or not acct.connected:
+        return
+
+    try:
+        client = await kite_accounts.acquire_client(acct)
+        for idx_name in needed:
+            token = _INDEX_TOKENS.get(idx_name)
+            if not token:
+                continue
+            inst = InstrumentMeta(
+                underlying=idx_name,
+                tick_size=0.05,
+                strike_step=1.0,
+                exchange_currency="INR",
+                index_name=idx_name,
+                has_options=True,
+                exchange="zerodha",
+                zerodha_token=token,
+            )
+            k_candles = await client.get_candles(inst, "5m", limit=150)
+            if k_candles:
+                c_dicts = [
+                    {
+                        "time": int(c.timestamp_ms / 1000),
+                        "open": c.open,
+                        "high": c.high,
+                        "low": c.low,
+                        "close": c.close,
+                        "volume": c.volume,
+                    }
+                    for c in k_candles
+                ]
+                upsert_candles(idx_name, "5m", c_dicts)
+    except Exception as exc:
+        log.warning("Live 5m candle sync failed for Adaptive Edge: %s", exc)
+
+
 @router.get("/snapshot")
-def get_snapshot() -> dict[str, Any]:
+async def get_snapshot() -> dict[str, Any]:
     from app.services.simulation import simulation_runner
     if simulation_runner.has_session_view:
         return simulation_runner.get_adaptive_edge_snapshot()
+
+    settings = _load_settings()
+    scan_idx_list = list(settings.scan_indices or ["NIFTY 50", "NIFTY BANK", "SENSEX"])
+    try:
+        await _sync_live_5m_candles_if_needed(scan_idx_list)
+    except Exception as exc:
+        log.warning("Live 5m candle sync failed: %s", exc)
 
     gate = evaluate_execution_gate()
     artifact = _load_json(ARTIFACT) or {}

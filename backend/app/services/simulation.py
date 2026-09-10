@@ -3338,9 +3338,6 @@ class SimulationRunner:
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
         skip_ae_model = adaptive_src in ("spot_scan", "spot")
-        # If user requested spot_scan but session has no recorded signals, fall back to AE model
-        # rather than exiting silently with 0 trades.
-        skip_ae_model = (adaptive_src in ("spot_scan", "spot")) and has_recorded_today
 
         has_recorded_ae = (
             adaptive_src not in ("ae_model", "ae")

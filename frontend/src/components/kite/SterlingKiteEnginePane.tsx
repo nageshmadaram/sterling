@@ -2043,6 +2043,9 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
     if (todayOnly) {
       const todayKey = sessionDayKey(effectiveNowMs);
       result = result.filter((r) => {
+        // Active/running signals are always visible — a position entered days
+        // ago is still a live trade and must not vanish behind a date filter.
+        if (r.is_active) return true;
         const rawTs = (r as any).timestamp_ms ?? (r as any).timestamp ?? (r as any).time ?? (r as any).atMs;
         const day = sessionDayKey(rawTs);
         return day === todayKey || day === 'unknown';
@@ -2828,7 +2831,9 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
           groupedRows.map(group => {
             const expanded = userToggledGroups.has(group.label)
               ? userToggledGroups.get(group.label)!
-              : isDayExpandedByDefault(group.label, groupedRows.map(g => g.label));
+              // Active groups (running positions) always open by default —
+              // a live trade must not hide behind a collapsed band.
+              : Boolean(group.active || isDayExpandedByDefault(group.label, groupedRows.map(g => g.label)));
             const isCollapsed = !expanded;
             return (
               <div key={group.label}>

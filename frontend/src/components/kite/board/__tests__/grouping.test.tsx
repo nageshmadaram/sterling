@@ -468,6 +468,15 @@ describe('only the newest day band opens by default', () => {
     expect(isDayExpandedByDefault('2026-09-04', [])).toBe(false);
   });
 
+  it('opens live active day bands even when they are not the first key', () => {
+    const liveKey = liveDayKey('2026-09-07');
+    const keys = ['2026-09-10', liveKey, '2026-09-09', OLDER_BUCKET];
+    expect(isDayExpandedByDefault('2026-09-10', keys)).toBe(true);
+    expect(isDayExpandedByDefault(liveKey, keys)).toBe(true);
+    expect(isDayExpandedByDefault('2026-09-09', keys)).toBe(false);
+    expect(isDayExpandedByDefault(OLDER_BUCKET, keys)).toBe(false);
+  });
+
   it('leaves Yesterday closed on a board that has Today', () => {
     render(
       <SignalBoard

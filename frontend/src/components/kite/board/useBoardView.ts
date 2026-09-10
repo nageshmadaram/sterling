@@ -193,6 +193,9 @@ export function useBoardView(
     if (!showEnded) visible = visible.filter((s) => s.status !== 'ended');
     if (todayOnly) {
       visible = visible.filter((s) => {
+        // Running positions are always visible — a live trade entered on a
+        // prior session must not vanish behind a date filter.
+        if (s.status === 'running' || s.status === 'watching' || s.status === 'weakening') return true;
         const day = sessionDayKey(s.atMs);
         return day === todayKey || day === 'unknown';
       });
