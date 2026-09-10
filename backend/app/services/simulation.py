@@ -829,6 +829,7 @@ class SimulationRunner:
         self._emitted_recorded_keys: set = set()
         self._session_id: Optional[str] = None
         self._session_complete: bool = False
+        self._ae_fallback_mode: bool = False
 
     # ── SSE fan-out ─────────────────────────────────────────────────────
 
@@ -1403,6 +1404,7 @@ class SimulationRunner:
         self._in_session_bars = {}
         self._last_fired = {}
         self._active_until_bar = {}
+        self._ae_fallback_mode = False
         self._publish_state()
         return self.status
 
@@ -1917,9 +1919,11 @@ class SimulationRunner:
         self._emitted_recorded_keys = set()
 
         adaptive_src = getattr(cfg, "adaptive_source", "both") or "both"
+        self._ae_fallback_mode = False
         if str(adaptive_src).lower() in ("spot_scan", "spot") and not self._recorded_signals:
             log.info("No recorded spot scans for %s; replaying via AE Model.", range_label)
             self._status_message = f"Notice: No recorded spot scans on {range_label}; replaying via AE Model."
+            self._ae_fallback_mode = True
 
         if not cfg.instruments:
             if self._recorded_signals:
@@ -3331,13 +3335,12 @@ class SimulationRunner:
         # 3. Adaptive Edge: Canonical Multi-Horizon Value Area & Order Flow Pipeline
         # When recorded signals exist for this session, authentic spot scans are replayed
         # automatically at their recorded timestamps; synthetic fallback heuristics are skipped.
-        has_recorded_ae = has_recorded_today and any(
-            r.get("underlying", "").upper() in sym_aliases
-            for r in today_recorded
-        )
         adaptive_src = (cfg.adaptive_source if cfg and hasattr(cfg, "adaptive_source") else "both") or "both"
         adaptive_src = str(adaptive_src).lower()
-        skip_ae_model = adaptive_src in ("spot_scan", "spot")
+        skip_ae_model = (
+            adaptive_src in ("spot_scan", "spot")
+            and not getattr(self, "_ae_fallback_mode", False)
+        )
 
         has_recorded_ae = (
             adaptive_src not in ("ae_model", "ae")
@@ -3615,7 +3618,7 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
-                scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
+                scan_origin="spot_scan" if (adaptive_src in ("spot_scan", "spot") or strategy != "adaptive_edge") else "adaptive_edge",
                 strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
             )
             self._stats.signals_fired += 1

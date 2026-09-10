@@ -1502,3 +1502,37 @@ async def test_simulation_exit_reasons_settlement():
     simulation_runner._open_by_symbol["NIFTY"] = [trade_eod]
     simulation_runner._close_all_open("test eod")
     assert trade_eod.exit_reason == "SESSION_CLOSE"
+
+
+def test_simulation_spot_scan_fallback_when_no_recorded_signals():
+    """Verify that when no recorded signals exist for a session, spot_scan falls back to AE model and emits signals."""
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-10",
+        strategies=["adaptive_edge"],
+        adaptive_source="spot_scan",
+    )
+    simulation_runner._recorded_signals = []
+    # Simulate the start() fallback detection
+    simulation_runner._ae_fallback_mode = True
+
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t0 = datetime(2026, 9, 10, 10, 0, 0, tzinfo=ist)
+    for i in range(30):
+        bar = {
+            "symbol": "NIFTY",
+            "open": 24000.0 - i * 10,
+            "high": 24005.0 - i * 10,
+            "low": 23980.0 - i * 10,
+            "close": 23995.0 - i * 10,
+            "volume": 50000,
+        }
+        simulation_runner._evaluate_bar(bar, t0 + timedelta(minutes=5 * i))
+
+    # In fallback mode, AE model signals ARE emitted and tagged as spot_scan
+    assert len(simulation_runner._stats.events) > 0
+    for ev in simulation_runner._stats.events:
+        assert ev.scan_origin == "spot_scan"
+    assert len(simulation_runner._stats.trades) > 0
+

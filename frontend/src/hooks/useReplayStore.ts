@@ -849,16 +849,20 @@ export function matchAdaptiveSource(
 ): boolean {
   if (source === 'both') return true;
 
+  const strat = (strategy || '').toLowerCase();
+  // Non-AE strategies are unaffected by adaptiveSource filtering
+  if (strat !== 'adaptive_edge' && strat !== 'spot_scan') {
+    return true;
+  }
+
   let origin = scanOrigin;
   if (!origin) {
-    if (strategy === 'spot_scan') {
+    if (strat === 'spot_scan') {
       origin = 'spot_scan';
-    } else if (strategy === 'adaptive_edge') {
+    } else {
       const sym = (instrumentOrUnderlying || '').toUpperCase().replace(/^(NSE|BSE):/, '').trim();
       const isIndex = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX)/i.test(sym);
       origin = isIndex ? 'adaptive_edge' : 'spot_scan';
-    } else {
-      return true; // Non-AE strategies pass through
     }
   }
 

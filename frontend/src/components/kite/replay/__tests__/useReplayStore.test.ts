@@ -433,8 +433,12 @@ describe('draft preferences persistence', () => {
       expect(matchAdaptiveSource('adaptive_edge', undefined, 'RELIANCE', 'ae_model')).toBe(false);
 
       // Non-AE strategies pass through
+      // Non-AE strategies pass through even if scan_origin is populated
       expect(matchAdaptiveSource('scalp_pnl', undefined, 'NIFTY', 'ae_model')).toBe(true);
       expect(matchAdaptiveSource('scalp_pnl', undefined, 'NIFTY', 'spot_scan')).toBe(true);
+      expect(matchAdaptiveSource('supertrend', 'adaptive_edge', 'NIFTY', 'spot_scan')).toBe(true);
+      expect(matchAdaptiveSource('vcp', 'spot_scan', 'NIFTY', 'ae_model')).toBe(true);
+      expect(matchAdaptiveSource('navigator', 'adaptive_edge', 'BANKNIFTY', 'spot_scan')).toBe(true);
     });
 
     it('useFilteredReplayEvents and useFilteredReplayTrades filter based on draft.adaptiveSource', () => {
