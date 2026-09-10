@@ -98,6 +98,35 @@ describe('AdaptiveEdgePanel', () => {
     expect(screen.queryByText('Why')).toBeNull();
   });
 
+  it('renders AE V1 vs AE V2 provenance badges based on strategy_version', () => {
+    const v1Snapshot = {
+      ...snapshot,
+      signals: [{
+        ...(snapshot.signals?.[0] ?? {}),
+        strategy_version: 'v1_baseline',
+      }],
+    } as unknown as AdaptiveEdgeSnapshot;
+    const v1Rows = rowsFromSnapshot(v1Snapshot);
+    expect(v1Rows[0].strategy_version).toBe('v1_baseline');
+
+    const v2Snapshot = {
+      ...snapshot,
+      signals: [{
+        ...(snapshot.signals?.[0] ?? {}),
+        strategy_version: 'v2_hardened',
+      }],
+    } as unknown as AdaptiveEdgeSnapshot;
+    const v2Rows = rowsFromSnapshot(v2Snapshot);
+    expect(v2Rows[0].strategy_version).toBe('v2_hardened');
+
+    const { unmount } = render(<AdaptiveEdgePanel rows={v1Rows} />);
+    expect(screen.getAllByText('AE V1').length).toBeGreaterThan(0);
+    unmount();
+
+    render(<AdaptiveEdgePanel rows={v2Rows} />);
+    expect(screen.getAllByText('AE V2').length).toBeGreaterThan(0);
+  });
+
   it('renders entry with live LTP price based diff when diff exists', () => {
     const customSnapshot = {
       ...snapshot,

@@ -36,6 +36,7 @@ ScanExpiry = Literal["weekly", "monthly"]
 
 class AdaptiveEdgeSettings(BaseModel):
     enabled: bool = False
+    strategy_version: Literal["v1_baseline", "v2_hardened"] = "v2_hardened"
     symbol: str = "NIFTY-I"
     symbols: list[str] = Field(default_factory=lambda: ["NIFTY-I"])
     scan_source: ScanSource = "spot"
@@ -76,6 +77,16 @@ class AdaptiveEdgeSettings(BaseModel):
             raise ValueError(f"unknown scan_indices: {unknown}")
         return value
 
+    @field_validator("scan_stocks")
+    @classmethod
+    def _clean_stocks(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value:
+            norm = str(item).strip().upper()
+            if norm and norm not in cleaned:
+                cleaned.append(norm)
+        return cleaned
+
     @field_validator("strike_moneyness")
     @classmethod
     def _known_moneyness(cls, value: list[str]) -> list[str]:
@@ -112,11 +123,20 @@ def _default_settings() -> AdaptiveEdgeSettings:
 def _load_settings() -> AdaptiveEdgeSettings:
     raw = db.get_config(CONFIG_KEY, "")
     if not raw:
-        return _default_settings()
+        st = _default_settings()
+    else:
+        try:
+            st = AdaptiveEdgeSettings.model_validate(json.loads(raw))
+        except Exception:
+            st = _default_settings()
     try:
-        return AdaptiveEdgeSettings.model_validate(json.loads(raw))
+        from app.services.adaptive_edge import get_config as get_ae_cfg
+        ae_cfg = get_ae_cfg()
+        if ae_cfg and hasattr(ae_cfg, "strategy_version"):
+            st.strategy_version = ae_cfg.strategy_version
     except Exception:
-        return _default_settings()
+        pass
+    return st
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -134,6 +154,7 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 #: and runner actually read.
 _MIRRORED_TO_ENGINE: dict[str, str] = {
     "enabled": "enabled",
+    "strategy_version": "strategy_version",
     "scan_indices": "scan_indices",
     "scan_stocks": "scan_stocks",
     "scan_all_stocks": "scan_all_stocks",
@@ -226,7 +247,16 @@ def put_settings(body: AdaptiveEdgeSettings) -> dict[str, Any]:
 
 
 _BRIDGED_CACHE: dict[str, Any] = {"time": 0.0, "result": None}
+_BRIDGED_CACHE: dict[str, Any] = {"time": 0.0, "result": None, "key": None}
 _HISTORICAL_CACHE: dict[str, Any] = {"initialized": False, "legs": [], "daily": []}
+
+
+def clear_bridged_cache() -> None:
+    global _BRIDGED_CACHE, _HISTORICAL_CACHE
+    _BRIDGED_CACHE["time"] = 0.0
+    _BRIDGED_CACHE["result"] = None
+    _BRIDGED_CACHE["key"] = None
+    _HISTORICAL_CACHE["initialized"] = False
 
 
 def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -248,6 +278,11 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
     scan_idx_list = list(settings.scan_indices or ["NIFTY 50", "NIFTY BANK", "SENSEX"])
     ae_cfg = get_config()
     today_iso = datetime.now(ist).strftime("%Y-%m-%d")
+    curr_version = getattr(ae_cfg, "strategy_version", "v2_hardened") or "v2_hardened"
+
+    cache_key = (curr_version, tuple(sorted(scan_idx_list)), settings.scan_source)
+    if _BRIDGED_CACHE.get("key") == cache_key and _BRIDGED_CACHE.get("result") is not None and (now - _BRIDGED_CACHE.get("time", 0.0)) < 60.0:
+        return _BRIDGED_CACHE["result"]
 
     # Initialize historical cache (< today_iso) once
     if not _HISTORICAL_CACHE["initialized"]:
@@ -361,9 +396,11 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
         pass
 
     # 2. Bridge today's dates for indices using fast limit
+    # 2. Bridge today's dates for indices using AE decision engine
+    existing_ae_sym_dates = set((l.get("symbol"), l.get("session_date")) for l in legs if l.get("symbol") and l.get("session_date") and l.get("scan_origin") == "adaptive_edge")
     for idx_name in scan_idx_list:
         tape = INDEX_TO_TAPE.get(idx_name, idx_name)
-        if (tape, today_iso) in existing_sym_dates:
+        if (tape, today_iso) in existing_ae_sym_dates:
             continue
         try:
             candles = get_candles(idx_name, "5m", limit=150)
@@ -409,8 +446,10 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
                         "entry_poc": spot,
                         "entry_cvd": 1500.0 if side == "BUY" else -1500.0,
                         "scan_origin": "adaptive_edge",
+                        "strategy_version": curr_version,
                     })
                     existing_sym_dates.add((tape, today_iso))
+                    existing_ae_sym_dates.add((tape, today_iso))
         except Exception as err:
             log.warning("Failed bridging today candles for %s: %s", idx_name, err)
 
@@ -450,6 +489,7 @@ def _get_bridged_legs_and_daily(artifact: dict[str, Any]) -> tuple[list[dict[str
     res = (legs, daily, session_patch)
     _BRIDGED_CACHE["time"] = time.time()
     _BRIDGED_CACHE["result"] = res
+    _BRIDGED_CACHE["key"] = cache_key
     return res
 
 

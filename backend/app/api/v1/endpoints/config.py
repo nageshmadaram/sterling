@@ -697,6 +697,11 @@ async def update_adaptive_edge_config(body: dict = Body(...)) -> dict:
         raise HTTPException(status_code=422, detail="no settings to change")
     try:
         cfg = set_config(values)
+        try:
+            from app.api.v1.endpoints.adaptive_edge import clear_bridged_cache
+            clear_bridged_cache()
+        except Exception:
+            pass
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"config": cfg.as_dict()}

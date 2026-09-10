@@ -14,6 +14,7 @@ import numpy as np
 from pydantic import BaseModel
 from app.core.logging import get_logger
 from app.engines.indicators.supertrend import compute_supertrend
+from app.engines.indicators.heikin_ashi import compute_heikin_ashi
 
 log = get_logger(__name__)
 
@@ -103,6 +104,65 @@ def _load_recorded_signals(date_str: str, end_date_str: Optional[str] = None) ->
         if k not in dedup:
             dedup[k] = sig
     return sorted(dedup.values(), key=lambda s: s["timestamp_ms"])
+
+
+def _get_scanned_dates(date_str: str, end_date_str: Optional[str] = None) -> set[str]:
+    """Identify dates within the range that were already scanned by the live Kite Engine.
+
+    If a date was scanned live by the Kite Engine, ground-truth exists for that session
+    (even if it produced 0 signals). In that case, replay must honor the 0 signals rather
+    than fabricating synthetic 5m indicator crossovers.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.services import db
+    from app.services.kite_engine import state
+    if not getattr(db, "_available", False):
+        try:
+            db.init()
+        except Exception:
+            pass
+    ist = timezone(timedelta(hours=5, minutes=30))
+    scanned: set[str] = set()
+
+    # 1. Dates with recorded signals or cache in DB
+    for uid in ["default", "u1", ""]:
+        key = f"kite_engine_signals_{uid}" if uid else "kite_engine_signals"
+        raw = db.get_config(key)
+        if not raw:
+            continue
+        try:
+            import json
+            val = json.loads(raw)
+            gen_ms = val.get("generated_ms") if isinstance(val, dict) else None
+            if gen_ms:
+                g_dt = datetime.fromtimestamp(gen_ms / 1000, ist)
+                g_date = g_dt.strftime("%Y-%m-%d")
+                if (end_date_str and date_str <= g_date <= end_date_str) or (date_str == g_date):
+                    scanned.add(g_date)
+            rows = val.get("rows", []) if isinstance(val, dict) else (val if isinstance(val, list) else [])
+            for r in rows:
+                ts = r.get("timestamp_ms")
+                if ts:
+                    r_dt = datetime.fromtimestamp(ts / 1000, ist)
+                    r_date = r_dt.strftime("%Y-%m-%d")
+                    if (end_date_str and date_str <= r_date <= end_date_str) or (date_str == r_date):
+                        scanned.add(r_date)
+        except Exception:
+            pass
+
+    # 2. Status last_scan_ms
+    for uid in ["default", "u1"]:
+        try:
+            st = state.status(uid)
+            if st.last_scan_ms > 0:
+                s_dt = datetime.fromtimestamp(st.last_scan_ms / 1000, ist)
+                s_date = s_dt.strftime("%Y-%m-%d")
+                if (end_date_str and date_str <= s_date <= end_date_str) or (date_str == s_date):
+                    scanned.add(s_date)
+        except Exception:
+            pass
+
+    return scanned
 
 
 class SimState(str, Enum):
@@ -826,6 +886,7 @@ class SimulationRunner:
         # a superseded loop and must not touch shared state.
         self._run_generation: int = 0
         self._recorded_signals: List[Dict[str, Any]] = []
+        self._scanned_dates: set[str] = set()
         self._emitted_recorded_keys: set = set()
         self._session_id: Optional[str] = None
         self._session_complete: bool = False
@@ -1351,6 +1412,10 @@ class SimulationRunner:
         self._stop_requested = False
         self._pause_event.set()
         self._stats = SimStats()
+        self._current_date = config.date
+        self._current_time_iso = config.start_time
+        self._progress = 0.0
+        self._status_message = f"Loading session {config.date}..."
         self._bar_history = {}
         self._in_session_bars = {}
         self._last_fired = {}
@@ -1405,6 +1470,7 @@ class SimulationRunner:
         self._last_fired = {}
         self._active_until_bar = {}
         self._ae_fallback_mode = False
+        self._scanned_dates = set()
         self._publish_state()
         return self.status
 
@@ -1650,6 +1716,7 @@ class SimulationRunner:
         adaptive_ver = (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
         adaptive_ver = str(adaptive_ver).lower()
         is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge" and not is_spot)
+        is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge")
         if is_ae_signal and adaptive_ver in ("v2_hardened", "v2"):
             # When user explicitly asks for spot scans, do not lock out spot scans
             if not (is_spot and adaptive_src in ("spot_scan", "spot")):
@@ -1916,6 +1983,9 @@ class SimulationRunner:
         self._recorded_signals = (
             _load_recorded_signals(cfg.date, cfg.end_date) if is_multi_day else _load_recorded_signals(cfg.date)
         )
+        self._scanned_dates = (
+            _get_scanned_dates(cfg.date, cfg.end_date) if is_multi_day else _get_scanned_dates(cfg.date)
+        )
         self._emitted_recorded_keys = set()
 
         adaptive_src = getattr(cfg, "adaptive_source", "both") or "both"
@@ -1952,6 +2022,11 @@ class SimulationRunner:
                         stocks = parsed_c.get("scan_stocks", [])
                         indices = [s.replace(" 50", "").replace(" SERVICE", "").replace(" ", "") for s in parsed_c.get("scan_indices", [])]
                         instruments = list(dict.fromkeys(indices + stocks + default_universe))
+                        scan_all = parsed_c.get("scan_all_stocks", False)
+                        if not scan_all and (indices or stocks):
+                            instruments = list(dict.fromkeys(indices + stocks))
+                        else:
+                            instruments = list(dict.fromkeys(indices + stocks + default_universe))
                     else:
                         instruments = default_universe
                 except Exception:
@@ -2205,10 +2280,13 @@ class SimulationRunner:
 
         if allow_all:
             kite_events = list(self._stats.events)
+            kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine")]
         else:
             kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in cfg_strats]
             if not kite_events:
                 kite_events = list(self._stats.events)
+            if not kite_events and any(ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine") for ev in self._stats.events):
+                kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine")]
 
         from app.services.ohlcv_store import INDEX_ALIASES
         recorded_map_exact = {}
@@ -2228,10 +2306,21 @@ class SimulationRunner:
                 recorded_map_exact[(a, r["timestamp_ms"])] = raw_row
                 recorded_map_sym[a] = raw_row
 
+        # Identify the latest event index for each underlying instrument
+        latest_idx_by_inst: Dict[str, int] = {}
+        for idx, ev in enumerate(kite_events):
+            latest_idx_by_inst[ev.instrument.upper()] = idx
+
         rows = []
         for i, ev in enumerate(kite_events):
             base_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
             ev_ms = base_ms + i
+
+            # Only the most recent event for an instrument is active; previous ones are superseded
+            is_latest_for_inst = (latest_idx_by_inst.get(ev.instrument.upper()) == i)
+            row_active = is_latest_for_inst
+            row_fresh = is_latest_for_inst
+            row_exit_reason = None if is_latest_for_inst else "re-entered"
 
             # If this event matches an authentic recorded signal with full live contract legs, use it
             raw_rec = recorded_map_exact.get((ev.instrument.upper(), ev.timestamp_ms)) or recorded_map_sym.get(ev.instrument.upper())
@@ -2242,6 +2331,10 @@ class SimulationRunner:
                 row_copy = dict(raw_rec)
                 row_copy["is_active"] = True
                 row_copy["is_fresh"] = True
+                row_copy["is_active"] = row_active
+                row_copy["is_fresh"] = row_fresh
+                if row_exit_reason:
+                    row_copy["exit_reason"] = row_exit_reason
                 row_copy["timestamp_ms"] = ev_ms
                 rows.append(row_copy)
                 continue
@@ -2253,6 +2346,7 @@ class SimulationRunner:
             token_val = KITE_TOKENS.get(ev.instrument.upper(), 256265)
             step = _strike_step(ev.instrument, ev.entry)
             atm_strike = round(ev.entry / step) * step
+            opt_exchange = "BFO" if ev.instrument.upper() in ("SENSEX", "BANKEX") else "NFO"
 
             if cfg_money == "ALL":
                 moneyness_types = ["ITM1", "ATM", "OTM1"]
@@ -2268,6 +2362,12 @@ class SimulationRunner:
                 signed_offset = offset_val if opt_type == "CE" else -offset_val
                 s_val = max(step, atm_strike + signed_offset * step)
 
+                prem_spot = ev.premium_entry if (ev.premium_entry and ev.premium_entry > 0) else round(ev.entry * 0.02, 2)
+                prem_sl = ev.premium_sl if (ev.premium_sl and ev.premium_sl > 0) else round(ev.entry * 0.015, 2)
+                prem_tgt = ev.premium_target if (ev.premium_target and ev.premium_target > 0) else (
+                    round(ev.entry * 0.03, 2) if is_long else round(ev.entry * 0.01, 2)
+                )
+
                 legs.append({
                     "moneyness": m_type,
                     "option_type": opt_type,
@@ -2277,8 +2377,15 @@ class SimulationRunner:
                     "premium_spot": round(ev.entry * 0.02, 2),
                     "premium_sl": round(ev.entry * 0.015, 2),
                     "entry_sl": round(ev.entry * 0.01, 2),
+                    "premium_spot": prem_spot,
+                    "premium_sl": prem_sl,
+                    "entry_sl": prem_sl,
+                    "premium_target": prem_tgt,
+                    "last_price": prem_spot,
+                    "exit_state": "0/1 red",
                     "lots": cfg_lots,
                     "is_active": True,
+                    "is_active": row_active,
                     "signal_timestamp_ms": ev_ms,
                     "entry_timestamp_ms": ev_ms,
                 })
@@ -2287,6 +2394,7 @@ class SimulationRunner:
                 "underlying": ev.instrument,
                 "token": token_val,
                 "exchange": "NSE",
+                "exchange": opt_exchange,
                 "regime": regime_str,
                 "alignment": {"fast": 1 if is_long else -1, "mid": 1 if is_long else -1, "slow": 1 if is_long else -1},
                 "direction": direction_str,
@@ -2297,10 +2405,14 @@ class SimulationRunner:
                 "stop_loss": ev.stop,
                 "entry_sl": ev.stop,
                 "target": ev.target,
+                "exit_state": "0/1 red",
+                "exit_reason": row_exit_reason,
                 "score": 90.0 if ev.strength == "STRONG" else 65.0,
                 "timestamp_ms": ev_ms,
                 "is_active": True,
                 "is_fresh": True,
+                "is_active": row_active,
+                "is_fresh": row_fresh,
                 "source": "spot",
             })
 
@@ -2615,6 +2727,22 @@ class SimulationRunner:
 
         adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
         adaptive_ver = str(adaptive_ver).lower()
+        is_ae_v2 = adaptive_ver in ("v2_hardened", "v2")
+
+        if is_ae_v2:
+            filtered = []
+            for s in signals:
+                time_iso = s.get("entry_time") or ""
+                time_str = time_iso.split("T")[1][:8] if "T" in time_iso else time_iso[:8]
+                is_spot_signal = (s.get("scan_origin") == "spot_scan") or (not _is_index(s.get("underlying", "")))
+                if not (is_spot_signal and adaptive_src in ("spot_scan", "spot")):
+                    if "09:15:00" <= time_str < "09:28:00":
+                        continue
+                filtered.append(s)
+            signals = filtered
+
+        for s in signals:
+            s["strategy_version"] = adaptive_ver
 
         default_sym = signals[0].get("underlying", "NIFTY-I") if signals else (ae_events[0].instrument if ae_events else "NIFTY-I")
         all_syms = list(dict.fromkeys([s.get("underlying", "NIFTY-I") for s in signals])) or [default_sym]
@@ -3259,26 +3387,32 @@ class SimulationRunner:
                 sym_aliases.add(k.upper())
 
         # 1. SuperTrend: Canonical Triple SuperTrend Alignment (regime.py)
-        # Fast (10, 1.0), Mid (14, 2.0), Slow (21, 3.0).
-        # When recorded signals exist for this session, ground truth signals are replayed
-        # automatically at their recorded timestamps; synthetic evaluation is skipped.
+        # Fast (21, 1.0), Mid (14, 2.0), Slow (7, 3.0) on Heikin-Ashi candles.
+        # When recorded signals exist for this session, or this date was scanned by Kite Engine live,
+        # ground truth signals are replayed automatically at their recorded timestamps; synthetic evaluation is skipped.
         bar_date_str = bar_dt.strftime("%Y-%m-%d")
         today_recorded = [
             r for r in recorded_list
             if datetime.fromtimestamp(r["timestamp_ms"] / 1000, tz=ist).strftime("%Y-%m-%d") == bar_date_str
         ]
         has_recorded_today = bool(today_recorded)
-        has_recorded_st = has_recorded_today and any(
+        is_scanned_session = has_recorded_today or (bar_date_str in getattr(self, "_scanned_dates", set()))
+        has_recorded_st = is_scanned_session or (has_recorded_today and any(
             r.get("underlying", "").upper() in sym_aliases
             for r in today_recorded
-        )
+        ))
         if not has_recorded_st and len(history) >= 25:
             h_arr = np.array([float(b["high"]) for b in history], dtype=np.float64)
             l_arr = np.array([float(b["low"]) for b in history], dtype=np.float64)
             c_arr = np.array([float(b["close"]) for b in history], dtype=np.float64)
-            _, t_fast = compute_supertrend(h_arr, l_arr, c_arr, period=10, multiplier=1.0)
+            o_arr = np.array([float(b.get("open", b["close"])) for b in history], dtype=np.float64)
+
+            # Apply Heikin-Ashi smoothing matching live Kite Engine
+            _, h_arr, l_arr, c_arr = compute_heikin_ashi(o_arr, h_arr, l_arr, c_arr)
+
+            _, t_fast = compute_supertrend(h_arr, l_arr, c_arr, period=21, multiplier=1.0)
             _, t_mid = compute_supertrend(h_arr, l_arr, c_arr, period=14, multiplier=2.0)
-            _, t_slow = compute_supertrend(h_arr, l_arr, c_arr, period=21, multiplier=3.0)
+            _, t_slow = compute_supertrend(h_arr, l_arr, c_arr, period=7, multiplier=3.0)
 
             # Require indicators to be fully initialized (non-zero) on both current and previous bar
             if (t_fast[-1] != 0 and t_fast[-2] != 0 and
@@ -3348,6 +3482,7 @@ class SimulationRunner:
             and any(
                 r.get("underlying", "").upper() in sym_aliases
                 and (r.get("strategy") == "adaptive_edge" or r.get("is_spot_scan"))
+                and (r.get("strategy") == "adaptive_edge")
                 for r in today_recorded
             )
         )
@@ -3370,6 +3505,7 @@ class SimulationRunner:
             if rsi <= 28 and lower_wick >= 2.0 * max(body, 0.05 * atr) and close > low + 0.4 * (high - low) and long_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
+                    "strategy_version": ("v2_hardened" if is_ae_v2 else "v1_baseline"),
                     "direction": "BULLISH",
                     "strength": "STRONG",
                 })
@@ -3377,6 +3513,7 @@ class SimulationRunner:
             elif rsi >= 72 and upper_wick >= 2.0 * max(body, 0.05 * atr) and close < low + 0.6 * (high - low) and short_body_ok:
                 signals_to_fire.append({
                     "strategy": "adaptive_edge",
+                    "strategy_version": ("v2_hardened" if is_ae_v2 else "v1_baseline"),
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
@@ -3412,6 +3549,7 @@ class SimulationRunner:
                 if dec and dec.actionable:
                     signals_to_fire.append({
                         "strategy": "adaptive_edge",
+                        "strategy_version": ("v2_hardened" if is_ae_v2 else "v1_baseline"),
                         "direction": dec.direction,
                         "strength": "STRONG",
                     })
@@ -3619,7 +3757,7 @@ class SimulationRunner:
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
                 scan_origin="spot_scan" if (adaptive_src in ("spot_scan", "spot") or strategy != "adaptive_edge") else "adaptive_edge",
-                strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
+                strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)
@@ -3675,7 +3813,7 @@ class SimulationRunner:
                     exit_reason=None,
                     bars_held=0,
                     scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
-                    strategy_version=adaptive_ver if (strategy == "adaptive_edge" or not _is_index(sym)) else None,
+                    strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
                 )
                 self._stats.trades_entered += 1
                 self._stats.trades.append(trade)

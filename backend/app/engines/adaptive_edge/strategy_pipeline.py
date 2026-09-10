@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Mapping, Sequence
@@ -188,6 +189,14 @@ def build_causal_feature_snapshots(
                 )
             )
 
+        bar_payload = bar.payload if isinstance(bar.payload, dict) else {}
+        bar_open = float(bar_payload["open"]) if "open" in bar_payload and bar_payload["open"] is not None else struct.session_open
+        bar_high = float(bar_payload["high"]) if "high" in bar_payload and bar_payload["high"] is not None else struct.vah
+        bar_low = float(bar_payload["low"]) if "low" in bar_payload and bar_payload["low"] is not None else struct.val
+
+        add_feat("open", bar_open)
+        add_feat("high", bar_high)
+        add_feat("low", bar_low)
         add_feat("close", struct.close)
         add_feat("vwap", struct.vwap)
         add_feat("poc", struct.poc)
@@ -250,9 +259,29 @@ def evaluate_market_decision(
     # Directional hypothesis - differentiated between V1 baseline and V2 hardened
     strat_ver = getattr(config, "strategy_version", "v2_hardened") or "v2_hardened"
     is_v2 = str(strat_ver).lower() in ("v2_hardened", "v2", "v2.0")
+    is_v2_hardened = str(strat_ver).lower() == "v2_hardened"
+    is_v2 = is_v2_hardened or str(strat_ver).lower() in ("v2", "v2.0")
 
     if is_v2:
         # V2 Hardened: strict multi-condition confirmation (VWAP + POC + CVD + Session Open)
+        # 1. V2 Hardened Opening Toxic Window Lockout (09:15 - 09:28 IST)
+        if is_v2_hardened and snapshot.decision_time:
+            try:
+                dt_raw = datetime.fromisoformat(str(snapshot.decision_time).replace("Z", "+00:00"))
+                dt_ist = dt_raw.astimezone(timezone(timedelta(hours=5, minutes=30)))
+                if dt_ist.hour == 9 and dt_ist.minute < 28:
+                    return MarketStateDecision(
+                        direction="NEUTRAL",
+                        horizon=OpportunityMode.MICRO,
+                        uncertainty=0.5,
+                        decision_reason="opening_toxic_window_lockout",
+                        target_points=0.0,
+                        stop_points=config.stop_points,
+                    )
+            except Exception:
+                pass
+
+        # 2. V2 Hardened: strict multi-condition confirmation (VWAP + POC + CVD + Session Open)
         is_bullish = (
             close >= effective_vwap
             and close >= effective_poc
@@ -265,8 +294,19 @@ def evaluate_market_decision(
             and (cvd <= 0 or (struct.ib_complete and struct.ib_low and close < struct.ib_low))
             and (close < session_open or (struct.vwap is not None and close < struct.vwap))
         )
+
+        # 3. V2 Candle Body & Rejection Filter (Close near extreme, avoid exhaustion wicks)
+        b_high = snapshot.values.get("high")
+        b_low = snapshot.values.get("low")
+        if b_high is not None and b_low is not None and b_high > b_low:
+            denom = max(b_high - b_low, 1e-9)
+            if is_bullish and ((close - b_low) / denom) < 0.60:
+                is_bullish = False
+            if is_bearish and ((b_high - close) / denom) < 0.60:
+                is_bearish = False
     else:
         # V1 Baseline: relaxed single-anchor confirmation
+        # V1 Baseline: relaxed single-anchor confirmation without morning lockout or wick filter
         is_bullish = (
             (close >= effective_vwap or close >= effective_poc)
             and (close >= session_open or cvd >= 0)

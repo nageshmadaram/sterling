@@ -6,7 +6,7 @@ import {
 } from '../../../hooks/useReplayStore';
 import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
 import { ReplayPopover } from './primitives/ReplayPopover';
-import { ensureSeconds, fmtSmartDate, fmtTime } from './replayFormat';
+import { ensureSeconds, fmtSessionDate, fmtSmartDate, fmtTime } from './replayFormat';
 import { MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
 import * as Icons from './ReplayIcons';
 
@@ -28,21 +28,29 @@ export function ReplaySessionDropdown() {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const locked = state !== 'idle';
-  const presets = useMemo(() => getDynamicMarketPresets(), []);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const isRange = Boolean(draft.endDate && draft.endDate !== draft.date);
   const [isRangeMode, setIsRangeMode] = useState<boolean>(isRange);
 
   useEffect(() => {
     if (open) {
+      setNow(Date.now());
       setIsRangeMode(isRange);
     }
   }, [open, isRange]);
 
+  const presets = useMemo(() => getDynamicMarketPresets(new Date(now)), [now, open]);
+
   const activePreset = !isRange ? presets.find((p) => p.date === draft.date) : undefined;
   const displayLabel = isRange
-    ? `${fmtSmartDate(draft.date)} – ${fmtSmartDate(draft.endDate)}`
-    : (activePreset?.label ?? fmtSmartDate(draft.date));
+    ? `${fmtSmartDate(draft.date, new Date(now))} – ${fmtSmartDate(draft.endDate, new Date(now))}`
+    : (activePreset?.label ?? fmtSmartDate(draft.date, new Date(now)));
 
   return (
     <>
@@ -129,6 +137,7 @@ export function ReplaySessionDropdown() {
                     <span className="rd-drop-option-text">
                       <span className="rd-drop-option-title">{p.label}</span>
                       <span className="rd-drop-option-hint">{fmtSmartDate(p.date)}</span>
+                      <span className="rd-drop-option-hint">{fmtSessionDate(p.date, true)}</span>
                     </span>
                   </button>
                 );

@@ -1536,3 +1536,128 @@ def test_simulation_spot_scan_fallback_when_no_recorded_signals():
         assert ev.scan_origin == "spot_scan"
     assert len(simulation_runner._stats.trades) > 0
 
+
+def test_simulation_scanned_session_zero_signals_honored():
+    """Verify that a date scanned by the live Kite Engine with 0 signals does not fabricate synthetic SuperTrend crossovers."""
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-10",
+        strategy="supertrend",
+        strategies=["supertrend"],
+    )
+    simulation_runner._recorded_signals = []
+    simulation_runner._scanned_dates = {"2026-09-10"}
+
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t0 = datetime(2026, 9, 10, 9, 15, 0, tzinfo=ist)
+    for i in range(35):
+        bar = {
+            "symbol": "NIFTY",
+            "open": 25000.0 - i * 15,
+            "high": 25010.0 - i * 15,
+            "low": 24980.0 - i * 15,
+            "close": 24985.0 - i * 15,
+            "volume": 50000,
+        }
+        simulation_runner._evaluate_bar(bar, t0 + timedelta(minutes=5 * i))
+
+    st_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "supertrend"]
+    assert len(st_events) == 0
+
+
+def test_kite_signals_response_does_not_leak_other_strategies():
+    """Verify that get_kite_signals_response strictly excludes non-SuperTrend strategies during multi-strategy replay."""
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(date="2026-09-10", strategies=["all"])
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="09:20:00",
+            timestamp_ms=1789012800000,
+            strategy="adaptive_edge",
+            instrument="NIFTY",
+            direction="BEARISH",
+            strength="STRONG",
+            entry=100.0,
+            stop=90.0,
+            target=120.0,
+        ),
+        SimSignalEvent(
+            time_iso="10:15:00",
+            timestamp_ms=1789016100000,
+            strategy="supertrend",
+            instrument="BANKNIFTY",
+            direction="BULLISH",
+            strength="STRONG",
+            entry=200.0,
+            stop=180.0,
+            target=240.0,
+        ),
+    ]
+
+    resp = simulation_runner.get_kite_signals_response()
+    rows = resp.get("rows", [])
+    assert len(rows) == 1
+    assert rows[0]["underlying"] in ("BANKNIFTY", "NIFTY BANK")
+    assert rows[0]["direction"] == "long"
+
+
+def test_adaptive_edge_snapshot_parity_with_simulation_trades_in_spot_scan_v2():
+    """Verify that Adaptive Edge snapshot signals stay in 100% parity with executed simulation trades under V2 Spot Scan."""
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t_open = int(datetime(2026, 9, 9, 9, 15, 0, tzinfo=ist).timestamp() * 1000)
+
+    morning_spot_sig = {
+        "underlying": "ADANIENT",
+        "direction": "BULLISH",
+        "time_iso": "09:15:00",
+        "timestamp_ms": t_open,
+        "spot": 2984.0,
+        "stop_loss": 2950.0,
+        "strategy": "supertrend",
+        "is_spot_scan": True,
+        "source": "spot",
+        "raw_row": {
+            "underlying": "ADANIENT",
+            "direction": "BUY",
+            "spot": 2984.0,
+            "legs": [
+                {"moneyness": "ATM", "option_symbol": "ADANIENT26SEP3100CE", "strike": 3100.0, "premium_spot": 70.55}
+            ],
+        },
+    }
+
+    # 1. Under Adaptive Edge (V2 - Spot): Morning spot scan executes trade AND appears in snapshot
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-09",
+        strategies=["adaptive_edge"],
+        adaptive_source="spot_scan",
+        adaptive_version="v2_hardened",
+    )
+    simulation_runner._emit_recorded_signal(morning_spot_sig)
+    assert len(simulation_runner._stats.events) == 1
+    assert len(simulation_runner._stats.trades) == 1
+
+    snap = simulation_runner.get_adaptive_edge_snapshot()
+    assert len(snap["signals"]) == 1, "Snapshot signals must match simulation trades count"
+    assert snap["signals"][0]["underlying"] == "ADANIENT"
+    assert snap["signals"][0]["scan_origin"] == "spot_scan"
+
+    # 2. Under Adaptive Edge (V2 - All / Both): Morning spot scan is locked out in BOTH
+    simulation_runner.clear()
+    simulation_runner._config = SimConfig(
+        date="2026-09-09",
+        strategies=["adaptive_edge"],
+        adaptive_source="both",
+        adaptive_version="v2_hardened",
+    )
+    simulation_runner._emit_recorded_signal(morning_spot_sig)
+    assert len(simulation_runner._stats.events) == 0
+    assert len(simulation_runner._stats.trades) == 0
+    snap_both = simulation_runner.get_adaptive_edge_snapshot()
+    assert len(snap_both["signals"]) == 0
+
+
+

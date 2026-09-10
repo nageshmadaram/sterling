@@ -40,9 +40,33 @@ const venueFor = (exchange: string, kind: string) =>
 
 /** Whether the microstructure model found this, or a plain directional scan did. */
 function originOf(row: AdaptiveEdgeRow): BoardOrigin {
-  return row.origin === 'spot_scan'
-    ? { label: 'SPOT SCAN', tone: 'blue', hint: 'Direction came from a SuperTrend spot scan; Adaptive Edge chose the contract and manages the exit.' }
-    : { label: 'AE MODEL', tone: 'brand', hint: "Found by Adaptive Edge's own microstructure and order-flow model." };
+  const stratVer = row.strategy_version ? String(row.strategy_version).toLowerCase() : null;
+  const ver = stratVer ? (stratVer.includes('v2') ? 'V2' : 'V1') : null;
+
+  if (row.origin === 'spot_scan') {
+    return {
+      label: 'SPOT SCAN',
+      tone: 'blue',
+      hint: ver
+        ? `Direction came from a SuperTrend spot scan; managed under Adaptive Edge ${ver === 'V2' ? 'V2 Hardened' : 'V1 Baseline'}.`
+        : 'Direction came from a SuperTrend spot scan; Adaptive Edge chose the contract and manages the exit.',
+    };
+  }
+
+  return ver
+    ? {
+        label: `AE ${ver}`,
+        tone: 'brand',
+        hint:
+          ver === 'V2'
+            ? 'Found by Adaptive Edge V2 Hardened (confluence + toxic lockout + rejection filter).'
+            : 'Found by Adaptive Edge V1 Baseline (single anchor relaxed).',
+      }
+    : {
+        label: 'AE MODEL',
+        tone: 'brand',
+        hint: "Found by Adaptive Edge's own microstructure and order-flow model.",
+      };
 }
 
 const ms = (iso: string | null | undefined): number | null => {

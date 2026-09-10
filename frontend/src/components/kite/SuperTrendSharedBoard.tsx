@@ -1,7 +1,7 @@
 import React from 'react';
 import { SignalBoard, DEFAULT_SORT, type ColumnId, type SortState } from './board/SignalBoard';
 import { supertrendToBoard } from './board/supertrendAdapter';
-import { underlyingQuoteKey, type BoardSignal } from './board/boardTypes';
+import { underlyingQuoteKey, sessionDayKey, type BoardSignal } from './board/boardTypes';
 import {
   BOARD_COL_TO_SIGNAL, SIGNAL_COL_TO_BOARD, SIGNAL_LEFT_COLUMNS, SIGNAL_RIGHT_COLUMNS,
   signalColGroup, type SignalColKey,
@@ -154,36 +154,66 @@ export function SuperTrendSharedBoard({
     });
   }, []);
 
+  const hasToday = React.useMemo(() => {
+    const todayKey = sessionDayKey(nowMs);
+    return rows.some((r) => sessionDayKey(r.timestamp_ms) === todayKey);
+  }, [rows, nowMs]);
+
   return (
-    <SignalBoard
-      signals={signals}
-      columns={columns}
-      hidden={hidden}
-      openId={openId}
-      onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
-      onOpenDetail={(sig) => {
-        const row = rows.find((r) => r.underlying === sig.underlying);
-        if (row) onSelectSignal({ token: row.token, underlying: row.underlying, timestamp_ms: row.timestamp_ms, source: row.source });
-      }}
-      sort={sort}
-      onSortChange={setSort}
-      collapsedGroups={collapsed}
-      onToggleGroup={toggleGroup}
-      nowMs={nowMs}
-      isHistoricalSim={isHistoricalSim}
-      // The three capabilities, from the operator's own Behaviour settings.
-      onReorderColumn={s.boardDragColumns ? onReorderColumn : undefined}
-      rowScroll={s.boardRowScroll}
-      // Date groups only: Today / Yesterday / Older. Hoisting live rows into
-      // "Live now" hid those headings — a morning scan then read as one live
-      // pile even when every print was from today.
-      collapseOlderDays={true}
-      // Trade and chart are COLUMNS now, shared with every other board, so the
-      // picker can switch either off.
-      renderTrade={rowActions.renderTrade}
-      renderChart={rowActions.renderChart}
-      emptyLabel="No active or recent setups on the board yet."
-    />
+    <>
+      {!hasToday && rows.length > 0 && !isHistoricalSim && (
+        <div
+          data-testid="supertrend-today-zero-notice"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '7px 16px',
+            background: 'var(--k-surface-sunken-2, rgba(255, 255, 255, 0.02))',
+            borderBottom: '1px solid var(--k-border, rgba(255, 255, 255, 0.08))',
+            fontSize: 11,
+            color: 'var(--k-dim, #888)',
+          }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontWeight: 700, letterSpacing: '0.04em', color: 'var(--k-text, #eee)', textTransform: 'uppercase' }}>Today</span>
+            <span style={{ padding: '1px 6px', borderRadius: 4, background: 'rgba(255, 255, 255, 0.06)', fontSize: 10, fontFamily: 'monospace' }}>0 new entries</span>
+          </span>
+          <span style={{ fontSize: 10.5, color: 'var(--k-dim, #888)' }}>
+            No new 1H SuperTrend transitions today · Active positions from earlier sessions are tracked below
+          </span>
+        </div>
+      )}
+      <SignalBoard
+        signals={signals}
+        columns={columns}
+        hidden={hidden}
+        openId={openId}
+        onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
+        onOpenDetail={(sig) => {
+          const row = rows.find((r) => r.underlying === sig.underlying);
+          if (row) onSelectSignal({ token: row.token, underlying: row.underlying, timestamp_ms: row.timestamp_ms, source: row.source });
+        }}
+        sort={sort}
+        onSortChange={setSort}
+        collapsedGroups={collapsed}
+        onToggleGroup={toggleGroup}
+        nowMs={nowMs}
+        isHistoricalSim={isHistoricalSim}
+        // The three capabilities, from the operator's own Behaviour settings.
+        onReorderColumn={s.boardDragColumns ? onReorderColumn : undefined}
+        rowScroll={s.boardRowScroll}
+        // Date groups only: Today / Yesterday / Older. Hoisting live rows into
+        // "Live now" hid those headings — a morning scan then read as one live
+        // pile even when every print was from today.
+        collapseOlderDays={true}
+        // Trade and chart are COLUMNS now, shared with every other board, so the
+        // picker can switch either off.
+        renderTrade={rowActions.renderTrade}
+        renderChart={rowActions.renderChart}
+        emptyLabel="No active or recent setups on the board yet."
+      />
+    </>
   );
 }
 

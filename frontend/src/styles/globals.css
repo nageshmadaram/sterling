@@ -323,6 +323,8 @@ body {
 .kv-rows > * {
   content-visibility: auto;
   contain-intrinsic-size: auto 64px;
+  /* content-visibility: auto disabled to prevent blank unrendered top rows under sticky headers */
+  contain: none;
 }
 
 /* ── macOS-style overlay scrollbars ───────────────────────────────────────

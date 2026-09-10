@@ -347,7 +347,7 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
 
   let uChgAbs = null;
   let uChgPct = null;
-  let uLastPx = null;
+  let uLastPx = uQ?.last_price ?? ((row as any).underlying_spot || (row.spot && row.spot > 0 ? row.spot : null));
   let uColor = k.text;
 
   if (uQ) {
@@ -364,6 +364,13 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
       // blank. Without an open/close to divide by there is no percentage to
       // show, and inventing one is worse than leaving the cell empty.
       uChgAbs = uQ.net_change;
+      uColor = s.showPriceDirection ? (uChgAbs >= 0 ? k.green : k.red) : k.text;
+    }
+  } else if (uLastPx != null && (row.spot || (row as any).entry)) {
+    const baseSpot = (row as any).entry || row.spot;
+    if (baseSpot && uLastPx !== baseSpot) {
+      uChgAbs = uLastPx - baseSpot;
+      uChgPct = (uChgAbs / baseSpot) * 100;
       uColor = s.showPriceDirection ? (uChgAbs >= 0 ? k.green : k.red) : k.text;
     }
   }
@@ -843,13 +850,16 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
               const sym = `${row.exchange}:${leg.option_symbol}`;
           const q = quotes?.[sym];
           
+
+          const rawEntryPx = (leg as any).premium_spot;
+          const entryPx = rawEntryPx != null && rawEntryPx > 0 ? rawEntryPx : null;
+          let lastPx = q?.last_price ?? (leg as any).last_price ?? null;
+
           let chgAbs = null;
           let chgPct = null;
-          let lastPx = null;
           let color = k.text;
-          
+
           if (q) {
-            lastPx = q.last_price;
             const base = s.chgType === 'close' ? q.ohlc?.close : q.ohlc?.open;
             if (base) {
               chgAbs = q.last_price - base;
@@ -863,6 +873,10 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
               chgAbs = q.net_change;
               color = s.showPriceDirection ? (chgAbs >= 0 ? k.green : k.red) : k.text;
             }
+          } else if (lastPx != null && entryPx != null && entryPx > 0) {
+            chgAbs = (leg as any).net_change ?? (leg as any).change ?? (lastPx - entryPx);
+            chgPct = (leg as any).chg_pct ?? (((lastPx - entryPx) / entryPx) * 100);
+            color = s.showPriceDirection ? (chgAbs >= 0 ? k.green : k.red) : k.text;
           }
           const isExp = expanded.has(leg.option_symbol);
           // The trade's trend has flipped: Entry/Stop are a frozen snapshot from when
@@ -872,20 +886,18 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
           // A 0 / illiquid premium bar at the entry can leave these at 0 — that's not a
           // real entry/stop, so treat non-positive as "no value" (renders as "—") instead
           // of a misleading 0.00 sitting next to a live LTP (the classic "entry 0 (+61.75)").
-          const rawEntryPx = (leg as any).premium_spot;
-          const entryPx = rawEntryPx != null && rawEntryPx > 0 ? rawEntryPx : null;
           const rawSlPx = (leg as any).premium_sl;
           const slPx = rawSlPx != null && rawSlPx > 0 ? rawSlPx : null;
           // Initial hard stop at entry (fast ST line) — the static SL column, distinct
           // from the live ratcheting TSL (premium_sl) above.
           const rawInitSl = (leg as any).entry_sl;
           const initSlPx = rawInitSl != null && rawInitSl > 0 ? rawInitSl : null;
-          const rawTargetPx = (leg as any).premium_target;
+          const rawTargetPx = (leg as any).premium_target ?? (leg as any).target ?? (isDeriv ? null : row.target);
           const targetPx = rawTargetPx != null && rawTargetPx > 0 ? rawTargetPx : null;
           // Exit column — red-counter progress ("<reds>/<threshold> red") toward the
           // auto-exit rule. Row-level (the underlying/premium regime), coloured by how
           // close it is to firing: green→safe, amber→approaching, red→at/over threshold.
-          const legExitState = leg.exit_state ?? row.exit_state;
+          const legExitState = leg.exit_state ?? row.exit_state ?? (row.source === 'navigator' ? null : '0/1 red');
           const exitReds = legExitState ? (parseInt(legExitState, 10) || 0) : 0;
           const exitThr = legExitState ? (parseInt(legExitState.split('/')[1] || '1', 10) || 1) : 1;
           const exitColor = !legExitState ? k.dim : exitReds <= 0 ? k.dim : exitReds >= exitThr ? k.red : k.orange;
@@ -2175,12 +2187,18 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
     const active = sorted.filter((r) => rowIsRunning(r, quotes));
     const history = sorted.filter((r) => !rowIsRunning(r, quotes));
     // Indices first in "Active now", then stocks alphabetically.
-    const INDEX_NAMES = new Set(INDEX_OPTS.map(o => o.name));
+    const INDEX_NAMES = new Set([
+      ...INDEX_OPTS.map(o => o.name),
+      ...INDEX_OPTS.map(o => o.label),
+      'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MID SELECT', 'BANKEX', 'SENSEX'
+    ]);
     const sortedActive = [...active].sort((a, b) => {
       const aIdx = INDEX_NAMES.has(a.underlying) ? 1 : 0;
       const bIdx = INDEX_NAMES.has(b.underlying) ? 1 : 0;
       if (aIdx !== bIdx) return bIdx - aIdx; // indices first
-      return a.underlying.localeCompare(b.underlying);
+      const cmp = a.underlying.localeCompare(b.underlying);
+      if (cmp !== 0) return cmp;
+      return (b.timestamp_ms || 0) - (a.timestamp_ms || 0);
     });
     const nowMs = effectiveNowMs;
     const todayKey = sessionDayKey(nowMs);
@@ -2242,7 +2260,12 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
         const hasActive = label === todayLabel ? activeToday.length > 0
           : label === yesterdayLabel ? activeYesterday.length > 0
           : false;
-        dayBuckets.push({ label, rows: applyUserSort(groups[label]), active: hasActive });
+        const bucketRows = (!showEnded && hasActive)
+          ? groups[label].filter(r => rowIsRunning(r, quotes))
+          : groups[label];
+        if (bucketRows.length > 0) {
+          dayBuckets.push({ label, rows: applyUserSort(bucketRows), active: hasActive });
+        }
       }
     }
     // Today and Yesterday lead; the dated active groups sit between them and

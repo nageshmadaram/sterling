@@ -88,6 +88,7 @@ export interface AdaptiveEdgeLeg {
   entry_poc?: number | null;
   entry_vwap?: number | null;
   entry_cvd?: number | null;
+  strategy_version?: string | null;
 }
 
 export type AdaptiveEdgeOrigin = 'adaptive_edge' | 'spot_scan';
@@ -109,6 +110,7 @@ export interface AdaptiveEdgeOptionLeg {
   trail_premium: number | null;
   ltp: number | null;
   resolution_reason: string | null;
+  strategy_version?: string | null;
 }
 
 export interface AdaptiveEdgeSignal {
@@ -130,6 +132,7 @@ export interface AdaptiveEdgeSignal {
   scanned: boolean;
   skip_reason: string | null;
   scan_origin?: AdaptiveEdgeOrigin | string | null;
+  strategy_version?: string | null;
   flattened: boolean;
   quantity: number | null;
   overlays: string[];

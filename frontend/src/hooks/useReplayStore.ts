@@ -265,6 +265,7 @@ export interface ReplayUiPrefs {
 export interface ReplayDraftPrefs {
   date?: string;
   endDate?: string;
+  savedAt?: number;
   startTime?: string;
   endTime?: string;
   strategies?: string[];
@@ -281,13 +282,16 @@ export interface ReplayDraftPrefs {
   instruments?: string[];
 }
 
-export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Partial<ReplayDraft> {
+export function loadDraftPrefs(storage: Storage | undefined = safeStorage()): Partial<ReplayDraft> & { savedAt?: number } {
   if (!storage) return {};
   try {
     const raw = storage.getItem(REPLAY_DRAFT_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Partial<ReplayDraft> = {};
+    const out: Partial<ReplayDraft> & { savedAt?: number } = {};
+    if (typeof parsed.savedAt === 'number') {
+      out.savedAt = parsed.savedAt;
+    }
     if (typeof parsed.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
       out.date = parsed.date;
     }
@@ -333,6 +337,7 @@ export function persistDraft(draft: ReplayDraft) {
     const payload: ReplayDraftPrefs = {
       date: draft.date,
       endDate: draft.endDate,
+      savedAt: Date.now(),
       startTime: draft.startTime,
       endTime: draft.endTime,
       strategies: draft.strategies,
@@ -354,13 +359,17 @@ export function persistDraft(draft: ReplayDraft) {
   }
 }
 
-function initialDraft(): ReplayDraft {
+export function initialDraft(): ReplayDraft {
   const d = getLastMarketWorkingDay();
   const saved = loadDraftPrefs();
-  // If saved date is older than 7 days from the latest completed market session,
-  // do not trap the user on a stale session date from an old test run.
+  const isRange = Boolean(saved.endDate && saved.endDate !== saved.date);
+  // A single-day session date older than the latest market session is considered stale
+  // if saved in a prior browser session (no savedAt or saved > 4 hours ago).
   const isStale = Boolean(
-    saved.date && (new Date(d).getTime() - new Date(saved.date).getTime() > 7 * 86400 * 1000)
+    saved.date &&
+    !isRange &&
+    saved.date < d &&
+    (!saved.savedAt || Date.now() - saved.savedAt > 4 * 3600 * 1000)
   );
   const effectiveDate = (!isStale && saved.date) ? saved.date : d;
   const effectiveEndDate = (!isStale && saved.endDate) ? saved.endDate : effectiveDate;

@@ -6,6 +6,7 @@ import {
   REPLAY_DRAFT_KEY,
   REPLAY_UI_KEY,
   getReplayNowMs,
+  initialDraft,
   loadDraftPrefs,
   loadPrefs,
   matchAdaptiveSource,
@@ -332,6 +333,49 @@ describe('draft preferences persistence', () => {
     expect(loaded.speed).toBe(10);
     expect(loaded.resolution).toBe('1m');
     expect(loaded.lots).toBe(2);
+  });
+
+  it('resets stale single-day draft dates to latest completed market session', () => {
+    // Saved date from older session with no savedAt timestamp
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        date: '2026-09-08',
+        endDate: '2026-09-08',
+      }),
+    );
+    const draft = initialDraft();
+    // Must roll forward to the latest market session, not get trapped on 2026-09-08
+    expect(draft.date).not.toBe('2026-09-08');
+    expect(draft.date).toBe(draft.endDate);
+  });
+
+  it('retains recent single-day draft date if savedAt is fresh', () => {
+    const recentTime = Date.now() - 60_000; // 1 minute ago
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        date: '2026-09-08',
+        endDate: '2026-09-08',
+        savedAt: recentTime,
+      }),
+    );
+    const draft = initialDraft();
+    // Fresh explicit selection is preserved across quick reload
+    expect(draft.date).toBe('2026-09-08');
+  });
+
+  it('preserves multi-day date range draft even if start date is older', () => {
+    localStorage.setItem(
+      REPLAY_DRAFT_KEY,
+      JSON.stringify({
+        date: '2026-09-01',
+        endDate: '2026-09-05',
+      }),
+    );
+    const draft = initialDraft();
+    expect(draft.date).toBe('2026-09-01');
+    expect(draft.endDate).toBe('2026-09-05');
   });
 
   it('matches strategy filter correctly', () => {

@@ -18,7 +18,8 @@ import { useBoardRowActions } from './useBoardRowActions';
 import { BoardFilters } from './BoardFilters';
 import { BoardTicket } from './BoardTicket';
 import { useBoardView } from './useBoardView';
-import type { BoardSignal } from './boardTypes';
+import { sessionDayKey, type BoardSignal } from './boardTypes';
+import { useSimNowMs } from '../../../hooks/useReplayStore';
 import { k } from '../../../styles/kiteUI';
 
 export type AdaptiveEdgeSourceFilter = 'all' | 'ae' | 'spot';
@@ -227,6 +228,9 @@ export function AdaptiveEdgeBoard({
     </button>
   );
 
+  const simNowMs = useSimNowMs();
+  const isHistoricalSim = simNowMs != null && sessionDayKey(simNowMs) !== sessionDayKey(Date.now());
+
   return (
     <div>
       <BoardFilters view={view} columns={BOARD_COLUMNS}>
@@ -249,6 +253,7 @@ export function AdaptiveEdgeBoard({
         onToggleGroup={toggleGroup}
         collapseOlderDays={true}
         nowMs={nowMs}
+        isHistoricalSim={isHistoricalSim}
         emptyLabel={
           view.counts.total
             ? 'Every row is filtered out. Clear the search or include ended positions.'

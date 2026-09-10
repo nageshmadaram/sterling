@@ -808,6 +808,7 @@ def build_snapshot_signals(
                 "mode_history": path_segments,
                 "horizon": raw.get("horizon") or "IMPULSE",
                 "scan_origin": raw.get("scan_origin") or "adaptive_edge",
+                "strategy_version": raw.get("strategy_version") or settings.get("strategy_version") or "v2_hardened",
                 "legs": [leg.as_dict() for leg in option_legs],
             }
         )
@@ -929,6 +930,7 @@ def build_snapshot_signals(
                 "scanned": False,
                 "skip_reason": "no tape",
                 "scan_origin": "adaptive_edge" if name in ("NIFTY 50", "NIFTY-I") else "spot_scan",
+                "strategy_version": settings.get("strategy_version") or "v2_hardened",
                 "flattened": True,
                 "quantity": 0,
                 "overlays": [],

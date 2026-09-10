@@ -81,7 +81,9 @@ const SignalRow = memo(function SignalRow({
                 letterSpacing: '0.02em',
               }}
             >
-              {ev.scan_origin === 'spot_scan' ? 'Spot' : 'AE'}
+              {ev.scan_origin === 'spot_scan'
+                ? (ev.strategy_version ? `Spot (${ev.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'})` : 'Spot')
+                : (ev.strategy_version ? `AE ${ev.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'}` : 'AE')}
             </span>
           )}
         </span>

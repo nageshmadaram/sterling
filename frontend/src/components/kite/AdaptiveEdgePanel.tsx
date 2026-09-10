@@ -469,6 +469,7 @@ function optionRow(signal: AdaptiveEdgeSignal, leg: AdaptiveEdgeOptionLeg, index
     modePath: signal.mode_path,
     modeHistory: signal.mode_history,
     horizon: signal.horizon ?? (origin === 'spot_scan' ? 'SESSION_TREND' : 'IMPULSE'),
+    strategy_version: signal.strategy_version ?? (signal as any).strategyVersion ?? null,
   };
 }
 
@@ -522,6 +523,7 @@ function legacyLegRow(leg: AdaptiveEdgeLeg, index: number, symbol: string): Adap
     modePath: null,
     modeHistory: [eMode, pMode],
     horizon: leg.horizon ?? 'IMPULSE',
+    strategy_version: leg.strategy_version ?? (leg as any).strategyVersion ?? null,
   };
 }
 
@@ -596,6 +598,7 @@ export interface AdaptiveEdgeRow {
   modeHistory?: string[] | null;
   horizon?: AdaptiveEdgeHorizon | string;
   side?: 'BUY' | 'SELL';
+  strategy_version?: string | null;
 }
 
 const ALL_COLUMNS: Array<{ id: string; label: string }> = [
@@ -901,7 +904,11 @@ export function AdaptiveEdgePanel({
               </span>
               {row.origin === 'adaptive_edge' ? (
                 <span
-                  title="Origin: Adaptive Edge Microstructure Model"
+                  title={
+                    row.strategy_version
+                      ? `Origin: Adaptive Edge (${row.strategy_version.toLowerCase().includes('v2') ? 'V2 Production-Hardened' : 'V1 Legacy Baseline'})`
+                      : 'Origin: Adaptive Edge Microstructure Model'
+                  }
                   style={{
                     fontSize: 9,
                     fontWeight: 700,
@@ -913,11 +920,19 @@ export function AdaptiveEdgePanel({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  AE RESEARCH
+                  {row.strategy_version
+                    ? row.strategy_version.toLowerCase().includes('v2')
+                      ? 'AE V2'
+                      : 'AE V1'
+                    : 'AE RESEARCH'}
                 </span>
               ) : (
                 <span
-                  title="Origin: Spot Scan (SuperTrend Direction)"
+                  title={
+                    row.strategy_version
+                      ? `Origin: Spot Scan (SuperTrend Direction) [Adaptive Edge ${row.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'}]`
+                      : 'Origin: Spot Scan (SuperTrend Direction)'
+                  }
                   style={{
                     fontSize: 9,
                     fontWeight: 700,
@@ -929,7 +944,9 @@ export function AdaptiveEdgePanel({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  SPOT SCAN (ST)
+                  {row.strategy_version
+                    ? `SPOT (${row.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'})`
+                    : 'SPOT SCAN (ST)'}
                 </span>
               )}
             </div>

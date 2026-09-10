@@ -110,7 +110,9 @@ const TradeRow = memo(function TradeRow({
                 letterSpacing: '0.02em',
               }}
             >
-              {t.scan_origin === 'spot_scan' ? 'Spot' : 'AE'}
+              {t.scan_origin === 'spot_scan'
+                ? (t.strategy_version ? `Spot (${t.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'})` : 'Spot')
+                : (t.strategy_version ? `AE ${t.strategy_version.toLowerCase().includes('v2') ? 'V2' : 'V1'}` : 'AE')}
             </span>
           )}
         </span>

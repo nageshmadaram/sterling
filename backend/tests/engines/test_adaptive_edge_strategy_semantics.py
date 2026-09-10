@@ -301,3 +301,20 @@ def test_complete_strategy_semantics_canonical_replay_determinism():
     # 5. Deterministic Trace Hash Match
     assert result_1.trace_hash == result_2.trace_hash
     assert len(result_1.audit) == len(result_2.audit)
+
+
+def test_v1_baseline_vs_v2_hardened_decision_divergence():
+    """Verify that V1 baseline and V2 hardened produce distinct strategy decisions."""
+    # 1. 09:20 IST opening session bar (in toxic window)
+    bars_open = _make_sample_session_bars(5, base_price=24500.0, trend="bullish")
+    cfg_v1 = StrategyConfig(strategy_version="v1_baseline")
+    cfg_v2 = StrategyConfig(strategy_version="v2_hardened")
+
+    res_v1 = run_strategy_semantics_pipeline(bars_open, config=cfg_v1)
+    res_v2 = run_strategy_semantics_pipeline(bars_open, config=cfg_v2)
+
+    # V1 fires bullish at 09:15-09:20; V2 locks out with opening_toxic_window_lockout
+    assert res_v1.market_decision.direction == "BULLISH"
+    assert res_v2.market_decision.direction == "NEUTRAL"
+    assert res_v2.market_decision.decision_reason == "opening_toxic_window_lockout"
+
