@@ -186,9 +186,15 @@ export function PcrPane() {
       const expiry = row
         ? `${kind === "today" ? "Today" : kind === "weekly" ? "Wk" : "Mo"} ${formatExpiry(row.expiry)}`
         : "—";
-      const action = book.book?.action ?? liveAction(pcr);
-      const insight = readPcr(oi, row?.spot.changePer ?? null);
+      const insight = readPcr(oi, liveChg ?? row?.spot.changePer ?? null);
+      const action = insight.action;
       const band = last?.band ?? pcrBand(pcr);
+      const flow =
+        pcr != null && last?.hhmm
+          ? describeFlow(u.short, last.hhmm, pcr, delta ?? 0, metric)
+          : null;
+      const flowAction: PcrAction = flow?.action ?? "Wait";
+      const flowWhy = flow?.why ?? "";
       return {
         id: u.id,
         name: u.short,
@@ -209,6 +215,8 @@ export function PcrPane() {
         hhmm: last?.hhmm ?? "",
         band,
         insight,
+        flowAction,
+        flowWhy,
       };
     });
   }, [metricBoards, payload, sessionIso, todayIso, liveQuotes]);
@@ -375,7 +383,21 @@ export function PcrPane() {
                                 <span className="kp-tip">{playHint(row.action)}</span>
                               </td>
                             ) : null}
-                            {showCol("pcr") ? <td className={`kp-pcr kp-act ${kind} num`}>{row.pcr != null ? formatPcr(row.pcr) : "—"}</td> : null}
+                            {showCol("pcr") ? (
+                              <td className="kp-pcr-cell num">
+                                <div className="kp-pcr-wrap">
+                                  <span className="kp-pcr-val">{row.pcr != null ? formatPcr(row.pcr) : "—"}</span>
+                                  {row.pcr != null && row.flowAction ? (
+                                    <span
+                                      className={`kp-flow-pill kp-act ${ideaKind(row.flowAction)}`}
+                                      title={row.flowWhy || undefined}
+                                    >
+                                      {row.flowAction}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </td>
+                            ) : null}
                             {showCol("move") ? (
                               <td className="kp-move num">
                                 {row.path}
@@ -431,10 +453,22 @@ export function PcrPane() {
                           <th>{slot.hhmm}</th>
                           {cols.map((u) => {
                             const s = boards?.[u.id]?.[row];
+                            const flow =
+                              s?.pcr != null && s.delta != null && Math.abs(s.delta) >= FLOW_MOVE_MIN
+                                ? describeFlow(u.short, s.hhmm, s.pcr, s.delta, metric)
+                                : null;
                             return (
                               <td key={u.id}>
                                 <span className={`kp-heat kp-band-${s?.band ?? "empty"}`}>
-                                  {s?.pcr == null ? "" : formatPcr(s.pcr)}
+                                  <span className="kp-heat-val">{s?.pcr == null ? "" : formatPcr(s.pcr)}</span>
+                                  {flow ? (
+                                    <span
+                                      className={`kp-heat-flow-tag kp-act ${ideaKind(flow.action)}`}
+                                      title={flow.why}
+                                    >
+                                      {flow.action}
+                                    </span>
+                                  ) : null}
                                 </span>
                               </td>
                             );

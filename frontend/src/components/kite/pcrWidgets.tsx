@@ -182,6 +182,8 @@ export type DeskRow = {
   hhmm: string;
   band: PcrBand;
   insight: PcrRead;
+  flowAction?: PcrAction;
+  flowWhy?: string;
 };
 
 export function IndexTile({ row, show }: { row: DeskRow; show: (id: TileField) => boolean }) {

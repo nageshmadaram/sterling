@@ -583,6 +583,17 @@ export function readPcr(slots: PcrSlot[], spotChg: number | null): PcrRead {
     };
   }
   if (rising && chg > 0.1) {
+    if (pcr < CE_PCR_MIN) {
+      return {
+        bias: "Bullish",
+        headline: "Put writing on the bounce",
+        reason: `PCR climbed to ${pcr.toFixed(2)} with spot higher, but calls are still more. Not a CE yet.`,
+        conviction: clamp(Math.round(50 + (pcr - 0.8) * 60), 35, 65),
+        regime: "Constructive",
+        action: "Wait",
+        play: "Writers are selling PE into the bounce, but calls still outnumber puts. Wait for PCR ≥ 1.00 before buying CE.",
+      };
+    }
     return {
       bias: "Bullish",
       headline: "Put writing on the bounce",
@@ -594,6 +605,17 @@ export function readPcr(slots: PcrSlot[], spotChg: number | null): PcrRead {
     };
   }
   if (!rising && chg > 0.2) {
+    if (pcr < CE_PCR_MIN) {
+      return {
+        bias: "Bullish",
+        headline: "Calls chasing the rally",
+        reason: `PCR ${pcr.toFixed(2)} is easing into strength, but calls still outnumber puts.`,
+        conviction: clamp(Math.round(45 + Math.abs(pcr - first) * 100), 32, 65),
+        regime: "Upside chase",
+        action: "Wait",
+        play: "Call momentum is active, but PCR is below 1.00. Wait for clear skew before buying CE.",
+      };
+    }
     return {
       bias: "Bullish",
       headline: "Calls chasing the rally",

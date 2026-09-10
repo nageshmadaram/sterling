@@ -119,7 +119,15 @@ describe("pcr slots", () => {
       { hhmm: "09:45", label: "9.45", minutes: 585, pcr: 0.98, delta: 0.08, band: "negative" as const, live: true },
     ];
     expect(readPcr(rising, -0.4)).toMatchObject({ bias: "Bearish", headline: "Puts being bought into weakness", action: "Buy PE" });
-    expect(readPcr(rising, 0.3)).toMatchObject({ bias: "Bullish", headline: "Put writing on the bounce", action: "Buy CE" });
+    // PCR 0.98 is rising with spot up, but calls still outnumber puts (< 1.00) -> Wait
+    expect(readPcr(rising, 0.3)).toMatchObject({ bias: "Bullish", headline: "Put writing on the bounce", action: "Wait" });
+    // PCR >= 1.00 with spot up -> Buy CE
+    const risingCrossed = [
+      { hhmm: "09:15", label: "9.15", minutes: 555, pcr: 0.80, delta: null, band: "highly-negative" as const, live: false },
+      { hhmm: "09:30", label: "9.30", minutes: 570, pcr: 0.95, delta: 0.15, band: "negative" as const, live: false },
+      { hhmm: "09:45", label: "9.45", minutes: 585, pcr: 1.08, delta: 0.13, band: "positive" as const, live: true },
+    ];
+    expect(readPcr(risingCrossed, 0.3)).toMatchObject({ bias: "Bullish", headline: "Put writing on the bounce", action: "Buy CE" });
     const falling = [
       { hhmm: "09:15", label: "9.15", minutes: 555, pcr: 1.05, delta: null, band: "positive" as const, live: false },
       { hhmm: "09:30", label: "9.30", minutes: 570, pcr: 0.95, delta: -0.10, band: "negative" as const, live: true },
@@ -250,5 +258,24 @@ describe("pcr slots", () => {
     const by = Object.fromEntries(marks.map((m) => [m.hhmm, m]));
     expect(by["09:15"]?.indexClose).toBe(23915);
     expect(by["09:30"]?.indexClose).toBe(23930);
+  });
+
+  it("keeps tile insight and flow tape consistent at balanced PCR (e.g. Sensex 0.96)", () => {
+    const slots = [
+      { hhmm: "12:00", label: "12.00", minutes: 720, pcr: 0.88, delta: null, band: "negative" as const, live: false },
+      { hhmm: "12:15", label: "12.15", minutes: 735, pcr: 0.92, delta: 0.04, band: "negative" as const, live: false },
+      { hhmm: "12:30", label: "12.30", minutes: 750, pcr: 0.96, delta: 0.04, band: "empty" as const, live: true },
+    ];
+    const tapeLine = describeFlow("Sensex", "12:30", 0.96, 0.04, "oi");
+    expect(tapeLine.action).toBe("Wait");
+    expect(tapeLine.why).toBe("PCR went up, but calls are still more. Not a CE yet.");
+
+    const insight = readPcr(slots, 0.35);
+    expect(insight.action).toBe("Wait");
+    expect(insight.headline).toBe("Put writing on the bounce");
+    expect(insight.reason).toContain("calls are still more. Not a CE yet.");
+    expect(insight.play).toContain("Wait for PCR ≥ 1.00 before buying CE.");
+
+    expect(insight.action).toBe(tapeLine.action);
   });
 });

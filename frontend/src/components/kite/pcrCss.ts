@@ -42,7 +42,7 @@ export const PCR_CSS = `
 .kite-pcr tbody tr[data-live="true"] th{color:var(--k-orange);font-weight:600}
 .kite-pcr .kp-book col.c-idx{width:72px}
 .kite-pcr .kp-book col.c-play{width:92px}
-.kite-pcr .kp-book col.c-pcr{width:76px}
+.kite-pcr .kp-book col.c-pcr{width:115px}
 .kite-pcr .kp-book col.c-move{width:148px}
 .kite-pcr .kp-book col.c-st{width:64px}
 .kite-pcr .kp-book col.c-spot{width:148px}
@@ -59,6 +59,12 @@ export const PCR_CSS = `
 .kite-pcr .kp-book thead th.num,.kite-pcr .kp-book tbody td.num{text-align:right}
 .kite-pcr .kp-book thead th.mid,.kite-pcr .kp-book tbody td.mid{text-align:center}
 .kite-pcr .kp-pcr{font-size:${ROW_METRICS.cellFontSize}px;font-weight:400;letter-spacing:0}
+.kite-pcr .kp-pcr-wrap{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px}
+.kite-pcr .kp-pcr-val{font-variant-numeric:tabular-nums;font-weight:500}
+.kite-pcr .kp-flow-pill{display:inline-flex;align-items:center;padding:1px 5px;font-size:10.5px;font-weight:600;letter-spacing:.02em;border-radius:2px;line-height:1.2;white-space:nowrap;border:1px solid currentColor}
+.kite-pcr .kp-flow-pill.wait{border-color:var(--k-border);color:var(--k-dim);background:var(--k-surface-hover)}
+.kite-pcr .kp-flow-pill.ce{border-color:var(--k-green);color:var(--k-green);background:rgba(38,166,154,.1)}
+.kite-pcr .kp-flow-pill.pe{border-color:var(--k-red);color:var(--k-red);background:rgba(239,83,80,.1)}
 .kite-pcr .kp-play{font-weight:400;letter-spacing:0;white-space:nowrap;font-size:${ROW_METRICS.cellFontSize}px}
 .kite-pcr .kp-play-cell{position:relative}
 .kite-pcr .kp-tip{display:none;position:absolute;left:8px;top:calc(100% - 2px);z-index:6;background:var(--k-surface);border:1px solid var(--k-border);color:var(--k-text);padding:5px 8px;font-size:${ROW_METRICS.cellFontSize}px;font-weight:400;white-space:nowrap;border-radius:3px;box-shadow:0 6px 16px rgba(0,0,0,.18);pointer-events:none}
@@ -74,7 +80,8 @@ export const PCR_CSS = `
 .kite-pcr .kp-sheet-heat.one col:not(.c-time){width:108px}
 .kite-pcr .kp-heat-row td{padding:0;text-align:center;border-bottom:0}
 .kite-pcr .kp-heat-row th{padding:4px 10px;font-variant-numeric:tabular-nums;border-bottom:0}
-.kite-pcr .kp-heat{display:block;width:100%;text-align:center;font-size:12px;font-weight:500;padding:7px 4px;border-radius:0;min-height:26px;box-sizing:border-box}
+.kite-pcr .kp-heat{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;font-size:12px;font-weight:500;padding:5px 4px;border-radius:0;min-height:26px;box-sizing:border-box}
+.kite-pcr .kp-heat-flow-tag{display:inline-block;padding:0 3px;font-size:9.5px;font-weight:600;letter-spacing:.02em;border-radius:2px;border:1px solid currentColor;line-height:1.2;white-space:nowrap}
 .kite-pcr .kp-delta{display:block;text-align:right;padding:5px 6px;font-size:12px;color:var(--k-dim)}
 .kite-pcr .kp-band-extreme-positive{background:#1b5e4a;color:#f4f4f5}
 .kite-pcr .kp-band-highly-positive{background:#2e7a64;color:#f4f4f5}
