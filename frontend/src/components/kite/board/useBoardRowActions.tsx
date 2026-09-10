@@ -46,6 +46,12 @@ export function useBoardRowActions({ onOpenChart }: {
    */
   const renderTrade = React.useCallback((signal: BoardSignal): React.ReactNode => {
     if (signal.children?.length) return null;
+    // A Gamma Move row without a listed strike is the level filter only.
+    // Buy would open NFO:RELIANCE (or cash equity) — not this strategy.
+    if (signal.engine === 'gamma_move' &&
+        !(signal.instrument.kind === 'option' && (signal.instrument.strike ?? 0) > 0)) {
+      return null;
+    }
     const { symbol, exchange, lotSize } = signal.instrument;
     const ended = signal.status === 'ended';
     const orb = signal.engine === 'orb';

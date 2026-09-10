@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReplaySignal,
   useFilteredReplayEvents,
@@ -102,7 +102,7 @@ const SignalRow = memo(function SignalRow({
         <span className="rd-dir" data-tone={bull ? 'bull' : 'bear'}>{bull ? 'LONG' : 'SHORT'}</span>
       </td>
       <td data-col="strength" style={{ color: 'var(--k-dim)' }}>{ev.strength}</td>
-      <td data-align="right" className="rd-num">{fmtInr(ev.entry)}</td>
+      <td data-align="right" className="rd-num">{fmtInr(ev.premium_entry ?? (ev.strength === 'WATCHING' ? null : ev.entry))}</td>
       <td data-align="right" className="rd-num rd-sl">{fmtInr(ev.stop)}</td>
       <td data-align="right" className="rd-num rd-tp">{fmtInr(ev.target)}</td>
       <td data-align="right" data-col="rr" className="rd-num">
@@ -223,12 +223,12 @@ export const ReplaySignalsTable = memo(function ReplaySignalsTable() {
   // Selecting a row moves the playhead to that signal — the reverse of clicking
   // a timeline dot. The two directions together are what make the timeline
   // worth having rather than a decoration.
-  const onSelect = (key: string) => {
+  const onSelect = useCallback((key: string) => {
     setSelected(key);
     if (state === 'idle') return;
     const row = rows.find((r) => r.key === key);
     if (row) void transport.seekToPct(scale.pctFor(row.ev.time_iso));
-  };
+  }, [state, rows, scale, transport]);
 
   if (state === 'loading') return <SkeletonRows rows={6} cols={6} />;
 

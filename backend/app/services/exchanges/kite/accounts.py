@@ -505,3 +505,11 @@ def clear() -> None:
     _accounts.clear()
     _validated_at.clear()
     _loaded = True
+    from app.services import db
+    if getattr(db, "_available", False):
+        try:
+            with db._conn() as c:
+                c.execute("DELETE FROM kite_accounts")
+        except Exception as _exc:  # noqa: BLE001
+            log.debug("suppressed: %s", _exc)
+

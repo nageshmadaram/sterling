@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
 import { useKiteAccounts, useUpdateKiteAccount } from '../../hooks/useKite';
-import { useEngineConfig, usePatchEngineConfig } from '../../hooks/useSterlingKiteEngine';
+import {
+  useApplyProductionConfig,
+  useEmergencyHalt,
+  useEmergencySquareOff,
+  useEngineConfig,
+  useEngineReadiness,
+  usePatchEngineConfig,
+} from '../../hooks/useSterlingKiteEngine';
 import type { EngineConfigModel } from '../../types/kiteEngine';
 import { ModeToggle } from './ModeToggle';
 
@@ -28,14 +35,20 @@ const S: Record<string, React.CSSProperties> = {
   divider: { height: 1, background: 'var(--k-hairline-3)', margin: '2px 0' },
 };
 
-type ConfirmKind = null | 'go-live' | 'enable-auto';
+type ConfirmKind = null | 'go-live' | 'enable-auto' | 'emergency-square-off' | 'emergency-halt' | 'apply-production-preset';
 
 export function TradingModeControls() {
   const { data } = useKiteAccounts();
   const update = useUpdateKiteAccount();
   const { data: cfg } = useEngineConfig();
   const setCfg = usePatchEngineConfig();
+  const { data: readiness, refetch: refetchReadiness } = useEngineReadiness();
+  const applyProduction = useApplyProductionConfig();
+  const emergencySquareOff = useEmergencySquareOff();
+  const emergencyHalt = useEmergencyHalt();
+
   const [confirm, setConfirm] = useState<ConfirmKind>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   const active = data?.accounts.find((a) => a.is_active);
   const hasKeys = !!active?.has_credentials;
@@ -56,7 +69,7 @@ export function TradingModeControls() {
   }
 
   const onExec = (side: 'left' | 'right') => {
-    if (side === 'right') { setConfirm('go-live'); return; }
+    if (side === 'right') { refetchReadiness(); setConfirm('go-live'); return; }
     update.mutate({ id: active.id, is_paper: true });
   };
   const confirmGoLive = () =>
@@ -64,15 +77,53 @@ export function TradingModeControls() {
 
   const onSignals = (side: 'left' | 'right') => {
     if (!cfg) return;
-    if (side === 'right') { setConfirm('enable-auto'); return; }
+    if (side === 'right') { refetchReadiness(); setConfirm('enable-auto'); return; }
     setCfg.mutate({ auto_execute: false });
   };
   const confirmEnableAuto = () =>
     cfg && setCfg.mutate({ auto_execute: true }, { onSuccess: () => setConfirm(null) });
 
+  const handleApplyProductionPreset = () => {
+    applyProduction.mutate(undefined, {
+      onSuccess: () => {
+        setConfirm(null);
+        setFeedback('Production preset applied: Fast Trail, One-Red Exit, ADX 25, Time Stop 48, 2% Daily Loss.');
+        setTimeout(() => setFeedback(null), 5000);
+      },
+    });
+  };
+
+  const handleEmergencySquareOff = () => {
+    emergencySquareOff.mutate(undefined, {
+      onSuccess: (res) => {
+        setConfirm(null);
+        setFeedback(res.message);
+        setTimeout(() => setFeedback(null), 6000);
+      },
+    });
+  };
+
+  const handleEmergencyHalt = () => {
+    emergencyHalt.mutate(undefined, {
+      onSuccess: (res) => {
+        setConfirm(null);
+        setFeedback(res.message);
+        setTimeout(() => setFeedback(null), 6000);
+      },
+    });
+  };
+
+  const hasBlockers = (readiness?.blockers?.length ?? 0) > 0;
+
   return (
     <div style={S.card}>
       <div style={S.title}>TRADING CONFIG · {active.label}</div>
+
+      {feedback && (
+        <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 6, background: '#eef2ff', border: '1px solid #c7d2fe', color: '#3730a3', fontSize: 11.5 }}>
+          {feedback}
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={S.row}>
@@ -125,38 +176,148 @@ export function TradingModeControls() {
         </div>
       )}
 
+      {/* ── Live Safeguards & Emergency Control Surface ── */}
+      {isLive && (
+        <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 8, background: 'var(--k-surface-sunken-2)', border: '1px solid var(--k-border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 11, fontWeight: 750, color: 'var(--k-text)', letterSpacing: 0.4 }}>
+              🛡️ SAFEGUARDS & CONTROLS
+            </div>
+            <button
+              onClick={() => setConfirm('apply-production-preset')}
+              disabled={applyProduction.isPending}
+              style={{ background: 'var(--k-bg)', border: '1px solid var(--k-border-strong-2)', color: 'var(--k-brand)', borderRadius: 5, padding: '3px 8px', fontSize: 10.5, fontWeight: 700, cursor: 'pointer' }}
+              title="Apply 7.5y sweep-validated parameters (ADX 25, Time Stop 48, Daily Loss 2%)"
+            >
+              {applyProduction.isPending ? 'Applying…' : '⚡ Load Production Preset'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setConfirm('emergency-square-off')}
+              disabled={emergencySquareOff.isPending}
+              style={{ flex: 1, minHeight: 30, background: 'var(--k-bg)', border: '1px solid var(--k-red-brick)', color: 'var(--k-red-brick)', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+            >
+              {emergencySquareOff.isPending ? 'Closing…' : '🚨 Square-Off All'}
+            </button>
+            <button
+              onClick={() => setConfirm('emergency-halt')}
+              disabled={emergencyHalt.isPending}
+              style={{ flex: 1, minHeight: 30, background: 'var(--k-red-brick)', border: '1px solid var(--k-red-brick)', color: '#fff', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+            >
+              {emergencyHalt.isPending ? 'Halting…' : '🛑 Kill Switch & Halt'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {confirm === 'go-live' && (
         <ConfirmModal
           title="⚡ Switch to LIVE" accent="var(--k-green)" busy={execBusy}
-          confirmLabel={execBusy ? 'Switching…' : 'Go Live'}
+          confirmLabel={execBusy ? 'Switching…' : hasBlockers ? 'Blockers Exist' : 'Go Live'}
+          disabled={hasBlockers}
           onCancel={() => setConfirm(null)} onConfirm={confirmGoLive}
-          body={<>Orders on <strong>{active.label}</strong> will execute on your <strong>real Zerodha account</strong>
-            {auto ? ', and AUTO is ON — the engine will trade the same board tickets automatically' : ''}. Continue?</>}
+          body={
+            <>
+              <div>Orders on <strong>{active.label}</strong> will execute on your <strong>real Zerodha account</strong>
+              {auto ? ', and AUTO is ON — the engine will trade the same board tickets automatically' : ''}.</div>
+              {hasBlockers && (
+                <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: '#fdf2f2', border: '1px solid #f8b4b4', color: '#9b1c1c', fontSize: 11 }}>
+                  <strong>Pre-Flight Blockers:</strong>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                    {readiness?.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                  </ul>
+                </div>
+              )}
+            </>
+          }
         />
       )}
+
       {confirm === 'enable-auto' && (
         <ConfirmModal
           title="⚡ Enable AUTO" accent="var(--k-amber-2)" busy={autoBusy}
-          confirmLabel={autoBusy ? 'Enabling…' : 'Enable Auto'}
+          confirmLabel={autoBusy ? 'Enabling…' : hasBlockers ? 'Blockers Exist' : 'Enable Auto'}
+          disabled={hasBlockers}
           onCancel={() => setConfirm(null)} onConfirm={confirmEnableAuto}
-          body={<>Ready board tickets will place <strong>1-lot {vehicleOrderLabel(cfg)}</strong> on{' '}
-            {isLive ? <strong>your real Zerodha account</strong> : 'the paper account'} under the live-safety gate. Same ticket Manual would Buy. Continue?</>}
+          body={
+            <>
+              <div>Ready board tickets will place <strong>1-lot {vehicleOrderLabel(cfg)}</strong> on{' '}
+              {isLive ? <strong>your real Zerodha account</strong> : 'the paper account'} under the live-safety gate. Same ticket Manual would Buy.</div>
+              {hasBlockers && (
+                <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, background: '#fdf2f2', border: '1px solid #f8b4b4', color: '#9b1c1c', fontSize: 11 }}>
+                  <strong>Pre-Flight Blockers:</strong>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                    {readiness?.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                  </ul>
+                </div>
+              )}
+            </>
+          }
+        />
+      )}
+
+      {confirm === 'emergency-square-off' && (
+        <ConfirmModal
+          title="🚨 Emergency Square-Off All" accent="var(--k-red-brick)" busy={emergencySquareOff.isPending}
+          confirmLabel={emergencySquareOff.isPending ? 'Closing…' : 'Confirm Square-Off'}
+          onCancel={() => setConfirm(null)} onConfirm={handleEmergencySquareOff}
+          body={<>This will immediately <strong>cancel all resting broker GTT stops</strong> and submit <strong>MARKET sell orders</strong> to flatten all open positions for this account. Continue?</>}
+        />
+      )}
+
+      {confirm === 'emergency-halt' && (
+        <ConfirmModal
+          title="🛑 Emergency Kill Switch & Halt" accent="var(--k-red-brick)" busy={emergencyHalt.isPending}
+          confirmLabel={emergencyHalt.isPending ? 'Halting…' : 'Confirm Kill Switch'}
+          onCancel={() => setConfirm(null)} onConfirm={handleEmergencyHalt}
+          body={<>This will engage the <strong>global Kill Switch</strong> (halting all new orders), turn off <strong>Auto-Execute</strong>, and market-exit all open positions. Continue?</>}
+        />
+      )}
+
+      {confirm === 'apply-production-preset' && (
+        <ConfirmModal
+          title="⚡ Apply Production Preset" accent="var(--k-brand)" busy={applyProduction.isPending}
+          confirmLabel={applyProduction.isPending ? 'Applying…' : 'Apply Preset'}
+          onCancel={() => setConfirm(null)} onConfirm={handleApplyProductionPreset}
+          body={<>Load verified hyperparameters from the 7.5y IS/OOS sweep:<br />
+          • Fast SuperTrend trail (1.0 mult)<br />
+          • One-Red tightest auto-exit<br />
+          • ADX ≥ 25 filter (filters chop)<br />
+          • 48-bar time-stop (curbs option theta bleed)<br />
+          • 2.0% daily-loss circuit breaker<br />
+          • Dual stop protection (broker GTT + WS monitor)</>}
         />
       )}
     </div>
   );
 }
 
-function ConfirmModal({ title, accent, body, confirmLabel, busy, onConfirm, onCancel }: {
-  title: string; accent: string; body: React.ReactNode; confirmLabel: string;
-  busy: boolean; onConfirm: () => void; onCancel: () => void;
+function ConfirmModal({
+  title,
+  accent,
+  body,
+  confirmLabel,
+  busy,
+  disabled = false,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  accent: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  busy: boolean;
+  disabled?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
 }) {
   return (
     <div
       onClick={(e) => { if (e.target === e.currentTarget && !busy) onCancel(); }}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
     >
-      <div style={{ width: 380, background: 'var(--k-bg)', border: '1px solid var(--k-border)', borderRadius: 10, padding: '22px 24px', boxShadow: '0 16px 40px rgba(0,0,0,.16)' }}>
+      <div style={{ width: 400, background: 'var(--k-bg)', border: '1px solid var(--k-border)', borderRadius: 10, padding: '22px 24px', boxShadow: '0 16px 40px rgba(0,0,0,.16)' }}>
         <div style={{ fontSize: 15, fontWeight: 800, color: accent, marginBottom: 8 }}>{title}</div>
         <div style={{ fontSize: 12, color: 'var(--k-text)', lineHeight: 1.6, marginBottom: 18 }}>{body}</div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -164,8 +325,8 @@ function ConfirmModal({ title, accent, body, confirmLabel, busy, onConfirm, onCa
             style={{ minHeight: 36, background: 'var(--k-bg)', color: 'var(--k-ink-3)', border: '1px solid var(--k-border-strong-2)', padding: '0 14px', borderRadius: 7, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 }}>
             Cancel
           </button>
-          <button onClick={onConfirm} disabled={busy}
-            style={{ minHeight: 36, background: accent, color: 'var(--k-bg)', border: `1px solid ${accent}`, padding: '0 16px', borderRadius: 7, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
+          <button onClick={onConfirm} disabled={busy || disabled}
+            style={{ minHeight: 36, background: disabled ? 'var(--k-dim)' : accent, color: 'var(--k-bg)', border: `1px solid ${disabled ? 'var(--k-border)' : accent}`, padding: '0 16px', borderRadius: 7, cursor: (busy || disabled) ? 'not-allowed' : 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 700 }}>
             {confirmLabel}
           </button>
         </div>
@@ -175,3 +336,4 @@ function ConfirmModal({ title, accent, body, confirmLabel, busy, onConfirm, onCa
 }
 
 export default TradingModeControls;
+

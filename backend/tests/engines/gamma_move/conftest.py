@@ -38,7 +38,8 @@ def level() -> SpotLevel:
 @pytest.fixture
 def candidate(instrument, level) -> StrikeCandidate:
     return StrikeCandidate(underlying="RELIANCE", level=level, instrument=instrument,
-                           oi=6_000_000, days_to_expiry=9, spot=1298.0, premium=53.0)
+                           oi=6_000_000, days_to_expiry=9, spot=1298.0, premium=53.0,
+                           chain_oi_max=6_000_000)
 
 
 @pytest.fixture

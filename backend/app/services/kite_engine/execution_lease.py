@@ -82,20 +82,25 @@ def acquire(scope: str, *, account_id: str, uid: str, symbol: str,
     expires = now + int(ttl_s * 1000)
     owner = _owner()
     with _transaction() as conn:
-        held = conn.execute(
-            """SELECT owner, expires_ms FROM kite_execution_leases
-                WHERE scope=? AND account_id=? AND uid=? AND symbol=?""",
-            (scope, account_id, uid, symbol)).fetchone()
-        if held is not None and int(held["expires_ms"]) > now:
-            return None
-        conn.execute(
+        # Steal only an expired row. A bare ON CONFLICT UPDATE overwrote a live
+        # holder when two processes both saw an empty SELECT.
+        cur = conn.execute(
             """INSERT INTO kite_execution_leases
                  (scope,account_id,uid,symbol,owner,acquired_ms,expires_ms)
                VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(scope,account_id,uid,symbol) DO UPDATE SET
                  owner=excluded.owner, acquired_ms=excluded.acquired_ms,
-                 expires_ms=excluded.expires_ms""",
+                 expires_ms=excluded.expires_ms
+               WHERE kite_execution_leases.expires_ms <= excluded.acquired_ms""",
             (scope, account_id, uid, symbol, owner, now, expires))
+        if cur.rowcount != 1:
+            return None
+        held = conn.execute(
+            """SELECT owner FROM kite_execution_leases
+                WHERE scope=? AND account_id=? AND uid=? AND symbol=?""",
+            (scope, account_id, uid, symbol)).fetchone()
+        if held is None or str(held["owner"]) != owner:
+            return None
         return owner
 
 

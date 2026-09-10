@@ -33,6 +33,15 @@ def _derive_fernet_key(secret: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
+def get_jwt_key() -> str:
+    """Return the signing key used for JWT access and refresh tokens."""
+    return (
+        os.environ.get("STERLING_JWT_SECRET")
+        or os.environ.get("STERLING_SECRET_KEY")
+        or "sterling-dev-jwt-secret-key"
+    )
+
+
 def _init() -> None:
     global _fernet, _backend
     if _fernet is not None or _backend == "fernet":

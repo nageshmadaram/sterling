@@ -24,6 +24,11 @@ from typing import Dict, Optional, Tuple
 
 from app.core.logging import get_logger
 from app.engines.common.exit_counter import exit_needs_counter_signal, get_exit_threshold
+from app.engines.common.exit_counter import (
+    exit_needs_counter_signal,
+    get_exit_threshold,
+    should_exit_on_reds,
+)
 from app.services.kite_engine import positions as pos
 from app.services.kite_engine import protective_stop as pstop
 from app.services.kite_engine import state
@@ -895,12 +900,16 @@ async def on_tick(uid: str, token: int, ltp: float, *, client) -> Optional[str]:
             mode = getattr(p, 'exit_mode', 'one_red')
             thresh = get_exit_threshold(mode)
             red_exit = reds >= thresh
+            has_counter = bool(getattr(p, 'counter_signal_fired', False))
+            red_exit = should_exit_on_reds(reds, mode, has_counter_arrow=has_counter)
             if price_exit or red_exit or target_exit:
                 if price_exit:
                     close_reason = (f"trail breach @ ₹{ltp:.2f} "
                                     f"{'≤' if p.direction == 'long' else '≥'} ₹{p.stop_premium:.2f}")
                 elif red_exit:
                     close_reason = f"red count exit {reds}/{thresh} ({mode})"
+                    extra = " + counter-signal" if mode == "three_red_signal" else ""
+                    close_reason = f"red count exit {reds}/{thresh} ({mode}{extra})"
                 else:
                     close_reason = (f"target reached @ ₹{ltp:.2f} "
                                     f"{'≥' if p.direction == 'long' else '≤'} ₹{target:.2f}")

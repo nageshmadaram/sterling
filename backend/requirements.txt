@@ -18,3 +18,4 @@ alembic>=1.13.0
 cryptography>=42.0.0
 websockets>=12.0
 pyarrow>=18.0.0
+pyjwt>=2.8.0
