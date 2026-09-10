@@ -2831,9 +2831,7 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
           groupedRows.map(group => {
             const expanded = userToggledGroups.has(group.label)
               ? userToggledGroups.get(group.label)!
-              // Active groups (running positions) always open by default —
-              // a live trade must not hide behind a collapsed band.
-              : Boolean(group.active || isDayExpandedByDefault(group.label, groupedRows.map(g => g.label)));
+              : isDayExpandedByDefault(group.label, groupedRows.map(g => g.label));
             const isCollapsed = !expanded;
             return (
               <div key={group.label}>

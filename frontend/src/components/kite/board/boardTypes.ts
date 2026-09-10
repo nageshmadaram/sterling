@@ -507,7 +507,7 @@ export function groupByDay(
  * what happens before anyone touches it.
  */
 export function isDayExpandedByDefault(key: string, orderedDayKeys: readonly string[]): boolean {
-  return orderedDayKeys.length > 0 && (orderedDayKeys[0] === key || isLiveDayKey(key));
+  return orderedDayKeys.length > 0 && orderedDayKeys[0] === key;
 }
 
 /**

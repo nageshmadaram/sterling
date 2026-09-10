@@ -23,4 +23,19 @@ describe("PCR desk prefs", () => {
   it("drops unknown ids and keeps order of the desk", () => {
     expect(normalizeIndices(["SENSEX", "NOPE", "NIFTY"])).toEqual(["NIFTY", "SENSEX"]);
   });
+
+  it("defaults tile.tape to false so there is only one flow tape on the desk", () => {
+    expect(DEFAULT_PREFS.tile.tape).toBe(false);
+    expect(loadPrefs().tile.tape).toBe(false);
+  });
+
+  it("migrates v1 prefs with tile.tape set to false", () => {
+    localStorage.setItem("sterling.pcr.desk.v1", JSON.stringify({
+      layout: "tiles",
+      tile: { tape: true, print: true },
+    }));
+    const loaded = loadPrefs();
+    expect(loaded.tile.tape).toBe(false);
+    expect(loaded.tile.print).toBe(true);
+  });
 });

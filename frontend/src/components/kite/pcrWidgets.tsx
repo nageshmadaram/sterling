@@ -55,7 +55,7 @@ export function expiryLong(expiryIso: string, kind: "weekly" | "monthly" | "toda
   return `${k} · ${wd}, ${d} ${months[m - 1]}`;
 }
 
-export const PREF_KEY = "sterling.pcr.desk.v1";
+export const PREF_KEY = "sterling.pcr.desk.v2";
 
 export const TILE_FIELDS = [
   { id: "print", label: "PCR print" },
@@ -113,7 +113,10 @@ export type Prefs = {
 export const DEFAULT_PREFS: Prefs = {
   layout: "tiles",
   sections: { book: true, heat: true, tape: true, legend: true, read: true },
-  tile: Object.fromEntries(TILE_FIELDS.map((f) => [f.id, true])) as Prefs["tile"],
+  tile: {
+    ...Object.fromEntries(TILE_FIELDS.map((f) => [f.id, true])),
+    tape: false,
+  } as Prefs["tile"],
   cols: Object.fromEntries(TABLE_COLS.map((c) => [c.id, true])) as Prefs["cols"],
   indices: PCR_INDICES.map((u) => u.id),
   path: false,
@@ -145,8 +148,30 @@ export function savePrefs(p: Prefs): void {
 
 export function loadPrefs(): Prefs {
   try {
-    const raw = localStorage.getItem(PREF_KEY);
-    if (!raw) return clonePrefs(DEFAULT_PREFS);
+    let raw = localStorage.getItem(PREF_KEY);
+    if (!raw) {
+      const oldRaw = localStorage.getItem("sterling.pcr.desk.v1");
+      if (oldRaw) {
+        try {
+          const oldP = JSON.parse(oldRaw) as Partial<Prefs>;
+          const migrated: Prefs = {
+            layout: oldP.layout === "table" ? "table" : "tiles",
+            sections: { ...DEFAULT_PREFS.sections, ...oldP.sections },
+            tile: { ...DEFAULT_PREFS.tile, ...oldP.tile, tape: false },
+            cols: { ...DEFAULT_PREFS.cols, ...oldP.cols },
+            indices: Object.prototype.hasOwnProperty.call(oldP, "indices")
+              ? normalizeIndices(oldP.indices)
+              : [...DEFAULT_PREFS.indices],
+            path: Boolean(oldP.path),
+          };
+          savePrefs(migrated);
+          return migrated;
+        } catch {
+          /* ignore parse error on old key */
+        }
+      }
+      return clonePrefs(DEFAULT_PREFS);
+    }
     const p = JSON.parse(raw) as Partial<Prefs>;
     return {
       layout: p.layout === "table" ? "table" : "tiles",

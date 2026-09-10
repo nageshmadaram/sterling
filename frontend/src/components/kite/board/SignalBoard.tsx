@@ -1286,6 +1286,8 @@ export function SignalBoard({
         const isRecentGroup =
           key === sessionDayKey(effectiveNowMs) ||
           sessionDayLabel(key, effectiveNowMs, isHistoricalSim) === 'Today';
+        // Only the newest day bucket expands its signals by default. Older days start collapsed.
+        const isLatestDay = days.length > 0 && days[0].key === key;
 
         const renderSignalGroup = (groupRows: BoardSignal[]) => {
           return groupRows.map((signal, i) => {
@@ -1326,11 +1328,11 @@ export function SignalBoard({
                 </React.Fragment>
               );
             }
-            // For Today and Yesterday: default expanded unless in collapsedGroups.
-            // For older days: default collapsed unless in collapsedGroups as false.
-            const expanded = isRecentGroup
+            // Only the latest day expands its child legs by default (unless user toggled).
+            // Older days remain collapsed by default (unless user toggled to expand).
+            const expanded = isLatestDay
               ? !(collapsedGroups?.has(signal.id) ?? false)
-              : (collapsedGroups?.has(signal.id) === false);
+              : (collapsedGroups?.has(signal.id) === true);
             const legMarks = markLegs(legs);
             const sortedLegs = sortSignals(legs, sort);
             const weeklyLegs = sortedLegs.filter(isWeeklySignal);

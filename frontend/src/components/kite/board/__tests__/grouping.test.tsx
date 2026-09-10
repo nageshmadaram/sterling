@@ -468,11 +468,11 @@ describe('only the newest day band opens by default', () => {
     expect(isDayExpandedByDefault('2026-09-04', [])).toBe(false);
   });
 
-  it('opens live active day bands even when they are not the first key', () => {
+  it('opens only the first key and leaves older live active day bands closed', () => {
     const liveKey = liveDayKey('2026-09-07');
     const keys = ['2026-09-10', liveKey, '2026-09-09', OLDER_BUCKET];
     expect(isDayExpandedByDefault('2026-09-10', keys)).toBe(true);
-    expect(isDayExpandedByDefault(liveKey, keys)).toBe(true);
+    expect(isDayExpandedByDefault(liveKey, keys)).toBe(false);
     expect(isDayExpandedByDefault('2026-09-09', keys)).toBe(false);
     expect(isDayExpandedByDefault(OLDER_BUCKET, keys)).toBe(false);
   });
@@ -494,5 +494,52 @@ describe('only the newest day band opens by default', () => {
     expect(screen.queryByText('SYMyesterday-row')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Yesterday'));
     expect(screen.getByText('SYMyesterday-row')).toBeInTheDocument();
+  });
+
+  it('opens Yesterday by default when Today has no signals', () => {
+    render(
+      <SignalBoard
+        signals={[
+          makeDaySig('yesterday-row', NOW - 86_400_000, 'running'),
+          makeDaySig('older-row', NOW - 86_400_000 * 3, 'ended'),
+        ]}
+        columns={['instrument', 'time']}
+        nowMs={NOW}
+        openId={null}
+        onToggle={() => {}}
+      />,
+    );
+    expect(screen.getByText('SYMyesterday-row')).toBeInTheDocument();
+    expect(screen.queryByText('SYMolder-row')).not.toBeInTheDocument();
+  });
+
+  it('expands child legs by default for the latest day, but keeps older day child legs collapsed', () => {
+    const todayRow = row({ timestamp_ms: NOW });
+    const yesterdayRow = row({ timestamp_ms: NOW - 86_400_000, underlying: 'BANKNIFTY' });
+    const board = supertrendToBoard([todayRow, yesterdayRow]);
+
+    const { container } = render(
+      <SignalBoard
+        signals={board}
+        columns={['instrument', 'time']}
+        nowMs={NOW}
+        openId={null}
+        onToggle={() => {}}
+      />,
+    );
+
+    // Today is open, its 2 child legs are rendered
+    expect(screen.getByRole('button', { name: /NIFTY 50 long, 2 contracts/ })).toBeInTheDocument();
+    expect(container.querySelectorAll('.sb-row:not(.sb-parent)')).toHaveLength(2);
+
+    // Yesterday is closed initially
+    expect(screen.queryByRole('button', { name: /NIFTY BANK long, 2 contracts/ })).not.toBeInTheDocument();
+
+    // Open Yesterday
+    fireEvent.click(screen.getByText('Yesterday'));
+    expect(screen.getByRole('button', { name: /BANKNIFTY long, 2 contracts/ })).toBeInTheDocument();
+
+    // In Yesterday, child legs start collapsed, so still only 2 child rows are visible across the board
+    expect(container.querySelectorAll('.sb-row:not(.sb-parent)')).toHaveLength(2);
   });
 });
