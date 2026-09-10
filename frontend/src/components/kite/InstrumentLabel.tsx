@@ -11,7 +11,7 @@ export interface ParsedParts {
 }
 
 const MONTHS = 'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
-const UNDERLYING = '[A-Z&-]+';
+const UNDERLYING = '(?:SENSEX50|NIFTYNXT50|MIDCPNIFTY|[A-Z&-]+)';
 
 export function parseInstrument(ts: string): ParsedParts | null {
   const normalized = (ts || '').trim().toUpperCase();
@@ -46,6 +46,7 @@ export function parseInstrument(ts: string): ParsedParts | null {
   }
 
   // NFO Futures: NIFTY24JUNFUT, BAJAJ-AUTO26JULFUT
+  // NFO Futures: NIFTY24JUNFUT, BAJAJ-AUTO26JULFUT, SENSEX26SEPFUT, SENSEX5026SEPFUT
   const futRe = new RegExp(`^(${UNDERLYING})(\\d{2})(${MONTHS})FUT(BFO|NFO)?$`);
   const futM = normalized.match(futRe);
   if (futM) {
@@ -59,6 +60,7 @@ export function parseInstrument(ts: string): ParsedParts | null {
   }
 
   // BSE options: SENSEX2461875500CE
+  // BSE options: SENSEX2461875500CE, SENSEX502461875500CE
   const bseRe = new RegExp(`^(${UNDERLYING})(\\d{2})([1-9A-COND])(\\d{2})(\\d+)(CE|PE)$`);
   const bseM = normalized.match(bseRe);
   if (bseM) {
@@ -105,6 +107,7 @@ export function InstrumentLabel({ symbol, fallback, onColor }: { symbol: string;
 
   if (rawTs === 'NIFTY 50' || rawTs === 'NIFTY BANK' || rawTs === 'SENSEX' || rawTs === 'BANKEX' || rawTs === 'NIFTY 100' || rawTs === 'NIFTY COMMODITIES' || rawTs === 'NIFTY FIN SERVICE' || rawTs.includes('INDEX')) {
     exchange = 'INDEX';
+    exchange = '';
   }
 
   const parsed = parseInstrument(rawTs);

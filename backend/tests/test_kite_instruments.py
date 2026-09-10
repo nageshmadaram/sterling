@@ -111,3 +111,32 @@ async def test_get_product_id_returns_token(monkeypatch):
     c._instruments._fetch = fake_fetch
     assert await c.get_product_id("NSE:INFY") == 408065
     assert await c.get_product_id("NSE:NOPE") == 0  # graceful, never raises
+
+
+async def test_universal_search_sensex_ranking_parity():
+    # Parity with Kite: SENSEX index -> SENSEX futures -> SENSEX50 futures -> ATM options (CE/PE paired) -> ETFs
+    csv = (
+        "instrument_token,tradingsymbol,name,expiry,strike,instrument_type,segment,exchange\n"
+        "100,SENSEXAXIS,AXIS BSE SENSEX ETF,,0,EQ,NSE,NSE\n"
+        "101,SENSEX,SENSEX,,0,EQ,INDICES,BSE\n"
+        "102,SENSEX26OCTFUT,SENSEX,2026-10-29,0,FUT,BFO-FUT,BFO\n"
+        "103,SENSEX26SEPFUT,SENSEX,2026-09-24,0,FUT,BFO-FUT,BFO\n"
+        "104,SENSEX5026SEPFUT,SENSEX50,2026-09-24,0,FUT,BFO-FUT,BFO\n"
+        "105,SENSEX2691074800PE,SENSEX,2026-09-10,74800,PE,BFO-OPT,BFO\n"
+        "106,SENSEX2691074800CE,SENSEX,2026-09-10,74800,CE,BFO-OPT,BFO\n"
+        "107,SENSEX2691070000CE,SENSEX,2026-09-10,70000,CE,BFO-OPT,BFO\n"
+    )
+    async def fetch(ex):
+        return csv
+    c = InstrumentCache(fetch)
+    res = await c.search("SENSEX", exchange="")
+    syms = [r["tradingsymbol"] for r in res]
+    assert syms[0] == "SENSEX"              # 1. Exact index
+    assert syms[1] == "SENSEX26SEPFUT"      # 2. Near month fut
+    assert syms[2] == "SENSEX26OCTFUT"      # 3. Next month fut
+    assert syms[3] == "SENSEX5026SEPFUT"    # 4. SENSEX50 fut
+    # 5 & 6. Options paired near spot (74800 CE before PE)
+    assert syms[4] == "SENSEX2691074800CE"
+    assert syms[5] == "SENSEX2691074800PE"
+    assert "SENSEXAXIS" in syms[6:]         # ETF ranked after core derivatives
+

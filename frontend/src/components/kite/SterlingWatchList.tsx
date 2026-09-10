@@ -409,6 +409,7 @@ import { defaultProduct } from './orderTicket';
 
 export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (symbol: string, defaultTab: 'chart' | 'option-chain') => void }) {
   const [query, setQuery] = useState('');
+  const [searchSegment, setSearchSegment] = useState<'all' | 'fo' | 'indices' | 'cash' | 'etf'>('all');
   const [searchSettingsOpen, setSearchSettingsOpen] = useState(false);
   // Debounce so we fire ONE /instruments request after typing pauses, not one
   // per keystroke (each is a heavy full-dump filter server-side).
@@ -553,6 +554,40 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
       <div style={S.listContainer}>
         {query.trim().length > 0 ? (
           <div>
+            {search.data && query.trim().length >= 2 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 16px 8px', background: t.bg, borderBottom: `1px solid ${t.border}`, overflowX: 'auto' }}>
+                {[
+                  { id: 'all', label: '#' },
+                  { id: 'fo', label: 'F&O' },
+                  { id: 'indices', label: 'Indices' },
+                  { id: 'cash', label: 'Cash' },
+                  { id: 'etf', label: 'ETF' },
+                ].map((tab) => {
+                  const active = searchSegment === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSearchSegment(tab.id as any)}
+                      style={{
+                        border: 'none',
+                        borderRadius: 3,
+                        padding: '2px 8px',
+                        fontSize: 11,
+                        fontWeight: active ? 700 : 500,
+                        background: active ? 'var(--k-surface-hover, #f4f4f5)' : 'transparent',
+                        color: active ? 'var(--k-blue, #387ed1)' : 'var(--k-dim, #888)',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {search.isFetching && query.trim().length >= 2 && <div style={{ padding: 16, color: t.dim, fontSize: 13 }}>Searching…</div>}
             {search.error && <div style={{ padding: 16, color: t.red, fontSize: 13 }}>✗ {(search.error as Error).message}</div>}
             {search.data && query.trim().length >= 2 && (
@@ -587,14 +622,37 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
                     display: flex;
                     align-items: center;
                     gap: 8px;
+                    gap: 6px;
                     flex-shrink: 0;
                   }
                   .sr-exp { color: ${t.dim}; font-size: 11px; letter-spacing: 0.3px; text-transform: uppercase; }
                   .sr-exch { color: ${t.dim}; font-size: 10px; background: ${t.surface}; padding: 2px 5px; border-radius: 2px; }
+                  .sr-exp {
+                    color: ${t.dim};
+                    font-size: 11px;
+                    font-weight: 500;
+                    letter-spacing: 0.3px;
+                    text-transform: uppercase;
+                    font-variant-numeric: tabular-nums;
+                  }
+                  .sr-exch, .sr-tag {
+                    color: ${t.dim};
+                    font-size: 10px;
+                    font-weight: 600;
+                    background: var(--k-surface-hover, #f4f4f5);
+                    border: 1px solid var(--k-border, #e4e4e7);
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    letter-spacing: 0.4px;
+                    text-transform: uppercase;
+                  }
+                  .sr-tag {
+                    background: rgba(0, 0, 0, 0.04);
+                  }
                   .sr-check { color: ${t.green}; font-size: 15px; width: 16px; text-align: center; }
                   .sr-item:hover .sr-meta { visibility: hidden; }
                   .sr-actions {
-                    display: none;
+                    display: none !important;
                     gap: 4px;
                     align-items: center;
                     position: absolute;
@@ -603,39 +661,65 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
                     transform: translateY(-50%);
                     background: ${t.bg};
                   }
-                  .sr-item:hover .sr-actions { display: flex; }
+                  .sr-item:hover .sr-actions { display: flex !important; }
                 `}</style>
-                {search.data.instruments.map((i) => {
-                  const sym = `${i.exchange || 'NSE'}:${i.tradingsymbol}`;
-                  const added = watch.some((w) => w.symbol === sym);
-                  const parsed = parseInstrument(i.tradingsymbol);
-                  const expLabel = parsed?.isWeekly && parsed.day && parsed.month
-                    ? `${parsed.day} ${parsed.month} Weekly` : '';
-                  const lastPx = ltp?.[sym]?.last_price ?? null;
-                  return (
-                    <div
-                      key={`${i.exchange}:${i.instrument_token}`}
-                      className={`sr-item${added ? ' added' : ''}`}
-                      onClick={() => { if (!added) addInstr(i); }}
-                    >
-                      <span className="sr-name"><InstrumentLabel symbol={i.tradingsymbol} fallback={i.name} /></span>
-                      <div className="sr-meta">
-                        {expLabel && <span className="sr-exp">{expLabel}</span>}
-                        <span className="sr-exch">{i.exchange}</span>
-                        {added && <span className="sr-check">✓</span>}
+                {search.data.instruments
+                  .filter((i) => {
+                    if (searchSegment === 'all') return true;
+                    const itype = (i.instrument_type || '').toUpperCase();
+                    const seg = (i.segment || '').toUpperCase();
+                    const ts = (i.tradingsymbol || '').toUpperCase();
+                    const nm = (i.name || '').toUpperCase();
+                    const isDeriv = ['FUT', 'CE', 'PE'].includes(itype) || seg.includes('OPT') || seg.includes('FUT');
+                    const isIndex = seg === 'INDICES' || ['SENSEX', 'NIFTY 50', 'NIFTY BANK', 'BANKEX', 'FINNIFTY'].includes(ts);
+                    const isEtf = ts.includes('ETF') || ts.includes('BEES') || nm.includes('ETF');
+                    if (searchSegment === 'fo') return isDeriv;
+                    if (searchSegment === 'indices') return isIndex;
+                    if (searchSegment === 'etf') return isEtf;
+                    if (searchSegment === 'cash') return !isDeriv && !isIndex && !isEtf;
+                    return true;
+                  })
+                  .map((i) => {
+                    const sym = `${i.exchange || 'NSE'}:${i.tradingsymbol}`;
+                    const added = watch.some((w) => w.symbol === sym);
+                    const parsed = parseInstrument(i.tradingsymbol);
+                    const isIndex = i.segment === 'INDICES' || i.instrument_type === 'INDEX' || (!parsed && (i.tradingsymbol === 'SENSEX' || i.tradingsymbol === 'NIFTY 50' || i.tradingsymbol === 'NIFTY BANK' || i.tradingsymbol === 'BANKEX'));
+                    const expLabel = parsed?.isWeekly && parsed.day && parsed.month
+                      ? `${parsed.day} ${parsed.month} WEEKLY` : '';
+                    const lastPx = ltp?.[sym]?.last_price ?? null;
+                    return (
+                      <div
+                        key={`${i.exchange}:${i.instrument_token}`}
+                        className={`sr-item${added ? ' added' : ''}`}
+                        onClick={() => { if (!added) addInstr(i); }}
+                      >
+                        <span className="sr-name"><InstrumentLabel symbol={i.tradingsymbol} fallback={i.name} /></span>
+                        <div className="sr-meta">
+                          {isIndex ? (
+                            <>
+                              <span className="sr-tag">{i.tradingsymbol}</span>
+                              <span className="sr-exch">INDICES</span>
+                            </>
+                          ) : (
+                            <>
+                              {expLabel && <span className="sr-exp">{expLabel}</span>}
+                              <span className="sr-exch">{i.exchange}</span>
+                            </>
+                          )}
+                          {added && <span className="sr-check">✓</span>}
+                        </div>
+                        <KiteActionButtons
+                          className="sr-actions"
+                          onBuy={(e) => { e.stopPropagation(); handleOpenOrder(sym, 'BUY', lastPx, i.lot_size); }}
+                          onSell={(e) => { e.stopPropagation(); handleOpenOrder(sym, 'SELL', lastPx, i.lot_size); }}
+                          onChart={(e) => { e.stopPropagation(); onOpenInstrument?.(sym, 'chart'); }}
+                          onDepth={(e) => { e.stopPropagation(); addAndExpand(i); }}
+                          onAdd={added ? undefined : (e) => { e.stopPropagation(); addInstr(i); }}
+                          onBasket={(e) => { e.stopPropagation(); const [exch, tsym] = sym.split(':'); addToBasket({ symbol: tsym || sym, exchange: exch || 'NSE', side: 'BUY', qty: i.lot_size && i.lot_size > 0 ? i.lot_size : 1, product: defaultProduct(exch || 'NSE'), orderType: 'MARKET', price: 0, trigger: 0 }); }}
+                        />
                       </div>
-                      <KiteActionButtons
-                        className="sr-actions"
-                        onBuy={(e) => { e.stopPropagation(); handleOpenOrder(sym, 'BUY', lastPx, i.lot_size); }}
-                        onSell={(e) => { e.stopPropagation(); handleOpenOrder(sym, 'SELL', lastPx, i.lot_size); }}
-                        onChart={(e) => { e.stopPropagation(); onOpenInstrument?.(sym, 'chart'); }}
-                        onDepth={(e) => { e.stopPropagation(); addAndExpand(i); }}
-                        onAdd={added ? undefined : (e) => { e.stopPropagation(); addInstr(i); }}
-                        onBasket={(e) => { e.stopPropagation(); const [exch, tsym] = sym.split(':'); addToBasket({ symbol: tsym || sym, exchange: exch || 'NSE', side: 'BUY', qty: i.lot_size && i.lot_size > 0 ? i.lot_size : 1, product: defaultProduct(exch || 'NSE'), orderType: 'MARKET', price: 0, trigger: 0 }); }}
-                      />
-                    </div>
-                  );
-                })}
+                    );
+                  })}
                 {search.data.instruments.length === 0 && <div style={{ padding: 16, color: t.dim, fontSize: 13 }}>No matches found.</div>}
               </div>
             )}

@@ -2,9 +2,8 @@ export const KITE_EXCHANGES = ['NSE', 'NFO', 'BSE', 'BFO', 'CDS', 'BCD', 'MCX'] 
 
 export type KiteExchange = typeof KITE_EXCHANGES[number];
 
-// The Sterling workflow is options-first, so the default NSE market preset includes
-// NSE cash/indices and NFO derivatives while excluding BSE/BFO and other venues.
-export const DEFAULT_KITE_EXCHANGES: KiteExchange[] = ['NSE', 'NFO'];
+// Core Indian exchanges enabled by default: NSE/BSE equities & indices, plus NFO/BFO derivatives.
+export const DEFAULT_KITE_EXCHANGES: KiteExchange[] = ['NSE', 'NFO', 'BSE', 'BFO'];
 export const KITE_EXCHANGE_FILTER_KEY = 'sterling:kite:exchange-filter:v1';
 
 const EXCHANGE_SET = new Set<string>(KITE_EXCHANGES);
@@ -19,11 +18,17 @@ export function normalizeKiteExchanges(value: unknown): KiteExchange[] {
   return selected.length ? selected : [...DEFAULT_KITE_EXCHANGES];
 }
 
-export function readKiteExchanges(storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage): KiteExchange[] {
+export function readKiteExchanges(storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage): KiteExchange[] {
   if (!storage) return [...DEFAULT_KITE_EXCHANGES];
   try {
     const raw = storage.getItem(KITE_EXCHANGE_FILTER_KEY);
-    return raw ? normalizeKiteExchanges(JSON.parse(raw)) : [...DEFAULT_KITE_EXCHANGES];
+    if (!raw) return [...DEFAULT_KITE_EXCHANGES];
+    const normalized = normalizeKiteExchanges(JSON.parse(raw));
+    // Auto-migrate legacy 2-exchange preset (NSE + NFO) to include BSE & BFO so SENSEX/BANKEX are available out of the box
+    if (normalized.length === 2 && normalized.includes('NSE') && normalized.includes('NFO')) {
+      return writeKiteExchanges(DEFAULT_KITE_EXCHANGES, storage);
+    }
+    return normalized;
   } catch {
     return [...DEFAULT_KITE_EXCHANGES];
   }

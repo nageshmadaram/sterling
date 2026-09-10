@@ -109,6 +109,41 @@ class InstrumentCache:
             return ""
         return str(int(f)) if f.is_integer() else str(f)
 
+    @staticmethod
+    def _lookup_spot(underlying: str) -> Optional[float]:
+        """Return the latest known spot price for an underlying from ohlcv."""
+        u = (underlying or "").strip().upper()
+        if not u:
+            return None
+        candidates = [u]
+        if u == "SENSEX":
+            candidates.extend(["BSE:SENSEX", "SENSEX"])
+        elif u in ("NIFTY", "NIFTY 50"):
+            candidates.extend(["NIFTY 50", "NSE:NIFTY 50"])
+        elif u in ("BANKNIFTY", "NIFTY BANK"):
+            candidates.extend(["NIFTY BANK", "NSE:NIFTY BANK"])
+        elif u in ("FINNIFTY", "NIFTY FIN SERVICE"):
+            candidates.extend(["NIFTY FIN SERVICE", "NSE:NIFTY FIN SERVICE"])
+        elif u in ("MIDCPNIFTY", "NIFTY MID SELECT"):
+            candidates.extend(["NIFTY MID SELECT", "NSE:NIFTY MID SELECT"])
+
+        try:
+            from app.services.ohlcv_store import _get_connection
+            conn = _get_connection(timeout=1.0)
+            try:
+                for sym in candidates:
+                    row = conn.execute(
+                        "SELECT close FROM ohlcv WHERE symbol = ? ORDER BY time DESC LIMIT 1",
+                        (sym,)
+                    ).fetchone()
+                    if row and row[0] and float(row[0]) > 0:
+                        return float(row[0])
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return None
+
     async def search(self, query: str, exchange: str = "", limit: int = 50) -> List[dict]:
         """Kite-style universal instrument search.
 
@@ -117,6 +152,15 @@ class InstrumentCache:
         strike, or CE/PE/FUT puts exact derivative matches before the cash-equity
         row. A broad underlying-only query keeps equities/indices above the option
         flood, matching Kite's normal search behaviour.
+        Ranking matches Zerodha Kite:
+        1. When searching broad underlying (e.g. "SENSEX", "NIFTY", "RELIANCE"):
+           - Exact index/cash equity row is #1
+           - Active near-month futures (SEP, OCT, NOV) are #2
+           - Related prefix futures (e.g. SENSEX50 futures) are #3
+           - Near-term active options paired around ATM spot price (CE then PE) are #4
+           - Other matching equities/ETFs are #5
+        2. When searching specific derivative (e.g. "SENSEX 74800", "NIFTY CE", "INFY SEP FUT"):
+           - Prioritizes exact month, strike and contract type.
         """
         q = (query or "").strip().upper()
         rows = await self.load(exchange)
@@ -133,6 +177,9 @@ class InstrumentCache:
         derivative_intent = bool(requested_type or requested_month or requested_strike)
         type_order = {"CE": 0, "PE": 1, "FUT": 2}
         scored = []
+
+        # Filter matching rows first
+        matched_rows: List[dict] = []
         for r in rows:
             ts = str(r.get("tradingsymbol", "")).upper()
             nm = str(r.get("name", "")).upper()
@@ -148,10 +195,47 @@ class InstrumentCache:
                     strike_v = float(r.get("strike") or 0)
                 except (TypeError, ValueError):
                     strike_v = 0.0
+                matched_rows.append(r)
 
                 # These dimensions are no-ops for broad searches, but for a query
                 # such as "BAJAJ-AUTO JUL 10500 CE" they force the exact month,
                 # strike and side to the top rather than returning BAJAJ-AUTO EQ.
+        if not matched_rows:
+            return []
+
+        # Spot price lookup for ATM proximity sorting
+        spot: Optional[float] = None
+        if not derivative_intent:
+            spot = self._lookup_spot(first)
+            if spot is None:
+                # Fallback to median strike of nearest options for this underlying
+                first_opt_strikes = sorted([
+                    float(r.get("strike") or 0)
+                    for r in matched_rows
+                    if str(r.get("instrument_type", "")).upper() in ("CE", "PE")
+                    and str(r.get("name", "")).upper() == first
+                    and float(r.get("strike") or 0) > 0
+                ])
+                if first_opt_strikes:
+                    spot = first_opt_strikes[len(first_opt_strikes) // 2]
+
+        scored = []
+        for r in matched_rows:
+            ts = str(r.get("tradingsymbol", "")).upper()
+            nm = str(r.get("name", "")).upper()
+            seg = str(r.get("segment", "")).upper()
+            exch = str(r.get("exchange", "")).upper()
+            itype = str(r.get("instrument_type", "")).upper()
+            is_derivative = itype in _DERIVATIVE_TYPES
+            expiry = str(r.get("expiry") or "9999-99-99")
+            strike_s = self._strike_str(r.get("strike"))
+            try:
+                strike_v = float(r.get("strike") or 0)
+            except (TypeError, ValueError):
+                strike_v = 0.0
+
+            if derivative_intent:
+                # Specific derivative search (e.g. "BAJAJ-AUTO JUL 10500 CE")
                 type_miss = 0 if not requested_type or itype == requested_type else 1
                 month_miss = 0 if not requested_month or requested_month in ts else 1
                 strike_miss = 0 if not requested_strike or strike_s == requested_strike else 1
@@ -161,10 +245,10 @@ class InstrumentCache:
                     else 1 if is_derivative else 0
                 )
                 rank = (
-                    0 if ts == q else 1,
                     type_miss,
                     month_miss,
                     strike_miss,
+                    0 if ts == q else 1,
                     0 if (ts.startswith(first) or nm.startswith(first)) else 1,
                     asset_rank,
                     nm,
@@ -173,7 +257,43 @@ class InstrumentCache:
                     strike_v,
                     ts,
                 )
-                scored.append((rank, r))
+            else:
+                # Broad underlying search (e.g. "SENSEX", "NIFTY", "RELIANCE")
+                und = nm if is_derivative else ts
+                is_exact_und = (
+                    und == first
+                    or (seg == "INDICES" and (ts == first or (first == "NIFTY" and ts in ("NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE"))))
+                    or (not is_derivative and ts == first)
+                )
+                is_prefix_deriv = is_derivative and und.startswith(first) and und != first
+
+                if is_exact_und:
+                    if seg == "INDICES" or (not is_derivative and ts == first):
+                        idx_order = 0 if ts in (first, "NIFTY 50") else 1 if ts == "NIFTY BANK" else 2
+                        rank = (0, idx_order, "")
+                    elif itype == "FUT":
+                        rank = (1, 0, expiry)
+                    elif itype in ("CE", "PE"):
+                        dist = abs(strike_v - spot) if spot and strike_v else strike_v
+                        # Pair CE and PE for each strike, sorted by distance from ATM
+                        rank = (3, 0, expiry, dist, 0 if itype == "CE" else 1, strike_v)
+                    else:
+                        rank = (5, 0, ts)
+                elif is_prefix_deriv:
+                    if itype == "FUT":
+                        rank = (2, 0, und, expiry)
+                    elif itype in ("CE", "PE"):
+                        dist = abs(strike_v - spot) if spot and strike_v else strike_v
+                        rank = (4, 0, und, expiry, dist, 0 if itype == "CE" else 1, strike_v)
+                    else:
+                        rank = (5, 1, ts)
+                else:
+                    # Equities/ETFs matching query
+                    starts = 0 if ts.startswith(first) else 1 if nm.startswith(first) else 2
+                    rank = (6, starts, nm, ts)
+
+            scored.append((rank, r))
+
         scored.sort(key=lambda x: x[0])
         return [r for _, r in scored[:limit]]
 
