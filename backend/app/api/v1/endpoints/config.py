@@ -348,7 +348,7 @@ async def atm_premium_imbalance_simulate_stop(
 # ------------------------------------------------------------------ Gamma Move
 
 @router.get("/gamma-move")
-async def get_gamma_move_config() -> dict:
+async def get_gamma_move_config(user: UserContext = Depends(get_current_user)) -> dict:
     """Current config plus the engine's own defaults, vocabularies and calibration.
 
     Defaults and enums are published rather than mirrored in the client, so the
@@ -367,7 +367,8 @@ async def get_gamma_move_config() -> dict:
                                                TRIGGER_TIMEFRAMES, GammaMoveConfig)
     from app.services.kite_engine.stock_registry import HIGH_LIQUIDITY_STOCK_NAMES
     from app.services.gamma_move import descriptor, get_config
-    cfg = get_config()
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
+    cfg = get_config(uid)
     return {
         "strategy": {**descriptor(), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
@@ -399,7 +400,8 @@ async def get_gamma_move_config() -> dict:
 
 
 @router.put("/gamma-move")
-async def update_gamma_move_config(body: dict = Body(...)) -> dict:
+async def update_gamma_move_config(body: dict = Body(...),
+                                   user: UserContext = Depends(get_current_user)) -> dict:
     """Apply a partial config change.
 
     Only the keys present are changed. Unknown keys are refused rather than
@@ -410,8 +412,9 @@ async def update_gamma_move_config(body: dict = Body(...)) -> dict:
     values = {k: v for k, v in dict(body).items() if v is not None}
     if not values:
         raise HTTPException(status_code=422, detail="no settings to change")
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
     try:
-        cfg = set_config(values)
+        cfg = set_config(values, uid=uid)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"config": cfg.as_dict()}
@@ -438,6 +441,10 @@ async def gamma_move_snapshot(user: UserContext = Depends(get_current_user)) -> 
 @router.post("/gamma-move/scan")
 async def gamma_move_scan(user: UserContext = Depends(get_current_user)) -> dict:
     """Run one on-demand levels -> strikes -> trigger pass."""
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live scan is off")
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
     if not uid:
         raise HTTPException(status_code=401, detail="authenticated user is required")
@@ -453,6 +460,10 @@ async def gamma_move_scan(user: UserContext = Depends(get_current_user)) -> dict
 async def gamma_move_arm(body: dict = Body(...),
                          user: UserContext = Depends(get_current_user)) -> dict:
     """Enter one armed signal by id."""
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live entry is off")
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
     if not uid:
         raise HTTPException(status_code=401, detail="authenticated user is required")
@@ -481,6 +492,10 @@ async def gamma_move_adopt(body: dict = Body(...),
     if not symbol or quantity <= 0 or entry_price <= 0:
         raise HTTPException(status_code=422,
                             detail="symbol, a positive quantity and entry_price are required")
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        raise HTTPException(status_code=409,
+                            detail="replay is driving this board — live adopt is off")
     from app.services.gamma_move_runner import adopt
     return await adopt(uid, symbol, quantity, entry_price)
 

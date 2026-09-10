@@ -694,8 +694,12 @@ def build_snapshot_signals(
 
     chosen: list[dict[str, Any]] = []
     for _tape, group in taped.items():
+        latest_session = group[-1].get("session_date")
         open_legs = [
-            item for item in group if not item.get("flattened") and (item.get("quantity") or 0)
+            item for item in group
+            if not item.get("flattened")
+            and (item.get("quantity") or 0)
+            and (not latest_session or item.get("session_date") == latest_session)
         ]
         if open_legs:
             chosen.extend(open_legs)

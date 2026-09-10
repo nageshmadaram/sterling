@@ -16,8 +16,10 @@ from app.core.logging import get_logger
 from app.engines.sterling_kite_engine.config import SterlingKiteEngineConfig
 from app.engines.sterling_kite_engine.schemas import (
     ActivityResponse, BacktestRequest, BacktestResponse,
+    ActivityResponse, BacktestRequest, BacktestResponse, EmergencyActionResponse,
     EngineConfigModel, EngineDetailResponse, EngineOrderRequest, EngineOrderResponse,
     EngineSignalRow, OpenPositionRecord, OpenPositionsResponse, SetupChart, SignalsResponse,
+    EngineSignalRow, OpenPositionRecord, OpenPositionsResponse, ReadinessResponse, SetupChart, SignalsResponse,
 )
 from app.services.exchanges.kite import accounts as kite_accounts
 from app.services.exchanges.kite.errors import KiteError
@@ -197,6 +199,50 @@ async def patch_config(body: dict,
 @router.post("/config/reset")
 async def reset_config(user: UserContext = Depends(get_current_user)) -> EngineConfigModel:
     return state.set_config(user.user_id, EngineConfigModel())
+
+
+@router.post("/config/production")
+async def apply_production_config(user: UserContext = Depends(get_current_user)) -> EngineConfigModel:
+    """Apply the sweep-validated, fail-safe production configuration preset."""
+    prod_cfg = EngineConfigModel.production()
+    return state.set_config(user.user_id, prod_cfg)
+
+
+@router.get("/readiness")
+async def live_readiness(user: UserContext = Depends(get_current_user)) -> ReadinessResponse:
+    """Pre-flight diagnostic for live production trading."""
+    client = None
+    acct = kite_accounts.get_active(user.user_id)
+    if acct:
+        try:
+            client = await kite_accounts.acquire_client(acct)
+        except Exception:
+            client = None
+    report = await service.check_live_readiness(client, user.user_id)
+    return ReadinessResponse(**report)
+
+
+@router.post("/emergency-square-off")
+async def emergency_square_off(user: UserContext = Depends(get_current_user)) -> EmergencyActionResponse:
+    """Emergency manual square-off for all open/pending positions in this engine."""
+    client = await _client(user)
+    res = await service.emergency_square_off_all(client, user.user_id)
+    return EmergencyActionResponse(**res)
+
+
+@router.post("/emergency-halt")
+async def emergency_halt_all(user: UserContext = Depends(get_current_user)) -> EmergencyActionResponse:
+    """Engage global kill switch, turn off auto-execute, and square off all open positions."""
+    client = await _client(user)
+    res = await service.emergency_halt(client, user.user_id)
+    return EmergencyActionResponse(
+        status=res["status"],
+        message=res["message"],
+        positions_count=res["square_off"]["positions_count"],
+        squared_off=res["square_off"]["squared_off"],
+        failed=res["square_off"]["failed"],
+        details=res["square_off"]["details"],
+    )
 
 
 @router.get("/expiry-calendar")

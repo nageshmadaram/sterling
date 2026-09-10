@@ -53,6 +53,7 @@ const DEFAULTS = {
   max_premium_at_risk_inr: 60000, daily_loss_limit_inr: 10000,
   descale_after_losses: 3, descale_factor: 0.5, rescale_after_wins: 2,
   data_source: 'kite', execution_mode: 'paper',
+  require_chain_max_oi: true, require_spot_through_strike: true,
 };
 
 const STRATEGY = {
@@ -77,6 +78,10 @@ const STRATEGY = {
   headline_finding: 'Only the level filter is proven.',
   what_to_do: 'Trust the distance badge on the row.',
   evidence: 'Share of bars reaching +30% within two sessions: 46.2% [31.6, 61.4].',
+  source_gates: {
+    require_chain_max_oi: '208/598 sampled contracts were the max-OI of their (name, leg)',
+    require_spot_through_strike: '369/598 had spot through/at the strike inside the 1% band',
+  },
 };
 
 beforeEach(() => {
@@ -181,6 +186,24 @@ describe('GammaMoveSettings — structure and terminology', () => {
   it('hosts the shared Option contracts picker', () => {
     render(<GammaMoveSettings />);
     expect(document.body.textContent).toContain('Option contracts');
+  });
+
+  it('exposes the two source-rule gates as switches, labelled not calibrated', () => {
+    render(<GammaMoveSettings />);
+    expect(screen.getByRole('switch', { name: /chain-max/i })).toBeTruthy();
+    expect(screen.getByRole('switch', { name: /spot through/i })).toBeTruthy();
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Source rule, not calibrated');
+    expect(text).toContain('208/598');
+    expect(text).toContain('369/598');
+  });
+
+  it('treats a missing source flag as on, matching the engine default', () => {
+    const { require_chain_max_oi: _wall, require_spot_through_strike: _through, ...rest } = DEFAULTS;
+    cfgQuery.data.config = rest;
+    render(<GammaMoveSettings />);
+    expect(screen.getByRole('switch', { name: /chain-max/i }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('switch', { name: /spot through/i }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('drafts an expiry-window change like any other field', () => {

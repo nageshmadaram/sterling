@@ -581,12 +581,17 @@ def _run_keep_breaker(cfg, row, client, item=None):
 # ── Trail update (_new_trail_for_open) ────────────────────────────────────────
 
 def _make_signal_row(underlying="NIFTY 50", stop_loss=24800.0, symbol="NIFTY2562625000PE",
-                     premium_sl=85.0):
+                     premium_sl=85.0, direction="short", regime=None, option_type=None):
+    if regime is None:
+        regime = "BULL" if direction == "long" else "BEAR"
+    if option_type is None:
+        option_type = "CE" if direction == "long" else "PE"
+    align_val = 1 if direction == "long" else -1
     return EngineSignalRow(
         underlying=underlying, token=256265, exchange="NFO",
-        regime="BEAR", alignment=AlignmentChip(fast=-1, mid=-1, slow=-1),
-        direction="short", option_type="PE",
-        legs=[OptionLeg(moneyness="ATM", option_type="PE",
+        regime=regime, alignment=AlignmentChip(fast=align_val, mid=align_val, slow=align_val),
+        direction=direction, option_type=option_type,
+        legs=[OptionLeg(moneyness="ATM", option_type=option_type,
                         option_symbol=symbol, strike=25000, expiry=_future_expiry(10),
                         premium_spot=120.0, premium_sl=premium_sl, token=111)],
         spot=25000.0, stop_loss=stop_loss, score=85.0,
@@ -598,7 +603,7 @@ def test_new_trail_futures_long_tightens():
         uid="tx", symbol="NIFTY26JUNFUT", exchange="NFO", token=1,
         qty=75, stop_premium=24700.0, direction="long", vehicle="futures",
         underlying="NIFTY 50", status=positions.OPEN)
-    row = _make_signal_row(stop_loss=24850.0)  # higher → tighter for a long
+    row = _make_signal_row(stop_loss=24850.0, direction="long")  # higher → tighter for a long
     new_sl = service._new_trail_for_open(p, [row])
     assert new_sl == 24850.0
 
@@ -608,7 +613,7 @@ def test_new_trail_futures_long_no_update_when_wider():
         uid="tx", symbol="NIFTY26JUNFUT", exchange="NFO", token=1,
         qty=75, stop_premium=24900.0, direction="long", vehicle="futures",
         underlying="NIFTY 50", status=positions.OPEN)
-    row = _make_signal_row(stop_loss=24700.0)  # lower → would widen — skip
+    row = _make_signal_row(stop_loss=24700.0, direction="long")  # lower → would widen — skip
     assert service._new_trail_for_open(p, [row]) is None
 
 
@@ -650,6 +655,27 @@ def test_new_trail_ignores_opposing_signal_direction():
     assert service._new_trail_for_open(p, [bull_row]) is None
 
 
+def test_new_trail_ignores_opposing_row_when_signal_direction_unset_futures():
+    """Short futures with signal_direction=None must NOT adopt a bullish row stop."""
+    p = positions.OpenPosition(
+        uid="tx", symbol="NIFTY26JUNFUT", exchange="NFO", token=1,
+        qty=75, stop_premium=25200.0, direction="short", signal_direction=None,
+        vehicle="futures", underlying="NIFTY 50", status=positions.OPEN)
+    bull_row = _make_signal_row(stop_loss=24800.0, direction="long")
+    assert service._new_trail_for_open(p, [bull_row]) is None
+
+
+def test_new_trail_ignores_opposing_row_when_signal_direction_unset_pe_option():
+    """PE option with signal_direction=None must NOT retranslate a bullish row stop."""
+    p = positions.OpenPosition(
+        uid="tx", symbol="NIFTY26JUN25000PE", exchange="NFO", token=10,
+        qty=75, stop_premium=100.0, initial_stop_premium=100.0, direction="long",
+        signal_direction=None, vehicle="otm_options", underlying="NIFTY 50",
+        status=positions.OPEN, entry_premium=150.0, entry_delta=-0.5, entry_spot=25000.0)
+    bull_row = _make_signal_row(stop_loss=24800.0, direction="long", symbol="NIFTY26JUN25000CE")
+    assert service._new_trail_for_open(p, [bull_row]) is None
+
+
 def test_new_trail_futures_translates_the_underlying_level_by_the_entry_basis():
     """The trail arrives as an UNDERLYING level; the position's stop is a FUTURES
     price. Without the basis the two are compared in different units, and on a
@@ -660,7 +686,7 @@ def test_new_trail_futures_translates_the_underlying_level_by_the_entry_basis():
         qty=75, stop_premium=24_780.0, direction="long", vehicle="futures",
         underlying="NIFTY 50", status=positions.OPEN,
         entry_premium=25_080.0, entry_spot=25_000.0)     # basis +80
-    row = _make_signal_row(stop_loss=24_850.0)
+    row = _make_signal_row(stop_loss=24_850.0, direction="long")
     # 24,850 underlying + 80 basis = 24,930, which tightens 24,780.
     assert service._new_trail_for_open(p, [row]) == pytest.approx(24_930.0)
 
@@ -674,7 +700,7 @@ def test_new_trail_futures_without_an_entry_spot_leaves_the_level_alone():
         qty=75, stop_premium=24_700.0, direction="long", vehicle="futures",
         underlying="NIFTY 50", status=positions.OPEN,
         entry_premium=25_000.0, entry_spot=0.0)          # legacy row
-    row = _make_signal_row(stop_loss=24_850.0)
+    row = _make_signal_row(stop_loss=24_850.0, direction="long")
     assert service._new_trail_for_open(p, [row]) == pytest.approx(24_850.0)
 
 
@@ -718,7 +744,7 @@ def test_new_trail_deep_itm_retranslates_and_tightens():
         vehicle="deep_itm_options", underlying="NIFTY 50", status=positions.OPEN,
         entry_premium=520.0, entry_delta=0.9, entry_spot=25000.0, strike=24000.0)
     # bull CE: fresh ST trail rose 24800 → 24900 (closer to spot) → tighter premium stop
-    row = _make_signal_row(underlying="NIFTY 50", stop_loss=24900.0)
+    row = _make_signal_row(underlying="NIFTY 50", stop_loss=24900.0, direction="long")
     new_sl = service._new_trail_for_open(p, [row])
     assert new_sl == pytest.approx(520.0 + 0.9 * (24900.0 - 25000.0))  # 430.0
     assert new_sl > p.stop_premium
@@ -863,7 +889,7 @@ def test_new_trail_deep_itm_no_update_when_wider():
         vehicle="deep_itm_options", underlying="NIFTY 50", status=positions.OPEN,
         entry_premium=520.0, entry_delta=0.9, entry_spot=25000.0)
     # ST trail slipped back (24700 < spot) → would loosen → no update (ratchet)
-    row = _make_signal_row(underlying="NIFTY 50", stop_loss=24700.0)
+    row = _make_signal_row(underlying="NIFTY 50", stop_loss=24700.0, direction="long")
     assert service._new_trail_for_open(p, [row]) is None
 
 

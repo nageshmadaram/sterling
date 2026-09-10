@@ -48,6 +48,7 @@ async def main():
                 ist = ZoneInfo("Asia/Kolkata")
             except ImportError:
                 ist = timezone(timedelta(hours=5, minutes=30))
+            parsed_candles = []
             for row in raw_list:
                 dt_c = datetime.fromisoformat(row[0])
                 if dt_c.tzinfo is None:

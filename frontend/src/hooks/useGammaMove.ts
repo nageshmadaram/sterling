@@ -39,6 +39,10 @@ export interface GammaMoveConfig {
   level_proximity_pct: number;
   strike_window_pct: number;
   max_candidates: number;
+  /** Source rule, not calibrated. Strike must be chain-max OI on that expiry+type. */
+  require_chain_max_oi?: boolean;
+  /** Source rule, not calibrated. Spot must have broken through (or sit at) the wall. */
+  require_spot_through_strike?: boolean;
   /** Contract settings — same names as every other engine's. */
   expiry_selection: ExpirySelection;
   expiry_dte_min: number;
@@ -129,6 +133,8 @@ export interface GammaMoveStrategyInfo {
    *  Deliberately not the first thing shown: it belongs on a hover, not across
    *  the top of a trading screen. */
   evidence?: string;
+  /** Snapshot occupancy for the two source-rule gates. Not a measured edge. */
+  source_gates?: Record<string, string>;
 }
 
 export interface GammaMoveResponse {
@@ -168,11 +174,12 @@ export interface GammaSignalRow {
   entry_day: string | null;
   instrument: {
     instrument_id: string; tradingsymbol: string; option_type: 'CE' | 'PE';
-    strike: number; expiry: string; lot_size: number; tick_size: number; exchange: string;
+    strike: number | null; expiry: string | null; lot_size: number | null;
+    tick_size: number; exchange: string;
   };
   level: { price: number; kind: 'support' | 'resistance'; touches: number; distance_pct: number };
   oi: number;
-  days_to_expiry: number;
+  days_to_expiry: number | null;
   spot: number;
   metrics: TriggerMetrics | null;
   /** Every level is nullable: a missing number must render as "—", never as 0. */

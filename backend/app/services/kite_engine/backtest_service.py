@@ -87,6 +87,11 @@ async def run_backtest(client, req) -> dict:
     notes: List[str] = []
     drift: Optional[float] = None
 
+    sym_clean = str(req.symbol or "").strip().upper()
+    is_stock = sym_clean not in {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX", "MIDCPNIFTY", "NIFTY 50", "NIFTY BANK"} and not any(
+        idx in sym_clean for idx in ("NIFTY", "SENSEX", "BANKEX")
+    )
+
     want_syn = req.data_mode in ("synthetic", "both")
     want_real = req.data_mode in ("real", "both")
 
@@ -109,6 +114,8 @@ async def run_backtest(client, req) -> dict:
                     iv=req.iv, dte_days=req.dte_days,
                     bars_per_day=_BARS_PER_DAY, moneyness_offset_pct=req.moneyness_offset_pct,
                     qty=req.qty, costs=costs, starting_capital=req.starting_capital)
+                    qty=req.qty, costs=costs, starting_capital=req.starting_capital,
+                    is_stock=is_stock)
                 runs.append(_run_dict(run))
 
     # ── real: ST on an actual option-premium series ───────────────────────────
@@ -131,6 +138,8 @@ async def run_backtest(client, req) -> dict:
                     premium_close=c, cfg=cfg, trail_target=req.trail_target,
                     exit_mode=req.exit_mode, qty=req.qty,
                     costs=costs, starting_capital=req.starting_capital, direction_label="long")
+                    costs=costs, starting_capital=req.starting_capital, direction_label="long",
+                    is_stock=is_stock)
                 run.mode = "real"
                 run.caveat = ("Real fetched premium for a currently-listed contract — limited to "
                               "this expiry cycle (cannot test the strategy over full history).")

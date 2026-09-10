@@ -718,6 +718,23 @@ class KiteEngineScanner:
     def snapshot(self, uid: str) -> UserScan:
         us = self._users.get(uid)
         if us is not None:
+            cached = state.load_signal_cache(uid)
+            if cached:
+                cached_rows_data, gen_ms = cached
+                cached_underlyings = {r.get("underlying") for r in cached_rows_data}
+                current_underlyings = {r.underlying for r in us.rows}
+                missing_underlyings = cached_underlyings - current_underlyings
+                if missing_underlyings:
+                    try:
+                        extra_rows = [
+                            EngineSignalRow(**r)
+                            for r in cached_rows_data
+                            if r.get("underlying") in missing_underlyings
+                        ]
+                        us.rows = _compile_rows(us.rows + extra_rows)
+                        us.generated_ms = max(us.generated_ms, gen_ms)
+                    except Exception as _exc:
+                        log.debug("suppressed: %s", _exc)
             return us
         us = UserScan(engine=SterlingKiteEngine())
         self._hydrate_from_cache(us, uid)
@@ -873,6 +890,8 @@ class KiteEngineScanner:
         close_feed: Optional[Callable[[str, float], None]] = None,
     ) -> None:
         us = self._user(uid, cfg)
+        if not us.rows:
+            self._hydrate_from_cache(us, uid)
         us.engine.cfg = cfg
         us.scanning = True
         us.cancelled = False
@@ -888,6 +907,16 @@ class KiteEngineScanner:
                 r.underlying: r for r in us.rows
                 if getattr(r, "source", "") == "confluence" and getattr(r, "is_active", False)
             }
+            all_scanned_names = {item.name for item in universe}
+            if deriv_universe:
+                all_scanned_names.update(item.name for item in deriv_universe)
+            if confluence_universe:
+                all_scanned_names.update(item.name for item in confluence_universe)
+
+            initial_other_rows = [
+                r for r in us.rows
+                if r.underlying not in all_scanned_names
+            ]
             diag = ScanDiag(universe=len(universe),
                             indices=sum(1 for i in universe if i.is_index))
 
@@ -906,7 +935,7 @@ class KiteEngineScanner:
                     conf_row for und, conf_row in initial_active_confluence.items()
                     if und not in active_conf_underlyings
                 ]
-                us.rows = _compile_rows(rows + preserved)
+                us.rows = _compile_rows(rows + preserved + initial_other_rows)
                 us.generated_ms = int(time.time() * 1000)
                 model_rows = [r.model_dump() for r in us.rows]
                 state.save_signal_cache(uid, model_rows, us.generated_ms)

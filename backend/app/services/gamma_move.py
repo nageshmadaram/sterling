@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.engines.gamma_move import (CALIBRATION, CALIBRATED_FIELDS, CONTRACT_VERSION,
-                                    GammaMoveConfig, InstrumentRef, STRATEGY_ID,
-                                    STRATEGY_NAME)
+                                    GammaMoveConfig, InstrumentRef, SOURCE_GATES,
+                                    STRATEGY_ID, STRATEGY_NAME)
 
 log = get_logger(__name__)
 
@@ -161,6 +161,10 @@ def descriptor() -> dict:
         "source_aligned_at": "2026-09-09",
         "calibration": CALIBRATION,
         "calibrated_fields": sorted(CALIBRATED_FIELDS),
+        # Occupancy on one snapshot, not a measured edge. Published so the
+        # settings page can label the two source-rule toggles without mirroring
+        # a second copy of the numbers.
+        "source_gates": SOURCE_GATES,
         "headline_finding": (
             "Only the level filter is proven. A setup with spot inside its proximity "
             "band worked about twice as often as an average bar — the open-interest "
@@ -183,26 +187,27 @@ def descriptor() -> dict:
 
 
 async def snapshot(uid: str) -> dict:
-    cfg = get_config()
-    from app.services.gamma_move_runner import session_status, scan_state
+    cfg = get_config(uid)
+    from app.services.gamma_move_runner import session_status, scan_state, session_for
     from app.services.gamma_move_sim import state as _sim_state
+
+    session = session_status(uid)
+    if not session or not session.get("candidates"):
+        session_for(uid, cfg)
+        session = session_status(uid) or {}
 
     out: dict[str, Any] = {
         "strategy": {**descriptor(), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
         "scan": scan_state(uid),
-        "session": session_status(uid),
+        "session": session,
         "simulation": _sim_state(uid),
-        "candidates": [],
-        "positions": [],
-        "record": {"trades": 0, "verdict": "no realised trades yet"},
+        "candidates": session.get("candidates") or [],
+        "positions": session.get("positions") or [],
+        "record": session.get("record") or {"trades": 0, "verdict": "no realised trades yet"},
         "orphan_positions": [],
         "blockers": [],
     }
-    session = session_status(uid) or {}
-    out["candidates"] = session.get("candidates") or []
-    out["positions"] = session.get("positions") or []
-    out["record"] = session.get("record") or out["record"]
 
     from app.services.gamma_move_runner import auto_execute, is_paper
     paper, auto = is_paper(uid), auto_execute(uid)
