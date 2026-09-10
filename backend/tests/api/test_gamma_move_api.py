@@ -19,6 +19,11 @@ def client(tmp_path, monkeypatch):
     from app.services import db
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "test.db"), raising=False)
     db.init()
+    from app.services.simulation import SimState, simulation_runner
+    simulation_runner._state = SimState.IDLE
+    simulation_runner._session_complete = False
+    simulation_runner._stats.events = []
+    simulation_runner._stats.trades = []
     app = FastAPI()
     app.include_router(router)
     return TestClient(app)
@@ -40,6 +45,16 @@ def test_descriptor_publishes_identity_and_calibration(client):
     # provenance beside the control rather than asking the reader to trust it.
     for field in s["calibrated_fields"]:
         assert s["calibration"][field]
+
+
+def test_source_gates_are_published_as_occupancy_not_edge(client):
+    """Snapshot occupancy, not a measured edge. Must not sit in calibrated_fields."""
+    s = client.get("/config/gamma-move").json()["strategy"]
+    gates = s["source_gates"]
+    assert "require_chain_max_oi" in gates
+    assert "require_spot_through_strike" in gates
+    assert "require_chain_max_oi" not in s["calibrated_fields"]
+    assert "require_spot_through_strike" not in s["calibrated_fields"]
 
 
 def test_defaults_are_the_calibrated_values(client):
@@ -88,6 +103,24 @@ def test_partial_update_changes_only_what_was_sent(client):
     assert after["volume_spike_mult"] == before["volume_spike_mult"]
 
 
+def test_source_flags_round_trip_through_put(client):
+    """Settings PUT must store the two source gates, not drop them via getattr."""
+    defaults = client.get("/config/gamma-move").json()["defaults"]
+    assert defaults["require_chain_max_oi"] is True
+    assert defaults["require_spot_through_strike"] is True
+    r = client.put("/config/gamma-move", json={
+        "require_chain_max_oi": False,
+        "require_spot_through_strike": False,
+    })
+    assert r.status_code == 200, r.text
+    cfg = r.json()["config"]
+    assert cfg["require_chain_max_oi"] is False
+    assert cfg["require_spot_through_strike"] is False
+    again = client.get("/config/gamma-move").json()["config"]
+    assert again["require_chain_max_oi"] is False
+    assert again["require_spot_through_strike"] is False
+
+
 def test_unknown_key_is_refused_not_dropped(client):
     """A silently ignored setting is worse than a 422: the UI cannot tell."""
     r = client.put("/config/gamma-move", json={"min_oi_drp_pct": 4.5})
@@ -124,6 +157,18 @@ def test_warnings_are_published_for_risky_but_legal_choices(client):
     body = client.get("/config/gamma-move").json()
     assert any("unprotected" in w for w in body["warnings"])
     client.put("/config/gamma-move", json={"stop_mode": "both"})
+
+
+def test_scan_and_arm_are_refused_while_replay_owns_the_board(client, monkeypatch):
+    from app.services.simulation import SimulationRunner
+    monkeypatch.setattr(SimulationRunner, "has_session_view",
+                        property(lambda self: True))
+    scan = client.post("/config/gamma-move/scan")
+    assert scan.status_code == 409
+    assert "replay" in scan.json()["detail"]
+    arm = client.post("/config/gamma-move/arm", json={"signal_id": "x"})
+    assert arm.status_code == 409
+    assert "replay" in arm.json()["detail"]
 
 
 def test_a_rejected_change_does_not_persist(client):

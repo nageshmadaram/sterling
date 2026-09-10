@@ -38,7 +38,6 @@ def _try_acquire(_n):
 
 
 def _try_claim(_n):
-    monitor._exiting.clear()
     return monitor._exiting.claim(('u', 'OPT'), account_id='account')
 
 

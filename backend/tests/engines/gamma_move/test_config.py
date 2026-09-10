@@ -178,3 +178,23 @@ def test_as_dict_round_trips():
                                "scan_stocks": tuple(cfg.as_dict()["scan_stocks"])})
     assert again.min_oi_drop_pct == 4.5
     assert again.scan_stocks == ("RELIANCE",)
+
+
+def test_source_flags_are_real_fields():
+    """getattr(..., True) cannot be persisted. These must sit on the dataclass."""
+    cfg = GammaMoveConfig(
+        require_chain_max_oi=False,
+        require_spot_through_strike=False,
+    ).validate()
+    assert cfg.require_chain_max_oi is False
+    assert cfg.require_spot_through_strike is False
+    dumped = cfg.as_dict()
+    assert dumped["require_chain_max_oi"] is False
+    assert dumped["require_spot_through_strike"] is False
+    assert {"require_chain_max_oi", "require_spot_through_strike"} <= GammaMoveConfig.field_names()
+
+
+def test_source_flags_default_on():
+    cfg = GammaMoveConfig()
+    assert cfg.require_chain_max_oi is True
+    assert cfg.require_spot_through_strike is True

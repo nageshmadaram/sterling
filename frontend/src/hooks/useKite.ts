@@ -385,12 +385,13 @@ export function useKiteHoldings(enabled = true) {
   });
 }
 
-export function useKitePositions(enabled = true) {
+export function useKitePositions(enabled = true, refetchInterval = 1_000) {
   return useQuery<{ net: any[]; day: any[] }>({
     queryKey: ['kite-positions'],
     queryFn: () => api.get(`${K}/positions`),
     enabled,
-    refetchInterval: 5_000,
+    refetchInterval,
+    staleTime: 0,
   });
 }
 
@@ -893,13 +894,14 @@ export function useKiteWatchlist() {
   return { items, add, remove, reorder, clear, mergeLots, mergeExpiries };
 }
 
-export function useKiteLtp(symbols: string[], enabled = true) {
+export function useKiteLtp(symbols: string[], enabled = true, heartbeatMs = 1_000) {
   const syms = canonSyms(symbols);
   const q = useQuery<Record<string, { last_price?: number; instrument_token?: number }>>({
     queryKey: ['kite-ltp', syms.join(',')],
     queryFn: () => api.get(`${K}/ltp?${iParams(syms)}`),
     enabled: enabled && syms.length > 0,
-    refetchInterval: () => quoteHeartbeatMs(LIVE_HEARTBEAT_MS),
+    refetchInterval: () => quoteHeartbeatMs(heartbeatMs),
+    staleTime: 0,
   });
   const data = useKiteLive(syms, q.data) as Record<string, { last_price?: number; instrument_token?: number }>;
   return { ...q, data };

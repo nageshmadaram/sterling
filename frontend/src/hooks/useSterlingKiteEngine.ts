@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
 import { notifyOrder } from '../store/useKiteNotifications';
 import type {
-  ActivityResponse, BacktestRequest, BacktestResponse, EngineConfigModel,
+  ActivityResponse, BacktestRequest, BacktestResponse, EmergencyActionResponse, EngineConfigModel,
   EngineDetailResponse, EngineOrderRequest, EngineOrderResponse, ExpiryCalendarResponse, LiquidityGroup,
-  OpenPositionsResponse, SetupChart, SignalsResponse,
+  OpenPositionsResponse, ReadinessResponse, SetupChart, SignalsResponse,
 } from '../types/kiteEngine';
 
 const E = '/api/v1/kite/engine';
@@ -274,3 +274,49 @@ export function useCloseEnginePosition() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['kite-engine-open-positions'] }),
   });
 }
+
+// ─── Live Readiness Diagnostic ────────────────────────────────────────────────
+export function useEngineReadiness(options?: { enabled?: boolean }) {
+  return useQuery<ReadinessResponse>({
+    queryKey: ['kite-engine-readiness'],
+    queryFn: () => api.get<ReadinessResponse>(`${E}/readiness`),
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    enabled: options?.enabled ?? true,
+  });
+}
+
+// ─── Apply Production Config Preset ───────────────────────────────────────────
+export function useApplyProductionConfig() {
+  const qc = useQueryClient();
+  return useMutation<EngineConfigModel, Error, void>({
+    mutationFn: () => api.post<EngineConfigModel>(`${E}/config/production`, {}),
+    onSuccess: (data) => qc.setQueryData(['kite-engine-config'], data),
+  });
+}
+
+// ─── Emergency Square-Off & Halt ──────────────────────────────────────────────
+export function useEmergencySquareOff() {
+  const qc = useQueryClient();
+  return useMutation<EmergencyActionResponse, Error, void>({
+    mutationFn: () => api.post<EmergencyActionResponse>(`${E}/emergency-square-off`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['kite-engine-open-positions'] });
+      qc.invalidateQueries({ queryKey: ['kite-engine-activity'] });
+    },
+  });
+}
+
+export function useEmergencyHalt() {
+  const qc = useQueryClient();
+  return useMutation<EmergencyActionResponse, Error, void>({
+    mutationFn: () => api.post<EmergencyActionResponse>(`${E}/emergency-halt`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['kite-engine-config'] });
+      qc.invalidateQueries({ queryKey: ['kite-engine-open-positions'] });
+      qc.invalidateQueries({ queryKey: ['kite-engine-activity'] });
+      qc.invalidateQueries({ queryKey: ['kite-kill-switch'] });
+    },
+  });
+}
+

@@ -66,6 +66,22 @@ def auto_execute(uid: str) -> bool:
         return False
 
 
+def spread_blocks_entry(quote: dict, cfg: GammaMoveConfig) -> Optional[str]:
+    """Refuse a live quote whose bid/ask width exceeds ``max_spread_pct``.
+
+    Missing depth is not a refusal — the scanner already skipped unquoted
+    rows, and a tick with no book is not the same as a 3.1% book.
+    """
+    from app.services.gamma_move_scanner import _spread_pct
+    spread = _spread_pct(quote or {})
+    if spread is None:
+        return None
+    cap = float(cfg.max_spread_pct or 0.0)
+    if cap > 0 and spread > cap:
+        return f"spread {spread:.1f}% exceeds {cap:g}%"
+    return None
+
+
 def _safety(uid: str, idempotency_key: Optional[str]) -> tuple[bool, str]:
     try:
         from app.services.live_safety import assert_safe_to_trade
@@ -112,11 +128,22 @@ class Session:
 
 def session_for(uid: str, cfg: Optional[GammaMoveConfig] = None) -> Session:
     """Reuse the in-memory session across midnight."""
-    cfg = cfg or get_config()
+    cfg = cfg or get_config(uid)
     s = _sessions.get(uid)
     if s is None:
         s = _sessions[uid] = Session(uid, cfg)
         s.strategy.state.record = positions_store.load_record(uid)
+        from app.services import db
+        try:
+            raw = db.get_config(f"gamma_move_signals:{uid}")
+            if raw:
+                import json
+                rows = json.loads(raw) if isinstance(raw, str) else raw
+                for r in rows:
+                    sig = GammaSignal.from_dict(r)
+                    s.signals[sig.id] = sig
+        except Exception as exc:
+            log.debug("gamma_move: signal hydration failed for %s: %s", uid, exc)
     s.cfg = cfg
     s.strategy.cfg = cfg
     s.strategy.state.roll(_today_str())
@@ -130,13 +157,31 @@ def clear(uid: Optional[str] = None) -> None:
         _sessions.clear()
 
 
+def _replay_owns_the_board() -> bool:
+    try:
+        from app.services.simulation import simulation_runner
+        return bool(simulation_runner.has_session_view)
+    except Exception:
+        return False
+
+
 async def scan_once(uid: str) -> dict:
-    cfg = get_config()
+    if _replay_owns_the_board():
+        return {"scanned": 0, "armed": 0, "signals": [],
+                "message": "replay is driving this board — live scan is off"}
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         from app.services.gamma_move_scanner import scan_once as _scan
         signals = await _scan(uid, cfg, session.strategy)
         session.signals = {s.id: s for s in signals}
+        from app.services import db
+        try:
+            import json
+            db.set_config(f"gamma_move_signals:{uid}",
+                          json.dumps([s.as_dict() for s in signals], separators=(",", ":")))
+        except Exception as exc:
+            log.warning("gamma_move: could not persist scan signals for %s: %s", uid, exc)
         await _subscribe_watched(uid, session)
         armed = [s for s in signals if s.state == "armed"]
         return {"scanned": len(signals), "armed": len(armed),
@@ -182,18 +227,31 @@ async def release_subscriptions(uid: str) -> None:
 
 
 async def arm(uid: str, signal_id: str) -> dict:
-    cfg = get_config()
+    if _replay_owns_the_board():
+        return {"ok": False, "message": "replay is driving this board — live entry is off"}
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         signal = session.signals.get(signal_id)
         if signal is None:
             return {"ok": False, "message": f"no signal {signal_id} in this session"}
+        inst = signal.candidate.instrument
+        client = await _client(uid)
+        try:
+            quotes = await client.get_quote([f"{inst.exchange}:{inst.tradingsymbol}"]) or {}
+        except Exception as exc:
+            session.note("error", f"quote failed for {inst.tradingsymbol}: {exc}")
+            return {"ok": False, "message": str(exc)}
+        q = quotes.get(f"{inst.exchange}:{inst.tradingsymbol}") or quotes.get(inst.tradingsymbol) or {}
+        why = spread_blocks_entry(q, cfg)
+        if why:
+            session.note("blocked", f"entry refused for {inst.tradingsymbol}: {why}")
+            return {"ok": False, "message": why}
         blocker = session.strategy.admit(signal, _today_str())
         if blocker:
             return {"ok": False, "message": blocker}
         if signal.entry is None or signal.quantity is None or signal.quantity <= 0:
             return {"ok": False, "message": "signal has no priced entry or size"}
-        inst = signal.candidate.instrument
         if positions_store.get(uid, inst.tradingsymbol) and \
                 positions_store.get(uid, inst.tradingsymbol).is_open:
             return {"ok": False, "message": f"already holding {inst.tradingsymbol}"}
@@ -203,7 +261,6 @@ async def arm(uid: str, signal_id: str) -> dict:
             session.note("blocked", f"entry refused for {inst.tradingsymbol}: {why}")
             return {"ok": False, "message": why}
         limit = align_to_tick(signal.entry, inst.tick_size, side="buy")
-        client = await _client(uid)
         try:
             res = await client.place_order(
                 f"{inst.exchange}:{inst.tradingsymbol}", "buy", float(signal.quantity),
@@ -268,7 +325,9 @@ async def _place_protection(uid: str, client, pos, cfg) -> int:
 
 
 async def adopt(uid: str, symbol: str, quantity: int, entry_price: float) -> dict:
-    cfg = get_config()
+    if _replay_owns_the_board():
+        return {"ok": False, "message": "replay is driving this board — live adopt is off"}
+    cfg = get_config(uid)
     async with _lock_for(uid):
         session = session_for(uid, cfg)
         match = next((s for s in session.signals.values()
@@ -324,7 +383,7 @@ async def orphan_positions(uid: str, cfg: GammaMoveConfig) -> list[dict]:
 
 
 async def reconcile(uid: str) -> dict:
-    cfg = get_config()
+    cfg = get_config(uid)
     session = session_for(uid, cfg)
     restored = 0
     for sym, pos in positions_store.load(uid).items():
@@ -489,13 +548,20 @@ def _kite_user_ids() -> list[str]:
 
 
 async def scan_all_once() -> dict[str, str]:
-    cfg = get_config()
+    if _replay_owns_the_board():
+        return {"*": "replay is driving this board — live scan is off"}
+    uids = _kite_user_ids()
+    if not uids:
+        return {"*": "no active accounts"}
     out: dict[str, str] = {}
-    if not cfg.enabled:
-        return {"*": "disabled"}
-    if not _is_market_open(cfg):
-        return {"*": "outside session"}
-    for uid in _kite_user_ids():
+    for uid in uids:
+        cfg = get_config(uid)
+        if not cfg.enabled:
+            out[uid] = "disabled"
+            continue
+        if not _is_market_open(cfg):
+            out[uid] = "outside session"
+            continue
         try:
             res = await scan_once(uid)
             note = f"{res['armed']} armed of {res['scanned']}"

@@ -97,8 +97,9 @@ class StrikeCandidate:
     spot: float
     premium: float = 0.0
     #: Highest open interest on the same expiry + option type. None means the
-    #: caller did not look at the rest of the chain, so the wall check is skipped
-    #: rather than invented. The scanner always fills this.
+    #: caller did not look at the rest of the chain. The wall check then refuses
+    #: (when required) rather than inventing a pass. The scanner always fills this;
+    #: replay turns the requirement off and labels the skip.
     chain_oi_max: int | None = None
 
     @property
@@ -191,12 +192,79 @@ class GammaSignal:
                       "touches": c.level.touches,
                       "distance_pct": q2(c.distance_pct)},
             "oi": c.oi, "days_to_expiry": c.days_to_expiry, "spot": q2(c.spot),
+            "chain_oi_max": c.chain_oi_max,
             "metrics": self.metrics.as_dict() if self.metrics else None,
             "levels": {"ltp": self.ltp, "entry": self.entry, "stop": self.stop,
                        "trail": self.trail, "target": self.target, "exit": self.exit_price},
             "sizing": {"lots": self.lots, "quantity": self.quantity,
                        "at_risk_inr": self.at_risk_inr, "deployed_inr": self.deployed_inr},
         }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> GammaSignal:
+        inst_d = d.get("instrument") or {}
+        inst = InstrumentRef(
+            instrument_id=str(inst_d.get("instrument_id") or ""),
+            tradingsymbol=str(inst_d.get("tradingsymbol") or ""),
+            option_type=str(inst_d.get("option_type") or "CE"),
+            strike=float(inst_d.get("strike") or 0.0),
+            expiry=str(inst_d.get("expiry") or "")[:10],
+            lot_size=int(inst_d.get("lot_size") or 1),
+            tick_size=float(inst_d.get("tick_size") or 0.05),
+            exchange=str(inst_d.get("exchange") or "NFO"),
+        )
+        lvl_d = d.get("level") or {}
+        lvl = SpotLevel(
+            price=float(lvl_d.get("price") or 0.0),
+            kind=str(lvl_d.get("kind") or "support"),
+            touches=int(lvl_d.get("touches") or 1),
+        )
+        cand = StrikeCandidate(
+            underlying=str(d.get("underlying") or ""),
+            level=lvl,
+            instrument=inst,
+            oi=int(d.get("oi") or 0),
+            days_to_expiry=int(d.get("days_to_expiry") or 0),
+            spot=float(d.get("spot") or 0.0),
+            premium=float((d.get("levels") or {}).get("ltp") or 0.0),
+            chain_oi_max=d.get("chain_oi_max"),
+        )
+        met_d = d.get("metrics")
+        metrics = None
+        if met_d:
+            metrics = TriggerMetrics(
+                oi_drop_pct=float(met_d.get("oi_drop_pct") or 0.0),
+                volume_ratio=float(met_d.get("volume_ratio") or 0.0),
+                price_gain_pct=float(met_d.get("price_gain_pct") or 0.0),
+                unwinding=bool(met_d.get("unwinding")),
+                abnormal=bool(met_d.get("abnormal")),
+                rising=bool(met_d.get("rising")),
+                bars_confirmed=int(met_d.get("bars_confirmed") or 0),
+                bars_required=int(met_d.get("bars_required") or 1),
+            )
+        lvls = d.get("levels") or {}
+        sizing = d.get("sizing") or {}
+        return cls(
+            id=str(d.get("id") or ""),
+            candidate=cand,
+            metrics=metrics,
+            state=str(d.get("state") or "watching"),
+            at_ms=int(d.get("at_ms") or 0),
+            regime=str(d.get("regime") or "unknown"),
+            reason=d.get("reason"),
+            entry=lvls.get("entry"),
+            stop=lvls.get("stop"),
+            target=lvls.get("target"),
+            trail=lvls.get("trail"),
+            ltp=lvls.get("ltp"),
+            exit_price=lvls.get("exit"),
+            lots=sizing.get("lots"),
+            quantity=sizing.get("quantity"),
+            at_risk_inr=sizing.get("at_risk_inr"),
+            deployed_inr=sizing.get("deployed_inr"),
+            entry_day=d.get("entry_day"),
+            exit_reason=d.get("exit_reason"),
+        )
 
 
 @dataclass

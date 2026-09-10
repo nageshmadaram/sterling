@@ -13,13 +13,27 @@ from .trigger import session_day
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+_SESSION_END = (15, 30)  # NSE cash close. A daily close is not known before this.
+
+
 def _spot_asof(spot_candles: Sequence[Candle], ts_ms: int) -> Optional[float]:
-    """Last daily close at or before ts_ms. None if the tape has not started."""
+    """Last *completed* daily close as of ts_ms.
+
+    Daily candles are stamped at the session date (midnight or 09:15). Their
+    close is the end-of-day print, so a 10:00 option bar must still see
+    yesterday. Passing the raw stamp through would leak today's close into
+    every earlier 15-minute bar.
+    """
+    asof = datetime.fromtimestamp(ts_ms / 1000, _IST)
+    session_done = (asof.hour, asof.minute) >= _SESSION_END
     px = None
     for c in spot_candles:
-        if c.ts_ms <= ts_ms and c.close > 0:
+        if c.close <= 0:
+            continue
+        day = datetime.fromtimestamp(c.ts_ms / 1000, _IST).date()
+        if day < asof.date() or (day == asof.date() and session_done):
             px = float(c.close)
-        elif c.ts_ms > ts_ms:
+        elif day > asof.date():
             break
     return px
 
@@ -81,8 +95,9 @@ def replay_contract(candidate: StrikeCandidate, bars: Sequence[OICandle],
         "open_at_end": open_positions,
         "caveats": [
             "fills are the bar close; no spread, no slippage, no brokerage",
-            "spot-through uses the last daily close at or before the bar when "
-            "spot_candles are supplied; otherwise the candidate's frozen spot",
+            "spot-through uses the last completed daily close (visible only "
+            "after 15:30 IST) when spot_candles are supplied; otherwise the "
+            "candidate's frozen spot",
             "the level price is still held fixed for the whole replay",
         ],
     }

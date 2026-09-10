@@ -6,6 +6,7 @@ evidence about the shipped code rather than about a parallel implementation.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -20,10 +21,22 @@ log = get_logger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def cfg_for_unscanned_chain(cfg: GammaMoveConfig) -> GammaMoveConfig:
+    """Wall gate needs a full as-of chain. Without one, skip it and say so.
+
+    ``is_chain_wall(..., chain_oi_max=None, required=True)`` now refuses, so
+    leaving the flag on would watch every strike and never arm. Study replay
+    already labels this; live ``replay_symbol`` must do the same.
+    """
+    if cfg.require_chain_max_oi:
+        return replace(cfg, require_chain_max_oi=False)
+    return cfg
+
+
 async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
                         cfg: Optional[GammaMoveConfig] = None) -> dict:
     """Replay one option contract over the last ``days`` of its own history."""
-    cfg = cfg or get_config()
+    cfg = cfg or get_config(uid)
     from app.services.exchanges.kite import accounts
     from app.services.gamma_move_scanner import Pacer, _historical, _to_candles
 
@@ -81,14 +94,20 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
                            (f" (nearest is {nearest:.2f}% away)" if nearest else "")),
                 "summary": summarise([])}
 
-    dte = days_to_expiry(inst.expiry, today) or 0
+    dte = days_to_expiry(inst.expiry, today)
+    if dte is None:
+        return {"tradingsymbol": tradingsymbol, "skipped": True,
+                "reason": f"unparseable expiry {inst.expiry!r}",
+                "summary": summarise([])}
     cand = StrikeCandidate(underlying=underlying, level=near[0], instrument=inst,
                            oi=0, days_to_expiry=dte, spot=spot,
                            premium=bars[-1].close)
+    cfg = cfg_for_unscanned_chain(cfg)
     regime = regime_of(spot_candles, cfg)
     regimes = {datetime.fromtimestamp(b.ts_ms / 1000, _IST).strftime("%Y-%m-%d"): regime
                for b in bars}
-    result = replay_contract(cand, bars, cfg, regime_by_day=regimes)
+    result = replay_contract(cand, bars, cfg, regime_by_day=regimes,
+                             spot_candles=spot_candles)
     result["summary"] = summarise([result])
     result["level"] = {"price": near[0].price, "kind": near[0].kind,
                        "touches": near[0].touches}
@@ -98,4 +117,7 @@ async def replay_symbol(uid: str, tradingsymbol: str, *, days: int = 60,
     result["caveats"].append(
         "the level is today's, held fixed across the window — a clean walk-forward "
         "would rediscover it bar by bar")
+    result["caveats"].append(
+        "wall_gate=skipped — no as-of full-chain OI; require_chain_max_oi was "
+        "turned off rather than silently passing every strike")
     return result

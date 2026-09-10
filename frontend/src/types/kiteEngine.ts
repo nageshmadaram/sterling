@@ -425,3 +425,30 @@ export interface EngineOpenPosition {
 export interface OpenPositionsResponse {
   positions: EngineOpenPosition[];
 }
+
+// ─── Live Readiness & Emergency Safeguards ───────────────────────────────────
+export interface ReadinessCheckItem {
+  name: string;
+  status: 'ok' | 'warning' | 'blocked';
+  detail: string;
+  data?: Record<string, any>;
+}
+
+export interface ReadinessResponse {
+  ready_for_live: boolean;
+  is_live_account: boolean;
+  account_label: string;
+  checks: Record<string, ReadinessCheckItem>;
+  blockers: string[];
+  warnings: string[];
+  timestamp_ms: number;
+}
+
+export interface EmergencyActionResponse {
+  status: string;
+  message: string;
+  positions_count: number;
+  squared_off: number;
+  failed: number;
+  details: Array<{ symbol: string; status: string; price?: number; detail?: string }>;
+}
