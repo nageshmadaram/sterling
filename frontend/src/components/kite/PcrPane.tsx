@@ -44,7 +44,6 @@ export function PcrPane() {
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState<PcrIndex>("NIFTY");
   const [metric, setMetric] = useState<PcrMetric>("oi");
-  const [tapeIndex, setTapeIndex] = useState<"ALL" | PcrIndex>("ALL");
   const [tapeSortOrder, setTapeSortOrder] = useState<"desc" | "asc">("desc");
   const [now, setNow] = useState<Date | null>(null);
   const [liveIso, setLiveIso] = useState("");
@@ -669,100 +668,7 @@ export function PcrPane() {
                   </div>
                 </div>
               ) : null}
-              {showSec("tape") ? (
-                <aside className="kp-card kp-tape">
-                  <div className="kp-tape-head">
-                    <p className="kp-kicker" style={{ margin: 0 }}>Flow tape</p>
-                    <div className="kp-tape-chips" role="tablist" aria-label="Tape index filter">
-                      <button
-                        type="button"
-                        className="kp-tape-chip"
-                        data-on={tapeIndex === "ALL"}
-                        onClick={() => setTapeIndex("ALL")}
-                      >
-                        All
-                      </button>
-                      {PCR_INDICES.map((u) => (
-                        <button
-                          key={u.id}
-                          type="button"
-                          className="kp-tape-chip"
-                          data-on={tapeIndex === u.id}
-                          onClick={() => setTapeIndex(u.id)}
-                        >
-                          {u.short}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {tapeIndex !== "ALL" ? (
-                    (() => {
-                      const items = indexTapes[tapeIndex] ?? [];
-                      const targetIdx = PCR_INDICES.find((u) => u.id === tapeIndex);
-                      return items.length ? (
-                        <ul>
-                          {items.slice(0, 12).map((e) => (
-                            <li key={e.id}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                <b>
-                                  {e.name} · <span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span>
-                                </b>
-                                <span className="kp-sub">
-                                  {e.from != null && e.to != null ? `${e.from.toFixed(2)} → ${e.to.toFixed(2)} · ` : ""}
-                                  {e.clock}
-                                </span>
-                              </div>
-                              <div className="kp-sub" style={{ marginTop: 3 }}>{e.why}</div>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="kp-sub" style={{ marginTop: 10 }}>
-                          Quiet book for {targetIdx?.short ?? tapeIndex} — waiting on 15m delta moves.
-                        </p>
-                      );
-                    })()
-                  ) : (
-                    <div className="kp-tape-all">
-                      {(cols.length ? cols : PCR_INDICES).map((u) => {
-                        const items = indexTapes[u.id] ?? [];
-                        const top = items[0];
-                        return (
-                          <div key={u.id} className="kp-tape-idx-group">
-                            <div className="kp-tape-idx-title">
-                              <span>{u.short}</span>
-                              {top ? (
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span className={`kp-act ${ideaKind(top.action)}`}>{top.action}</span>
-                                  <span className="kp-sub">{top.clock}</span>
-                                </div>
-                              ) : null}
-                            </div>
-                            {items.length ? (
-                              <ul>
-                                {items.slice(0, 3).map((e) => (
-                                  <li key={e.id}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                      <b><span className={`kp-act ${ideaKind(e.action)}`}>{e.action}</span></b>
-                                      <span className="kp-sub">
-                                        {e.from != null && e.to != null ? `${e.from.toFixed(2)} → ${e.to.toFixed(2)} · ` : ""}
-                                        {e.clock}
-                                      </span>
-                                    </div>
-                                    <div className="kp-sub" style={{ marginTop: 3 }}>{e.why}</div>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="kp-sub" style={{ margin: "4px 0 0" }}>Quiet book</p>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </aside>
-              ) : null}
+
               {showSec("legend") ? (
                 <section className="kp-card kp-legend" aria-label="How to read PCR">
                   <p className="kp-kicker">How to read PCR</p>
