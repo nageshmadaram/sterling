@@ -45,6 +45,7 @@ export function PcrPane() {
   const [index, setIndex] = useState<PcrIndex>("NIFTY");
   const [metric, setMetric] = useState<PcrMetric>("oi");
   const [tapeIndex, setTapeIndex] = useState<"ALL" | PcrIndex>("ALL");
+  const [tapeSortOrder, setTapeSortOrder] = useState<"desc" | "asc">("desc");
   const [now, setNow] = useState<Date | null>(null);
   const [liveIso, setLiveIso] = useState("");
   const [sessionIso, setSessionIso] = useState("");
@@ -281,20 +282,19 @@ export function PcrPane() {
   const sumRows = deskRows.filter((r) => picked.includes(r.id));
   const heatSlots = showAll || cols.length !== 1 ? axis : (boards?.[cols[0].id] ?? grid);
   const insight = useMemo(() => readPcr(grid, series?.spot.changePer ?? null), [grid, series?.spot.changePer]);
-  const tape = useMemo(() => {
-    const src = cols.length ? cols : PCR_INDICES;
-    const out: { id: string; name: string; action: PcrAction; why: string; clock: string; hhmm: string }[] = [];
-    for (const u of src) {
-      const row = (metricBoards?.oi[u.id] ?? []);
-      for (const s of row) {
-        if (s.delta == null || Math.abs(s.delta) < FLOW_MOVE_MIN) continue;
-        if (!isValidPrint(s.pcr, "oi")) continue;
-        const line = describeFlow(u.short, s.hhmm, s.pcr, s.delta, "oi");
-        out.push({ id: `${u.id}-${s.hhmm}`, name: line.name, action: line.action, why: line.why, clock: line.clock, hhmm: line.hhmm });
+  const displayTapeSlots = useMemo(() => {
+    const rowsWithData: { slot: PcrSlot; rowIdx: number }[] = [];
+    heatSlots.forEach((slot, rowIdx) => {
+      const hasPrint = cols.some((u) => {
+        const p = boards?.[u.id]?.[rowIdx]?.pcr;
+        return p != null && isValidPrint(p, "oi");
+      });
+      if (hasPrint) {
+        rowsWithData.push({ slot, rowIdx });
       }
-    }
-    return out.sort((a, b) => hhmmToMinutes(b.hhmm) - hhmmToMinutes(a.hhmm)).slice(0, 8);
-  }, [metricBoards, cols]);
+    });
+    return tapeSortOrder === "desc" ? [...rowsWithData].reverse() : rowsWithData;
+  }, [heatSlots, cols, boards, tapeSortOrder]);
   const showSec = (id: SectionId) => prefs.sections[id];
   const showTile = (id: TileField) => prefs.tile[id] !== false;
   const showCol = (id: ColId) => prefs.cols[id];
@@ -307,7 +307,7 @@ export function PcrPane() {
       return { ...p, indices: on ? p.indices.filter((x) => x !== id) : [...p.indices, id] };
     });
   };
-  const notesOn = (prefs.layout === "table" && showSec("read")) || showSec("tape") || showSec("legend");
+  const notesOn = (prefs.layout === "table" && showSec("read")) || showSec("legend");
 
   return (
     <div className="kite-pcr">
@@ -529,6 +529,111 @@ export function PcrPane() {
                           })}
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              {showSec("tape") ? (
+                <div className={`kp-sheet kp-sheet-tape${cols.length === 1 ? " one" : ""}`}>
+                  <div className="kp-sheet-head">
+                    <div>
+                      <h2 className="kp-sheet-title">Flow Tape</h2>
+                      <p className="kp-sub" style={{ margin: "2px 0 0" }}>
+                        15-minute PCR delta flows · {cols.map((u) => u.short).join(" · ")}
+                      </p>
+                    </div>
+                    <div className="kp-sheet-tools">
+                      <button
+                        type="button"
+                        className="kp-sort-toggle"
+                        onClick={() => setTapeSortOrder((o) => (o === "desc" ? "asc" : "desc"))}
+                        title="Toggle sort order"
+                      >
+                        {tapeSortOrder === "desc" ? "Newest first ↓" : "Oldest first ↑"}
+                      </button>
+                    </div>
+                  </div>
+                  <table className="kp-tape-table">
+                    <colgroup>
+                      <col className="c-time" />
+                      {cols.map((u) => <col key={u.id} />)}
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        {cols.map((u) => {
+                          const latest = indexTapes[u.id]?.[0];
+                          return (
+                            <th key={u.id} data-on={!showAll && index === u.id}>
+                              <div className="kp-tape-th">
+                                <span>{u.short}</span>
+                                {latest ? (
+                                  <span className={`kp-act ${ideaKind(latest.action)}`}>
+                                    {latest.action}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {displayTapeSlots.length ? (
+                        displayTapeSlots.map(({ slot, rowIdx }) => (
+                          <tr key={slot.hhmm} className="kp-tape-row" data-live={slot.live}>
+                            <th>{formatHhmm12(slot.hhmm)}</th>
+                            {cols.map((u) => {
+                              const s = boards?.[u.id]?.[rowIdx];
+                              if (!s || s.pcr == null || !isValidPrint(s.pcr, "oi")) {
+                                return (
+                                  <td key={u.id} className="kp-tape-td-empty">
+                                    <span className="kp-muted">—</span>
+                                  </td>
+                                );
+                              }
+                              const flow =
+                                s.delta != null && Math.abs(s.delta) >= FLOW_MOVE_MIN
+                                  ? describeFlow(u.short, s.hhmm, s.pcr, s.delta, metric)
+                                  : null;
+                              if (!flow) {
+                                return (
+                                  <td key={u.id} className="kp-tape-td">
+                                    <div className="kp-tape-cell-quiet">
+                                      <span className="kp-pcr-num">{s.pcr.toFixed(2)}</span>
+                                      <span className="kp-muted">flat</span>
+                                    </div>
+                                  </td>
+                                );
+                              }
+                              return (
+                                <td key={u.id} className="kp-tape-td">
+                                  <div className="kp-tape-cell">
+                                    <div className="kp-tape-cell-head">
+                                      <span className={`kp-act ${ideaKind(flow.action)}`}>{flow.action}</span>
+                                      <span className="kp-tape-move">
+                                        {flow.from != null && flow.to != null
+                                          ? `${flow.from.toFixed(2)} → ${flow.to.toFixed(2)}`
+                                          : `${s.pcr.toFixed(2)}`}
+                                        {flow.move != null
+                                          ? ` (${flow.move > 0 ? "+" : ""}${flow.move.toFixed(2)})`
+                                          : ""}
+                                      </span>
+                                    </div>
+                                    <div className="kp-tape-why" title={flow.why}>{flow.why}</div>
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={cols.length + 1} className="kp-tape-empty" style={{ padding: "20px 0" }}>
+                            Waiting on 15-minute PCR prints.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
