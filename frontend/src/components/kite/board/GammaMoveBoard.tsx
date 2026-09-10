@@ -94,6 +94,9 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
   const arm = useArmGammaMove();
 
   const data = snapshot.data;
+  // Market replay stamps `{ mode: 'replay' }`. A leftover contract-sim blob
+  // also sits on `simulation` and must not disable live Scan/Buy.
+  const isReplay = String(data?.simulation?.mode || '') === 'replay';
   const open = (data?.positions?.length ?? 0) > 0;
   React.useEffect(() => { setPollMs(open ? 3000 : 0); }, [open]);
 
@@ -120,12 +123,15 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
         <button
           type="button"
           onClick={() => scan.mutate()}
-          disabled={scan.isPending}
-          title="Run one levels → strikes → trigger pass over the F&O universe"
+          disabled={scan.isPending || isReplay}
+          title={isReplay
+            ? 'Replay is driving this board — live scan is off'
+            : 'Run one levels → strikes → trigger pass over the F&O universe'}
           style={{
             background: 'transparent', border: `1px solid ${k.border}`, color: k.text,
             borderRadius: 6, padding: '4px 10px', fontSize: 11,
-            cursor: scan.isPending ? 'progress' : 'pointer',
+            cursor: (scan.isPending || isReplay) ? 'progress' : 'pointer',
+            opacity: isReplay ? 0.55 : 1,
           }}
         >
           {scan.isPending ? 'Scanning…' : 'Scan now'}
@@ -193,7 +199,7 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
         <p style={{ ...note, color: k.red }}>Entry failed: {(arm.error as Error).message}</p>
       )}
 
-      {signals.length === 0 && blockers.length > 0 && (
+      {(signals.length === 0 || isReplay) && blockers.length > 0 && (
         <ul style={{ ...note, paddingLeft: 26 }}>
           {blockers.map((b) => <li key={b}>{b}</li>)}
         </ul>
@@ -213,7 +219,7 @@ export function GammaMoveBoard({ nowMs, onOpenDetail, onOpenChart }: {
         renderDetail={(sig) => (
           <div>
             <BoardTicket signal={sig} tag="GAMMA_MOVE" />
-            {sig.status === 'armed' && (
+            {sig.status === 'armed' && !isReplay && (
               <button
                 type="button"
                 onClick={() => arm.mutate(sig.id)}

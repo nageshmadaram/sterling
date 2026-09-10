@@ -493,6 +493,252 @@ async def test_simulation_ideal_friction_mode(september_4_recorded_evidence):
     await simulation_runner.stop()
 
 
+def test_replay_snapshots_do_not_steal_other_engines_entries():
+    """Navigator/ATM/Bear/AE used to paint every event as their own.
+
+    Five SuperTrend prints then showed up as five Navigator entries, five
+    ATM trades, five Bear rows — the same five, on every board.
+    """
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    st = dict(time_iso="10:15:00", timestamp_ms=1, instrument="NIFTY",
+              direction="BULLISH", strength="STRONG",
+              entry=24000.0, stop=23900.0, target=24200.0)
+    simulation_runner._stats.events = [
+        SimSignalEvent(strategy="supertrend", **st),
+        SimSignalEvent(strategy="supertrend", time_iso="10:16:00", timestamp_ms=2,
+                       instrument="BANKNIFTY", direction="BEARISH", strength="STRONG",
+                       entry=52000.0, stop=52100.0, target=51500.0),
+        SimSignalEvent(strategy="gamma_move", time_iso="10:17:00", timestamp_ms=3,
+                       instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+                       entry=1298.0, stop=1280.0, target=1320.0),
+        SimSignalEvent(strategy="navigator", time_iso="10:18:00", timestamp_ms=4,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24010.0, stop=23900.0, target=24200.0),
+        SimSignalEvent(strategy="bear_to_bearish", time_iso="10:19:00", timestamp_ms=5,
+                       instrument="NIFTY", direction="BEARISH", strength="STRONG",
+                       entry=23900.0, stop=24000.0, target=23600.0),
+        SimSignalEvent(strategy="atm_imbalance", time_iso="09:20:00", timestamp_ms=6,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24050.0, stop=23900.0, target=24200.0),
+        SimSignalEvent(strategy="adaptive_edge", time_iso="10:21:00", timestamp_ms=7,
+                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
+                       entry=24100.0, stop=24000.0, target=24300.0, premium_entry=150.0),
+    ]
+    nav = simulation_runner.get_navigator_signals_response()
+    assert [i["strategy"] for i in nav["items"]] == ["navigator"]
+    bear = simulation_runner.get_bear_to_bearish_snapshot()
+    assert len(bear["rows"]) == 1
+    assert bear["rows"][0]["underlying"] == "NIFTY"
+    atm = simulation_runner.get_atm_imbalance_snapshot()
+    assert atm["session"]["trades_taken"] == 1
+    assert atm["session"]["underlying"] == "NIFTY"
+    ae = simulation_runner.get_adaptive_edge_snapshot()
+    assert len(ae["signals"]) == 1
+    assert ae["signals"][0]["underlying"] == "NIFTY"
+    assert ae["session"]["entries"] == 1
+    gm = simulation_runner.get_gamma_move_snapshot()
+    assert len(gm["candidates"]) == 1
+    simulation_runner._stats.events = []
+
+
+def test_gamma_move_snapshot_matches_the_live_board_schema():
+    """Simulation must publish `candidates` + `config`, not a private `signals` blob.
+
+    The live adapter reads those keys. A sim payload that only has `signals`
+    makes Gamma Move disappear from the board during replay.
+    """
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="10:15:00", timestamp_ms=1788756300000,
+            strategy="gamma_move", instrument="RELIANCE",
+            direction="BULLISH", strength="WATCHING",
+            entry=1298.0, stop=1280.0, target=1320.0,
+            opt_type="CE", spot=1298.0,
+            level_price=1290.0, level_kind="resistance", level_touches=3,
+            regime="up",
+        ),
+        SimSignalEvent(
+            time_iso="10:16:00", timestamp_ms=1788756360000,
+            strategy="supertrend", instrument="NIFTY",
+            direction="BULLISH", strength="STRONG",
+            entry=24000.0, stop=23900.0, target=24200.0,
+        ),
+    ]
+    snap = simulation_runner.get_gamma_move_snapshot()
+    assert snap["strategy"]["id"] == "gamma_move"
+    assert snap["config"]["require_chain_max_oi"] is True
+    assert len(snap["candidates"]) == 1
+    row = snap["candidates"][0]
+    assert row["state"] == "watching"
+    assert row["metrics"] is None
+    assert row["days_to_expiry"] is None
+    assert row["instrument"]["expiry"] is None
+    assert row["instrument"]["strike"] is None
+    assert row["level"]["price"] == 1290.0
+    assert row["level"]["price"] != 1300
+    assert row["regime"] == "up"
+    assert "open-interest" in row["reason"]
+    assert any("open-interest" in b for b in snap["blockers"])
+    simulation_runner._stats.events = []
+
+
+def test_gamma_move_snapshot_keeps_one_row_per_underlying():
+    simulation_runner._config = SimConfig(date="2026-08-28")
+    simulation_runner._stats.events = [
+        SimSignalEvent(
+            time_iso="10:15:00", timestamp_ms=1, strategy="gamma_move",
+            instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+            entry=1298.0, stop=1280.0, target=1320.0, opt_type="CE",
+            spot=1290.0, level_price=1290.0, level_kind="resistance",
+            level_touches=2, regime="up",
+        ),
+        SimSignalEvent(
+            time_iso="10:45:00", timestamp_ms=2, strategy="gamma_move",
+            instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+            entry=1301.0, stop=1280.0, target=1320.0, opt_type="CE",
+            spot=1301.0, level_price=1290.0, level_kind="resistance",
+            level_touches=2, regime="up",
+        ),
+    ]
+    snap = simulation_runner.get_gamma_move_snapshot()
+    assert len(snap["candidates"]) == 1
+    assert snap["candidates"][0]["spot"] == 1301.0
+    simulation_runner._stats.events = []
+
+
+def test_gamma_move_candidate_does_not_invent_regime_from_the_leg():
+    from app.services.simulation import _gamma_move_candidate
+    ev = SimSignalEvent(
+        time_iso="10:15:00", timestamp_ms=1, strategy="gamma_move",
+        instrument="RELIANCE", direction="BULLISH", strength="WATCHING",
+        entry=1298.0, stop=1280.0, target=1320.0, opt_type="CE",
+        spot=1298.0, level_price=1290.0, level_kind="resistance",
+    )
+    row = _gamma_move_candidate(ev, "2026-08-28")
+    assert row["regime"] == "unknown"
+
+
+def test_gamma_move_watch_needs_enough_history():
+    from app.services.simulation import _gamma_move_watch_from_bars
+    short = [{"open": 100, "high": 101, "low": 99, "close": 100, "time": i} for i in range(5)]
+    assert _gamma_move_watch_from_bars(short, 100.0) is None
+
+
+def _gm_daily_pivots(n=80):
+    """Daily IST closes with two confirmed 105 resistances, matching the engine test series."""
+    from datetime import datetime, timedelta, timezone
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start = datetime(2026, 4, 1, 15, 30, tzinfo=ist)
+    out = []
+    for i in range(n):
+        high = 105.0 if i in (10, 30, 50) else 101.0
+        low = 95.0 if i in (20, 40, 60) else 99.0
+        ts = (start + timedelta(days=i)).timestamp()
+        out.append({"open": 100.0, "high": high, "low": low, "close": 100.0,
+                    "time": ts, "volume": 1000, "symbol": "RELIANCE"})
+    return out
+
+
+def test_gamma_move_watch_skips_index_underlyings():
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    bars = _gm_daily_pivots()
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="NIFTY", cfg=cfg) is None
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="BANKNIFTY", cfg=cfg) is None
+
+
+def test_gamma_move_watch_five_minute_tape_is_not_a_daily_window():
+    """120 five-minute bars are not 120 daily bars. Do not invent intraday 'levels'."""
+    from datetime import datetime, timedelta, timezone
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    ist = timezone(timedelta(hours=5, minutes=30))
+    start = datetime(2026, 8, 26, 9, 15, tzinfo=ist)
+    bars = []
+    for i in range(80):
+        high = 105.0 if i in (10, 30, 50) else 101.0
+        low = 95.0 if i in (20, 40, 60) else 99.0
+        ts = (start + timedelta(minutes=5 * i)).timestamp()
+        bars.append({"open": 100.0, "high": high, "low": low, "close": 100.0,
+                     "time": ts, "volume": 1000, "symbol": "RELIANCE"})
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    assert _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg) is None
+
+
+def test_gamma_move_store_daily_caps_at_the_asof_clock(monkeypatch):
+    """DESC LIMIT without until would return the newest bars in the store,
+    which can all sit after the replay clock."""
+    seen = {}
+
+    def fake(symbol, resolution, limit=500, since=None, until=None):
+        seen["until"] = until
+        seen["since"] = since
+        return []
+
+    monkeypatch.setattr("app.services.ohlcv_store.get_candles", fake)
+    from app.services.simulation import _gamma_move_store_daily
+    asof = 1_700_000_000
+    assert _gamma_move_store_daily("RELIANCE", asof) == []
+    assert seen["until"] == asof
+    assert seen["since"] < asof
+
+
+def test_gamma_move_watch_prefers_stored_daily_over_five_minute(monkeypatch):
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services import simulation as sim
+    monkeypatch.setattr(sim, "_gamma_move_store_daily", lambda *_a, **_k: _gm_daily_pivots())
+    ist_bars = [{"open": 100, "high": 101, "low": 99, "close": 100, "time": i,
+                 "volume": 1, "symbol": "RELIANCE"} for i in range(80)]
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    got = sim._gamma_move_watch_from_bars(
+        ist_bars, 105.0, symbol="RELIANCE", cfg=cfg, prefer_store=True)
+    assert got is not None
+    assert got["strength"] == "WATCHING"
+
+
+def test_gamma_move_watch_emits_on_a_confirmed_daily_stock_level():
+    from app.engines.gamma_move import GammaMoveConfig
+    from app.services.simulation import _gamma_move_watch_from_bars
+    cfg = GammaMoveConfig(regime_enabled=False, pivot_lookback=3)
+    bars = _gm_daily_pivots()
+    got = _gamma_move_watch_from_bars(bars, 105.0, symbol="RELIANCE", cfg=cfg)
+    assert got is not None
+    assert got["strategy"] == "gamma_move"
+    assert got["strength"] == "WATCHING"
+    assert got["level_kind"] in ("resistance", "support")
+    assert got["level_price"] > 0
+    assert abs(got["level_price"] - 105.0) / 105.0 * 100 < 2.0
+
+
+def test_collapse_to_daily_drops_a_forming_session():
+    from datetime import datetime, timedelta, timezone
+    from app.services.simulation import _collapse_to_daily
+    ist = timezone(timedelta(hours=5, minutes=30))
+    closed = datetime(2026, 8, 25, 15, 30, tzinfo=ist).timestamp()
+    morning = datetime(2026, 8, 26, 10, 0, tzinfo=ist).timestamp()
+    bars = [
+        {"open": 1, "high": 2, "low": 1, "close": 2, "time": closed, "volume": 1},
+        {"open": 2, "high": 3, "low": 2, "close": 3, "time": morning, "volume": 1},
+    ]
+    got = _collapse_to_daily(bars, morning)
+    assert len(got) == 1
+    assert got[0]["close"] == 2
+
+
+def test_asof_symbol_bars_drops_future_prints():
+    from app.services.simulation import _asof_symbol_bars
+    candles = [
+        {"symbol": "RELIANCE", "time": 1, "close": 10},
+        {"symbol": "RELIANCE", "time": 2, "close": 11},
+        {"symbol": "RELIANCE", "time": 3, "close": 12},
+        {"symbol": "TCS", "time": 2, "close": 99},
+    ]
+    got = _asof_symbol_bars(candles, "RELIANCE", 2)
+    assert [b["time"] for b in got] == [1, 2]
+
+
 def test_adaptive_edge_snapshot_dynamic_ltp():
     """Verify get_adaptive_edge_snapshot dynamically tracks current spot and produces points delta."""
     from app.services.simulation import SimSignalEvent
@@ -677,8 +923,11 @@ def test_evaluate_bar_skips_synthetic_ae_when_recorded_present():
 
 def test_september_7_recorded_signals_adaptive_edge():
     """Verify that 2026-09-07 recorded signals emit all 6 authentic spot scans when replayed with adaptive_edge."""
+    import pytest
     from app.services.simulation import _load_recorded_signals
     sigs = _load_recorded_signals("2026-09-07")
+    if not sigs:
+        pytest.skip("no kite_engine_signals for 2026-09-07 in this environment")
     assert len(sigs) == 6
     underlyings = {s["underlying"] for s in sigs}
     assert underlyings == {"NIFTY 50", "NIFTY BANK", "SENSEX", "BAJAJFINSV", "INFY", "TCS"}

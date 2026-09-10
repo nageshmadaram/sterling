@@ -120,7 +120,11 @@ def get_candles(
     since: Optional[int] = None,
     until: Optional[int] = None,
 ) -> List[Dict]:
-    """Return up to `limit` stored candles in chronological order."""
+    """Return up to `limit` stored candles in chronological order.
+
+    ``until`` is inclusive. Without it, DESC LIMIT returns the newest bars in
+    the store — which can all sit after a replay clock.
+    """
     sym_u = symbol.upper()
     conn = None
     try:

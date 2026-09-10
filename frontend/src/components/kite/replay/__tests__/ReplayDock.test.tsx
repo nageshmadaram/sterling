@@ -701,6 +701,15 @@ describe('configuration', () => {
     expect(useReplayStore.getState().draft.strategies).toContain('nifty_orb');
   });
 
+  it('lists Gamma Move as a selectable replay strategy', async () => {
+    await renderDock();
+    const trigger = screen.getByTestId('replay-strategy-trigger');
+    await act(async () => { fireEvent.click(trigger); });
+    expect(screen.getByText('Gamma Move')).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByText('Gamma Move')); });
+    expect(useReplayStore.getState().draft.strategies).toContain('gamma_move');
+  });
+
   it('allows configuring position sizing and moneyness', async () => {
     await renderDock();
     const trigger = screen.getByTestId('replay-sizing-trigger');

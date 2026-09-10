@@ -1,7 +1,27 @@
+import os
+import tempfile
 import numpy as np
 import pytest
 from typing import List
 from app.schemas.market import Candle
+
+# Ensure pytest NEVER writes to or reads from the live sterling_paper.db.
+# All tests execute against an isolated temporary test database.
+if "STERLING_DB_PATH" not in os.environ:
+    _TEST_DB = tempfile.NamedTemporaryFile(suffix="_sterling_test.db", delete=False)
+    _TEST_DB.close()
+    os.environ["STERLING_DB_PATH"] = _TEST_DB.name
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_db():
+    yield
+    try:
+        test_db_path = os.environ.get("STERLING_DB_PATH")
+        if test_db_path and os.path.exists(test_db_path) and "test" in test_db_path:
+            os.remove(test_db_path)
+    except Exception:
+        pass
 
 
 def make_candles(n: int = 100, base: float = 30000.0, trend: float = 10.0) -> List[Candle]:
@@ -37,17 +57,6 @@ def _default_risk():
         max_position_pct=settings.max_position_pct,
         max_contracts=settings.max_contracts,
     )
-
-
-    try:
-        if db._available:
-            with db._conn() as connection:
-                connection.execute("DELETE FROM exchange_configs")
-    except Exception:
-        pass
-    eas._configs.clear()
-    eas._loaded = False
-    eas.bootstrap()
 
 
 @pytest.fixture(autouse=True)
