@@ -194,13 +194,35 @@ export function IndexTile({ row, show }: { row: DeskRow; show: (id: TileField) =
     <article className="kp-tile">
       <div className="kp-tile-top">
         <span className="kp-tile-name">{row.name}</span>
-        {show("play") ? <span className={`kp-tile-tag kp-act ${kind}`}>{row.action}</span> : null}
       </div>
-      {show("print") ? (
-        <div className={`kp-tile-pcr kp-band-${row.band}`}>{row.pcr != null ? formatPcr(row.pcr) : "—"}</div>
-      ) : null}
-      {show("stamp") ? (
-        <p className="kp-sub">{row.hhmm || "—"}{row.band !== "empty" || row.pcr != null ? ` · ${bandLine(row.band)}` : ""}</p>
+      {show("print") || show("play") || show("stamp") ? (
+        <div className="kp-tile-hero">
+          {show("print") ? (
+            <div className={`kp-tile-pcr kp-band-${row.band}`}>
+              {row.pcr != null ? formatPcr(row.pcr) : "—"}
+            </div>
+          ) : null}
+          {show("play") || show("stamp") ? (
+            <div className="kp-tile-side">
+              {show("play") ? (
+                <div
+                  className={`kp-tile-action kp-act ${kind}`}
+                  title={row.flowWhy || row.insight.reason || undefined}
+                >
+                  {row.action}
+                </div>
+              ) : null}
+              {show("stamp") ? (
+                <div className="kp-tile-stamp">
+                  <span className="kp-tile-time">{row.hhmm || "—"}</span>
+                  {row.band !== "empty" || row.pcr != null ? (
+                    <span className="kp-tile-band"> · {bandLine(row.band)}</span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       ) : null}
       {show("split") && put != null ? (
         <div className="kp-split-wrap">

@@ -139,9 +139,18 @@ export const PCR_CSS = `
 .kite-pcr .kp-tiles.one{grid-template-columns:minmax(280px,420px)}
 .kite-pcr .kp-tile{border:1px solid var(--k-border);background:var(--k-surface);padding:14px;display:flex;flex-direction:column;gap:8px}
 .kite-pcr .kp-tile-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.kite-pcr .kp-tile-name{font-size:13px;font-weight:600}
+.kite-pcr .kp-tile-name{font-size:13px;font-weight:600;color:var(--k-text)}
 .kite-pcr .kp-tile-tag{font-size:11px;font-weight:600;letter-spacing:.04em}
-.kite-pcr .kp-tile-pcr{font-size:40px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.04em;line-height:1;padding:6px 10px;align-self:flex-start}
+.kite-pcr .kp-tile-hero{display:flex;align-items:stretch;gap:12px;margin:2px 0 4px}
+.kite-pcr .kp-tile-pcr{font-size:40px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.04em;line-height:1;padding:6px 10px;border-radius:3px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.kite-pcr .kp-tile-side{display:flex;flex-direction:column;justify-content:space-between;gap:4px;min-width:0;flex:1;padding:1px 0}
+.kite-pcr .kp-tile-action{font-size:18px;font-weight:750;letter-spacing:.01em;line-height:1.2;white-space:nowrap}
+.kite-pcr .kp-tile-action.ce{color:var(--k-green)}
+.kite-pcr .kp-tile-action.pe{color:var(--k-red)}
+.kite-pcr .kp-tile-action.wait{color:var(--k-text);opacity:.88}
+.kite-pcr .kp-tile-stamp{font-size:14px;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:2px;overflow:hidden;text-overflow:ellipsis}
+.kite-pcr .kp-tile-time{font-weight:650;color:var(--k-text);opacity:.9}
+.kite-pcr .kp-tile-band{font-weight:500;color:var(--k-dim)}
 .kite-pcr .kp-tile h2{margin:4px 0 0;font-size:15px;font-weight:600;letter-spacing:-.02em;line-height:1.3}
 .kite-pcr .kp-split-wrap{margin:2px 0 4px}
 .kite-pcr .kp-split-lab{display:flex;justify-content:space-between;font-size:11px;font-variant-numeric:tabular-nums;color:var(--k-dim);margin-bottom:4px}
