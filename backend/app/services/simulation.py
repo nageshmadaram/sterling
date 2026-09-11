@@ -940,7 +940,10 @@ def _intraday_signals_from_bars(runner: Any, sym: str, bar_time: Any,
         return []
     from app.services.intraday import evaluate_symbol
     out: List[Dict[str, Any]] = []
-    for ev in evaluate_symbol(tape, cfg, sym):
+    # The replay already evaluates every bar, so it looks at the NEWEST one
+    # only. Catch-up exists for a live scan that can land late and skip a bar;
+    # here it would re-report a signal this loop already reported.
+    for ev in evaluate_symbol(tape, cfg, sym, catchup=1):
         sig = ev.signal
         if sig is None or sig.strategy not in wanted:
             continue

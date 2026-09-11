@@ -172,32 +172,61 @@ def profit_factor(trades: Sequence) -> Optional[float]:
     return round(wins / losses, 3)
 
 
-def permutation_p_value(trades: Sequence, bars, *, rounds: int = 500,
-                        seed: int = 7) -> Optional[float]:
+def permutation_p_value(trades: Sequence, tapes: dict, *, costs=None,
+                        rounds: int = 1000, seed: int = 7) -> Optional[float]:
     """Does the TIMING beat random entries of identical exposure?
 
-    The null is deliberately not "no position". It is the same number of
-    trades, the same holding periods, entered at random times in the same
-    tape — so a strategy cannot pass simply by having been long a market that
-    went up, which is the way most intraday backtests pass.
+    The null is deliberately not "no position". It is the same trades — same
+    symbol, same side, same size, same holding period, same costs — entered at
+    RANDOM times in that symbol's own tape. A strategy cannot pass this simply
+    by having been long a market that went up, which is how most intraday
+    backtests pass.
 
-    ``None`` when there are too few trades to permute meaningfully. That is an
-    answer: a p-value from nine trades is noise with a decimal point.
+    Every term has to be in the same units as the observed result, and the
+    earlier version of this was not: it summed the observed book in RUPEES
+    (quantity-weighted, across every symbol) and drew the null in POINTS at one
+    unit on a single symbol's closes. The null could never reach the observed,
+    so the p-value was pinned at ``1/(rounds+1)`` for any profitable book and
+    ``1.0`` for any losing one — it was reporting the SIGN of net profit with a
+    decimal point on it, and it read like significance.
+
+    Compared on GROSS, not net. Costs are identical on both sides by
+    construction — the null takes the same number of trades at the same sizes —
+    so including them cancels in expectation while making the null's mean
+    strongly negative, which turns the test back into a cost test that any
+    break-even book passes. Charging them made a book of exactly ZERO profit
+    score p = 0.002.
+
+    ``tapes`` is symbol -> Bars. A trade on a symbol with no tape is dropped
+    from both sides of the comparison rather than silently scored against
+    another instrument's prices.
+
+    ``None`` when there is too little to permute. That is an answer: a p-value
+    from nine trades is noise with a decimal point, and the gate treats a
+    missing one as a FAILED check rather than a passed one.
     """
-    if len(trades) < 20 or bars is None or len(bars) < 100:
+    usable = [t for t in trades
+              if getattr(t, "symbol", None) in (tapes or {})
+              and len(tapes[t.symbol]) > int(getattr(t, "bars_held", 1)) + 2]
+    if len(usable) < 20:
         return None
     rng = np.random.default_rng(seed)
-    closes = np.asarray(bars.close, dtype=float)
-    holds = [max(1, int(getattr(t, "bars_held", 1))) for t in trades]
-    signs = [1.0 if getattr(t, "thesis", "BULLISH") == "BULLISH" else -1.0
-             for t in trades]
-    observed = float(sum(float(t.net) for t in trades))
+    observed = float(sum(float(getattr(t, "gross", t.net)) for t in usable))
+
+    plans = []
+    for t in usable:
+        closes = np.asarray(tapes[t.symbol].close, dtype=float)
+        hold = max(1, int(getattr(t, "bars_held", 1)))
+        sign = 1.0 if getattr(t, "thesis", "BULLISH") == "BULLISH" else -1.0
+        plans.append((closes, hold, sign, int(getattr(t, "qty", 1) or 1)))
+
     hits = 0
     for _ in range(rounds):
         total = 0.0
-        for hold, sign in zip(holds, signs):
+        for closes, hold, sign, qty in plans:
             i = int(rng.integers(0, len(closes) - hold - 1))
-            total += sign * (closes[i + hold] - closes[i])
+            entry, exit_px = float(closes[i]), float(closes[i + hold])
+            total += sign * (exit_px - entry) * qty
         if total >= observed:
             hits += 1
     return round((hits + 1) / (rounds + 1), 4)

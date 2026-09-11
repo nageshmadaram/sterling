@@ -89,6 +89,16 @@ class IntradayConfig:
     #: level fires on every bar it recrosses.
     cooldown_bars: int = 6
     max_signals_per_symbol_per_day: int = 3
+    #: Closed bars the live scan looks BACK over, not just the newest one.
+    #:
+    #: Every rule here fires on ONE bar. The scan loop runs on its own cadence,
+    #: and any cycle that lands late — a slow instrument dump, a rate limit, a
+    #: restart — skips a bar entirely and the signal on it is never seen. The
+    #: replay finds it and the live engine does not, which is the same
+    #: divergence as a second implementation with none of the visibility.
+    #:
+    #: 1 restores the old newest-bar-only behaviour.
+    catchup_bars: int = 3
     #: Contract picking. Only the SERIES, because that is the axis the strike
     #: resolver actually takes — an `expiry_selection` knob alongside it would
     #: be a second control for one decision, honoured by neither.
@@ -286,6 +296,8 @@ class IntradayConfig:
                      "max_new_trades_per_day"):
             if int(getattr(self, name)) < 1:
                 raise ValueError(f"{name} must be >= 1")
+        if int(self.catchup_bars) < 1:
+            raise ValueError("catchup_bars must be >= 1 (1 = newest bar only)")
         for name in ("cooldown_bars", "rb_confirm_bars", "vs_confirm_within_bars",
                      "descale_after_losses"):
             if int(getattr(self, name)) < 0:

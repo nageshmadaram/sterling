@@ -32,7 +32,7 @@ import numpy as np
 
 from .config import IntradayConfig
 from .models import Bars, IntradaySignal, to_bars
-from .position import ratchet_trail
+from .position import should_scale_out, spot_trail
 from .strategies import EVALUATORS, thesis_broken
 
 Lens = Literal["underlying", "option"]
@@ -181,22 +181,6 @@ def _atr_series(bars: Bars, period: int) -> np.ndarray:
     return compute_atr(bars.high, bars.low, bars.close, period)
 
 
-@dataclass
-class _Open:
-    """A position under replay. Deliberately the same shape the live one has."""
-    sig: IntradaySignal
-    entry: float
-    stop: float
-    target: float
-    target2: Optional[float]
-    qty: int
-    entry_ms: int
-    entry_i: int
-    peak: float
-    risk: float
-    breakeven_done: bool = False
-
-
 #: How much history each evaluation sees, in bars.
 #:
 #: A bounded window rather than the whole tape, for two reasons and only
@@ -209,6 +193,47 @@ class _Open:
 #: The floor is what the rules actually need: the slowest EMA's warmup plus two
 #: full sessions, because pivots are computed from the PRIOR session.
 EVAL_WINDOW = 400
+
+
+@dataclass
+class _Open:
+    """A position under replay.
+
+    The field NAMES match :class:`~app.engines.intraday.position.IntradayPosition`
+    where the live management functions read them, so this object can be passed
+    straight to :func:`spot_trail` and :func:`should_scale_out` rather than the
+    replay keeping its own opinion about trailing and two-stage exits. Those
+    opinions is exactly what diverged: the replay ran pivot_break's breakeven
+    trail on all three strategies and jumped straight to the runner target
+    without banking the first one, so it measured a strategy nobody had written.
+    """
+    sig: IntradaySignal
+    strategy: str
+    thesis: str
+    entry: float
+    stop: float
+    target: float
+    target2: float
+    qty: int
+    entry_ms: int
+    entry_i: int
+    peak: float
+    risk: float
+    breakeven_done: bool = False
+    target1_done: bool = False
+
+    # ── the names `spot_trail` reads ──────────────────────────────────────
+    @property
+    def spot_entry(self) -> float:
+        return self.entry
+
+    @property
+    def spot_risk(self) -> float:
+        return self.risk
+
+    @property
+    def spot_stop(self) -> float:
+        return self.stop
 
 
 def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *,
@@ -241,58 +266,96 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
     start_m, cut_m, end_m = (_hhmm(cfg.session_start), _hhmm(cfg.no_entry_after),
                              _hhmm(cfg.session_end))
     open_pos: Optional[_Open] = None
+    #: A signal decided on a CLOSED bar, waiting to fill at the next bar's open.
+    pending: Optional[IntradaySignal] = None
     last_fire_i = -10_000
     fired_today = 0
     today = ""
     cooldown = max(0, int(cfg.cooldown_bars))
 
-    for i in range(cfg.warmup_bars, n - 1):
+    for i in range(cfg.warmup_bars, n):
         day = bars.session_day[i]
         if day != today:
             today, fired_today = day, 0
         minute = _minute_of_day_ist(bars.time[i])
-        session_over = minute >= end_m or bars.session_day[i + 1] != day
+        o, hi, lo, close = (float(bars.open[i]), float(bars.high[i]),
+                            float(bars.low[i]), float(bars.close[i]))
+        a = float(atr[i]) if np.isfinite(atr[i]) else 0.0
+        session_over = minute >= end_m or (i + 1 < n and bars.session_day[i + 1] != day)
 
-        # ── manage what is already on, on the NEXT bar, never this one ──────
+        # ── A. fill what was decided on the previous CLOSED bar ─────────────
+        if pending is not None and open_pos is None:
+            open_pos = _fill(pending, o, i, bars, costs, lens, qty)
+            pending = None
+            if open_pos is None:
+                out.skipped["no risk after fill"] = out.skipped.get(
+                    "no risk after fill", 0) + 1
+
+        # ── B. manage on THIS bar, INCLUDING the bar it filled on ───────────
+        #
+        # The bar a position fills on is live from the fill onward, and the
+        # replay used to skip it: a trade stopped out on its own entry bar was
+        # carried forward instead, which quietly removed the worst outcomes
+        # from the book.
         if open_pos is not None:
-            j = i + 1
-            hi, lo, close = float(bars.high[j]), float(bars.low[j]), float(bars.close[j])
-            bullish = open_pos.sig.direction == "BULLISH"
-            hit_stop = (lo <= open_pos.stop) if bullish else (hi >= open_pos.stop)
-            final = open_pos.target2 or open_pos.target
-            hit_target = (hi >= final) if bullish else (lo <= final)
-            over = (bars.session_day[j] != day) or _minute_of_day_ist(bars.time[j]) >= end_m
-
+            bull = open_pos.thesis == "BULLISH"
+            hit_stop = (lo <= open_pos.stop) if bull else (hi >= open_pos.stop)
             reason, px = "", 0.0
             if hit_stop:
                 # Both in one bar is a LOSS. Nothing in the data says which came
                 # first, so the harness assumes the worse.
-                reason, px = ("stop" if not open_pos.breakeven_done
-                              else "trailing stop"), open_pos.stop
-            elif hit_target:
-                reason, px = "target", final
-            elif over and cfg.close_at_session_end:
-                reason, px = "session end", close
+                reason, px = ("trailing stop" if open_pos.breakeven_done
+                              else "stop"), open_pos.stop
             else:
-                dead, why = thesis_broken(_slice(bars, j + 1, window), cfg, strategy,
-                                          open_pos.sig.direction)
-                if dead:
-                    reason, px = why, close
+                # The first target BANKS half on a two-stage trade rather than
+                # closing it, which is what the live path does.
+                if should_scale_out(open_pos, hi if bull else lo):
+                    half = open_pos.qty // 2
+                    if half > 0:
+                        out.trades.append(_close(
+                            open_pos, open_pos.target, int(bars.time[i] * 1000), i,
+                            "target", costs, lens, strategy, symbol, qty=half))
+                        open_pos.qty -= half
+                    open_pos.target1_done = True
+                    open_pos.breakeven_done = True
+                    open_pos.stop = max(open_pos.stop, open_pos.entry) if bull \
+                        else min(open_pos.stop, open_pos.entry)
+                final = open_pos.target2 if (open_pos.target2 > 0
+                                             and open_pos.target1_done) else (
+                    0.0 if open_pos.target2 > 0 else open_pos.target)
+                if final > 0 and ((hi >= final) if bull else (lo <= final)):
+                    reason = "target2" if open_pos.target1_done and \
+                        open_pos.target2 > 0 else "target"
+                    px = final
+                elif session_over and cfg.close_at_session_end:
+                    reason, px = "session end", close
+                else:
+                    dead, why = thesis_broken(_slice(bars, i + 1, window), cfg,
+                                              strategy, open_pos.thesis)
+                    if dead:
+                        reason, px = why, close
             if reason:
-                out.trades.append(_close(open_pos, px, int(bars.time[j] * 1000),
-                                         j, reason, costs, lens, strategy, symbol))
+                out.trades.append(_close(open_pos, px, int(bars.time[i] * 1000), i,
+                                         reason, costs, lens, strategy, symbol))
                 open_pos = None
             else:
-                peak = max(open_pos.peak, hi) if bullish else min(open_pos.peak, lo)
-                open_pos.peak = peak
-                moved = _trail(open_pos, peak, float(atr[j]) if np.isfinite(atr[j]) else 0.0,
-                               cfg, bullish)
+                open_pos.peak = max(open_pos.peak, hi) if bull else min(open_pos.peak, lo)
+                # Each input only where its own strategy's trail reads it.
+                # Computing a session VWAP on every bar for a strategy that
+                # never looks at one tripled this loop's cost for nothing.
+                moved, _ = spot_trail(
+                    open_pos, cfg, spot=close, atr=a,
+                    swing=(_swing(bars, i, cfg, bull)
+                           if strategy == "pivot_break"
+                           and cfg.pb_trail_mode == "structure" else None),
+                    vwap=(_vwap_at(bars, i, cfg)
+                          if strategy == "vwap_supertrend" else None))
                 if moved != open_pos.stop:
                     open_pos.stop = moved
-                    open_pos.breakeven_done = (
-                        moved >= open_pos.entry if bullish else moved <= open_pos.entry)
+                    open_pos.breakeven_done = open_pos.breakeven_done or (
+                        moved >= open_pos.entry if bull else moved <= open_pos.entry)
 
-        if open_pos is not None:
+        if open_pos is not None or pending is not None:
             continue
         if not (start_m <= minute < cut_m) or session_over:
             continue
@@ -302,38 +365,74 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
         if fired_today >= cfg.max_signals_per_symbol_per_day:
             out.skipped["daily cap"] = out.skipped.get("daily cap", 0) + 1
             continue
+        if i + 1 >= n:
+            continue        # nothing left to fill against
 
+        # ── C. decide on this CLOSED bar, to fill at the NEXT bar's open ────
         ev = evaluate(_slice(bars, i + 1, window), cfg, symbol)
         if ev.signal is None:
             continue
-
-        # ── the fill is the NEXT bar's open, never this bar's close ─────────
-        j = i + 1
-        fill = float(bars.open[j])
-        if fill <= 0:
-            continue
-        bullish = ev.signal.direction == "BULLISH"
-        side: Literal["buy", "sell"] = "buy" if lens == "option" else (
-            "buy" if bullish else "sell")
-        entry = costs.slip(fill, side)
-        # The stop and target were computed against the SIGNAL bar's close, so
-        # they are held at the same DISTANCE from the actual fill rather than at
-        # the same price — otherwise a gap would silently change the risk.
-        drift = entry - ev.signal.entry
-        stop = ev.signal.stop + drift
-        risk = abs(entry - stop)
-        if risk <= 0:
-            out.skipped["no risk after fill"] = out.skipped.get("no risk after fill", 0) + 1
-            continue
-        open_pos = _Open(sig=ev.signal, entry=entry, stop=stop,
-                         target=ev.signal.target + drift,
-                         target2=(ev.signal.target2 + drift)
-                         if ev.signal.target2 is not None else None,
-                         qty=qty, entry_ms=int(bars.time[j] * 1000), entry_i=j,
-                         peak=entry, risk=risk)
+        pending = ev.signal
         last_fire_i, fired_today = i, fired_today + 1
 
+    # A position still open when the window ends is a REAL trade that the window
+    # cut short, not one that never happened. Dropping it silently removed the
+    # trades a fold's edge happened to land on.
+    if open_pos is not None:
+        out.trades.append(_close(open_pos, float(bars.close[n - 1]),
+                                 int(bars.time[n - 1] * 1000), n - 1,
+                                 "window end", costs, lens, strategy, symbol))
+        out.skipped["open at window end"] = out.skipped.get("open at window end", 0) + 1
+
     return out
+
+
+def _fill(sig: IntradaySignal, open_px: float, i: int, bars: Bars,
+          costs: CostModel, lens: Lens, qty: int) -> Optional[_Open]:
+    """Open a position at this bar's open, keeping the rule's own RISK.
+
+    The stop and target were computed against the signal bar's close, so they
+    are held at the same DISTANCE from the actual fill rather than at the same
+    price — otherwise an overnight gap would silently change the risk the
+    strategy chose without changing the strategy.
+    """
+    if open_px <= 0:
+        return None
+    bull = sig.direction == "BULLISH"
+    side: Literal["buy", "sell"] = "buy" if lens == "option" else (
+        "buy" if bull else "sell")
+    entry = costs.slip(open_px, side)
+    drift = entry - sig.entry
+    stop = sig.stop + drift
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return None
+    return _Open(sig=sig, strategy=sig.strategy, thesis=sig.direction,
+                 entry=entry, stop=stop, target=sig.target + drift,
+                 target2=(sig.target2 + drift) if sig.target2 is not None else 0.0,
+                 qty=qty, entry_ms=int(bars.time[i] * 1000), entry_i=i,
+                 peak=entry, risk=risk)
+
+
+def _swing(bars: Bars, i: int, cfg: IntradayConfig, bullish: bool) -> Optional[float]:
+    """The swing the move came off, for the structure trail."""
+    look = max(3, int(cfg.pb_atr_length))
+    lo = max(0, i - look + 1)
+    if i < lo:
+        return None
+    return float(np.min(bars.low[lo:i + 1]) if bullish
+                 else np.max(bars.high[lo:i + 1]))
+
+
+def _vwap_at(bars: Bars, i: int, cfg: IntradayConfig) -> Optional[float]:
+    """Session VWAP at bar ``i``, for VWAP SuperTrend's own trail."""
+    from .indicators import session_vwap
+    lo = max(0, i - EVAL_WINDOW + 1)
+    cut = _slice(bars, i + 1, EVAL_WINDOW)
+    if len(cut) == 0:
+        return None
+    v = session_vwap(cut.high, cut.low, cut.close, cut.volume, cut.session_starts)
+    return float(v[-1])
 
 
 def _slice(bars: Bars, upto: int, window: int = EVAL_WINDOW) -> Bars:
@@ -352,24 +451,12 @@ def _slice(bars: Bars, upto: int, window: int = EVAL_WINDOW) -> Bars:
                 session_day=bars.session_day[lo:upto])
 
 
-def _trail(pos: _Open, peak: float, atr: float, cfg: IntradayConfig,
-           bullish: bool) -> float:
-    """The spot trail, in replay. Same shape and same ratchet as the live one."""
-    side = "long" if bullish else "short"
-    sign = 1.0 if bullish else -1.0
-    if pos.risk <= 0:
-        return pos.stop
-    if (peak - pos.entry) * sign / pos.risk < cfg.pb_breakeven_at_r:
-        return pos.stop
-    stop = ratchet_trail(pos.stop, pos.entry, side)
-    if cfg.pb_trail_mode == "atr" and atr > 0:
-        stop = ratchet_trail(stop, peak - sign * cfg.pb_trail_atr_mult * atr, side)
-    return round(stop, 2)
-
-
 def _close(pos: _Open, raw_exit: float, exit_ms: int, exit_i: int, reason: str,
-           costs: CostModel, lens: Lens, strategy: str, symbol: str) -> BacktestTrade:
-    bullish = pos.sig.direction == "BULLISH"
+           costs: CostModel, lens: Lens, strategy: str, symbol: str,
+           qty: Optional[int] = None) -> BacktestTrade:
+    """Book one leg. ``qty`` under the position's own size is a partial exit."""
+    size = int(qty if qty is not None else pos.qty)
+    bullish = pos.thesis == "BULLISH"
     side: Literal["buy", "sell"] = "sell" if lens == "option" else (
         "sell" if bullish else "buy")
     exit_price = costs.slip(max(0.01, raw_exit), side)
@@ -378,14 +465,14 @@ def _close(pos: _Open, raw_exit: float, exit_ms: int, exit_i: int, reason: str,
         # A bought option is long premium whichever way the thesis points, so
         # the leg is always entry -> exit on the premium itself.
         move = exit_price - pos.entry
-    gross = move * pos.qty
-    cost = costs.round_trip(pos.entry, exit_price, pos.qty)
+    gross = move * size
+    cost = costs.round_trip(pos.entry, exit_price, size)
     net = gross - cost
     return BacktestTrade(
         strategy=strategy, symbol=symbol, thesis=pos.sig.direction,
         entry_ms=pos.entry_ms, exit_ms=exit_ms, entry=round(pos.entry, 2),
         exit_price=round(exit_price, 2), stop=round(pos.stop, 2),
-        target=round(pos.target, 2), qty=pos.qty, gross=round(gross, 2),
+        target=round(pos.target, 2), qty=size, gross=round(gross, 2),
         cost=round(cost, 2), net=round(net, 2), reason=reason,
         bars_held=exit_i - pos.entry_i,
-        r=round(net / (pos.risk * pos.qty), 3) if pos.risk > 0 else 0.0)
+        r=round(net / (pos.risk * size), 3) if pos.risk > 0 and size else 0.0)

@@ -145,15 +145,38 @@ def status(uid: str) -> ScanState:
 
 # -------------------------------------------------------------- evaluation
 
-def evaluate_symbol(candles, cfg: IntradayConfig, symbol: str) -> list:
+def evaluate_symbol(candles, cfg: IntradayConfig, symbol: str, *,
+                    catchup: Optional[int] = None) -> list:
     """Bars to evaluations, at the configured timeframe.
 
     The resample is here rather than in the strategies so every caller gets the
     same answer: the simulation replays 1-minute tape, the live scan asks the
     broker for 5-minute candles, and both must produce the same signal on the
     same session or the replay proves nothing.
+
+    Looks back over ``catchup_bars`` closed bars rather than only the newest
+    one. Every rule here fires on a SINGLE bar, so a scan cycle that lands late
+    used to skip that bar's signal entirely — the replay found it and the live
+    engine never did. The newest firing bar wins, because an older signal has
+    had longer for the tape to move away from it.
     """
-    return evaluate_all(to_bars(resample_for(candles, cfg)), cfg, symbol)
+    rows = resample_for(candles, cfg)
+    # A caller that already evaluates EVERY bar passes 1. The replay and the
+    # simulation do; looking back there would re-report a signal they already
+    # reported on the bar it fired, as though it were new.
+    look = max(1, int(catchup if catchup is not None
+                      else getattr(cfg, "catchup_bars", 1)))
+    newest: dict[str, object] = {}
+    for back in range(min(look, max(1, len(rows) - cfg.warmup_bars)) - 1, -1, -1):
+        window = rows[: len(rows) - back] if back else rows
+        for ev in evaluate_all(to_bars(window), cfg, symbol):
+            # A firing bar replaces a quiet one; a NEWER firing bar replaces an
+            # older one. A quiet newest bar never erases a signal found behind
+            # it, which is the whole point of looking back.
+            prev = newest.get(ev.strategy)
+            if prev is None or (ev.signal is not None):
+                newest[ev.strategy] = ev
+    return [newest[k] for k in cfg.enabled_strategies() if k in newest]
 
 
 def _cooldown_ok(st: ScanState, cfg: IntradayConfig, symbol: str,
@@ -618,7 +641,14 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS,
     names = list(dedupe(raw_names))
     if not names:
         return []
-    key = f"{uid}:{cfg.timeframe}:{sessions}:{','.join(sorted(names))}"
+    # Keyed on the CONFIG, not just the universe. Keyed on names alone, an
+    # operator who changed a threshold saw the old history for five minutes and
+    # reasonably concluded the setting did nothing.
+    import hashlib
+    fingerprint = hashlib.sha1(
+        json.dumps(cfg.as_dict(), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:12]
+    key = f"{uid}:{sessions}:{','.join(sorted(names))}:{fingerprint}"
     hit = _history_cache.get(key)
     now = time.monotonic()
     if hit and (now - hit[0]) < _HISTORY_TTL_S:

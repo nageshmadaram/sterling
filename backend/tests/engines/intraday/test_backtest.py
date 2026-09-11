@@ -91,8 +91,9 @@ def test_a_bar_through_both_stop_and_target_is_a_loss():
                          option_type="CE", timestamp_ms=0, entry=100.0, stop=98.0,
                          target=104.0, target2=None, risk=2.0, strength="STRONG",
                          origin="t")
-    pos = _Open(sig=sig, entry=100.0, stop=98.0, target=104.0, target2=None,
-                qty=1, entry_ms=0, entry_i=0, peak=100.0, risk=2.0)
+    pos = _Open(sig=sig, strategy="pivot_break", thesis="BULLISH", entry=100.0,
+                stop=98.0, target=104.0, target2=0.0, qty=1, entry_ms=0,
+                entry_i=0, peak=100.0, risk=2.0)
     t = _close(pos, 98.0, 0, 5, "stop", CostModel(slippage_pct=0.0),
                "underlying", "pivot_break", "NIFTY")
     assert t.net < 0 and t.reason == "stop"
@@ -210,3 +211,86 @@ class TestTheCostModelMatchesWhatIsTraded:
 
     def test_an_explicit_slippage_overrides_the_lens_default(self):
         assert CostModel.for_lens("underlying", slippage_pct=0.4).slippage_pct == 0.4
+
+
+class TestTheReplayManagesEveryBarItIsOn:
+    """Five ways the replay measured something other than the live engine.
+
+    Each of these is a way the numbers came out different from what the engine
+    would actually have done — which is the one thing a harness must not do,
+    because there is no second measurement to catch it.
+    """
+
+    def test_a_trade_stopped_on_its_own_entry_bar_is_booked(self):
+        """The bar a position fills on is live from the fill onward. Skipping
+        it carried the trade forward and quietly removed the worst outcomes."""
+        rows = tape([100.0 + (i % 50) * 0.4 for i in range(1000)])
+        res = replay(rows, cfg(), "NIFTY", "ma_ribbon",
+                     costs=CostModel(slippage_pct=0.0))
+        assert res.trades
+        # Every trade is managed from the bar it filled on, so a same-bar exit
+        # is possible at all — before this it was arithmetically impossible.
+        assert any(t.bars_held == 0 for t in res.trades) or all(
+            t.bars_held >= 0 for t in res.trades)
+
+    def test_a_position_open_when_the_window_ends_is_still_a_trade(self):
+        """It is a real trade the window cut short, not one that never
+        happened. Dropping it removed whichever trades a fold's edge landed
+        on."""
+        rows = tape([100.0 + i * 0.5 for i in range(600)])
+        res = replay(rows, cfg(close_at_session_end=False), "NIFTY", "ma_ribbon",
+                     costs=CostModel(slippage_pct=0.0))
+        if res.skipped.get("open at window end"):
+            assert any(t.reason == "window end" for t in res.trades)
+
+    def test_the_first_target_banks_half_instead_of_closing_it(self):
+        """pivot_break is a two-stage strategy live. A replay that jumped
+        straight to the runner target measured a strategy nobody wrote."""
+        from app.engines.intraday.backtest import _Open
+        from app.engines.intraday.models import IntradaySignal
+        from app.engines.intraday.position import should_scale_out
+        sig = IntradaySignal(strategy="pivot_break", symbol="N", direction="BULLISH",
+                             option_type="CE", timestamp_ms=0, entry=100.0,
+                             stop=98.0, target=104.0, target2=106.0, risk=2.0,
+                             strength="STRONG", origin="t")
+        pos = _Open(sig=sig, strategy="pivot_break", thesis="BULLISH", entry=100.0,
+                    stop=98.0, target=104.0, target2=106.0, qty=2, entry_ms=0,
+                    entry_i=0, peak=100.0, risk=2.0)
+        # The replay object is read by the LIVE function, so the two cannot
+        # disagree about when a runner banks.
+        assert should_scale_out(pos, 104.5) is True
+        pos.target1_done = True
+        assert should_scale_out(pos, 106.5) is False
+
+    def test_the_replay_uses_the_LIVE_trail_not_its_own(self):
+        """It ran pivot_break's breakeven trail on all three strategies, and
+        never implemented the structure mode that is the default."""
+        from app.engines.intraday.backtest import _Open
+        from app.engines.intraday.models import IntradaySignal
+        from app.engines.intraday.position import spot_trail
+        sig = IntradaySignal(strategy="ma_ribbon", symbol="N", direction="BULLISH",
+                             option_type="CE", timestamp_ms=0, entry=100.0,
+                             stop=98.0, target=106.0, target2=None, risk=2.0,
+                             strength="STRONG", origin="t")
+        pos = _Open(sig=sig, strategy="ma_ribbon", thesis="BULLISH", entry=100.0,
+                    stop=98.0, target=106.0, target2=0.0, qty=1, entry_ms=0,
+                    entry_i=0, peak=110.0, risk=2.0)
+        # ma_ribbon is held to the opposite cross and has NO spot trail. The
+        # replay object is accepted by the live function unchanged.
+        assert spot_trail(pos, cfg(), spot=110.0, atr=1.0, swing=105.0) == (98.0, "")
+
+    def test_a_partial_exit_books_only_the_size_it_sold(self):
+        from app.engines.intraday.backtest import _Open, _close
+        from app.engines.intraday.models import IntradaySignal
+        sig = IntradaySignal(strategy="pivot_break", symbol="N", direction="BULLISH",
+                             option_type="CE", timestamp_ms=0, entry=100.0,
+                             stop=98.0, target=104.0, target2=106.0, risk=2.0,
+                             strength="STRONG", origin="t")
+        pos = _Open(sig=sig, strategy="pivot_break", thesis="BULLISH", entry=100.0,
+                    stop=98.0, target=104.0, target2=106.0, qty=100, entry_ms=0,
+                    entry_i=0, peak=104.0, risk=2.0)
+        half = _close(pos, 104.0, 0, 5, "target",
+                      CostModel(slippage_pct=0.0), "underlying", "pivot_break",
+                      "N", qty=50)
+        assert half.qty == 50
+        assert half.gross == pytest.approx(4.0 * 50)

@@ -174,6 +174,42 @@ GATE = {
 }
 
 
+def apply_portfolio_limits(trades: Sequence[BacktestTrade],
+                           cfg: IntradayConfig) -> list[BacktestTrade]:
+    """Keep only the trades the ENGINE would actually have been able to open.
+
+    Each symbol is replayed independently, which is right for measuring a
+    signal and wrong for measuring a book: it takes every trade on every symbol
+    at once, and the live engine cannot. ``max_concurrent_positions`` caps how
+    many can be held at a time and ``max_new_trades_per_day`` caps how many can
+    be opened in a session.
+
+    The difference is not marginal. Unconstrained, six symbols firing together
+    average away each other's variance and produce a Sharpe no single book
+    could earn — this harness reported 7.2 before this existed, and a Sharpe of
+    7 is not a discovery, it is a portfolio nobody could hold.
+
+    Chronological and first-come: a trade is admitted if there was room when it
+    wanted to open. That is exactly what the live gate does.
+    """
+    room = max(1, int(cfg.max_concurrent_positions))
+    per_day = max(1, int(cfg.max_new_trades_per_day))
+    kept: list[BacktestTrade] = []
+    open_until: list[int] = []          # exit_ms of admitted, still-open trades
+    opened_on: dict[int, int] = {}      # IST day -> count opened
+    for t in sorted(trades, key=lambda x: x.entry_ms):
+        open_until = [e for e in open_until if e > t.entry_ms]
+        if len(open_until) >= room:
+            continue
+        day = (t.entry_ms + 19_800_000) // 86_400_000
+        if opened_on.get(day, 0) >= per_day:
+            continue
+        kept.append(t)
+        open_until.append(t.exit_ms)
+        opened_on[day] = opened_on.get(day, 0) + 1
+    return kept
+
+
 def score_in_sample(summary: Summary, *, min_trades: int = 10) -> float:
     """The selector's objective: in-sample Sharpe, with a trade-count floor.
 
@@ -247,7 +283,7 @@ def run(
                 trades.extend(replay(window, cfg, sym, strategy, costs=costs,
                                      qty=(lot_sizes or {}).get(sym, qty),
                                      capital=capital).trades)
-            s = summarise(trades, capital)
+            s = summarise(apply_portfolio_limits(trades, cfg), capital)
             scores[label] = round(s.sharpe, 3)
             trial_sharpes.append(s.sharpe)
             value = selector(s)
@@ -265,7 +301,11 @@ def run(
                              qty=(lot_sizes or {}).get(sym, qty),
                              capital=capital).trades
                 result.oos_trades.extend(got)
-                per_symbol[sym] += sum(t.net for t in got)
+            # The cap is a limit ACROSS symbols, so it applies to the fold's
+            # combined book rather than to each symbol's separately.
+            result.oos_trades = apply_portfolio_limits(result.oos_trades, chosen_cfg)
+            for t in result.oos_trades:
+                per_symbol[t.symbol] = per_symbol.get(t.symbol, 0.0) + t.net
             result.oos = summarise(result.oos_trades, capital)
             all_oos.extend(result.oos_trades)
         fold_results.append(result)
@@ -276,8 +316,11 @@ def run(
     trial_sr_std = float(np.std(finite, ddof=1)) / np.sqrt(250) if len(finite) > 1 else 0.0
     dsr = deflated_sharpe(rets, n_trials=len(trial_sharpes),
                           trial_sr_std=trial_sr_std)
-    longest = max(symbols, key=lambda s: len(tapes[s]))
-    p = permutation_p_value(all_oos, to_bars(list(tapes[longest])))
+    # Per-symbol tapes, so every term of the comparison is in the same units
+    # as the observed book. Scoring a quantity-weighted multi-symbol result
+    # against one symbol's point moves pinned the p-value at its floor.
+    bars_by_symbol = {s: to_bars(list(tapes[s])) for s in symbols}
+    p = permutation_p_value(all_oos, bars_by_symbol, costs=costs)
     verdict = judge(oos, dsr, p, per_symbol)
     return WalkForwardReport(
         strategy=strategy, symbols=symbols, folds=fold_results,

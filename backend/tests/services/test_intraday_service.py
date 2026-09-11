@@ -377,3 +377,51 @@ def test_the_history_scans_one_instrument_once_however_it_is_spelled(monkeypatch
     twice = svc.recent_signals("u1", sessions=30, symbols=["NIFTY", "NIFTY 50"])
     assert len(once) == len(twice)
     assert len({r["signal_id"] for r in twice}) == len(twice)
+
+
+class TestTheScanCatchesUp:
+    """Every rule in this pack fires on ONE bar.
+
+    A scan cycle that lands late — a slow instrument dump, a rate limit, a
+    restart — skipped that bar entirely and the signal on it was never seen.
+    The replay found it and the live engine did not, which is the same
+    divergence as a second implementation with none of the visibility.
+    """
+
+    def test_looking_back_recovers_signals_a_late_cycle_would_miss(self):
+        rows = _tape_5m(n=900)
+        misses, catches = 0, 0
+        for end in range(300, len(rows), 3):     # a scan landing every 3rd bar
+            tape = rows[:end]
+            misses += sum(1 for e in svc.evaluate_symbol(
+                tape, IntradayConfig(warmup_bars=70).validate(), "NIFTY",
+                catchup=1) if e.signal)
+            catches += sum(1 for e in svc.evaluate_symbol(
+                tape, IntradayConfig(warmup_bars=70, catchup_bars=4).validate(),
+                "NIFTY", catchup=None) if e.signal)
+        assert catches > misses
+
+    def test_a_quiet_newest_bar_does_not_erase_a_signal_behind_it(self):
+        """Which is the whole point of looking back."""
+        rows = _tape_5m(n=900)
+        cfg = IntradayConfig(warmup_bars=70, catchup_bars=6).validate()
+        for end in range(400, len(rows), 7):
+            got = svc.evaluate_symbol(rows[:end], cfg, "NIFTY")
+            newest_only = svc.evaluate_symbol(rows[:end], cfg, "NIFTY", catchup=1)
+            fired_now = {e.strategy for e in newest_only if e.signal}
+            fired_back = {e.strategy for e in got if e.signal}
+            assert fired_now <= fired_back
+
+    def test_one_row_per_strategy_however_far_it_looks_back(self):
+        rows = _tape_5m(n=900)
+        cfg = IntradayConfig(warmup_bars=70, catchup_bars=8).validate()
+        got = svc.evaluate_symbol(rows, cfg, "NIFTY")
+        assert len(got) == len({e.strategy for e in got})
+
+    def test_the_replay_evaluates_every_bar_so_it_never_looks_back(self):
+        """Looking back there would re-report a signal the loop already
+        reported on the bar it fired, as though it were new."""
+        from app.services import simulation as sim
+        import inspect
+        src = inspect.getsource(sim._intraday_signals_from_bars)
+        assert "catchup=1" in src

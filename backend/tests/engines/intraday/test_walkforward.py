@@ -226,7 +226,7 @@ class TestStats:
         assert 2.5 < _kurtosis(rng.normal(0, 1, 20_000)) < 3.5
 
     def test_the_permutation_refuses_a_sample_too_small_to_permute(self):
-        assert permutation_p_value([], None) is None
+        assert permutation_p_value([], {}) is None
 
     def test_profit_factor_says_nothing_rather_than_infinity_on_no_trades(self):
         assert profit_factor([]) is None
@@ -234,3 +234,138 @@ class TestStats:
     def test_max_drawdown_is_negative_or_zero(self):
         assert max_drawdown(np.array([0.1, -0.5, 0.2])) < 0
         assert max_drawdown(np.array([])) == 0.0
+
+
+class TestThePermutationActuallyTestsSomething:
+    """It did not. It compared the observed book in RUPEES — quantity-weighted,
+    across every symbol — against a null drawn in POINTS at one unit on a
+    single symbol's closes. The null could never reach the observed, so the
+    p-value was pinned at 1/(rounds+1) for any profitable book and 1.0 for any
+    losing one. It was reporting the SIGN of net profit and it read like
+    significance.
+    """
+
+    def _tape(self, n=4000, seed=1):
+        from app.engines.intraday.models import to_bars
+        rng = np.random.default_rng(seed)
+        px = 100 + np.cumsum(rng.normal(0, 0.4, n))
+        return to_bars([{"time": 1_757_000_000 + i * 300, "open": px[i],
+                         "high": px[i] + 0.2, "low": px[i] - 0.2,
+                         "close": px[i], "volume": 1.0} for i in range(n)])
+
+    def _book(self, gross, n=40, hold=10, qty=75, symbol="NIFTY"):
+        class T:
+            def __init__(self):
+                self.gross = self.net = gross
+                self.bars_held, self.qty = hold, qty
+                self.symbol, self.thesis = symbol, "BULLISH"
+        return [T() for _ in range(n)]
+
+    def test_a_book_of_pure_noise_is_not_significant(self):
+        """The load-bearing case. Before the fix this scored 0.002 — the floor
+        — for a book with exactly zero profit."""
+        p = permutation_p_value(self._book(0.0), {"NIFTY": self._tape()})
+        assert p is not None and 0.15 < p < 0.85
+
+    def test_a_book_well_above_the_null_is(self):
+        p = permutation_p_value(self._book(4000.0), {"NIFTY": self._tape()})
+        assert p is not None and p < 0.05
+
+    def test_a_losing_book_is_not_rescued(self):
+        p = permutation_p_value(self._book(-4000.0), {"NIFTY": self._tape()})
+        assert p == 1.0
+
+    def test_it_compares_gross_to_gross_so_costs_cannot_carry_it(self):
+        """Costs are identical on both sides by construction — the null takes
+        the same trades at the same sizes — so charging them only makes the
+        null's mean negative and turns this back into a cost test."""
+        tapes = {"NIFTY": self._tape()}
+        book = self._book(0.0)
+        for t in book:
+            t.net = -9_999.0          # ruinous costs, identical timing
+        assert permutation_p_value(book, tapes) == pytest.approx(
+            permutation_p_value(self._book(0.0), tapes), abs=0.12)
+
+    def test_a_trade_on_a_symbol_with_no_tape_is_dropped_not_mispriced(self):
+        book = self._book(1000.0, symbol="ABSENT")
+        assert permutation_p_value(book, {"NIFTY": self._tape()}) is None
+
+    def test_each_trade_is_permuted_within_its_OWN_symbol(self):
+        """Scoring a NIFTY trade against a stock's point moves is comparing
+        two different instruments' volatility."""
+        tapes = {"NIFTY": self._tape(seed=1), "TCS": self._tape(seed=2)}
+        mixed = self._book(0.0, n=20, symbol="NIFTY") + \
+            self._book(0.0, n=20, symbol="TCS")
+        p = permutation_p_value(mixed, tapes)
+        assert p is not None and 0.1 < p < 0.9
+
+
+class TestThePortfolioCapIsHonoured:
+    """Each symbol is replayed independently, which is right for measuring a
+    SIGNAL and wrong for measuring a BOOK.
+
+    Unconstrained, six symbols firing together average away each other's
+    variance. This harness reported a Sharpe of 7.2 that way — not a discovery,
+    a portfolio nobody could hold.
+    """
+
+    def _t(self, entry_ms, exit_ms, symbol="NIFTY", net=100.0):
+        class T:
+            pass
+        t = T()
+        t.entry_ms, t.exit_ms, t.symbol, t.net = entry_ms, exit_ms, symbol, net
+        return t
+
+    def test_only_as_many_positions_as_the_engine_allows_are_held(self):
+        from app.engines.intraday.walkforward import apply_portfolio_limits
+        day = 1_789_000_000_000
+        # Five overlapping trades, a cap of two.
+        trades = [self._t(day + i * 1000, day + 10_000_000, f"S{i}")
+                  for i in range(5)]
+        kept = apply_portfolio_limits(
+            trades, IntradayConfig(max_concurrent_positions=2).validate())
+        assert len(kept) == 2
+
+    def test_a_position_that_has_closed_frees_its_slot(self):
+        from app.engines.intraday.walkforward import apply_portfolio_limits
+        day = 1_789_000_000_000
+        trades = [self._t(day, day + 1000, "A"),
+                  self._t(day + 2000, day + 3000, "B"),
+                  self._t(day + 4000, day + 5000, "C")]
+        kept = apply_portfolio_limits(
+            trades, IntradayConfig(max_concurrent_positions=1).validate())
+        assert len(kept) == 3, "sequential trades never compete for a slot"
+
+    def test_the_daily_cap_stops_opening_more_that_session(self):
+        from app.engines.intraday.walkforward import apply_portfolio_limits
+        day = 1_789_000_000_000
+        trades = [self._t(day + i * 1000, day + i * 1000 + 500, f"S{i}")
+                  for i in range(10)]
+        kept = apply_portfolio_limits(
+            trades, IntradayConfig(max_concurrent_positions=5,
+                                   max_new_trades_per_day=3).validate())
+        assert len(kept) == 3
+
+    def test_the_next_session_starts_the_daily_count_again(self):
+        from app.engines.intraday.walkforward import apply_portfolio_limits
+        d1 = 1_789_000_000_000
+        d2 = d1 + 86_400_000
+        trades = ([self._t(d1 + i * 1000, d1 + i * 1000 + 500, f"A{i}")
+                   for i in range(5)]
+                  + [self._t(d2 + i * 1000, d2 + i * 1000 + 500, f"B{i}")
+                     for i in range(5)])
+        kept = apply_portfolio_limits(
+            trades, IntradayConfig(max_concurrent_positions=5,
+                                   max_new_trades_per_day=2).validate())
+        assert len(kept) == 4
+
+    def test_admission_is_chronological_and_first_come(self):
+        """Which is exactly what the live gate does — it cannot know that a
+        better signal is coming in ten minutes."""
+        from app.engines.intraday.walkforward import apply_portfolio_limits
+        day = 1_789_000_000_000
+        early = self._t(day, day + 9_000_000, "EARLY", net=1.0)
+        late = self._t(day + 1000, day + 2000, "LATE", net=9999.0)
+        kept = apply_portfolio_limits(
+            [late, early], IntradayConfig(max_concurrent_positions=1).validate())
+        assert [t.symbol for t in kept] == ["EARLY"]
