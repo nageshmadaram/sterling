@@ -97,21 +97,41 @@ def session_vwap(
     """
     n = len(closes)
     out = np.zeros(n, dtype=np.float64)
+    if n == 0:
+        return out
     tp = (highs + lows + closes) / 3.0
-    cum_pv = 0.0
-    cum_v = 0.0
-    cum_tp = 0.0
-    cum_n = 0
-    for i in range(n):
-        if session_starts[i]:
-            cum_pv = cum_v = cum_tp = 0.0
-            cum_n = 0
-        v = float(volumes[i]) if np.isfinite(volumes[i]) else 0.0
-        cum_pv += tp[i] * v
-        cum_v += v
-        cum_tp += tp[i]
-        cum_n += 1
-        out[i] = (cum_pv / cum_v) if cum_v > 0 else (cum_tp / cum_n if cum_n else tp[i])
+    vol = np.where(np.isfinite(volumes), volumes, 0.0)
+
+    # Session-anchored cumulative sums, vectorised. The loop this replaced ran
+    # once per evaluation, and an evaluation happens on every bar of every
+    # window of every fold in a walk-forward run — it was the single slowest
+    # thing in this strategy's replay after SuperTrend's own recurrence.
+    starts = np.asarray(session_starts, dtype=bool)
+    # Index of the bar each session began on, carried forward.
+    begin = np.maximum.accumulate(np.where(starts, np.arange(n), 0))
+    begin[0] = 0
+
+    def _session_cumsum(values: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Cumulative sum that resets at each session start."""
+        total = np.cumsum(values)
+        # What had accumulated BEFORE this session began.
+        prior = np.where(begin > 0, total[begin - 1], 0.0)
+        # A bar that IS a session start has nothing before it within its own
+        # session, so its prior is everything up to the previous bar.
+        prior = np.where(starts, np.concatenate(([0.0], total[:-1])), prior)
+        return total - prior
+
+    cum_pv = _session_cumsum(tp * vol)
+    cum_v = _session_cumsum(vol)
+    cum_tp = _session_cumsum(tp)
+    cum_n = _session_cumsum(np.ones(n))
+
+    weighted = cum_pv / np.where(cum_v > 0, cum_v, 1.0)
+    # The index case: no volume at all, so a volume-weighted average is 0/0.
+    # A running mean of typical price is the honest fallback, and
+    # `vwap_is_volume_weighted` tells the caller which of the two it got.
+    unweighted = cum_tp / np.where(cum_n > 0, cum_n, 1.0)
+    out = np.where(cum_v > 0, weighted, unweighted)
     return out
 
 
