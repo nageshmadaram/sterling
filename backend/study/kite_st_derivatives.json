@@ -1,0 +1,744 @@
+{
+  "warmup": 21,
+  "feasibility": [
+    {
+      "timeframe": "1m",
+      "contract": "weekly (5 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.06,
+      "tradeable_sessions": 4.94,
+      "tradeable_pct": 98.9,
+      "share_in_back_half": 0.49
+    },
+    {
+      "timeframe": "1m",
+      "contract": "monthly (22 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.06,
+      "tradeable_sessions": 21.94,
+      "tradeable_pct": 99.7,
+      "share_in_back_half": 0.5
+    },
+    {
+      "timeframe": "5m",
+      "contract": "weekly (5 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.28,
+      "tradeable_sessions": 4.72,
+      "tradeable_pct": 94.4,
+      "share_in_back_half": 0.47
+    },
+    {
+      "timeframe": "5m",
+      "contract": "monthly (22 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.28,
+      "tradeable_sessions": 21.72,
+      "tradeable_pct": 98.7,
+      "share_in_back_half": 0.49
+    },
+    {
+      "timeframe": "15m",
+      "contract": "weekly (5 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.84,
+      "tradeable_sessions": 4.16,
+      "tradeable_pct": 83.2,
+      "share_in_back_half": 0.4
+    },
+    {
+      "timeframe": "15m",
+      "contract": "monthly (22 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 0.84,
+      "tradeable_sessions": 21.16,
+      "tradeable_pct": 96.2,
+      "share_in_back_half": 0.48
+    },
+    {
+      "timeframe": "1H",
+      "contract": "weekly (5 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 3.5,
+      "tradeable_sessions": 1.5,
+      "tradeable_pct": 30.0,
+      "share_in_back_half": 0.0
+    },
+    {
+      "timeframe": "1H",
+      "contract": "monthly (22 sessions)",
+      "warmup_bars": 21,
+      "sessions_to_warm": 3.5,
+      "tradeable_sessions": 18.5,
+      "tradeable_pct": 84.1,
+      "share_in_back_half": 0.41
+    }
+  ],
+  "tape": {
+    "meta": {
+      "expiry": "2026-09-01",
+      "spot": 24090.85,
+      "atm": 24100
+    },
+    "n_contracts": 25,
+    "timeframes": [
+      {
+        "timeframe": "1m",
+        "spot_bars": 1500,
+        "spot_entries": 21,
+        "contracts_with_enough_bars": 25,
+        "contracts_total": 25,
+        "premium_entries_total": 705,
+        "confluence_confirmations": 158,
+        "spot_entries_with_a_confirming_leg": 18,
+        "mean_confirming_legs_per_spot_entry": 7.52,
+        "production_three_legs": {
+          "legs_considered": [
+            "24050CE"
+          ],
+          "spot_entries_with_a_confirming_leg": 15
+        },
+        "per_contract": [
+          {
+            "contract": "24200CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 23,
+            "live_bars_pct": 19.9,
+            "confirms_spot_entries": 14
+          },
+          {
+            "contract": "24200PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 30,
+            "live_bars_pct": 29.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24250CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 22,
+            "live_bars_pct": 19.4,
+            "confirms_spot_entries": 13
+          },
+          {
+            "contract": "24250PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 31,
+            "live_bars_pct": 29.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24150PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 30,
+            "live_bars_pct": 28.0,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24300CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 21,
+            "live_bars_pct": 18.2,
+            "confirms_spot_entries": 12
+          },
+          {
+            "contract": "24300PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 30,
+            "live_bars_pct": 29.5,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24100PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 28,
+            "live_bars_pct": 26.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24350CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 23,
+            "live_bars_pct": 18.7,
+            "confirms_spot_entries": 13
+          },
+          {
+            "contract": "24050CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 22,
+            "live_bars_pct": 23.6,
+            "confirms_spot_entries": 15
+          },
+          {
+            "contract": "24050PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 32,
+            "live_bars_pct": 28.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24400CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 22,
+            "live_bars_pct": 19.4,
+            "confirms_spot_entries": 13
+          },
+          {
+            "contract": "24000CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 20,
+            "live_bars_pct": 21.6,
+            "confirms_spot_entries": 15
+          },
+          {
+            "contract": "24000PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 32,
+            "live_bars_pct": 25.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24450PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 35,
+            "live_bars_pct": 31.9,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23950CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 29,
+            "live_bars_pct": 25.9,
+            "confirms_spot_entries": 15
+          },
+          {
+            "contract": "23950PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 30,
+            "live_bars_pct": 25.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24500PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 30,
+            "live_bars_pct": 29.4,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "23900CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 27,
+            "live_bars_pct": 24.0,
+            "confirms_spot_entries": 15
+          },
+          {
+            "contract": "23900PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 27,
+            "live_bars_pct": 25.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23850PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 29,
+            "live_bars_pct": 24.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23800CE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 31,
+            "live_bars_pct": 25.5,
+            "confirms_spot_entries": 15
+          },
+          {
+            "contract": "23800PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 33,
+            "live_bars_pct": 25.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23750PE",
+            "bars": 1540,
+            "usable": true,
+            "premium_entries": 33,
+            "live_bars_pct": 22.4,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23700CE",
+            "bars": 1537,
+            "usable": true,
+            "premium_entries": 35,
+            "live_bars_pct": 30.1,
+            "confirms_spot_entries": 17
+          }
+        ]
+      },
+      {
+        "timeframe": "5m",
+        "spot_bars": 300,
+        "spot_entries": 3,
+        "contracts_with_enough_bars": 25,
+        "contracts_total": 25,
+        "premium_entries_total": 127,
+        "confluence_confirmations": 29,
+        "spot_entries_with_a_confirming_leg": 3,
+        "mean_confirming_legs_per_spot_entry": 9.67,
+        "production_three_legs": {
+          "legs_considered": [
+            "24050CE"
+          ],
+          "spot_entries_with_a_confirming_leg": 3
+        },
+        "per_contract": [
+          {
+            "contract": "24200CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 17.2,
+            "confirms_spot_entries": 2
+          },
+          {
+            "contract": "24200PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 31.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24250CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 16.9,
+            "confirms_spot_entries": 2
+          },
+          {
+            "contract": "24250PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 31.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24150PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 30.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24300CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 17.2,
+            "confirms_spot_entries": 2
+          },
+          {
+            "contract": "24300PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 33.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24100PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 28.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24350CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 19.8,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "24050CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 21.8,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "24050PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 28.2,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24400CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 16.2,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "24000CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 17.5,
+            "confirms_spot_entries": 2
+          },
+          {
+            "contract": "24000PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 22.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24450PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 32.5,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23950CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 22.1,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "23950PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 21.8,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24500PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 7,
+            "live_bars_pct": 35.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23900CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 21.8,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "23900PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 22.4,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23850PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 5,
+            "live_bars_pct": 22.1,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23800CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 23.4,
+            "confirms_spot_entries": 3
+          },
+          {
+            "contract": "23800PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 13.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23750PE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 4,
+            "live_bars_pct": 13.0,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23700CE",
+            "bars": 308,
+            "usable": true,
+            "premium_entries": 6,
+            "live_bars_pct": 25.3,
+            "confirms_spot_entries": 3
+          }
+        ]
+      },
+      {
+        "timeframe": "15m",
+        "spot_bars": 100,
+        "spot_entries": 1,
+        "contracts_with_enough_bars": 25,
+        "contracts_total": 25,
+        "premium_entries_total": 46,
+        "confluence_confirmations": 11,
+        "spot_entries_with_a_confirming_leg": 1,
+        "mean_confirming_legs_per_spot_entry": 11.0,
+        "production_three_legs": {
+          "legs_considered": [
+            "24050CE"
+          ],
+          "spot_entries_with_a_confirming_leg": 1
+        },
+        "per_contract": [
+          {
+            "contract": "24200CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24200PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 17.3,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24250CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24250PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 17.3,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24150PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 17.3,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24300CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24300PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 17.3,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24100PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 16.3,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24350CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24050CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24050PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 10.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24400CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24000CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "24000PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 10.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24450PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 25.0,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23950CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "23950PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 10.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "24500PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 3,
+            "live_bars_pct": 26.0,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23900CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "23900PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 9.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23850PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 9.6,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23800CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          },
+          {
+            "contract": "23800PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 7.7,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23750PE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 2,
+            "live_bars_pct": 7.7,
+            "confirms_spot_entries": 0
+          },
+          {
+            "contract": "23700CE",
+            "bars": 104,
+            "usable": true,
+            "premium_entries": 1,
+            "live_bars_pct": 8.7,
+            "confirms_spot_entries": 1
+          }
+        ]
+      }
+    ]
+  }
+}
