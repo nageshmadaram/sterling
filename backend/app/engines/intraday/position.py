@@ -314,17 +314,30 @@ def spot_trail(pos: IntradayPosition, cfg: IntradayConfig, *, spot: float,
     return stop, why
 
 
-def should_scale_out(pos: IntradayPosition, premium: float) -> bool:
+def should_scale_out(pos: IntradayPosition, price: float, *,
+                     long: bool = True) -> bool:
     """Whether the first target has been reached on a position that has a runner.
 
     Deliberately NOT part of ``should_exit``: banking half is not an exit, and
     folding the two together is how a two-stage strategy quietly becomes a
-    one-stage one — the first target closes everything and the 1:3 leg that the
+    one-stage one — the first target closes everything and the 1:3 leg the
     board advertises never exists.
+
+    ``long`` defaults True because the LIVE caller passes a premium, and a
+    bought option is long premium whichever way the thesis points. A caller
+    working in the UNDERLYING's prices must pass the actual direction: a short's
+    target sits BELOW its entry, so a `>=` test fires the instant the position
+    opens.
+
+    That is not hypothetical. Without this parameter the replay banked half of
+    every short at its target price on the entry bar, for a guaranteed +2R that
+    the tape never offered — worth about +0.6R per trade, and enough to make a
+    pure random walk look like a strategy.
     """
     if pos.target2 <= 0 or pos.target1_done or pos.target <= 0:
         return False
-    return float(premium or 0.0) >= pos.target
+    px = float(price or 0.0)
+    return px >= pos.target if long else px <= pos.target
 
 
 def should_exit(pos: IntradayPosition, premium: float, *,

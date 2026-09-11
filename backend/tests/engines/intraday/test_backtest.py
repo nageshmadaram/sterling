@@ -357,3 +357,85 @@ class TestNothingSeesTheFuture:
         gapped = _close(pos, 94.0, 0, 3, "stop", free, "underlying",
                         "pivot_break", "N")
         assert gapped.r < -1.0
+
+
+class TestTheHarnessCannotBeatANullMarket:
+    """The test that actually catches a harness bug.
+
+    A random walk has, by construction, nothing to find. Any exit scheme on a
+    martingale has zero expectancy before costs, so a strategy that makes money
+    on one is not a strategy — it is a bug in the measurement, and no amount of
+    staring at real-data results would show you which.
+
+    This caught two: a direction-blind scale-out that banked half of every
+    SHORT at its target the instant the position opened (a short's target is
+    BELOW its entry, and the test was `>=`), and an unweighted mean-R that
+    counted the good half of a scaled position as a whole trade. Together they
+    turned -0.25R into +0.65R and made pure noise look like an edge worth
+    trading.
+    """
+
+    def _random_walk(self, seed: int, n: int = 3000, sigma: float = 0.0011):
+        rng = np.random.default_rng(seed)
+        px = 23000 * np.exp(np.cumsum(rng.normal(0, sigma, n)))
+        base = tape([100.0] * n)          # borrow the session timestamps
+        out = []
+        for i, b in enumerate(base):
+            o = px[i - 1] if i else px[0]
+            c = px[i]
+            wick = abs(rng.normal(0, sigma)) * c
+            out.append({"time": b["time"], "open": o, "close": c,
+                        "high": max(o, c) + wick, "low": min(o, c) - wick,
+                        "volume": 0.0})
+        return out
+
+    def _free(self):
+        return CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0,
+                         exchange_pct=0.0, gst_pct=0.0, misc_pct=0.0,
+                         slippage_pct=0.0)
+
+    @pytest.mark.parametrize("strategy",
+                             ["pivot_break", "ma_ribbon", "vwap_supertrend"])
+    def test_no_strategy_makes_money_on_pure_noise(self, strategy):
+        from app.engines.intraday.stats import summarise
+        edges = []
+        for seed in range(3):
+            res = replay(self._random_walk(seed), cfg(), "N", strategy,
+                         costs=self._free(), qty=75)
+            if res.trades:
+                edges.append(summarise(res.trades, 100_000.0).avg_r)
+        if not edges:
+            pytest.skip(f"{strategy} does not trade this tape")
+        # Zero-ish, and certainly not a tradable edge.
+        assert float(np.mean(edges)) < 0.15, (
+            f"{strategy} earns {np.mean(edges):+.3f}R on a martingale — "
+            "that is a harness bug, not a strategy")
+
+    def test_the_result_does_not_depend_on_the_position_SIZE(self):
+        """Mean R is a per-unit quantity. If it moves with `qty`, something is
+        counting records where it should count units."""
+        from app.engines.intraday.stats import summarise
+        rows = self._random_walk(1)
+        one = summarise(replay(rows, cfg(), "N", "pivot_break",
+                               costs=self._free(), qty=1).trades, 100_000.0)
+        many = summarise(replay(rows, cfg(), "N", "pivot_break",
+                                costs=self._free(), qty=75).trades, 100_000.0)
+        assert one.avg_r == pytest.approx(many.avg_r, abs=0.12)
+
+    def test_a_short_does_not_bank_its_target_the_moment_it_opens(self):
+        """A short's target is BELOW its entry, so a `>=` test fires instantly.
+        Worth +0.6R per trade of pure invention before it was direction-aware."""
+        from app.engines.intraday.backtest import _Open
+        from app.engines.intraday.models import IntradaySignal
+        from app.engines.intraday.position import should_scale_out
+        sig = IntradaySignal(strategy="pivot_break", symbol="N", direction="BEARISH",
+                             option_type="PE", timestamp_ms=0, entry=100.0,
+                             stop=102.0, target=96.0, target2=94.0, risk=2.0,
+                             strength="STRONG", origin="t")
+        short = _Open(sig=sig, strategy="pivot_break", thesis="BEARISH",
+                      entry=100.0, stop=102.0, target=96.0, target2=94.0,
+                      qty=100, entry_ms=0, entry_i=0, peak=100.0, risk=2.0)
+        assert should_scale_out(short, 99.0, long=False) is False
+        assert should_scale_out(short, 95.0, long=False) is True
+        # And the premium caller, which is always long, is unaffected.
+        assert should_scale_out(short, 99.0) is True

@@ -318,7 +318,7 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
             else:
                 # The first target BANKS half on a two-stage trade rather than
                 # closing it, which is what the live path does.
-                if should_scale_out(open_pos, hi if bull else lo):
+                if should_scale_out(open_pos, hi if bull else lo, long=bull):
                     half = open_pos.qty // 2
                     if half > 0:
                         out.trades.append(_close(
@@ -329,6 +329,24 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
                     open_pos.breakeven_done = True
                     open_pos.stop = max(open_pos.stop, open_pos.entry) if bull \
                         else min(open_pos.stop, open_pos.entry)
+                    # The stop MOVED inside this bar, so it has to be tested
+                    # against this bar's range again. Without this the runner
+                    # got a free pass for the rest of the bar it banked on: a
+                    # bar whose high touched the first target and then collapsed
+                    # booked half at +2R and carried the remainder to the next
+                    # bar as though breakeven had held.
+                    #
+                    # This was worth roughly +0.6R per trade of pure invention.
+                    # A random walk — which by construction has nothing to find
+                    # — returned +0.69R through this path.
+                    if (lo <= open_pos.stop) if bull else (hi >= open_pos.stop):
+                        px2 = min(open_pos.stop, o) if bull else max(open_pos.stop, o)
+                        out.trades.append(_close(
+                            open_pos, px2, int(bars.time[i] * 1000), i,
+                            "breakeven stop", costs, lens, strategy, symbol))
+                        open_pos = None
+                if open_pos is None:
+                    continue
                 final = open_pos.target2 if (open_pos.target2 > 0
                                              and open_pos.target1_done) else (
                     0.0 if open_pos.target2 > 0 else open_pos.target)
@@ -398,12 +416,20 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
 
 def _fill(sig: IntradaySignal, open_px: float, i: int, bars: Bars,
           costs: CostModel, lens: Lens, qty: int) -> Optional[_Open]:
-    """Open a position at this bar's open, keeping the rule's own RISK.
+    """Open a position at this bar's open, at the rule's own PRICES.
 
-    The stop and target were computed against the signal bar's close, so they
-    are held at the same DISTANCE from the actual fill rather than at the same
-    price — otherwise an overnight gap would silently change the risk the
-    strategy chose without changing the strategy.
+    The stop and target are LEVELS, not distances. A candle's low does not move
+    because the next bar opened higher, and the live path does not move it:
+    ``arm()`` carries ``sig.stop`` and ``sig.target`` through unchanged.
+
+    The replay used to shift both by the fill's drift, which preserved the
+    reward-to-risk ratio across a gap — so every entry came out at a clean 1:2
+    however badly it filled. That is exactly backwards: a gap-up entry means
+    the structural stop is FURTHER away and the trade is worse, and quietly
+    renormalising it converted the worst entries into average ones.
+
+    A fill already beyond the stop or the target is a real outcome, not an
+    error: the entry bar's own management resolves it on the bar it happened.
     """
     if open_px <= 0:
         return None
@@ -411,14 +437,16 @@ def _fill(sig: IntradaySignal, open_px: float, i: int, bars: Bars,
     side: Literal["buy", "sell"] = "buy" if lens == "option" else (
         "buy" if bull else "sell")
     entry = costs.slip(open_px, side)
-    drift = entry - sig.entry
-    stop = sig.stop + drift
+    stop = sig.stop
     risk = abs(entry - stop)
     if risk <= 0:
         return None
+    # A fill already the wrong side of its own stop has no trade in it.
+    if (entry <= stop) if bull else (entry >= stop):
+        return None
     return _Open(sig=sig, strategy=sig.strategy, thesis=sig.direction,
-                 entry=entry, stop=stop, target=sig.target + drift,
-                 target2=(sig.target2 + drift) if sig.target2 is not None else 0.0,
+                 entry=entry, stop=stop, target=sig.target,
+                 target2=sig.target2 if sig.target2 is not None else 0.0,
                  qty=qty, entry_ms=int(bars.time[i] * 1000), entry_i=i,
                  peak=entry, risk=risk)
 

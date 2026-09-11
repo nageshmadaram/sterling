@@ -150,6 +150,19 @@ def max_drawdown(rets: np.ndarray) -> float:
     return float(((equity - peak) / peak).min() * 100.0)
 
 
+def _size_weighted_r(trades: Sequence) -> float:
+    """Mean R per UNIT traded, not per trade record.
+
+    A partial exit is half a position, and counting it as a whole one inflates
+    the average by exactly the share of trades that scale out.
+    """
+    units = sum(float(getattr(t, "qty", 1) or 1) for t in trades)
+    if units <= 0:
+        return 0.0
+    return sum(float(getattr(t, "r", 0.0)) * float(getattr(t, "qty", 1) or 1)
+               for t in trades) / units
+
+
 def drawdown_r(trades: Sequence) -> float:
     """Peak-to-trough of the cumulative R curve, in R.
 
@@ -282,6 +295,6 @@ def summarise(trades: Sequence, capital: float) -> Summary:
         sharpe=round(sharpe(rets), 3),
         max_drawdown_pct=round(max_drawdown(rets), 2),
         profit_factor=profit_factor(trades),
-        avg_r=round(float(np.mean([t.r for t in trades])), 3) if n else 0.0,
+        avg_r=round(_size_weighted_r(trades), 3) if n else 0.0,
         expectancy=round(net / n, 2) if n else 0.0,
         max_drawdown_r=round(drawdown_r(trades), 2))
