@@ -598,6 +598,8 @@ def thesis_broken(bars: Bars, cfg: IntradayConfig, strategy: str,
             return False, ""
         return ribbon_should_exit(bars, cfg, thesis)
     if strategy == "vwap_supertrend":
+        if not cfg.vs_exit_on_flip_back:
+            return False, ""
         i = len(bars) - 1
         _, trend = compute_supertrend(bars.high, bars.low, bars.close,
                                       cfg.vs_atr_length, cfg.vs_factor)

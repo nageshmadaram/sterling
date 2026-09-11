@@ -1,0 +1,677 @@
+{
+  "config": {
+    "symbols": [
+      "BANKNIFTY",
+      "HDFCBANK",
+      "ICICIBANK",
+      "INFY",
+      "NIFTY",
+      "RELIANCE"
+    ],
+    "bars": 2249,
+    "timeframe": "30m",
+    "is_bars": 500,
+    "oos_bars": 250,
+    "purge_bars": 12,
+    "lens": "underlying",
+    "slippage_pct": 0.01,
+    "capital": 100000.0
+  },
+  "gate": {
+    "min_oos_trades": 50,
+    "min_oos_net": 0.0,
+    "min_oos_sharpe": 0.5,
+    "min_deflated_sharpe": 0.5,
+    "max_permutation_p": 0.05,
+    "min_symbols_positive_pct": 60.0,
+    "max_drawdown_pct": -35.0,
+    "max_drawdown_r": -25.0
+  },
+  "strategies": {
+    "pivot_break": {
+      "strategy": "pivot_break",
+      "symbols": [
+        "BANKNIFTY",
+        "HDFCBANK",
+        "ICICIBANK",
+        "INFY",
+        "NIFTY",
+        "RELIANCE"
+      ],
+      "folds": [
+        {
+          "fold": 0,
+          "chosen": "body65",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": 0.694,
+            "body65": 1.65,
+            "body75": 1.445
+          },
+          "oos": {
+            "trades": 44,
+            "wins": 17,
+            "win_rate": 38.64,
+            "net": 66671.01,
+            "gross": 81480.44,
+            "costs": 14809.43,
+            "cost_share_pct": 18.2,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -38.31,
+            "profit_factor": 1.541,
+            "avg_r": 0.307,
+            "expectancy": 1515.25,
+            "max_drawdown_r": -6.51
+          }
+        },
+        {
+          "fold": 1,
+          "chosen": "body55",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": 2.452,
+            "body65": 2.351,
+            "body75": 2.26
+          },
+          "oos": {
+            "trades": 58,
+            "wins": 15,
+            "win_rate": 25.86,
+            "net": -58306.73,
+            "gross": -37657.72,
+            "costs": 20649.01,
+            "cost_share_pct": null,
+            "gross_positive": false,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -48.43,
+            "profit_factor": 0.662,
+            "avg_r": -0.076,
+            "expectancy": -1005.29,
+            "max_drawdown_r": -10.86
+          }
+        },
+        {
+          "fold": 2,
+          "chosen": "body55",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": 3.006,
+            "body65": 2.674,
+            "body75": 1.065
+          },
+          "oos": {
+            "trades": 68,
+            "wins": 24,
+            "win_rate": 35.29,
+            "net": 556.13,
+            "gross": 23331.57,
+            "costs": 22775.44,
+            "cost_share_pct": 97.6,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -48.03,
+            "profit_factor": 1.003,
+            "avg_r": 0.078,
+            "expectancy": 8.18,
+            "max_drawdown_r": -6.22
+          }
+        },
+        {
+          "fold": 3,
+          "chosen": "body65",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": -0.601,
+            "body65": -0.371,
+            "body75": -0.96
+          },
+          "oos": {
+            "trades": 63,
+            "wins": 18,
+            "win_rate": 28.57,
+            "net": -7442.27,
+            "gross": 13796.48,
+            "costs": 21238.75,
+            "cost_share_pct": 153.9,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -46.3,
+            "profit_factor": 0.944,
+            "avg_r": -0.09,
+            "expectancy": -118.13,
+            "max_drawdown_r": -15.15
+          }
+        },
+        {
+          "fold": 4,
+          "chosen": "body65",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": -0.24,
+            "body65": 0.205,
+            "body75": -0.576
+          },
+          "oos": {
+            "trades": 44,
+            "wins": 15,
+            "win_rate": 34.09,
+            "net": 24823.56,
+            "gross": 39505.92,
+            "costs": 14682.36,
+            "cost_share_pct": 37.2,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -18.38,
+            "profit_factor": 1.299,
+            "avg_r": 0.068,
+            "expectancy": 564.17,
+            "max_drawdown_r": -7.3
+          }
+        },
+        {
+          "fold": 5,
+          "chosen": "body75",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "body55": 0.091,
+            "body65": 0.09,
+            "body75": 0.973
+          },
+          "oos": {
+            "trades": 43,
+            "wins": 7,
+            "win_rate": 16.28,
+            "net": -64226.03,
+            "gross": -49949.8,
+            "costs": 14276.23,
+            "cost_share_pct": null,
+            "gross_positive": false,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -52.23,
+            "profit_factor": 0.406,
+            "avg_r": -0.404,
+            "expectancy": -1493.63,
+            "max_drawdown_r": -16.17
+          }
+        }
+      ],
+      "oos": {
+        "trades": 320,
+        "wins": 96,
+        "win_rate": 30.0,
+        "net": -37924.33,
+        "gross": 70506.89,
+        "costs": 108431.22,
+        "cost_share_pct": 153.8,
+        "gross_positive": true,
+        "sharpe": -0.34,
+        "max_drawdown_pct": -82.67,
+        "profit_factor": 0.952,
+        "avg_r": -0.018,
+        "expectancy": -118.51,
+        "max_drawdown_r": -23.33
+      },
+      "n_trials": 18,
+      "trial_sharpe_std": 0.0804,
+      "deflated_sharpe": 0.0165,
+      "permutation_p": 1.0,
+      "per_symbol_net": {
+        "BANKNIFTY": -22900.09,
+        "HDFCBANK": 2901.55,
+        "ICICIBANK": 24089.18,
+        "INFY": -31880.45,
+        "NIFTY": -33805.05,
+        "RELIANCE": 23670.53
+      },
+      "verdict": {
+        "promoted": false,
+        "reasons": [
+          "out-of-sample net -37,924 after costs \u2014 the edge was there (70,507 gross) and 153.8% of it went to costs",
+          "out-of-sample Sharpe -0.34 < 0.5",
+          "deflated Sharpe 0.017 < 0.5 \u2014 the result does not survive how many variants were tried",
+          "timing does not beat random entries of identical exposure",
+          "only 50% of symbols profitable, needs 60%"
+        ],
+        "checks": {
+          "enough_trades": true,
+          "profitable": false,
+          "sharpe": false,
+          "deflated_sharpe": false,
+          "beats_random_timing": false,
+          "consistent_across_symbols": false,
+          "survivable_drawdown": true
+        }
+      }
+    },
+    "ma_ribbon": {
+      "strategy": "ma_ribbon",
+      "symbols": [
+        "BANKNIFTY",
+        "HDFCBANK",
+        "ICICIBANK",
+        "INFY",
+        "NIFTY",
+        "RELIANCE"
+      ],
+      "folds": [
+        {
+          "fold": 0,
+          "chosen": "spread04",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": 2.218,
+            "spread08": 1.855,
+            "spread16": 1.082
+          },
+          "oos": {
+            "trades": 19,
+            "wins": 4,
+            "win_rate": 21.05,
+            "net": -182149.31,
+            "gross": -176283.9,
+            "costs": 5865.41,
+            "cost_share_pct": null,
+            "gross_positive": false,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -94.82,
+            "profit_factor": 0.044,
+            "avg_r": -0.436,
+            "expectancy": -9586.81,
+            "max_drawdown_r": -7.27
+          }
+        },
+        {
+          "fold": 1,
+          "chosen": "spread16",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": -2.775,
+            "spread08": -3.0,
+            "spread16": -2.619
+          },
+          "oos": {
+            "trades": 11,
+            "wins": 9,
+            "win_rate": 81.82,
+            "net": 38133.79,
+            "gross": 41227.53,
+            "costs": 3093.74,
+            "cost_share_pct": 7.5,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -3.55,
+            "profit_factor": 3.557,
+            "avg_r": 0.308,
+            "expectancy": 3466.71,
+            "max_drawdown_r": -1.46
+          }
+        },
+        {
+          "fold": 2,
+          "chosen": "spread08",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": -0.519,
+            "spread08": -0.325,
+            "spread16": -0.465
+          },
+          "oos": {
+            "trades": 19,
+            "wins": 10,
+            "win_rate": 52.63,
+            "net": 57532.95,
+            "gross": 63736.09,
+            "costs": 6203.14,
+            "cost_share_pct": 9.7,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -42.92,
+            "profit_factor": 1.925,
+            "avg_r": 0.15,
+            "expectancy": 3028.05,
+            "max_drawdown_r": -1.29
+          }
+        },
+        {
+          "fold": 3,
+          "chosen": "spread16",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": -0.042,
+            "spread08": -0.042,
+            "spread16": 1.1
+          },
+          "oos": {
+            "trades": 9,
+            "wins": 5,
+            "win_rate": 55.56,
+            "net": 58438.29,
+            "gross": 60697.63,
+            "costs": 2259.34,
+            "cost_share_pct": 3.7,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -14.29,
+            "profit_factor": 3.308,
+            "avg_r": 0.685,
+            "expectancy": 6493.14,
+            "max_drawdown_r": -1.84
+          }
+        },
+        {
+          "fold": 4,
+          "chosen": "spread16",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": 3.006,
+            "spread08": 2.896,
+            "spread16": 4.411
+          },
+          "oos": {
+            "trades": 13,
+            "wins": 4,
+            "win_rate": 30.77,
+            "net": -38595.88,
+            "gross": -33674.07,
+            "costs": 4921.81,
+            "cost_share_pct": null,
+            "gross_positive": false,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -57.0,
+            "profit_factor": 0.525,
+            "avg_r": -0.149,
+            "expectancy": -2968.91,
+            "max_drawdown_r": -4.92
+          }
+        },
+        {
+          "fold": 5,
+          "chosen": "spread04",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "spread04": 1.258,
+            "spread08": 0.826,
+            "spread16": 1.221
+          },
+          "oos": {
+            "trades": 10,
+            "wins": 4,
+            "win_rate": 40.0,
+            "net": 3208.82,
+            "gross": 6587.39,
+            "costs": 3378.57,
+            "cost_share_pct": 51.3,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -12.18,
+            "profit_factor": 1.227,
+            "avg_r": 0.001,
+            "expectancy": 320.88,
+            "max_drawdown_r": -1.07
+          }
+        }
+      ],
+      "oos": {
+        "trades": 81,
+        "wins": 36,
+        "win_rate": 44.44,
+        "net": -63431.34,
+        "gross": -37709.33,
+        "costs": 25722.01,
+        "cost_share_pct": null,
+        "gross_positive": false,
+        "sharpe": -0.545,
+        "max_drawdown_pct": -94.82,
+        "profit_factor": 0.837,
+        "avg_r": 0.027,
+        "expectancy": -783.1,
+        "max_drawdown_r": -7.27
+      },
+      "n_trials": 18,
+      "trial_sharpe_std": 0.1282,
+      "deflated_sharpe": 0.0002,
+      "permutation_p": 1.0,
+      "per_symbol_net": {
+        "BANKNIFTY": -33263.42,
+        "HDFCBANK": 13849.67,
+        "ICICIBANK": -57526.67,
+        "INFY": 44774.74,
+        "NIFTY": -14494.22,
+        "RELIANCE": -16771.44
+      },
+      "verdict": {
+        "promoted": false,
+        "reasons": [
+          "out-of-sample net -63,431: gross was -37,709 BEFORE any cost, so the entries lose on their own and no cost model fixes that",
+          "out-of-sample Sharpe -0.545 < 0.5",
+          "deflated Sharpe 0.000 < 0.5 \u2014 the result does not survive how many variants were tried",
+          "timing does not beat random entries of identical exposure",
+          "only 33% of symbols profitable, needs 60%"
+        ],
+        "checks": {
+          "enough_trades": true,
+          "profitable": false,
+          "sharpe": false,
+          "deflated_sharpe": false,
+          "beats_random_timing": false,
+          "consistent_across_symbols": false,
+          "survivable_drawdown": true
+        }
+      }
+    },
+    "vwap_supertrend": {
+      "strategy": "vwap_supertrend",
+      "symbols": [
+        "BANKNIFTY",
+        "HDFCBANK",
+        "ICICIBANK",
+        "INFY",
+        "NIFTY",
+        "RELIANCE"
+      ],
+      "folds": [
+        {
+          "fold": 0,
+          "chosen": "f120",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 3.335,
+            "f146": 3.199,
+            "f200": 1.32
+          },
+          "oos": {
+            "trades": 27,
+            "wins": 8,
+            "win_rate": 29.63,
+            "net": 8731.14,
+            "gross": 15407.12,
+            "costs": 6675.98,
+            "cost_share_pct": 43.3,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -38.2,
+            "profit_factor": 1.138,
+            "avg_r": 0.063,
+            "expectancy": 323.38,
+            "max_drawdown_r": -4.3
+          }
+        },
+        {
+          "fold": 1,
+          "chosen": "f120",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 1.13,
+            "f146": 0.538,
+            "f200": 0.588
+          },
+          "oos": {
+            "trades": 16,
+            "wins": 4,
+            "win_rate": 25.0,
+            "net": 1252.8,
+            "gross": 5163.79,
+            "costs": 3910.99,
+            "cost_share_pct": 75.7,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -23.63,
+            "profit_factor": 1.036,
+            "avg_r": -0.16,
+            "expectancy": 78.3,
+            "max_drawdown_r": -8.69
+          }
+        },
+        {
+          "fold": 2,
+          "chosen": "f146",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 1.896,
+            "f146": 2.061,
+            "f200": 0.95
+          },
+          "oos": {
+            "trades": 24,
+            "wins": 11,
+            "win_rate": 45.83,
+            "net": 7900.67,
+            "gross": 13523.55,
+            "costs": 5622.88,
+            "cost_share_pct": 41.6,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -15.6,
+            "profit_factor": 1.157,
+            "avg_r": 0.141,
+            "expectancy": 329.19,
+            "max_drawdown_r": -4.77
+          }
+        },
+        {
+          "fold": 3,
+          "chosen": "f200",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 1.34,
+            "f146": 1.606,
+            "f200": 1.73
+          },
+          "oos": {
+            "trades": 14,
+            "wins": 8,
+            "win_rate": 57.14,
+            "net": 36518.74,
+            "gross": 39607.3,
+            "costs": 3088.56,
+            "cost_share_pct": 7.8,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -8.8,
+            "profit_factor": 2.343,
+            "avg_r": 0.756,
+            "expectancy": 2608.48,
+            "max_drawdown_r": -2.16
+          }
+        },
+        {
+          "fold": 4,
+          "chosen": "f200",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 2.223,
+            "f146": 1.668,
+            "f200": 2.87
+          },
+          "oos": {
+            "trades": 11,
+            "wins": 4,
+            "win_rate": 36.36,
+            "net": -7433.65,
+            "gross": -4631.48,
+            "costs": 2802.17,
+            "cost_share_pct": null,
+            "gross_positive": false,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -8.5,
+            "profit_factor": 0.74,
+            "avg_r": -0.173,
+            "expectancy": -675.79,
+            "max_drawdown_r": -3.27
+          }
+        },
+        {
+          "fold": 5,
+          "chosen": "f200",
+          "purge_bars": 12,
+          "in_sample_scores": {
+            "f120": 1.029,
+            "f146": 2.34,
+            "f200": 3.512
+          },
+          "oos": {
+            "trades": 13,
+            "wins": 5,
+            "win_rate": 38.46,
+            "net": 12191.59,
+            "gross": 15149.3,
+            "costs": 2957.71,
+            "cost_share_pct": 19.5,
+            "gross_positive": true,
+            "sharpe": 0.0,
+            "max_drawdown_pct": -7.75,
+            "profit_factor": 1.473,
+            "avg_r": 0.237,
+            "expectancy": 937.81,
+            "max_drawdown_r": -1.69
+          }
+        }
+      ],
+      "oos": {
+        "trades": 105,
+        "wins": 40,
+        "win_rate": 38.1,
+        "net": 59161.29,
+        "gross": 84219.58,
+        "costs": 25058.29,
+        "cost_share_pct": 29.8,
+        "gross_positive": true,
+        "sharpe": 1.091,
+        "max_drawdown_pct": -38.2,
+        "profit_factor": 1.258,
+        "avg_r": 0.136,
+        "expectancy": 563.44,
+        "max_drawdown_r": -8.69
+      },
+      "n_trials": 18,
+      "trial_sharpe_std": 0.0578,
+      "deflated_sharpe": 0.3149,
+      "permutation_p": 0.002,
+      "per_symbol_net": {
+        "BANKNIFTY": 0.0,
+        "HDFCBANK": 12683.27,
+        "ICICIBANK": 33493.3,
+        "INFY": -2702.81,
+        "NIFTY": 0.0,
+        "RELIANCE": 15687.53
+      },
+      "verdict": {
+        "promoted": false,
+        "reasons": [
+          "deflated Sharpe 0.315 < 0.5 \u2014 the result does not survive how many variants were tried",
+          "only 50% of symbols profitable, needs 60%"
+        ],
+        "checks": {
+          "enough_trades": true,
+          "profitable": true,
+          "sharpe": true,
+          "deflated_sharpe": false,
+          "beats_random_timing": true,
+          "consistent_across_symbols": false,
+          "survivable_drawdown": true
+        }
+      }
+    }
+  }
+}

@@ -285,7 +285,8 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
 
         # ── A. fill what was decided on the previous CLOSED bar ─────────────
         if pending is not None and open_pos is None:
-            open_pos = _fill(pending, o, i, bars, costs, lens, qty)
+            open_pos = _fill(pending, o, i, bars, costs, lens, qty,
+                             cfg.stop_widen_mult)
             pending = None
             if open_pos is None:
                 out.skipped["no risk after fill"] = out.skipped.get(
@@ -354,6 +355,10 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
                     reason = "target2" if open_pos.target1_done and \
                         open_pos.target2 > 0 else "target"
                     px = final
+                elif cfg.exit_after_bars and (i - open_pos.entry_i) >= cfg.exit_after_bars:
+                    # The holding period the forward-return measurement points
+                    # at, rather than a level the noise reaches first.
+                    reason, px = "time", close
                 elif session_over and cfg.close_at_session_end:
                     reason, px = "session end", close
                 else:
@@ -415,7 +420,8 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
 
 
 def _fill(sig: IntradaySignal, open_px: float, i: int, bars: Bars,
-          costs: CostModel, lens: Lens, qty: int) -> Optional[_Open]:
+          costs: CostModel, lens: Lens, qty: int,
+          cfg_widen: float = 1.0) -> Optional[_Open]:
     """Open a position at this bar's open, at the rule's own PRICES.
 
     The stop and target are LEVELS, not distances. A candle's low does not move
@@ -438,6 +444,9 @@ def _fill(sig: IntradaySignal, open_px: float, i: int, bars: Bars,
         "buy" if bull else "sell")
     entry = costs.slip(open_px, side)
     stop = sig.stop
+    if cfg_widen != 1.0:
+        # Push the structural stop further out, keeping its side.
+        stop = entry - (entry - stop) * cfg_widen
     risk = abs(entry - stop)
     if risk <= 0:
         return None

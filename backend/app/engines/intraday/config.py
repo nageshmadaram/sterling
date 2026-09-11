@@ -140,6 +140,24 @@ class IntradayConfig:
     #: R banked before the stop moves to breakeven, and before the premium
     #: ratchet starts. Below this the trade has not earned a tighter stop.
     trail_activate_r: float = 1.0
+    #: Close after this many bars, whatever the price is doing. 0 = off.
+    #:
+    #: MEASURED, and the reason it exists: the forward move after these signals
+    #: is +3 to +11 basis points over 30-120 minutes, and a round trip costs
+    #: about 2.3. The edge is real and it is SLOW. The structural stops are 10
+    #: to 20 basis points away — two to four times the whole edge — so noise
+    #: reaches them long before the edge does, and the strategy books the noise.
+    #:
+    #: A holding period matched to where the edge actually lives collects the
+    #: mean instead of the tail. It is not a better guess at the exit; it is the
+    #: exit the measurement points at.
+    exit_after_bars: int = 0
+    #: Widen the structural stop by this multiple. 1.0 leaves the rule's own.
+    #:
+    #: A stop several times the size of the edge is not protection, it is a
+    #: sampling device: it decides the trade on noise before the signal has had
+    #: time to be right.
+    stop_widen_mult: float = 1.0
     #: Flatten everything at the session close. An intraday strategy holding
     #: overnight is a different strategy.
     close_at_session_end: bool = True
@@ -261,6 +279,14 @@ class IntradayConfig:
     #: is larger, and never lowers it.
     vs_dynamic_target: bool = True
     vs_target_atr_mult: float = 2.0
+    #: Close when SuperTrend flips back through VWAP.
+    #:
+    #: The counter-signal, and the obvious exit — but MEASURED over 204 trades
+    #: on 9 symbols it returns -0.607R, against a strategy whose gross edge is
+    #: +0.36 points per unit. An exit that fires on the counter-signal is not
+    #: automatically an exit worth taking: by the time both legs have reversed,
+    #: the move it is reacting to has already happened.
+    vs_exit_on_flip_back: bool = True
 
     # ------------------------------------------------------------------ checks
 
@@ -296,6 +322,10 @@ class IntradayConfig:
                      "max_new_trades_per_day"):
             if int(getattr(self, name)) < 1:
                 raise ValueError(f"{name} must be >= 1")
+        if int(self.exit_after_bars) < 0:
+            raise ValueError("exit_after_bars must be >= 0 (0 = off)")
+        if self.stop_widen_mult <= 0:
+            raise ValueError("stop_widen_mult must be > 0")
         if int(self.catchup_bars) < 1:
             raise ValueError("catchup_bars must be >= 1 (1 = newest bar only)")
         for name in ("cooldown_bars", "rb_confirm_bars", "vs_confirm_within_bars",
