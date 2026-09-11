@@ -9,7 +9,7 @@ import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { InstrumentLabel, parseInstrument } from '../InstrumentLabel';
 import { EmptyState } from './primitives/EmptyState';
 import { SkeletonRows } from './primitives/Skeleton';
-import { tradesHaveFriction } from './replayColumns';
+import { replayHasFriction } from './replayColumns';
 import {
   ABSENT,
   extractDate,
@@ -346,7 +346,8 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
     }
   }, [multiDay, userInteractedGroup]);
 
-  const hasFriction = tradesHaveFriction(trades);
+  const caps = useReplayStore((s) => s.status.capabilities);
+  const hasFriction = replayHasFriction(cfg, caps, trades);
   const rows = useMemo(() => trades.slice().reverse(), [trades]);
 
   const groups = useMemo(() => {
@@ -491,7 +492,9 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
       {/* Say it once, at the top, rather than implying it with a zero. */}
       {!hasFriction && (
         <div className="rd-pane-note">
-          Execution friction is not modelled in this replay — fills are at the signal price.
+          {cfg?.friction_mode === 'ideal'
+            ? 'Ideal execution — fills are at the signal price, so the modelled friction is exactly zero.'
+            : 'Execution friction is not modelled in this replay — fills are at the signal price.'}
         </div>
       )}
 
@@ -731,7 +734,13 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
                 )}
                 {/* Gross vs net is only a distinction when friction was measured;
                     labelling a single number "net" otherwise is a claim. */}
-                <span className="rd-sub">{hasFriction ? 'net of friction' : 'no friction modelled'}</span>
+                <span className="rd-sub">
+                  {hasFriction
+                    ? 'net of friction'
+                    : cfg?.friction_mode === 'ideal'
+                      ? 'ideal fills — zero friction'
+                      : 'no friction modelled'}
+                </span>
               </td>
             </tr>
           </tfoot>

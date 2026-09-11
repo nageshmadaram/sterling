@@ -121,6 +121,11 @@ class EngineSignalRow(BaseModel):
     # be resolved from the selected strike/expiry settings. This is not a
     # liquidity verdict; true liquidity gates run later on live quote/depth data.
     resolution_reason: Optional[str] = None
+    # This row came from the market REPLAY, not from the live scanner. The two
+    # are merged into one table while a replay holds the session view, so
+    # without this a trader cannot tell a recording from the market. Defaults
+    # to False, so every live and cached row is unaffected.
+    is_replay: bool = False
 
 
 class SignalsResponse(BaseModel):
@@ -131,6 +136,11 @@ class SignalsResponse(BaseModel):
     next_scan_ms: int = 0
     auto_scan: bool = False
     market_open: bool = True
+    # "live" | "replay" | "replay_review". Anything but "live" means at least
+    # some rows in this response are simulated, and `replay_live` says whether
+    # the replay is still playing or is a finished session held for review.
+    feed_mode: Literal["live", "replay", "replay_review"] = "live"
+    replay_live: bool = False
 
 
 class OpenPositionRecord(BaseModel):

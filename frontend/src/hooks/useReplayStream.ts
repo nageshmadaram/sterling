@@ -91,6 +91,9 @@ function applyStatus(next: ReplayStatus, wasDelta: boolean) {
   const totalTrades = next.trades_total ?? haveTrades;
 
   if (totalEvents < haveEvents || totalTrades < haveTrades) {
+    // The ledger was truncated (a seek, or a new session). Cut locally FIRST so
+    // the tables never render rows the runner has deleted, then resync.
+    store.truncateLedger(totalEvents, totalTrades);
     void fetchStatus().then((full) => full && store.setStatus(full));
     return;
   }
@@ -191,7 +194,10 @@ export function useReplayStream(enabled: boolean): void {
       if (stoppedRef.current) return;
       const store = useReplayStore.getState();
       const caps = store.status.capabilities;
-      const canDelta = caps?.delta_status === true;
+      // Signals are append-only, so an offset into them is meaningful. Trades
+      // mutate — their P&L, exit price and WIN/LOSS all change after the row is
+      // first sent — so the engine always returns those in full and says so.
+      const canDelta = caps?.delta_events ?? caps?.delta_status === true;
 
       const next = canDelta
         ? await fetchStatus(store.status.stats.events.length, store.status.stats.trades.length)
@@ -273,6 +279,17 @@ export function useReplayStream(enabled: boolean): void {
             },
           });
         });
+        // A seek on a RUNNING replay is applied inside the engine loop, long
+        // after `/seek` answered with the pre-seek status. This is the only
+        // notice the client gets that its ledger was cut.
+        es.addEventListener('truncate', (e) => {
+          armWatchdog();
+          const d = JSON.parse((e as MessageEvent).data);
+          useReplayStore.getState().truncateLedger(
+            Number(d.events_total ?? 0),
+            Number(d.trades_total ?? 0),
+          );
+        });
         es.addEventListener('signal', (e) => {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data) as ReplaySignal;
@@ -335,6 +352,13 @@ export function useReplayStream(enabled: boolean): void {
       if (esRef.current && esRef.current.readyState === EventSource.CLOSED) {
         closeStream();
         backoffRef.current = INITIAL_BACKOFF_MS;
+      }
+      // A FULL resync while the stream is alive. A delta poll here races the
+      // stream: a signal arriving between the request and its response leaves
+      // `since_events` stale, and the same rows are appended twice.
+      if (esRef.current) {
+        void fetchStatus().then((full) => full && useReplayStore.getState().setStatus(full));
+        return;
       }
       void poll();
     };

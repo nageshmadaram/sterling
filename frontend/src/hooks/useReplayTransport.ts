@@ -6,7 +6,7 @@ import {
   useReplayStore,
 } from './useReplayStore';
 import { pushReplayToast } from '../components/kite/replay/replayToastBus';
-import { ensureSeconds, makeScale } from '../components/kite/replay/replayFormat';
+import { ensureSeconds } from '../components/kite/replay/replayFormat';
 import { syncReplayStatus } from './useReplayStream';
 
 const API = '/api/v1/simulation';
@@ -125,6 +125,10 @@ export interface ReplayTransport {
   setSpeed(speed: number): Promise<void>;
   stepBars(count: number): Promise<void>;
   seekToPct(pct: number): Promise<void>;
+  /** Seek within the day currently showing, by time of day. */
+  seekToSessionTime(timeStr: string): Promise<void>;
+  /** Seek to the session open of a specific day in a multi-day range. */
+  seekToDay(dayIso: string): Promise<void>;
   seekToBar(index: number): Promise<void>;
   jumpStart(): Promise<void>;
   jumpEnd(): Promise<void>;
@@ -329,18 +333,29 @@ export function useReplayTransport(): ReplayTransport {
     // per drag rather than one per pointer move.
     seekToPct: (pct) => {
       const { status } = useReplayStore.getState();
-      const multiDay = !!status.config?.end_date && status.config.end_date !== status.config?.date;
-      if (multiDay) {
-        const startTime = status.config?.start_time || '09:00:00';
-        const endTime = status.config?.end_time || '15:40:00';
-        const scale = makeScale(startTime, endTime);
-        const timeStr = scale.timeForPct(pct);
-        const curDate = status.current_date || (status.current_time_iso?.includes('T') ? status.current_time_iso.split('T')[0] : status.config?.date);
-        return seek({ to_time: curDate ? `${curDate}T${timeStr}` : timeStr });
-      }
+      // `to_pct` spans the WHOLE session, including every day of a range, so a
+      // multi-day replay scrubs across days like any other. Mapping the pointer
+      // onto a time of day and pinning it to `current_date` — which is what
+      // this did — meant the scrubber could only ever move within whichever
+      // day the clock was already in, and day four of a five-day range was
+      // unreachable.
       if (status.capabilities?.absolute_seek) return seek({ to_pct: pct });
       const target = Math.round((pct / 100) * Math.max(0, status.bars_total - 1));
       return seek({ bars_offset: target - status.bars_played });
+    },
+    // Scrub within ONE session of a multi-day range: the timeline's own axis is
+    // a time of day, so a drag on it means "this time, on the day showing".
+    seekToSessionTime: (timeStr) => {
+      const { status } = useReplayStore.getState();
+      const curDate =
+        status.current_date ||
+        (status.current_time_iso?.includes('T') ? status.current_time_iso.split('T')[0] : status.config?.date);
+      return seek({ to_time: curDate ? `${curDate}T${timeStr}` : timeStr });
+    },
+    seekToDay: (dayIso) => {
+      const { status } = useReplayStore.getState();
+      const startTime = status.config?.start_time || '09:15:00';
+      return seek({ to_time: `${dayIso}T${startTime}` });
     },
     seekToBar: (index) => {
       const { status } = useReplayStore.getState();

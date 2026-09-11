@@ -10,6 +10,14 @@ import { rewardRisk } from './replayFormat';
  * always empty because the backend never populated them.
  */
 
+/**
+ * Signal columns.
+ *
+ * The premium ladder and the underlying ladder are separate COLUMNS, never the
+ * same one. A single "Entry / Stop Loss / Target" triple that took its entry
+ * from `premium_entry` and its stop from `stop` mixed an option premium with an
+ * index level inside one row, and the header could not say which was which.
+ */
 export const SIGNAL_CSV_COLUMNS: readonly CsvColumn<ReplaySignal>[] = [
   { header: 'Time', value: (r) => r.time_iso },
   { header: 'Strategy', value: (r) => (r.strategy || '').toUpperCase() },
@@ -18,9 +26,12 @@ export const SIGNAL_CSV_COLUMNS: readonly CsvColumn<ReplaySignal>[] = [
   { header: 'Spot', value: (r) => r.spot ?? '' },
   { header: 'Direction', value: (r) => r.direction },
   { header: 'Strength', value: (r) => r.strength },
-  { header: 'Entry', value: (r) => r.premium_entry ?? (r.strength === 'WATCHING' ? '' : r.entry) },
-  { header: 'Stop Loss', value: (r) => r.stop },
-  { header: 'Target', value: (r) => r.target },
+  { header: 'Premium Entry', value: (r) => r.premium_entry ?? '' },
+  { header: 'Premium SL', value: (r) => r.premium_sl ?? '' },
+  { header: 'Premium Target', value: (r) => r.premium_target ?? '' },
+  { header: 'Underlying Entry', value: (r) => (r.strength === 'WATCHING' ? '' : r.entry) },
+  { header: 'Underlying SL', value: (r) => (r.strength === 'WATCHING' ? '' : r.stop) },
+  { header: 'Underlying Target', value: (r) => (r.strength === 'WATCHING' ? '' : r.target) },
   {
     header: 'R:R',
     value: (r) => {
@@ -28,6 +39,9 @@ export const SIGNAL_CSV_COLUMNS: readonly CsvColumn<ReplaySignal>[] = [
       return rr == null ? '' : rr.toFixed(2);
     },
   },
+  { header: 'Level', value: (r) => (r.level_price == null ? '' : r.level_price) },
+  { header: 'Level Kind', value: (r) => r.level_kind ?? '' },
+  { header: 'Regime', value: (r) => r.regime ?? '' },
 ];
 
 /**
@@ -76,9 +90,33 @@ export function tradeCsvColumns(hasFriction: boolean): readonly CsvColumn<Replay
   ];
 }
 
-/** True when at least one trade carries measured friction. */
+/**
+ * Whether this replay MODELLED execution friction.
+ *
+ * Read from the session's own configuration, not from whether a sampled row
+ * happened to carry a value. Row-sniffing conflated three different states:
+ * friction not modelled at all, friction modelled in "ideal" mode and found to
+ * be zero, and a realistic run whose first rows had not yet been filled. A
+ * session in "ideal" mode is a MEASURED zero and says so; a `₹0.00` for a
+ * measurement never taken is the defect this whole surface was rebuilt over.
+ */
+export function replayHasFriction(
+  config: { friction_mode?: string } | null | undefined,
+  capabilities: { friction?: boolean } | null | undefined,
+  trades: readonly ReplayTrade[],
+): boolean {
+  if (capabilities && capabilities.friction === false) return false;
+  const mode = config?.friction_mode;
+  if (mode === 'realistic') return true;
+  if (mode === 'ideal') return false;
+  // No config echo yet (a session restored from the ledger alone): fall back to
+  // the rows, which is the only evidence available.
+  return trades.some((t) => t.slippage != null && t.slippage > 0);
+}
+
+/** True when at least one trade carries a non-zero measured drag. */
 export function tradesHaveFriction(trades: readonly ReplayTrade[]): boolean {
-  return trades.some((t) => t.slippage != null);
+  return trades.some((t) => t.slippage != null && t.slippage > 0);
 }
 
 /**

@@ -276,6 +276,9 @@ class SimTradeEvent(BaseModel):
     spot_initial_risk: Optional[float] = None
     #: Initial underlying stop at trade creation, to distinguish hard stop hits from trailing stop hits.
     spot_initial_stop: Optional[float] = None
+    #: |delta| used to translate an underlying move into a premium move, for
+    #: THIS leg's moneyness. `None` falls back to 0.50.
+    leg_delta: Optional[float] = None
     #: Why the position closed: TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE.
     exit_reason: Optional[str] = None
     bars_held: int = 0
@@ -338,7 +341,16 @@ class SimCapabilities(BaseModel):
     contract_on_signal: bool = True
     absolute_seek: bool = True
     stream: bool = True
+    #: Kept for clients that predate the split below. True when EITHER ledger
+    #: can be requested incrementally.
     delta_status: bool = True
+    #: Signals are append-only, so an offset into them is meaningful.
+    delta_events: bool = True
+    #: Trades MUTATE — their P&L, exit price and WIN/LOSS all change after the
+    #: row is first sent — so slicing them by index would withhold exactly the
+    #: updates the client needs. `/status` always returns them in full, and
+    #: saying so here stops the client from believing it received a delta.
+    delta_trades: bool = False
     multi_day: bool = True
     resolutions: List[str] = ["1m", "5m", "15m"]
 
@@ -366,6 +378,15 @@ class SimStatus(BaseModel):
     trades_total: int = 0
     open_positions: int = 0
     unrealised_pnl: float = 0.0
+    #: "instruments" when lot sizes came from the broker's instrument master,
+    #: "fallback" when the built-in literal table was used. Every quantity and
+    #: P&L in the session scales with this, so the client says which it was.
+    lot_size_source: str = "fallback"
+    #: True while the runner is actually playing. `session_complete` covers the
+    #: other case — a finished ledger held for review — and the two must not be
+    #: conflated by anything that decides whether a surface is showing the live
+    #: market or a recording.
+    replay_live: bool = False
 
 
 INDEX_SYMBOLS = {
@@ -420,6 +441,12 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 _SESSION_END = (15, 30)  # NSE cash close. A forming daily bar is not a close.
 
 
+# Last-resort lot sizes. The exchange revises these, and the live path resolves
+# them from the Kite instrument master (`exchanges/kite/instruments.py`), so
+# these literals are a FALLBACK — used only when the master is unavailable.
+# Every quantity, invested figure and P&L in a replay scales linearly with this
+# number, so a silent drift between here and the exchange rescales the whole
+# session. `_lot_size_source()` reports which one was used.
 INDEX_LOT_SIZES = {
     "NIFTY": 25,
     "BANKNIFTY": 15,
@@ -429,9 +456,73 @@ INDEX_LOT_SIZES = {
     "BANKEX": 15,
 }
 
+#: Lot sizes resolved from the instrument master this session, by canonical
+#: symbol. Populated once per replay by `prime_lot_sizes()`; empty means the
+#: master was not reachable and the literals above are in force.
+_LOT_SIZE_CACHE: Dict[str, int] = {}
+_LOT_SIZE_SOURCE: str = "fallback"
+
+
+def _lot_size_source() -> str:
+    """"instruments" when the broker's master answered, else "fallback"."""
+    return _LOT_SIZE_SOURCE
+
+
+def reset_lot_sizes() -> None:
+    global _LOT_SIZE_SOURCE
+    _LOT_SIZE_CACHE.clear()
+    _LOT_SIZE_SOURCE = "fallback"
+
+
+async def prime_lot_sizes(kite_client: Any, symbols: List[str]) -> str:
+    """Resolve lot sizes for `symbols` from the Kite instrument master.
+
+    The derivatives dump carries one row per option contract, each tagged with
+    its underlying's `name` and the contract's `lot_size`; one pass over it
+    gives every underlying we are about to replay. Best effort — any failure
+    leaves the literal table in force and says so, rather than blocking a
+    replay on a broker lookup. Returns the source in effect.
+    """
+    global _LOT_SIZE_SOURCE
+    wanted = {_canonical_symbol(s) for s in symbols if s}
+    if not wanted or kite_client is None:
+        return _LOT_SIZE_SOURCE
+    try:
+        cache = getattr(kite_client, "_instruments", None)
+        if cache is None:
+            return _LOT_SIZE_SOURCE
+        found: Dict[str, int] = {}
+        for exchange in ("NFO", "BFO"):
+            try:
+                rows = await cache.load(exchange)
+            except Exception:
+                continue
+            for r in rows:
+                if str(r.get("instrument_type", "")).upper() not in ("CE", "PE"):
+                    continue
+                name = _canonical_symbol(str(r.get("name", "")))
+                if name not in wanted or name in found:
+                    continue
+                try:
+                    size = int(r.get("lot_size") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if size > 0:
+                    found[name] = size
+        if found:
+            _LOT_SIZE_CACHE.update(found)
+            _LOT_SIZE_SOURCE = "instruments"
+            log.info("Replay lot sizes from instrument master: %s", found)
+    except Exception as exc:  # noqa: BLE001
+        log.info("Instrument master unavailable for lot sizes (%s); using fallback table.", exc)
+    return _LOT_SIZE_SOURCE
+
 
 def _lot_size(symbol: str) -> int:
     canon = _canonical_symbol(symbol)
+    resolved = _LOT_SIZE_CACHE.get(canon)
+    if resolved:
+        return resolved
     if canon in INDEX_LOT_SIZES:
         return INDEX_LOT_SIZES[canon]
     if _is_index(symbol):
@@ -535,7 +626,6 @@ def _option_contract(
     signed = offset if opt_type == "CE" else -offset
     strike = max(step, atm + signed * step)
 
-    lot_size = 25 if _is_index(symbol) else 15
     lot_size = _lot_size(symbol)
     # Rough premium: ~2% of spot at ATM, decaying as the strike moves away.
     intrinsic = max(0.0, (spot - strike) if opt_type == "CE" else (strike - spot))
@@ -558,17 +648,36 @@ def _option_contract(
         "opt_type": opt_type,
         "lot_size": lot_size,
         "premium": premium,
+        "delta": _leg_delta(strike, spot, step, opt_type),
     }
+
+
+#: Approximate |delta| by how far the strike sits from at-the-money, in strike
+#: steps. A flat 0.50 marked an OTM2 leg exactly like an ATM one, which is the
+#: difference between a plausible P&L and an invented one. ATM stays at exactly
+#: 0.50 so the ATM ladder is unchanged.
+_DELTA_BY_STEPS = {-2: 0.72, -1: 0.62, 0: 0.50, 1: 0.38, 2: 0.28}
+
+
+def _leg_delta(strike: float, spot: float, step: float, opt_type: str) -> float:
+    """|delta| for a leg `steps` away from ATM, floored well inside (0, 1)."""
+    if step <= 0:
+        return 0.50
+    # Positive = out of the money, for either option type.
+    steps = (strike - spot) / step if opt_type == "CE" else (spot - strike) / step
+    rounded = max(-2, min(2, int(round(steps))))
+    return _DELTA_BY_STEPS.get(rounded, 0.50)
 
 
 def _premium_at(leg: Dict[str, Any], spot_entry: float, spot_level: float) -> float:
     """The option premium implied when the underlying reaches `spot_level`.
 
-    Same ~0.50 delta approximation the settlement path uses, so the ladder a
-    signal advertises and the fill a trade reports cannot disagree.
+    Same delta approximation the settlement path uses, so the ladder a signal
+    advertises and the fill a trade reports cannot disagree.
     """
     move = (spot_level - spot_entry) if leg["opt_type"] == "CE" else (spot_entry - spot_level)
-    return round(max(0.05, leg["premium"] + move * 0.50), 2)
+    delta = float(leg.get("delta") or 0.50)
+    return round(max(0.05, leg["premium"] + move * delta), 2)
 
 
 def _asof_symbol_bars(candles: list, sym: str, bar_time: Any) -> list:
@@ -808,6 +917,7 @@ def _apply_friction(
     raw_exit: float,
     symbol: str,
     config: Optional["SimConfig"],
+    strategy: Optional[str] = None,
 ) -> Tuple[float, float, str]:
     """Fill prices after bid/ask spread and slippage.
 
@@ -828,10 +938,14 @@ def _apply_friction(
     # and silently preferring the percent default would ignore what it asked for.
     bps = getattr(config, "slippage_bps", None) if config else None
     slip_pct = (bps / 100.0) if bps is not None else (config.slippage_pct if config else 0.25)
-    # V2 Hardened: Passive limit order execution models 50% slippage reduction
-    adaptive_ver = (getattr(config, "adaptive_version", None) or "v2_hardened").lower()
-    if adaptive_ver in ("v2_hardened", "v2"):
-        slip_pct *= 0.5
+    # V2 Hardened models passive limit-order execution, which halves slippage.
+    # `adaptive_version` is an ADAPTIVE EDGE setting: applying it to every
+    # strategy quietly gave SuperTrend, VCP, Navigator, ORB and Bear-to-Bearish
+    # fills the Adaptive Edge execution model too.
+    if strategy is not None and str(strategy).lower() == "adaptive_edge":
+        adaptive_ver = (getattr(config, "adaptive_version", None) or "v1_baseline").lower()
+        if adaptive_ver in ("v2_hardened", "v2"):
+            slip_pct *= 0.5
 
     half_spread = spread_pct / 200.0     # round-trip pct → one-sided fraction
     slip = slip_pct / 100.0
@@ -891,6 +1005,11 @@ class SimulationRunner:
         self._session_id: Optional[str] = None
         self._session_complete: bool = False
         self._ae_fallback_mode: bool = False
+        #: Monotonic trade counter for `_next_trade_id`. Never reset by a seek.
+        self._trade_seq: int = 0
+        #: True once `jump_end` skipped unplayed bars, so the completion
+        #: message cannot claim the session was replayed.
+        self._skipped_to_end: bool = False
 
     # ── SSE fan-out ─────────────────────────────────────────────────────
 
@@ -903,22 +1022,48 @@ class SimulationRunner:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 # Only a frame may be dropped. For anything else, make room by
-                # discarding the OLDEST frame still queued.
+                # discarding the oldest FRAME still queued — `get_nowait()`
+                # alone takes the oldest item of ANY kind, which silently
+                # dropped the signals and trades this branch exists to protect.
                 if kind == "frame":
                     continue
+                self._evict_frame(q)
                 try:
-                    q.get_nowait()
                     q.put_nowait(event)
-                except Exception:
-                    pass
+                except asyncio.QueueFull:
+                    log.warning("Replay stream queue full; dropped a %s event.", kind)
+
+    @staticmethod
+    def _evict_frame(q: "asyncio.Queue[SimEvent]") -> bool:
+        """Make room for a signal or trade, sacrificing a frame if one is queued.
+
+        Drains and re-queues, leaving behind the oldest `frame`. If the queue
+        holds no frame at all, the oldest item goes instead — the newest signal
+        still has to be seated, and a queue with 512 stale entries has already
+        lost the race. Returns True if a frame was the thing dropped.
+        """
+        held: list = []
+        while True:
+            try:
+                held.append(q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        victim = next((i for i, item in enumerate(held)
+                       if getattr(item, "kind", None) == "frame"), None)
+        was_frame = victim is not None
+        if victim is None and held:
+            victim = 0
+        if victim is not None:
+            held.pop(victim)
+        for item in held:
+            try:
+                q.put_nowait(item)
+            except asyncio.QueueFull:  # pragma: no cover — cannot happen, we just drained
+                break
+        return was_frame
 
     def _publish_state(self) -> None:
-        self._publish("state", {
-            "state": self._state.value if hasattr(self._state, "value") else str(self._state),
-            "status_message": self._status_message,
-            "config": self._config.model_dump() if self._config else None,
-            "bars_total": self._bars_total,
-        })
+        self._publish("state", self._state_payload())
 
     def _publish_frame(self, force: bool = False) -> None:
         """Throttled progress tick.
@@ -945,33 +1090,51 @@ class SimulationRunner:
             "signals_fired": self._stats.signals_fired,
             "trades_entered": self._stats.trades_entered,
             "slippage_total": self._stats.slippage_total,
-            "open_positions": sum(len(v) for v in self._open_by_symbol.values()),
+            "open_positions": len([tr for tr in self._stats.trades if tr.status == "OPEN"]),
             "unrealised_pnl": round(
                 sum(tr.pnl_usd for tr in self._stats.trades if tr.status == "OPEN"), 2
             ),
         })
 
-    async def subscribe(self):
-        """Yield events until the caller stops iterating."""
+    def open_subscription(self) -> "asyncio.Queue[SimEvent]":
+        """Register a subscriber queue, primed with the current state.
+
+        Exposed alongside `subscribe()` so a caller can await the queue with a
+        timeout. Racing `__anext__()` against `asyncio.wait_for` cancels the
+        async generator mid-suspend, which is not a state it can be resumed
+        from — and a stream that needs a keep-alive needs exactly that race.
+        The caller MUST pass the queue back to `close_subscription()`.
+        """
         q: "asyncio.Queue[SimEvent]" = asyncio.Queue(maxsize=512)
         self._subscribers.append(q)
-        # Open with the current state so a client that connects mid-session is
-        # not left blank until the next transition.
         try:
-            q.put_nowait(SimEvent(kind="state", data={
-                "state": self._state.value if hasattr(self._state, "value") else str(self._state),
-                "status_message": self._status_message,
-                "config": self._config.model_dump() if self._config else None,
-                "bars_total": self._bars_total,
-            }))
-        except asyncio.QueueFull:
+            q.put_nowait(SimEvent(kind="state", data=self._state_payload()))
+        except asyncio.QueueFull:  # pragma: no cover — a fresh queue cannot be full
             pass
+        return q
+
+    def close_subscription(self, q: "asyncio.Queue[SimEvent]") -> None:
+        if q in self._subscribers:
+            self._subscribers.remove(q)
+
+    def _state_payload(self) -> Dict[str, Any]:
+        return {
+            "state": self._state.value if hasattr(self._state, "value") else str(self._state),
+            "status_message": self._status_message,
+            "config": self._config.model_dump() if self._config else None,
+            "bars_total": self._bars_total,
+        }
+
+    async def subscribe(self):
+        """Yield events until the caller stops iterating."""
+        # Opens with the current state so a client that connects mid-session is
+        # not left blank until the next transition.
+        q = self.open_subscription()
         try:
             while True:
                 yield await q.get()
         finally:
-            if q in self._subscribers:
-                self._subscribers.remove(q)
+            self.close_subscription(q)
 
     # ── Open book ───────────────────────────────────────────────────────
 
@@ -980,13 +1143,33 @@ class SimulationRunner:
     def _premium_for_spot(self, trade: SimTradeEvent, spot: float) -> float:
         """Option premium at `spot`, by the same delta approximation used at entry.
 
-        ~50% of the underlying's move passes into the premium, floored just
-        above zero — an option can expire worthless but cannot go negative.
+        The leg's own |delta| governs how much of the underlying's move passes
+        into the premium, floored just above zero — an option can expire
+        worthless but cannot go negative.
         """
         entry_spot = trade.spot_entry if trade.spot_entry is not None else spot
         move = (spot - entry_spot) if trade.opt_type == "CE" else (entry_spot - spot)
         base = trade.raw_entry if trade.raw_entry is not None else trade.entry_price
-        return round(max(0.05, base + move * 0.50), 2)
+        delta = float(trade.leg_delta) if trade.leg_delta else 0.50
+        return round(max(0.05, base + move * delta), 2)
+
+    def _is_ae_v2(self, strategy: Optional[str] = None) -> bool:
+        """True when the V2 Hardened trade-management rules apply.
+
+        `adaptive_version` is an ADAPTIVE EDGE setting. It used to be read
+        unconditionally, so choosing V2 silently gave every SuperTrend, VCP,
+        Navigator, ORB and Bear-to-Bearish position a breakeven lock and a
+        stagnation exit — and halved their slippage — which is not what the
+        control says it does.
+        """
+        if strategy is not None and str(strategy).lower() != "adaptive_edge":
+            return False
+        version = (
+            self._config.adaptive_version
+            if (self._config and getattr(self._config, "adaptive_version", None))
+            else "v1_baseline"
+        )
+        return str(version).lower() in ("v2_hardened", "v2")
 
     def _settle_open_positions(self, bar: Dict[str, Any], bar_dt) -> None:
         """Advance every open position on this symbol by one bar.
@@ -1058,10 +1241,7 @@ class SimulationRunner:
                             exit_spot = target
                             exit_reason = "TARGET"
 
-                timed_out = exit_spot is None and trade.bars_held >= self.MAX_HOLD_BARS
-                is_ae_v2 = (
-                    (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
-                ).lower() in ("v2_hardened", "v2")
+                is_ae_v2 = self._is_ae_v2(trade.strategy)
 
                 # V2 Hardened Stagnation Decay Exit: If trade makes no meaningful progress (< 0.25R)
                 # after 4 bars (20m), exit early to protect capital against chop and theta decay.
@@ -1133,7 +1313,6 @@ class SimulationRunner:
                     self._publish("trade", trade.model_dump())
                     continue
 
-                self._close_position(trade, exit_spot, bar_dt)
                 self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason)
 
             if still_open:
@@ -1159,6 +1338,7 @@ class SimulationRunner:
             raw_exit,
             trade.underlying,
             self._config,
+            strategy=trade.strategy,
         )
 
         trade.exit_price = fill_exit
@@ -1179,10 +1359,16 @@ class SimulationRunner:
         # cannot disagree.
         trade.status = "WIN" if trade.pnl_usd > 0 else "LOSS"
 
+        # The theoretical price is recorded in BOTH modes. "ideal" means friction
+        # was modelled and came to zero, which is a different statement from
+        # "friction was not modelled at all" — the latter is what
+        # `capabilities.friction` reports, and it is the only honest place for
+        # it. Withholding `raw_exit` here made the two indistinguishable and
+        # left the dock's slippage column half-populated.
+        trade.raw_exit = raw_exit
         if friction_mode == "ideal":
-            trade.raw_exit = None
+            trade.slippage = 0.0
         else:
-            trade.raw_exit = raw_exit
             entry_slip = (trade.entry_price - (trade.raw_entry or trade.entry_price)) * trade.quantity
             exit_slip = (raw_exit - fill_exit) * trade.quantity
             trade.slippage = round(max(0.0, entry_slip + exit_slip), 2)
@@ -1345,11 +1531,27 @@ class SimulationRunner:
             trades_total=len(stats.trades),
             session_id=self._session_id,
             session_complete=self._session_complete,
-            open_positions=sum(len(v) for v in self._open_by_symbol.values()),
+            # Counted from the LEDGER, not from `_open_by_symbol`. `stop()`
+            # drops the book without closing anything, so counting the book
+            # reported 0 open positions for a session whose table still showed
+            # OPEN rows carrying unrealised P&L.
+            open_positions=len([tr for tr in self._stats.trades if tr.status == "OPEN"]),
             unrealised_pnl=round(
-                sum(tr.pnl_usd for tr in stats.trades if tr.status == "OPEN"), 2
+                sum(tr.pnl_usd for tr in self._stats.trades if tr.status == "OPEN"), 2
             ),
+            lot_size_source=_lot_size_source(),
+            replay_live=self.is_replay_live,
         )
+
+    @property
+    def is_replay_live(self) -> bool:
+        """A replay is actually playing right now.
+
+        Distinct from `has_session_view`, which stays true while a FINISHED
+        session is held for review. Anything deciding whether a surface shows
+        the live market must read this one.
+        """
+        return self._state != SimState.IDLE
 
     @property
     def capabilities(self) -> SimCapabilities:
@@ -1412,6 +1614,8 @@ class SimulationRunner:
         self._stop_requested = False
         self._pause_event.set()
         self._stats = SimStats()
+        self._trade_seq = 0
+        self._skipped_to_end = False
         self._current_date = config.date
         self._current_time_iso = config.start_time
         self._progress = 0.0
@@ -1441,6 +1645,11 @@ class SimulationRunner:
                 pass
         self._state = SimState.IDLE
         self._task = None
+        # The book is dropped WITHOUT squaring off: force-closing at the last
+        # print would book a fill the market never offered. The honest report is
+        # that the session ended with those positions open — which is why
+        # `open_positions` counts the LEDGER rather than this book, so a stopped
+        # session cannot show OPEN rows while claiming to have none.
         self._open_by_symbol = {}
         # The ledger survives for review, but it is now explicitly a FINISHED
         # session. Without this flag an idle runner handed every client a
@@ -1456,6 +1665,7 @@ class SimulationRunner:
         if self._state != SimState.IDLE:
             return self.status
         self._stats = SimStats()
+        self._trade_seq = 0
         self._open_by_symbol = {}
         self._last_signal = None
         self._session_complete = False
@@ -1471,6 +1681,8 @@ class SimulationRunner:
         self._active_until_bar = {}
         self._ae_fallback_mode = False
         self._scanned_dates = set()
+        self._skipped_to_end = False
+        reset_lot_sizes()
         self._publish_state()
         return self.status
 
@@ -1511,6 +1723,7 @@ class SimulationRunner:
         self._stats.trades = [tr for tr in self._stats.trades if tr.timestamp_ms <= target_ms]
 
         self._open_by_symbol = {}
+        bar_seconds = max(1, self._bar_minutes() * 60)
         for tr in self._stats.trades:
             if tr.exit_timestamp_ms is not None and tr.exit_timestamp_ms > target_ms:
                 tr.status = "OPEN"
@@ -1519,6 +1732,19 @@ class SimulationRunner:
                 tr.exit_timestamp_ms = None
                 tr.pnl_usd = 0.0
                 tr.pnl_pct = 0.0
+                tr.exit_reason = None
+                tr.raw_exit = None
+                # Rewind the position's OWN state too. Leaving `bars_held`, the
+                # high-water mark and the ratcheted stop at the values they
+                # reached in the future gave the re-opened trade a stop the
+                # underlying had not yet earned, and it could time out on the
+                # very next bar.
+                tr.bars_held = max(0, int((target_ms - tr.timestamp_ms) / 1000 // bar_seconds))
+                tr.duration_mins = tr.bars_held * self._bar_minutes()
+                tr.spot_hwm = tr.spot_entry
+                tr.spot_stop = tr.spot_initial_stop if tr.spot_initial_stop is not None else tr.spot_stop
+                if tr.spot_entry is not None and tr.spot_stop is not None:
+                    tr.stop_loss = round(max(0.05, self._premium_for_spot(tr, tr.spot_stop)), 2)
             if tr.status == "OPEN":
                 self._open_by_symbol.setdefault(tr.underlying, []).append(tr)
         self._recompute_totals()
@@ -1560,8 +1786,27 @@ class SimulationRunner:
             min(100.0, max(0.0, (self._current_sim_epoch - self._start_epoch) / total_sim_seconds * 100.0)),
             1,
         )
+        # Tell the stream the ledger was cut. A seek on a RUNNING replay is
+        # deferred to the loop, so `/seek` has already answered with the
+        # PRE-seek status; without this the client keeps rows the runner has
+        # deleted, and the trades entered next reuse their ids.
+        self._publish("truncate", {
+            "events_total": len(self._stats.events),
+            "trades_total": len(self._stats.trades),
+            "session_id": self._session_id,
+        })
         self._publish_frame(force=True)
         return bar_idx
+
+    def _next_trade_id(self) -> str:
+        """Monotonic within a session.
+
+        Deriving the id from `len(trades)` made it collide after a seek: the
+        truncation frees ids that the next entries then reuse, and any client
+        keyed on `trade_id` merges the new trade onto the stale one.
+        """
+        self._trade_seq += 1
+        return f"TRD-{1000 + self._trade_seq}"
 
     def step_bars(self, count: int) -> SimStatus:
         from app.services.ohlcv_store import RESOLUTION_SECONDS
@@ -1571,7 +1816,6 @@ class SimulationRunner:
         res_sec = RESOLUTION_SECONDS.get(res, 300)
         target = self._current_sim_epoch + (count * res_sec)
         target = max(float(self._start_epoch), min(float(self._end_epoch), target))
-        self._seek_requested_epoch = target
         if self._state == SimState.PAUSED:
             self._apply_seek(target)
         else:
@@ -1656,6 +1900,7 @@ class SimulationRunner:
         if self._start_epoch > 0:
             target = float(self._start_epoch)
             self._stats = SimStats()
+            self._trade_seq = 0
             self._open_by_symbol.clear()
             self._last_signal = None
             self._last_fired.clear()
@@ -1668,13 +1913,26 @@ class SimulationRunner:
         return self.status
 
     def jump_end(self) -> SimStatus:
+        """Seek to the session end WITHOUT replaying what is in between.
+
+        The skipped bars are never evaluated, so no signal or trade from that
+        span can exist. The session then ends and is marked complete like any
+        other, which is indistinguishable from a replay that actually ran —
+        hence the explicit notice.
+        """
         if self._end_epoch > 0:
-            self._seek_requested_epoch = float(self._end_epoch)
             target = float(self._end_epoch)
+            skipped = max(0, self._bars_total - self._bars_played)
+            if skipped:
+                self._skipped_to_end = True
+                self._status_message = (
+                    f"Jumped to session end — {skipped} bar(s) were skipped, not replayed."
+                )
             if self._state == SimState.PAUSED:
                 self._apply_seek(target)
             else:
                 self._seek_requested_epoch = target
+            self._publish_state()
         return self.status
 
     def _emit_recorded_signal(self, rec: Dict[str, Any]) -> None:
@@ -1715,7 +1973,6 @@ class SimulationRunner:
 
         adaptive_ver = (self._config.adaptive_version if self._config and hasattr(self._config, "adaptive_version") else "v2_hardened") or "v2_hardened"
         adaptive_ver = str(adaptive_ver).lower()
-        is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge" and not is_spot)
         is_ae_signal = (strat_raw == "adaptive_edge") or (strat_to_emit == "adaptive_edge")
         if is_ae_signal and adaptive_ver in ("v2_hardened", "v2"):
             # When user explicitly asks for spot scans, do not lock out spot scans
@@ -1833,9 +2090,8 @@ class SimulationRunner:
             strike = float(selected_leg.get("strike") or spot)
             lot_size = int(selected_leg.get("lot_size") or lot_size)
             entry_prem = float(selected_leg.get("premium_spot") or round(spot * 0.02, 2))
-            stop_prem = float(selected_leg.get("entry_sl") or selected_leg.get("premium_sl") or round(entry_prem * 0.75, 2))
-            if stop_prem <= 0 or stop_prem >= entry_prem:
-                stop_prem = round(entry_prem * 0.75, 2)
+            # The recorded leg's own stop, when it is a usable one; a stop at or
+            # above the entry is not a stop.
             raw_prem_sl = float(selected_leg.get("premium_sl") or 0.0)
             raw_entry_sl = float(selected_leg.get("entry_sl") or 0.0)
             stop_prem = raw_prem_sl if (0 < raw_prem_sl < entry_prem) else (raw_entry_sl if (0 < raw_entry_sl < entry_prem) else round(entry_prem * 0.75, 2))
@@ -1887,14 +2143,14 @@ class SimulationRunner:
 
         qty = cfg_lots * lot_size
         effective_entry, _, friction_mode = _apply_friction(
-            entry_prem, entry_prem, sym, self._config
+            entry_prem, entry_prem, sym, self._config, strategy=strat_to_emit
         )
         entry_slip = round((effective_entry - entry_prem) * qty, 2)
 
         entry_time_str = sig_time
 
         trade = SimTradeEvent(
-            trade_id=f"TRD-{1000 + len(self._stats.trades) + 1}",
+            trade_id=self._next_trade_id(),
             entry_time_iso=entry_time_str,
             exit_time_iso="OPEN",
             timestamp_ms=rec["timestamp_ms"],
@@ -1923,6 +2179,7 @@ class SimulationRunner:
             spot_hwm=spot,
             spot_initial_risk=abs(spot - stop) if stop is not None else None,
             spot_initial_stop=stop,
+            leg_delta=_leg_delta(strike, spot, _strike_step(sym, spot), opt_type),
             exit_reason=None,
             bars_held=0,
             scan_origin="spot_scan",
@@ -1980,6 +2237,7 @@ class SimulationRunner:
         res_sec = RESOLUTION_SECONDS.get(res, 300)
 
         # Determine instruments (NSE Indian Markets only)
+        reset_lot_sizes()
         self._recorded_signals = (
             _load_recorded_signals(cfg.date, cfg.end_date) if is_multi_day else _load_recorded_signals(cfg.date)
         )
@@ -2104,6 +2362,12 @@ class SimulationRunner:
         # replay being broken, which is exactly how it was reported.
         first_bar_epoch = float(all_bars[0]["time"])
         self._current_sim_epoch = max(float(start_epoch), min(first_bar_epoch, float(end_epoch)))
+        # Measure progress over the span that will actually play. Measuring from
+        # the configured `start_time` (09:00 by default) while playback begins at
+        # the first real bar (09:15) opened every replay at ~4% before a single
+        # bar had been drawn.
+        start_epoch = int(self._current_sim_epoch)
+        self._start_epoch = start_epoch
         if first_bar_epoch > start_epoch:
             log.info(
                 "Skipping %.0fs of pre-session dead air (%s -> first bar).",
@@ -2201,7 +2465,13 @@ class SimulationRunner:
                         else last_dt.strftime("%H:%M:%S")
                     )
                     last_time_str = last_dt.strftime("%H:%M:%S")
-                    if last_dt.time() < end_dt.time():
+                    if getattr(self, "_skipped_to_end", False):
+                        self._status_message = (
+                            "Jumped to session end — the skipped bars were never replayed, "
+                            f"so no signal or trade from them exists ({self._stats.trades_entered} trades, "
+                            f"P&L {self._stats.pnl:+,.2f})."
+                        )
+                    elif last_dt.time() < end_dt.time():
                         self._status_message = f"Session completed at latest available bar ({last_time_str} IST)."
                     else:
                         self._status_message = f"Session completed ({self._stats.trades_entered} trades, P&L {self._stats.pnl:+,.2f})."
@@ -2288,6 +2558,7 @@ class SimulationRunner:
             if not kite_events and any(ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine") for ev in self._stats.events):
                 kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine")]
 
+
         from app.services.ohlcv_store import INDEX_ALIASES
         recorded_map_exact = {}
         recorded_map_sym = {}
@@ -2329,10 +2600,9 @@ class SimulationRunner:
                 raw_rec = recorded_map_sym.get(ev.instrument.upper())
             if raw_rec:
                 row_copy = dict(raw_rec)
-                row_copy["is_active"] = True
-                row_copy["is_fresh"] = True
                 row_copy["is_active"] = row_active
                 row_copy["is_fresh"] = row_fresh
+                row_copy["is_replay"] = True
                 if row_exit_reason:
                     row_copy["exit_reason"] = row_exit_reason
                 row_copy["timestamp_ms"] = ev_ms
@@ -2374,9 +2644,7 @@ class SimulationRunner:
                     "option_symbol": ev.contract if (m_type == "ATM" and ev.contract) else f"{canon_inst}{expiry_tag}{int(s_val)}{opt_type}",
                     "strike": s_val,
                     "expiry": sim_date,
-                    "premium_spot": round(ev.entry * 0.02, 2),
-                    "premium_sl": round(ev.entry * 0.015, 2),
-                    "entry_sl": round(ev.entry * 0.01, 2),
+                    "exchange": opt_exchange,
                     "premium_spot": prem_spot,
                     "premium_sl": prem_sl,
                     "entry_sl": prem_sl,
@@ -2384,7 +2652,6 @@ class SimulationRunner:
                     "last_price": prem_spot,
                     "exit_state": "0/1 red",
                     "lots": cfg_lots,
-                    "is_active": True,
                     "is_active": row_active,
                     "signal_timestamp_ms": ev_ms,
                     "entry_timestamp_ms": ev_ms,
@@ -2393,7 +2660,6 @@ class SimulationRunner:
             rows.append({
                 "underlying": ev.instrument,
                 "token": token_val,
-                "exchange": "NSE",
                 "exchange": opt_exchange,
                 "regime": regime_str,
                 "alignment": {"fast": 1 if is_long else -1, "mid": 1 if is_long else -1, "slow": 1 if is_long else -1},
@@ -2409,21 +2675,25 @@ class SimulationRunner:
                 "exit_reason": row_exit_reason,
                 "score": 90.0 if ev.strength == "STRONG" else 65.0,
                 "timestamp_ms": ev_ms,
-                "is_active": True,
-                "is_fresh": True,
                 "is_active": row_active,
                 "is_fresh": row_fresh,
                 "source": "spot",
+                "is_replay": True,
             })
 
+        live = self.is_replay_live
         return {
             "generated_ms": now_ms,
             "scanning": False,
-            "scanning_label": "SIMULATION_REPLAY",
+            "scanning_label": "SIMULATION_REPLAY" if live else "SIMULATION_REVIEW",
             "rows": rows,
             "next_scan_ms": 0,
             "auto_scan": False,
-            "market_open": True,
+            # A finished session held for review is NOT an open market. Saying
+            # it is was how a stale replay kept the live board looking live.
+            "market_open": live,
+            "feed_mode": "replay" if live else "replay_review",
+            "replay_live": live,
         }
 
     def get_scalping_signals_response(self) -> Dict[str, Any]:
@@ -3357,19 +3627,19 @@ class SimulationRunner:
         ranges = [h - l for h, l in zip(highs, lows)]
         atr = sum(ranges) / len(ranges) if ranges else max(0.01, close * 0.005)
 
-        # Simple RSI calculation
-        gains = []
-        losses = []
-        for j in range(1, min(len(closes), 15)):
-            diff = closes[-j] - closes[-j-1] if j+1 <= len(closes) else 0
-            if diff > 0:
-                gains.append(diff)
-            else:
-                losses.append(abs(diff))
-        avg_gain = sum(gains) / max(len(gains), 1)
-        avg_loss = sum(losses) / max(len(losses), 1)
-        rs = avg_gain / avg_loss if avg_loss > 0 else 100
-        rsi = 100 - (100 / (1 + rs))
+        # RSI, Wilder's definition: both averages are over the PERIOD, not over
+        # their own counts. Dividing each by its own count gives Wilder's value
+        # scaled by (down-bar count / up-bar count) — a different number, under
+        # the same name, that every threshold below was then read against.
+        rsi_period = 14
+        diffs = [closes[i] - closes[i - 1] for i in range(max(1, len(closes) - rsi_period), len(closes))]
+        periods = max(1, len(diffs))
+        avg_gain = sum(d for d in diffs if d > 0) / periods
+        avg_loss = sum(-d for d in diffs if d < 0) / periods
+        if avg_loss <= 0:
+            rsi = 100.0 if avg_gain > 0 else 50.0
+        else:
+            rsi = 100 - (100 / (1 + avg_gain / avg_loss))
 
         signals_to_fire = []
         bar_time_str = bar_dt.strftime("%H:%M:%S")
@@ -3481,15 +3751,16 @@ class SimulationRunner:
             and has_recorded_today
             and any(
                 r.get("underlying", "").upper() in sym_aliases
-                and (r.get("strategy") == "adaptive_edge" or r.get("is_spot_scan"))
                 and (r.get("strategy") == "adaptive_edge")
                 for r in today_recorded
             )
         )
 
-        adaptive_ver = (cfg.adaptive_version if cfg and hasattr(cfg, "adaptive_version") else "v2_hardened") or "v2_hardened"
+        adaptive_ver = (cfg.adaptive_version if cfg and getattr(cfg, "adaptive_version", None) else "v1_baseline")
         adaptive_ver = str(adaptive_ver).lower()
-        is_ae_v2 = adaptive_ver in ("v2_hardened", "v2")
+        is_ae_v2 = self._is_ae_v2("adaptive_edge")
+        # Adaptive Edge only — the lockout is a property of that strategy's
+        # opening-auction risk, not of the replay clock.
         ae_toxic_lockout = is_ae_v2 and ("09:15:00" <= bar_time_str < "09:28:00")
 
         is_ae_symbol = _is_index(sym) or (bool(cfg and cfg.instruments and (sym in cfg.instruments or sym_u in cfg.instruments)))
@@ -3517,7 +3788,14 @@ class SimulationRunner:
                     "direction": "BEARISH",
                     "strength": "STRONG",
                 })
-        sym_bar_idx = len(history)
+        # Monotonic bar ordinal for THIS symbol. `len(history)` looks like one
+        # but `_bar_history[sym]` is trimmed to 60, so past the 60th bar the
+        # index stopped advancing: the "same direction within 6 bars" guard
+        # below never expired again, and the re-entry horizon sat permanently
+        # in the future. At 1m resolution that silenced 325 of a session's 385
+        # bars. `_in_session_bars` already counts every bar and is rebuilt
+        # correctly by `_apply_seek`.
+        sym_bar_idx = self._in_session_bars.get(sym, len(history))
         ae_active = sym_bar_idx < self._active_until_bar.get((sym, "adaptive_edge"), -1) if hasattr(self, "_active_until_bar") else False
         if not ae_active and not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 20:
             from app.services.adaptive_edge_strategy import decide_from_candles
@@ -3535,16 +3813,12 @@ class SimulationRunner:
             ]
             try:
                 import dataclasses
-                ae_cfg = get_ae_config()
+                # Cached: this runs once per bar per symbol, and the uncached
+                # read was being thrown away immediately afterwards anyway.
                 if not getattr(self, "_cached_ae_cfg", None):
-                    from app.services.adaptive_edge import get_config as get_ae_config
                     self._cached_ae_cfg = get_ae_config()
-                ae_cfg = self._cached_ae_cfg
                 target_version = "v2_hardened" if is_ae_v2 else "v1_baseline"
-                ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
-                if ae_cfg and ae_cfg.strategy_version != target_version:
-                    ae_cfg = dataclasses.replace(ae_cfg, strategy_version=target_version)
-                    self._cached_ae_cfg = ae_cfg
+                ae_cfg = dataclasses.replace(self._cached_ae_cfg, strategy_version=target_version)
                 dec = decide_from_candles(sym, c_input, ae_cfg, expiry=bar_dt.strftime("%Y-%m-%d"), spot=close)
                 if dec and dec.actionable:
                     signals_to_fire.append({
@@ -3587,7 +3861,18 @@ class SimulationRunner:
         except Exception as exc:
             log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
 
-        # 5. ATM Premium Imbalance: Canonical Opening Window Session Trade (max 1/day)
+        # 5. ATM Premium Imbalance: opening-window session trade, max 1/day.
+        #
+        # Restricted to INDICES. It used to run on every instrument in the
+        # window, so the default twenty-name universe produced twenty STRONG
+        # signals and twenty positions before 09:30 every session, diluting
+        # every aggregate the dock reports. ATM Premium Imbalance is an index
+        # strategy; on a stock it was noise wearing its name.
+        #
+        # The direction test below is still `close >= opens`, which is a
+        # placeholder, not the shipped rule — the real engine reads the ATM
+        # call/put premium spread, which this tape does not carry. The row is
+        # therefore indicative of timing, not of the live signal.
         is_open_window = "09:15:00" <= bar_time_str <= "09:30:00"
         atm_already_traded = any(
             ev.strategy == "atm_imbalance"
@@ -3595,11 +3880,10 @@ class SimulationRunner:
             and datetime.fromtimestamp(ev.timestamp_ms / 1000, tz=ist).date() == bar_dt.date()
             for ev in self._stats.events
         )
-        if is_open_window and not atm_already_traded and len(history) >= 2:
-            direction = "BULLISH" if close >= opens else "BEARISH"
+        if is_open_window and not atm_already_traded and len(history) >= 2 and _is_index(sym):
             signals_to_fire.append({
                 "strategy": "atm_imbalance",
-                "direction": direction,
+                "direction": "BULLISH" if close >= opens else "BEARISH",
                 "strength": "STRONG",
             })
 
@@ -3665,7 +3949,7 @@ class SimulationRunner:
         if not hasattr(self, '_active_until_bar'):
             self._active_until_bar: Dict[Tuple[str, str], int] = {}
 
-        sym_bar_idx = len(history)
+        sym_bar_idx = self._in_session_bars.get(sym, len(history))
 
         # Intraday entry cutoff: Do not enter new trades after 15:15:00 (F&O cash stops at 15:15)
         time_hhmmss = bar_dt.strftime("%H:%M:%S")
@@ -3724,18 +4008,41 @@ class SimulationRunner:
                     level_touches=sdef.get("level_touches"),
                     regime=sdef.get("regime"),
                 )
-                idx = next((i for i, e in enumerate(self._stats.events)
-                            if e.strategy == "gamma_move" and e.instrument == sym), None)
-                if idx is None:
-                    self._stats.signals_fired += 1
-                    self._stats.events.append(event)
-                else:
-                    self._stats.events[idx] = event
+                # Append-only, and only when the watch actually CHANGED.
+                #
+                # This used to overwrite the symbol's existing row in place.
+                # `events_total` then never moved, so a client polling with
+                # `since_events` was never sent the update, and on the client
+                # side the array's identity was preserved so the table did not
+                # re-render even when the update did arrive over the stream.
+                # Appending on a real change keeps both channels honest; an
+                # unchanged watch emits nothing at all.
+                prev = next((e for e in reversed(self._stats.events)
+                             if e.strategy == "gamma_move" and e.instrument == sym), None)
+                if prev is not None and (
+                    prev.direction == event.direction
+                    and prev.level_price == event.level_price
+                    and prev.level_kind == event.level_kind
+                    and prev.regime == event.regime
+                ):
+                    continue
+                self._stats.signals_fired += 1
+                self._stats.events.append(event)
                 self._last_signal = event
                 self._publish("signal", event.model_dump())
                 continue
 
             leg = _option_contract(sym, close, direction, self._config, sim_date=bar_dt.strftime("%Y-%m-%d"))
+            # ONE origin for the signal and the trade it opens. They used to be
+            # derived by two different rules — the signal keyed on the strategy,
+            # the trade also on whether the symbol was an index — so a SuperTrend
+            # NIFTY signal was tagged `spot_scan` while its own trade was tagged
+            # `adaptive_edge`, and the AE-source filter showed one and hid the other.
+            scan_origin = (
+                "spot_scan"
+                if (adaptive_src in ("spot_scan", "spot") or strategy != "adaptive_edge")
+                else "adaptive_edge"
+            )
             event = SimSignalEvent(
                 time_iso=time_iso,
                 timestamp_ms=ts_ms,
@@ -3756,7 +4063,7 @@ class SimulationRunner:
                 premium_entry=leg["premium"],
                 premium_sl=_premium_at(leg, close, stop),
                 premium_target=_premium_at(leg, close, target),
-                scan_origin="spot_scan" if (adaptive_src in ("spot_scan", "spot") or strategy != "adaptive_edge") else "adaptive_edge",
+                scan_origin=scan_origin,
                 strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
             )
             self._stats.signals_fired += 1
@@ -3776,12 +4083,12 @@ class SimulationRunner:
                 qty = cfg_lots * lot_size
                 raw_entry_p = leg["premium"]
                 entry_p, _, friction_mode = _apply_friction(
-                    raw_entry_p, raw_entry_p, sym, self._config
+                    raw_entry_p, raw_entry_p, sym, self._config, strategy=strategy
                 )
                 entry_slip = round((entry_p - raw_entry_p) * qty, 2)
 
                 trade = SimTradeEvent(
-                    trade_id=f"TRD-{1000 + len(self._stats.trades) + 1}",
+                    trade_id=self._next_trade_id(),
                     entry_time_iso=bar_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi else bar_dt.strftime("%H:%M:%S"),
                     exit_time_iso="OPEN",
                     timestamp_ms=int(bar_dt.timestamp() * 1000),
@@ -3795,15 +4102,27 @@ class SimulationRunner:
                     quantity=qty,
                     entry_price=entry_p,
                     exit_price=None,
-                    stop_loss=round(entry_p * 0.75, 2),
-                    target_price=round(entry_p * 1.5, 2),
+                    # The premium implied at the levels the engine ACTUALLY
+                    # enforces. These used to be entry x0.75 and x1.5 while
+                    # settlement was decided entirely from `spot_stop` and
+                    # `spot_target`, so a row could be stamped TARGET with an
+                    # exit price far below the target it displayed. Same
+                    # function the signal's ladder uses, so a trade and its
+                    # signal cannot disagree.
+                    stop_loss=_premium_at(leg, close, stop),
+                    target_price=_premium_at(leg, close, target),
                     status="OPEN",
                     pnl_usd=0.0,
                     pnl_pct=0.0,
                     duration_mins=0,
-                    raw_entry=None if friction_mode == "ideal" else raw_entry_p,
+                    raw_entry=raw_entry_p,
                     raw_exit=None,
-                    slippage=None if friction_mode == "ideal" else max(0.0, entry_slip),
+                    # "ideal" is friction MODELLED AND FREE, not friction
+                    # unmodelled — the recorded-signal path already reported it
+                    # as 0.0 and the two disagreed, which made a mixed session
+                    # print a drag of zero for trades it had never modelled.
+                    slippage=0.0 if friction_mode == "ideal" else max(0.0, entry_slip),
+                    leg_delta=leg.get("delta"),
                     spot_entry=round(close, 2),
                     spot_stop=stop,
                     spot_target=target,
@@ -3812,7 +4131,7 @@ class SimulationRunner:
                     spot_initial_stop=stop,
                     exit_reason=None,
                     bars_held=0,
-                    scan_origin="spot_scan" if adaptive_src in ("spot_scan", "spot") else ("adaptive_edge" if (strategy == "adaptive_edge" or _is_index(sym)) else "spot_scan"),
+                    scan_origin=scan_origin,
                     strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
                 )
                 self._stats.trades_entered += 1
@@ -3820,7 +4139,6 @@ class SimulationRunner:
                 self._open_by_symbol.setdefault(sym, []).append(trade)
                 # Suppress a re-entry on this key while the position is live.
                 # `_close_position` clears it on the bar that actually closes.
-                self._active_until_bar[key] = sym_bar_idx + self.MAX_HOLD_BARS
                 max_bars = (
                     self._config.max_hold_bars
                     if (self._config and getattr(self._config, "max_hold_bars", None))
@@ -3883,6 +4201,9 @@ async def _hydrate_missing_candles(
 
     kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
     try:
+        # One pass over the derivatives dump gives every underlying's real lot
+        # size, so the replay stops scaling its quantities off a literal table.
+        await prime_lot_sizes(kc, instruments)
         for idx, sym in enumerate(instruments):
             canon_sym = _canonical_symbol(sym)
             token = KITE_TOKENS.get(canon_sym.upper()) or KITE_TOKENS.get(sym.upper())

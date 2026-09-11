@@ -122,9 +122,16 @@ export function ReplayTimeline() {
   const commit = useCallback(
     (target: number) => {
       setScrub(null);
+      // On a multi-day range this axis shows ONE session's times, so a drag on
+      // it means "this time, on the day showing" — the day is changed with the
+      // day strip below, not by dragging.
+      if (multiDay) {
+        void transport.seekToSessionTime(scale.timeForPct(target));
+        return;
+      }
       void transport.seekToPct(target);
     },
-    [transport],
+    [transport, multiDay, scale],
   );
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -209,6 +216,26 @@ export function ReplayTimeline() {
     return out;
   }, [scale, width]);
 
+  /* ── Days in a multi-day range ──────────────────────────────────────
+     The axis above is one session's times. Without a way to change WHICH
+     session, a five-day replay could only ever be scrubbed inside whichever
+     day the clock happened to be in. */
+  const sessionDays = useMemo(() => {
+    if (!multiDay || !cfg?.date || !cfg?.end_date) return [];
+    const out: string[] = [];
+    const cursor = new Date(`${cfg.date}T12:00:00Z`);
+    const end = new Date(`${cfg.end_date}T12:00:00Z`);
+    while (cursor <= end && out.length < 60) {
+      const day = cursor.getUTCDay();
+      if (day !== 0 && day !== 6) out.push(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return out;
+  }, [multiDay, cfg?.date, cfg?.end_date]);
+
+  const activeDay =
+    currentDate || (clock && clock.includes('T') ? clock.split('T')[0] : cfg?.date) || '';
+
   const closedRegions = useMemo(() => {
     const openMin = policy ? timeToMinutes(policy.continuous_open) : FALLBACK_OPEN_MIN;
     const closeMin = policy ? timeToMinutes(policy.continuous_close) : FALLBACK_CLOSE_MIN;
@@ -256,7 +283,7 @@ export function ReplayTimeline() {
       >
         {closedRegions.map((r, i) => (
           <span
-            key={i}
+            key={`closed-${i}`}
             className="rd-timeline-closed"
             style={{ left: `${r.left}%`, width: `${r.width}%` }}
             aria-hidden="true"
@@ -288,8 +315,12 @@ export function ReplayTimeline() {
           ))}
         </span>
 
+        {/* Positioned as a PERCENTAGE, like the fill beneath it. Using
+            `translateX(px)` from `ResizeObserver.contentRect` while the fill
+            used a percentage put the two in different coordinate systems, and
+            any ancestor CSS `zoom` separated them visibly. */}
         {!disabled && (
-          <span className="rd-playhead" style={{ transform: `translateX(${(shown / 100) * width}px)` }} aria-hidden="true" />
+          <span className="rd-playhead" style={{ left: `${shown}%` }} aria-hidden="true" />
         )}
 
         {scrub != null && (
@@ -298,6 +329,25 @@ export function ReplayTimeline() {
           </span>
         )}
       </div>
+
+      {multiDay && sessionDays.length > 1 && (
+        <div className="rd-day-strip" role="group" aria-label="Sessions in this range">
+          {sessionDays.map((day) => (
+            <button
+              key={day}
+              type="button"
+              className="rd-btn rd-btn-sm"
+              data-variant={day === activeDay ? 'primary' : 'ghost'}
+              aria-pressed={day === activeDay}
+              disabled={disabled}
+              title={`Jump to ${fmtSessionDate(day)}`}
+              onClick={() => void transport.seekToDay(day)}
+            >
+              {fmtSessionDate(day, true)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* A multi-day warning used to sit here. As a third row inside
           `.rd-timeline-wrap` — a flex column in a bar laid out around the

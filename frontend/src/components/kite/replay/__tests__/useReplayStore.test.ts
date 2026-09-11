@@ -542,3 +542,247 @@ describe('draft preferences persistence', () => {
   });
 });
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Regressions from the 2026-09-11 end-to-end audit.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+import {
+  selectFilteredEvents,
+  selectFilteredTrades,
+} from '../../../../hooks/useReplayStore';
+import { replayHasFriction } from '../replayColumns';
+import { signalLadder } from '../ReplaySignalsTable';
+import { nearestOpenSession } from '../../../../lib/replay/marketSessions';
+
+describe('H3 — a signal row is quoted in ONE unit', () => {
+  it('uses the premium ladder when the engine supplies one', () => {
+    const ladder = signalLadder(
+      makeSignal({
+        entry: 24500, stop: 24400, target: 24700,
+        premium_entry: 120, premium_sl: 70, premium_target: 220,
+      }),
+    );
+    expect(ladder).toEqual({ entry: 120, stop: 70, target: 220, inPremium: true });
+  });
+
+  it('never pairs a premium entry with an underlying stop', () => {
+    const ladder = signalLadder(
+      makeSignal({ entry: 24500, stop: 24400, target: 24700, premium_entry: 120 }),
+    );
+    // Only a partial premium ladder — fall back to underlying throughout rather
+    // than printing ₹120 beside ₹24,400.
+    expect(ladder.inPremium).toBe(false);
+    expect(ladder).toMatchObject({ entry: 24500, stop: 24400, target: 24700 });
+  });
+
+  it('shows nothing for a WATCHING row with no ladder at all', () => {
+    const ladder = signalLadder(makeSignal({ strategy: 'gamma_move', strength: 'WATCHING' }));
+    expect(ladder).toMatchObject({ entry: null, stop: null, target: null });
+  });
+});
+
+describe('M12 — the stream and the poll cannot double-append', () => {
+  it('ignores a signal it already holds', () => {
+    const sig = makeSignal({ timestamp_ms: 111 });
+    act(() => useReplayStore.getState().appendSignals([sig]));
+    act(() => useReplayStore.getState().appendSignals([{ ...sig }]));
+    expect(useReplayStore.getState().status.stats.events).toHaveLength(1);
+    expect(useReplayStore.getState().status.stats.signals_fired).toBe(1);
+  });
+
+  it('keeps two genuinely different prints in the same second', () => {
+    act(() =>
+      useReplayStore.getState().appendSignals([
+        makeSignal({ timestamp_ms: 111, instrument: 'NIFTY' }),
+        makeSignal({ timestamp_ms: 111, instrument: 'BANKNIFTY' }),
+      ]),
+    );
+    expect(useReplayStore.getState().status.stats.events).toHaveLength(2);
+  });
+
+  it('de-duplicates within one batch too', () => {
+    const sig = makeSignal({ timestamp_ms: 222 });
+    act(() => useReplayStore.getState().appendSignals([sig, { ...sig }]));
+    expect(useReplayStore.getState().status.stats.events).toHaveLength(1);
+  });
+});
+
+describe('H7 — a truncating seek cuts the client ledger', () => {
+  it('drops the rows the runner deleted and re-derives the aggregates', () => {
+    act(() =>
+      useReplayStore.getState().setStatus(
+        makeStatus({
+          stats: {
+            ...DEFAULT_STATUS.stats,
+            events: [makeSignal({ timestamp_ms: 1 }), makeSignal({ timestamp_ms: 2 })],
+            trades: [
+              makeTrade({ trade_id: 'TRD-1001', pnl_usd: 1000, status: 'WIN' }),
+              makeTrade({ trade_id: 'TRD-1002', pnl_usd: -400, status: 'LOSS' }),
+            ],
+          },
+        }),
+      ),
+    );
+
+    act(() => useReplayStore.getState().truncateLedger(1, 1));
+
+    const { stats, events_total, trades_total } = useReplayStore.getState().status;
+    expect(stats.events).toHaveLength(1);
+    expect(stats.trades).toHaveLength(1);
+    expect(stats.wins).toBe(1);
+    expect(stats.losses).toBe(0);
+    expect(stats.pnl).toBe(1000);
+    expect(events_total).toBe(1);
+    expect(trades_total).toBe(1);
+  });
+
+  it('is a no-op when nothing was actually cut', () => {
+    const status = makeStatus({
+      stats: { ...DEFAULT_STATUS.stats, events: [makeSignal()], trades: [makeTrade()] },
+    });
+    act(() => useReplayStore.getState().setStatus(status));
+    const before = useReplayStore.getState().status.stats.events;
+    act(() => useReplayStore.getState().truncateLedger(5, 5));
+    expect(useReplayStore.getState().status.stats.events).toBe(before);
+  });
+});
+
+describe('M15 — a poll does not erase the error explaining the failure', () => {
+  it('keeps a start_stalled error through the next status', () => {
+    act(() =>
+      useReplayStore.getState().setError({ code: 'start_stalled', message: 'never started', at: 1 }),
+    );
+    act(() => useReplayStore.getState().setStatus(makeStatus({ progress_pct: 10 })));
+    expect(useReplayStore.getState().error?.code).toBe('start_stalled');
+  });
+
+  it('clears engine_unreachable, which a successful fetch really does disprove', () => {
+    act(() =>
+      useReplayStore.getState().setError({ code: 'engine_unreachable', message: 'x', at: 1 }),
+    );
+    act(() => useReplayStore.getState().setStatus(makeStatus()));
+    expect(useReplayStore.getState().error).toBeNull();
+  });
+});
+
+describe('M13 — an in-place row change is not invisible', () => {
+  it('replaces the array when a row mutated without the length changing', () => {
+    const first = makeSignal({ strategy: 'gamma_move', level_price: 1400, timestamp_ms: 9 });
+    act(() =>
+      useReplayStore.getState().setStatus(
+        makeStatus({ stats: { ...DEFAULT_STATUS.stats, events: [first, makeSignal({ timestamp_ms: 10 })] } }),
+      ),
+    );
+    const before = useReplayStore.getState().status.stats.events;
+
+    act(() =>
+      useReplayStore.getState().setStatus(
+        makeStatus({
+          stats: {
+            ...DEFAULT_STATUS.stats,
+            events: [{ ...first, level_price: 1380 }, makeSignal({ timestamp_ms: 10 })],
+          },
+        }),
+      ),
+    );
+    expect(useReplayStore.getState().status.stats.events).not.toBe(before);
+  });
+});
+
+describe('M22 — one filtered ledger for the tables, the report and the export', () => {
+  beforeEach(() => {
+    act(() =>
+      useReplayStore.getState().setStatus(
+        makeStatus({
+          state: 'idle',
+          session_complete: true,
+          config: {
+            date: '2026-09-10', start_time: '09:15:00', end_time: '15:40:00',
+            speed: 5, resolution: '5m', instruments: [],
+            strategies: ['supertrend'], adaptive_source: 'both', adaptive_version: 'v1_baseline',
+          },
+          stats: {
+            ...DEFAULT_STATUS.stats,
+            events: [makeSignal({ strategy: 'supertrend' }), makeSignal({ strategy: 'vcp', timestamp_ms: 2 })],
+            trades: [
+              makeTrade({ trade_id: 'A', strategy: 'supertrend' }),
+              makeTrade({ trade_id: 'B', strategy: 'vcp' }),
+            ],
+          },
+        }),
+      ),
+    );
+  });
+
+  it('narrows trades the same way outside a component as inside one', () => {
+    const picked = selectFilteredTrades(useReplayStore.getState());
+    expect(picked.map((t) => t.trade_id)).toEqual(['A']);
+    const { result } = renderHook(() => useFilteredReplayTrades());
+    expect(result.current.map((t) => t.trade_id)).toEqual(['A']);
+  });
+
+  it('narrows signals the same way too', () => {
+    expect(selectFilteredEvents(useReplayStore.getState()).map((e) => e.strategy)).toEqual(['supertrend']);
+    const { result } = renderHook(() => useFilteredReplayEvents());
+    expect(result.current.map((e) => e.strategy)).toEqual(['supertrend']);
+  });
+});
+
+describe('M16 — friction is read from the session, not sniffed off the rows', () => {
+  const caps = { friction: true };
+
+  it('a realistic session modelled friction, even before the first fill', () => {
+    expect(replayHasFriction({ friction_mode: 'realistic' }, caps, [])).toBe(true);
+  });
+
+  it('an ideal session is a MEASURED zero, so the drag column stays off', () => {
+    expect(replayHasFriction({ friction_mode: 'ideal' }, caps, [makeTrade({ slippage: 0 })])).toBe(false);
+  });
+
+  it('an engine that cannot model friction always reports false', () => {
+    expect(replayHasFriction({ friction_mode: 'realistic' }, { friction: false }, [])).toBe(false);
+  });
+
+  it('falls back to the rows only when there is no config to read', () => {
+    expect(replayHasFriction(null, caps, [makeTrade({ slippage: 12.5 })])).toBe(true);
+    expect(replayHasFriction(null, caps, [makeTrade({ slippage: 0 })])).toBe(false);
+  });
+});
+
+describe('L34 — no clock means no replay time', () => {
+  it('returns null rather than inventing 15:30', () => {
+    expect(
+      getReplayNowMs(
+        makeStatus({
+          state: 'running',
+          current_time_iso: '',
+          current_date: '2026-09-10',
+          stats: { ...DEFAULT_STATUS.stats, events: [makeSignal()] },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('L32 — the date picker lands on a day the exchange was open', () => {
+  it('snaps a Saturday back to the Friday', () => {
+    expect(nearestOpenSession('2026-09-12')).toBe('2026-09-11');   // Sat -> Fri
+  });
+
+  it('leaves a trading day alone', () => {
+    expect(nearestOpenSession('2026-09-11')).toBe('2026-09-11');
+  });
+
+  it('passes malformed input through untouched', () => {
+    expect(nearestOpenSession('not-a-date')).toBe('not-a-date');
+  });
+});
+
+describe('M18 — the client asks for the delta the engine can serve', () => {
+  it('advertises signals as incremental and trades as not', () => {
+    const caps = makeStatus().capabilities!;
+    expect(caps.delta_events).toBe(true);
+    expect(caps.delta_trades).toBe(false);
+  });
+});

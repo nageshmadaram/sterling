@@ -58,6 +58,11 @@ export interface ReplaySignal {
   premium_target?: number | null;
   scan_origin?: string | null;
   strategy_version?: string | null;
+  /** Gamma Move only. The daily level the watch is keyed to. Absent elsewhere. */
+  level_price?: number | null;
+  level_kind?: string | null;
+  level_touches?: number | null;
+  regime?: string | null;
 }
 
 export interface ReplayTrade {
@@ -92,6 +97,9 @@ export interface ReplayTrade {
   scan_origin?: string | null;
   strategy_version?: string | null;
   exit_reason?: string | null;
+  bars_held?: number;
+  /** |delta| for this leg's moneyness, used to mark the premium. */
+  leg_delta?: number | null;
 }
 
 export interface ReplayStats {
@@ -123,7 +131,12 @@ export interface ReplayCapabilities {
   contract_on_signal: boolean;
   absolute_seek: boolean;
   stream: boolean;
+  /** Legacy: true when EITHER ledger can be requested incrementally. */
   delta_status: boolean;
+  /** Signals are append-only, so an offset into them means something. */
+  delta_events?: boolean;
+  /** Trades MUTATE, so `/status` always returns them in full. */
+  delta_trades?: boolean;
   multi_day: boolean;
   resolutions: string[];
 }
@@ -144,8 +157,12 @@ export interface ReplayConfigEcho {
   index_spread_pct?: number;
   stock_spread_pct?: number;
   slippage_pct?: number;
-  adaptive_source?: 'both' | 'fno' | 'cash';
+  // The values the engine actually sends and reads. This used to be typed
+  // 'both' | 'fno' | 'cash', which matched nothing on either side, so every
+  // call site reached it through `as any`.
+  adaptive_source?: 'both' | 'ae_model' | 'spot_scan';
   adaptive_version?: 'v2_hardened' | 'v1_baseline';
+  max_hold_bars?: number;
 }
 
 export interface ReplayStatus {
@@ -176,6 +193,18 @@ export interface ReplayStatus {
   open_positions?: number;
   /** Mark-to-market on open positions. Never folded into `stats.pnl`. */
   unrealised_pnl?: number;
+  /**
+   * Where the lot sizes came from: the broker's instrument master, or the
+   * engine's built-in fallback table. Every quantity and P&L in the session
+   * scales with it, so the dock says which was used.
+   */
+  lot_size_source?: 'instruments' | 'fallback';
+  /**
+   * A replay is PLAYING. Distinct from `session_complete`, which is a finished
+   * ledger held for review — the two must never be conflated by anything
+   * deciding whether a surface shows the live market.
+   */
+  replay_live?: boolean;
 }
 
 export interface ReplayDraft {
@@ -214,6 +243,8 @@ const DEFAULT_CAPS: ReplayCapabilities = {
   absolute_seek: false,
   stream: false,
   delta_status: false,
+  delta_events: false,
+  delta_trades: false,
   multi_day: false,
   resolutions: ['5m'],
 };
@@ -501,6 +532,7 @@ export interface ReplayStore {
   setStatus(status: ReplayStatus): void;
   applyFrame(frame: ReplayFrame): void;
   appendSignals(signals: ReplaySignal[]): void;
+  truncateLedger(eventsTotal: number, tradesTotal: number): void;
   upsertTrades(trades: ReplayTrade[]): void;
   setError(err: ReplayError | null): void;
   clearSession(): Promise<void>;
@@ -686,7 +718,11 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
       const next = status.stats;
       const events = sameEvents(prev.events, next.events) ? prev.events : next.events;
       const trades = sameTrades(prev.trades, next.trades) ? prev.trades : next.trades;
-      return { status: { ...status, stats: { ...next, events, trades } }, error: null };
+      // Clear ONLY the error that a successful fetch actually disproves.
+      // Clearing unconditionally wiped `start_stalled` within one poll of it
+      // being raised — the very message explaining why nothing was playing.
+      const error = s.error && s.error.code === 'engine_unreachable' ? null : s.error;
+      return { status: { ...status, stats: { ...next, events, trades } }, error };
     }),
 
   applyFrame: (frame) =>
@@ -705,12 +741,63 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
   appendSignals: (signals) =>
     set((s) => {
       if (!signals.length) return s;
-      const events = [...s.status.stats.events, ...signals];
+      // De-duplicate. The stream and the delta poll are two channels onto one
+      // append-only ledger: if a signal arrives over SSE between a poll's
+      // request and its response, the poll's `since_events` offset is already
+      // stale and the same rows come back a second time. Appending them blind
+      // duplicated table rows, timeline dots and the `signals_fired` count.
+      const have = new Set(s.status.stats.events.map(signalIdentity));
+      const fresh = signals.filter((ev) => {
+        const id = signalIdentity(ev);
+        if (have.has(id)) return false;
+        have.add(id);
+        return true;
+      });
+      if (!fresh.length) return s;
+      const events = [...s.status.stats.events, ...fresh];
       return {
         status: {
           ...s.status,
-          last_signal: signals[signals.length - 1],
+          last_signal: fresh[fresh.length - 1],
           stats: { ...s.status.stats, events, signals_fired: events.length },
+        },
+      };
+    }),
+
+  /**
+   * A seek truncated the runner's ledger — drop everything past the new totals.
+   *
+   * A seek on a RUNNING replay is applied inside the engine loop, AFTER
+   * `/seek` has already answered with the pre-seek status. Without this the
+   * client kept rows the runner had deleted, and the trades entered next
+   * merged onto them.
+   */
+  truncateLedger: (eventsTotal, tradesTotal) =>
+    set((s) => {
+      const { events, trades } = s.status.stats;
+      if (events.length <= eventsTotal && trades.length <= tradesTotal) return s;
+      const nextEvents = events.slice(0, eventsTotal);
+      const nextTrades = trades.slice(0, tradesTotal);
+      const closed = nextTrades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
+      const openTrades = nextTrades.filter((t) => t.status === 'OPEN');
+      return {
+        selectedSignalKey: null,
+        status: {
+          ...s.status,
+          events_total: eventsTotal,
+          trades_total: tradesTotal,
+          open_positions: openTrades.length,
+          unrealised_pnl: Number(openTrades.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2)),
+          stats: {
+            ...s.status.stats,
+            events: nextEvents,
+            trades: nextTrades,
+            signals_fired: nextEvents.length,
+            trades_entered: nextTrades.length,
+            wins: closed.filter((t) => t.status === 'WIN').length,
+            losses: closed.filter((t) => t.status === 'LOSS').length,
+            pnl: Number(closed.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2)),
+          },
         },
       };
     }),
@@ -780,13 +867,38 @@ function sameTrades(a: readonly any[], b: readonly any[]): boolean {
   return true;
 }
 
+/**
+ * Stable identity for one signal.
+ *
+ * Time alone is not unique — one strategy can fire twice on one symbol inside
+ * the same second — so the identity carries everything that distinguishes two
+ * genuinely different prints. Used for de-duplication, never for React keys
+ * (those need the array position, see `signalKey`).
+ */
+function signalIdentity(ev: ReplaySignal): string {
+  return [
+    ev.timestamp_ms ?? ev.time_iso,
+    ev.strategy,
+    ev.instrument,
+    ev.direction,
+    ev.strength,
+    ev.contract ?? '',
+    ev.level_price ?? '',
+  ].join('|');
+}
+
 function sameEvents(a: readonly any[], b: readonly any[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   if (!a.length) return true;
-  const x = a[a.length - 1];
-  const y = b[b.length - 1];
-  return x?.time_iso === y?.time_iso && x?.instrument === y?.instrument && x?.direction === y?.direction;
+  // Compare the WHOLE ledger, not just the last row. A row that changes in
+  // place — a Gamma Move watch updating its level — leaves the length and the
+  // last element untouched, so the shortcut preserved array identity and the
+  // table never re-rendered for it.
+  for (let i = 0; i < a.length; i += 1) {
+    if (signalIdentity(a[i]) !== signalIdentity(b[i])) return false;
+  }
+  return true;
 }
 
 /* ── Selectors ────────────────────────────────────────────────────────────
@@ -808,12 +920,13 @@ export function matchStrategyFilter(strategy: string | undefined | null, filterS
   return filterStrategies.some((f) => f.trim().toLowerCase() === s);
 }
 
-export function matchMoneynessFilter(contractOrSymbol: string | undefined | null, filterMoneyness: readonly string[]): boolean {
-  if (!filterMoneyness.length || filterMoneyness.includes('ALL') || filterMoneyness.includes('*')) return true;
-  if (!contractOrSymbol) return true;
-  const text = contractOrSymbol.toUpperCase();
-  return filterMoneyness.some((m) => text.includes(m.toUpperCase()));
-}
+/*
+ * There was a `matchMoneynessFilter` here. It substring-matched "ATM"/"OTM1"
+ * against contract names like `NIFTY26SEP25000CE`, which never contain them,
+ * so it would have hidden every row had anything ever called it. Moneyness is
+ * a leg-SELECTION setting the engine applies when it resolves the contract; it
+ * is not a row filter, and there is nothing here to filter on.
+ */
 
 export const INDEX_ALIAS_MAP: Record<string, string[]> = {
   NIFTY: ['NIFTY', 'NIFTY 50', 'NSE:NIFTY 50', 'NIFTY50'],
@@ -893,19 +1006,100 @@ export function matchAdaptiveVersion(
   return isStratV2 === isCfgV2;
 }
 
+/**
+ * The filters in force: the running session's own configuration where there is
+ * one, otherwise the draft the user is editing.
+ */
+interface ReplayRowFilters {
+  strats: readonly string[];
+  instruments: readonly string[];
+  adaptiveSource: 'both' | 'ae_model' | 'spot_scan';
+  adaptiveVersion: 'v2_hardened' | 'v1_baseline' | string;
+}
+
+export function replayRowFilters(state: ReplayStore): ReplayRowFilters {
+  const { status, draft } = state;
+  const hasSessionData =
+    status.state !== 'idle' ||
+    status.session_complete === true ||
+    (status.bars_played ?? 0) > 0 ||
+    (status.stats.events?.length ?? 0) > 0 ||
+    (status.stats.trades?.length ?? 0) > 0;
+  const cfg = hasSessionData && status.config ? status.config : null;
+  return {
+    strats: cfg?.strategies ?? draft.strategies,
+    instruments: cfg?.instruments ?? draft.instruments,
+    adaptiveSource: cfg?.adaptive_source ?? draft.adaptiveSource ?? 'both',
+    adaptiveVersion: cfg?.adaptive_version ?? draft.adaptiveVersion ?? 'v2_hardened',
+  };
+}
+
+/* Pure selectors, so the tables, the metrics strip, the summary report and the
+   CSV export all narrow the ledger THE SAME WAY. The report and the export used
+   to read `status.stats` directly while everything else filtered, so narrowing
+   to one strategy made the strip, the footer and the report disagree about the
+   P&L of what looked like a single session. */
+
+export function selectFilteredEvents(state: ReplayStore): ReplaySignal[] {
+  const f = replayRowFilters(state);
+  return state.status.stats.events.filter((ev) => {
+    if (!matchStrategyFilter(ev.strategy, f.strats)) return false;
+    if (!matchAdaptiveSource(ev.strategy, ev.scan_origin, ev.instrument, f.adaptiveSource)) return false;
+    if (!matchAdaptiveVersion(ev.strategy_version, f.adaptiveVersion)) return false;
+    if (!f.instruments.length) return true;
+    return matchInstrumentFilter(ev.instrument, f.instruments) || matchInstrumentFilter(ev.contract, f.instruments);
+  });
+}
+
+export function selectFilteredTrades(state: ReplayStore): ReplayTrade[] {
+  const f = replayRowFilters(state);
+  return state.status.stats.trades.filter((t) => {
+    if (!matchStrategyFilter(t.strategy, f.strats)) return false;
+    if (!matchAdaptiveSource(t.strategy, t.scan_origin, t.underlying, f.adaptiveSource)) return false;
+    if (!matchAdaptiveVersion(t.strategy_version, f.adaptiveVersion)) return false;
+    if (!f.instruments.length) return true;
+    return matchInstrumentFilter(t.underlying, f.instruments) || matchInstrumentFilter(t.symbol, f.instruments);
+  });
+}
+
+/**
+ * The filter inputs, selected FIELD BY FIELD.
+ *
+ * A selector returning `replayRowFilters(s)` would build a fresh object on
+ * every store read, so zustand's `Object.is` check could never bail out and
+ * the tables would re-render on every progress frame — the exact cost this
+ * store exists to avoid. Each field below is a stable reference or a scalar.
+ */
+function useRowFilterInputs(): ReplayRowFilters {
+  const useSessionCfg = useReplayStore(
+    (s) =>
+      Boolean(s.status.config) &&
+      (s.status.state !== 'idle' ||
+        s.status.session_complete === true ||
+        (s.status.bars_played ?? 0) > 0 ||
+        s.status.stats.events.length > 0 ||
+        s.status.stats.trades.length > 0),
+  );
+  const cfgStrats = useReplayStore((s) => s.status.config?.strategies);
+  const cfgInstruments = useReplayStore((s) => s.status.config?.instruments);
+  const cfgSource = useReplayStore((s) => s.status.config?.adaptive_source);
+  const cfgVersion = useReplayStore((s) => s.status.config?.adaptive_version);
+  const draftStrats = useReplayStore((s) => s.draft.strategies);
+  const draftInstruments = useReplayStore((s) => s.draft.instruments);
+  const draftSource = useReplayStore((s) => s.draft.adaptiveSource);
+  const draftVersion = useReplayStore((s) => s.draft.adaptiveVersion);
+
+  return {
+    strats: (useSessionCfg && cfgStrats) || draftStrats,
+    instruments: (useSessionCfg && cfgInstruments) || draftInstruments,
+    adaptiveSource: (useSessionCfg && cfgSource) || draftSource || 'both',
+    adaptiveVersion: (useSessionCfg && cfgVersion) || draftVersion || 'v2_hardened',
+  };
+}
+
 export function useFilteredReplayEvents(): ReplaySignal[] {
   const events = useReplayStore((s) => s.status.stats.events);
-  const hasSessionData = useReplayStore(
-    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.events?.length ?? 0) > 0
-  );
-  const config = useReplayStore((s) => s.status.config);
-  const draft = useReplayStore((s) => s.draft);
-
-  const activeCfg = (hasSessionData && config) ? config : null;
-  const strats = activeCfg?.strategies ?? draft.strategies;
-  const instruments = activeCfg?.instruments ?? draft.instruments;
-  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
-  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
+  const { strats, instruments, adaptiveSource, adaptiveVersion } = useRowFilterInputs();
 
   return useMemo(() => {
     return events.filter((ev) => {
@@ -920,17 +1114,7 @@ export function useFilteredReplayEvents(): ReplaySignal[] {
 
 export function useFilteredReplayTrades(): ReplayTrade[] {
   const trades = useReplayStore((s) => s.status.stats.trades);
-  const hasSessionData = useReplayStore(
-    (s) => s.status.state !== 'idle' || s.status.session_complete === true || (s.status.bars_played ?? 0) > 0 || (s.status.stats.trades?.length ?? 0) > 0
-  );
-  const config = useReplayStore((s) => s.status.config);
-  const draft = useReplayStore((s) => s.draft);
-
-  const activeCfg = (hasSessionData && config) ? config : null;
-  const strats = activeCfg?.strategies ?? draft.strategies;
-  const instruments = activeCfg?.instruments ?? draft.instruments;
-  const adaptiveSource = activeCfg?.adaptive_source ?? (activeCfg as any)?.adaptiveSource ?? draft.adaptiveSource ?? 'both';
-  const adaptiveVersion = activeCfg?.adaptive_version ?? (activeCfg as any)?.adaptiveVersion ?? draft.adaptiveVersion ?? 'v2_hardened';
+  const { strats, instruments, adaptiveSource, adaptiveVersion } = useRowFilterInputs();
 
   return useMemo(() => {
     return trades.filter((t) => {
@@ -989,7 +1173,9 @@ export function getReplayNowMs(status: ReplayStatus): number | null {
     status.session_complete === true ||
     (status.stats.trades.length > 0 || status.stats.events.length > 0);
   if (!isHoldingReplay) return null;
-  const timeIso = status.current_time_iso ? status.current_time_iso.trim() : '15:30:00';
+  // No clock means no replay time. Substituting 15:30 handed every other pane
+  // a confident wrong "now" for a session that had not started.
+  const timeIso = status.current_time_iso ? status.current_time_iso.trim() : '';
   if (!timeIso) return null;
   if (timeIso.includes('T')) {
     if (timeIso.endsWith('Z') || timeIso.includes('+') || (timeIso.lastIndexOf('-') > timeIso.indexOf('T'))) {
@@ -1012,12 +1198,52 @@ export function getReplayNowMs(status: ReplayStatus): number | null {
  * Distinct from `useEffectiveNowMs`, which substitutes wall time. Callers that
  * need to KNOW whether a replay is driving the clock want this one.
  */
+/**
+ * The four scalars `getReplayNowMs` actually reads, and nothing else.
+ *
+ * Both hooks below used to select `s.status`, whose identity changes on EVERY
+ * frame. Six panes outside the dock consume them, so a running replay
+ * re-rendered the whole workspace at up to 10 Hz — exactly the cost this
+ * store's header rule exists to prevent. Selecting scalars lets zustand's
+ * `Object.is` check stop a frame that moved only the clock's seconds.
+ */
+function useReplayClockInputs() {
+  const state = useReplayStore((s) => s.status.state);
+  const sessionComplete = useReplayStore((s) => s.status.session_complete);
+  const hasLedger = useReplayStore(
+    (s) => s.status.stats.trades.length > 0 || s.status.stats.events.length > 0,
+  );
+  const timeIso = useReplayStore((s) => s.status.current_time_iso);
+  const currentDate = useReplayStore((s) => s.status.current_date);
+  const configDate = useReplayStore((s) => s.status.config?.date);
+  return { state, sessionComplete, hasLedger, timeIso, currentDate, configDate };
+}
+
+function replayNowFromInputs(i: ReturnType<typeof useReplayClockInputs>): number | null {
+  return getReplayNowMs({
+    ...DEFAULT_STATUS,
+    state: i.state,
+    session_complete: i.sessionComplete,
+    current_time_iso: i.timeIso,
+    current_date: i.currentDate,
+    config: i.configDate ? ({ date: i.configDate } as ReplayConfigEcho) : null,
+    stats: {
+      ...DEFAULT_STATUS.stats,
+      // `getReplayNowMs` only asks whether a ledger EXISTS.
+      events: i.hasLedger ? ([{}] as unknown as ReplaySignal[]) : EMPTY_EVENTS,
+      trades: EMPTY_TRADES,
+    },
+  });
+}
+
 export function useSimNowMs(): number | null {
-  const status = useReplayStore((s) => s.status);
-  return getReplayNowMs(status);
+  const inputs = useReplayClockInputs();
+  return useMemo(() => replayNowFromInputs(inputs), [
+    inputs.state, inputs.sessionComplete, inputs.hasLedger,
+    inputs.timeIso, inputs.currentDate, inputs.configDate,
+  ]);
 }
 
 export function useEffectiveNowMs(): number {
-  const status = useReplayStore((s) => s.status);
-  return getReplayNowMs(status) ?? Date.now();
+  return useSimNowMs() ?? Date.now();
 }

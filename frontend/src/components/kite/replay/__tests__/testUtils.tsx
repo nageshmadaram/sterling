@@ -15,6 +15,8 @@ export const FULL_CAPS: ReplayCapabilities = {
   absolute_seek: true,
   stream: false,
   delta_status: true,
+  delta_events: true,
+  delta_trades: false,
   multi_day: false,
   resolutions: ['1m', '5m', '15m'],
 };

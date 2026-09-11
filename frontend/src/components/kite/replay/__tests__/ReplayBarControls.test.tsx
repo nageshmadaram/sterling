@@ -39,13 +39,20 @@ describe('ReplaySessionDropdown', () => {
     const options = screen.getAllByRole('option');
     expect(options.length).toBeGreaterThanOrEqual(2);
 
-    // First option should be Yesterday/Previous Session matching last working day
-    const prevSessionOpt = options[0];
+    // Find the preset for the last completed session BY ITS DATE, not by its
+    // position. `getDynamicMarketPresets` prepends a "Today" option on any
+    // trading day after 09:00 IST, so asserting on `options[0]` made this test
+    // pass overnight and at weekends and fail during market hours.
+    const prevSessionOpt = options.find(
+      (o) => o.getAttribute('aria-selected') === 'true',
+    );
     expect(prevSessionOpt).toBeTruthy();
-    expect(prevSessionOpt.getAttribute('aria-selected')).toBe('true');
+    expect(prevSessionOpt!.textContent).toMatch(/Yesterday|Previous Session/);
 
-    // Click prior session
-    const priorSessionOpt = options[1];
+    // Click a different preset — the one after the selected session.
+    const selectedIndex = options.indexOf(prevSessionOpt!);
+    const priorSessionOpt = options[selectedIndex + 1];
+    expect(priorSessionOpt).toBeTruthy();
     act(() => {
       fireEvent.click(priorSessionOpt);
     });
@@ -53,13 +60,17 @@ describe('ReplaySessionDropdown', () => {
     const updatedDraft = useReplayStore.getState().draft;
     expect(updatedDraft.date).not.toBe(lastDay);
 
-    // Click first option again
+    // Re-select the last completed session, again by identity rather than
+    // position.
     act(() => {
       fireEvent.click(trigger);
     });
-    const reopenedOptions = screen.getAllByRole('option');
+    const reopened = screen
+      .getAllByRole('option')
+      .find((o) => /Yesterday|Previous Session/.test(o.textContent ?? ''));
+    expect(reopened).toBeTruthy();
     act(() => {
-      fireEvent.click(reopenedOptions[0]);
+      fireEvent.click(reopened!);
     });
     expect(useReplayStore.getState().draft.date).toBe(lastDay);
   });

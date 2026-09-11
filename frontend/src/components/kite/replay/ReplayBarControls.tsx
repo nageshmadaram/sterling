@@ -4,7 +4,7 @@ import {
   useReplayState,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
-import { getDynamicMarketPresets } from '../../../lib/replay/marketSessions';
+import { getDynamicMarketPresets, nearestOpenSession } from '../../../lib/replay/marketSessions';
 import { ReplayPopover } from './primitives/ReplayPopover';
 import { ensureSeconds, fmtSessionDate, fmtSmartDate, fmtTime } from './replayFormat';
 import { MONEYNESS_LEGS, REPLAY_STRATEGIES, strategyLabel } from './replayStrategies';
@@ -153,7 +153,10 @@ export function ReplaySessionDropdown() {
                     data-testid="replay-session-date-input"
                     onChange={(e) => {
                       if (e.target.value) {
-                        const newDate = e.target.value;
+                        // Snap to a day the exchange was open. A weekend or a
+                        // holiday has no candles, so it produced "No real
+                        // candles available" instead of a session.
+                        const newDate = nearestOpenSession(e.target.value);
                         setDraft({ date: newDate, endDate: newDate });
                       }
                     }}
@@ -172,7 +175,7 @@ export function ReplaySessionDropdown() {
                   data-testid="replay-session-from-input"
                   onChange={(e) => {
                     if (e.target.value) {
-                      const newDate = e.target.value;
+                      const newDate = nearestOpenSession(e.target.value);
                       const newEndDate = draft.endDate && draft.endDate < newDate ? newDate : (draft.endDate ?? newDate);
                       setDraft({ date: newDate, endDate: newEndDate });
                     }
@@ -189,7 +192,7 @@ export function ReplaySessionDropdown() {
                   data-testid="replay-session-to-input"
                   onChange={(e) => {
                     if (e.target.value) {
-                      const to = e.target.value;
+                      const to = nearestOpenSession(e.target.value);
                       setDraft({ endDate: to < draft.date ? draft.date : to });
                     }
                   }}

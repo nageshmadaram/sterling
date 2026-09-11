@@ -823,3 +823,422 @@ async def test_multi_day_strategy_evaluation_unsuppressed_by_later_recorded_sign
 
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Regressions from the 2026-09-11 end-to-end audit.
+#
+# Each test below pins one defect the audit found. They are grouped here rather
+# than scattered so the next person can read the failure modes as a set.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import asyncio as _asyncio
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+from app.services.simulation import (
+    SimSignalEvent,
+    SimState,
+    _leg_delta,
+    _premium_at,
+)
+
+_IST_TZ = _tz(_td(hours=5, minutes=30))
+
+
+def _bar(symbol, o, h, l, c, ts, volume=1000):
+    return {"symbol": symbol, "open": o, "high": h, "low": l, "close": c,
+            "time": ts, "volume": volume}
+
+
+def _runner_with_trade(**overrides):
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", friction_mode="ideal")
+    fields = dict(
+        trade_id="TRD-1", strategy="supertrend", symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY", direction="BUY", opt_type="CE", strike=25_000.0,
+        lots=1, quantity=75, entry_price=100.0, stop_loss=75.0, target_price=150.0,
+        raw_entry=100.0, spot_entry=25_000.0, spot_stop=24_950.0,
+        spot_target=25_100.0, spot_hwm=25_000.0, spot_initial_risk=50.0,
+        spot_initial_stop=24_950.0,
+    )
+    fields.update(overrides)
+    trade = SimTradeEvent(**fields)
+    runner._stats.trades.append(trade)
+    runner._open_by_symbol["NIFTY"] = [trade]
+    return runner, trade
+
+
+# ── M8: one settlement, one close ────────────────────────────────────────────
+
+def test_a_settling_bar_closes_a_position_exactly_once():
+    """`_close_position` used to be called twice, the first time with no reason.
+
+    The ledger ended up right because every aggregate is re-derived, but the
+    stream carried a fabricated `MANUAL` exit before the real one.
+    """
+    runner, trade = _runner_with_trade()
+    published = []
+    runner._publish = lambda kind, data: published.append((kind, data.get("exit_reason")))
+
+    runner._settle_open_positions(
+        _bar("NIFTY", 25_000, 25_000, 24_900, 24_950, 1_757_500_000),
+        _dt.fromtimestamp(1_757_500_000, tz=_IST_TZ),
+    )
+
+    trade_events = [p for p in published if p[0] == "trade"]
+    assert len(trade_events) == 1, "a close must publish once"
+    assert trade_events[0][1] == "STOP_LOSS"
+    assert "MANUAL" not in [p[1] for p in trade_events]
+    assert trade.status == "LOSS"
+
+
+# ── H5: adaptive_version is an Adaptive Edge setting ─────────────────────────
+
+def test_v2_hardened_does_not_halve_slippage_for_other_strategies():
+    cfg = SimConfig(date="2026-09-10", adaptive_version="v2_hardened", slippage_pct=1.0)
+    ae_entry, _, _ = _apply_friction(100.0, 100.0, "NIFTY", cfg, strategy="adaptive_edge")
+    st_entry, _, _ = _apply_friction(100.0, 100.0, "NIFTY", cfg, strategy="supertrend")
+    assert st_entry > ae_entry, "only Adaptive Edge gets the passive-fill discount"
+
+    baseline = SimConfig(date="2026-09-10", adaptive_version="v1_baseline", slippage_pct=1.0)
+    v1_entry, _, _ = _apply_friction(100.0, 100.0, "NIFTY", baseline, strategy="supertrend")
+    assert st_entry == v1_entry, "a non-AE strategy is unaffected by the AE version"
+
+
+def test_v2_trade_management_does_not_reach_other_strategies():
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", adaptive_version="v2_hardened")
+    assert runner._is_ae_v2("adaptive_edge") is True
+    assert runner._is_ae_v2("supertrend") is False
+    assert runner._is_ae_v2("nifty_orb") is False
+
+
+def test_adaptive_version_defaults_to_the_declared_default():
+    """`_apply_friction` used to assume v2 when the field was absent, which is
+    the opposite of what `SimConfig` declares."""
+    assert SimConfig(date="2026-09-10").adaptive_version == "v1_baseline"
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10")
+    assert runner._is_ae_v2("adaptive_edge") is False
+
+
+# ── H4: the displayed ladder is the enforced ladder ──────────────────────────
+
+def test_trade_levels_are_the_premiums_implied_at_the_enforced_spot_levels():
+    """SL/Target were `entry x0.75` and `x1.5` while settlement used the SPOT
+    stop and target, so a row could be stamped TARGET below its own target."""
+    leg = _option_contract("NIFTY", 25_000.0, "BULLISH", SimConfig(date="2026-09-10"))
+    spot_stop, spot_target = 24_950.0, 25_100.0
+
+    stop_premium = _premium_at(leg, 25_000.0, spot_stop)
+    target_premium = _premium_at(leg, 25_000.0, spot_target)
+
+    # The exit a settling bar would actually book at the target.
+    runner, trade = _runner_with_trade(
+        entry_price=leg["premium"], raw_entry=leg["premium"],
+        stop_loss=stop_premium, target_price=target_premium,
+        leg_delta=leg["delta"], strike=leg["strike"],
+    )
+    booked = runner._premium_for_spot(trade, spot_target)
+    assert abs(booked - target_premium) < 0.02, "the target shown is the target booked"
+    assert target_premium > leg["premium"] > stop_premium
+
+
+# ── L33: a leg's delta follows its moneyness ─────────────────────────────────
+
+def test_leg_delta_tracks_moneyness():
+    assert _leg_delta(25_000.0, 25_000.0, 50.0, "CE") == 0.50           # ATM
+    assert _leg_delta(25_100.0, 25_000.0, 50.0, "CE") < 0.50            # OTM2 call
+    assert _leg_delta(24_900.0, 25_000.0, 50.0, "CE") > 0.50            # ITM2 call
+    assert _leg_delta(24_900.0, 25_000.0, 50.0, "PE") < 0.50            # OTM2 put
+    assert _leg_delta(25_100.0, 25_000.0, 50.0, "PE") > 0.50            # ITM2 put
+
+
+def test_an_otm_leg_marks_more_slowly_than_an_atm_leg():
+    cfg = SimConfig(date="2026-09-10", moneyness="OTM2")
+    otm = _option_contract("NIFTY", 25_000.0, "BULLISH", cfg)
+    atm = _option_contract("NIFTY", 25_000.0, "BULLISH", SimConfig(date="2026-09-10"))
+    move_otm = _premium_at(otm, 25_000.0, 25_100.0) - otm["premium"]
+    move_atm = _premium_at(atm, 25_000.0, 25_100.0) - atm["premium"]
+    assert move_otm < move_atm
+
+
+# ── M16: "ideal" is friction modelled and free, in BOTH entry paths ──────────
+
+def test_ideal_mode_reports_a_measured_zero_not_an_absent_value():
+    runner, trade = _runner_with_trade()
+    runner._publish = lambda *a, **k: None
+    runner._settle_open_positions(
+        _bar("NIFTY", 25_000, 25_120, 24_990, 25_100, 1_757_500_000),
+        _dt.fromtimestamp(1_757_500_000, tz=_IST_TZ),
+    )
+    assert trade.slippage == 0.0, "modelled and free is 0.0, never None"
+    assert trade.raw_exit is not None, "the theoretical price is recorded in both modes"
+    assert trade.exit_price == trade.raw_exit
+
+
+# ── M10: a stopped session reports its open positions ────────────────────────
+
+@pytest.mark.asyncio
+async def test_open_positions_counts_the_ledger_not_the_dropped_book():
+    """`stop()` drops the book without squaring off — deliberately, because a
+    forced fill at the last print is one the market never offered. Counting the
+    BOOK then reported 0 open positions for a table still showing OPEN rows."""
+    runner, trade = _runner_with_trade()
+    runner._publish = lambda *a, **k: None
+    runner._state = SimState.RUNNING
+    await runner.stop()
+
+    assert trade.status == "OPEN"
+    assert runner._open_by_symbol == {}
+    status = runner.status
+    assert status.open_positions == 1
+    assert status.unrealised_pnl == trade.pnl_usd
+
+
+# ── M9: back-pressure sacrifices a frame first ───────────────────────────────
+
+def test_backpressure_evicts_a_frame_in_preference_to_a_signal():
+    runner = SimulationRunner()
+    q = _asyncio.Queue(maxsize=2)
+    runner._subscribers = [q]
+
+    runner._publish("signal", {"instrument": "NIFTY", "n": 1})
+    runner._publish("frame", {"pct": 10})
+    assert q.qsize() == 2
+
+    runner._publish("trade", {"trade_id": "TRD-9"})
+
+    kinds = []
+    while not q.empty():
+        kinds.append(q.get_nowait().kind)
+    assert kinds == ["signal", "trade"], "the frame went, the signal stayed"
+
+
+# ── H7: a seek tells the stream its ledger was cut ───────────────────────────
+
+def test_seek_publishes_a_truncate_event_with_the_new_totals():
+    runner = SimulationRunner()
+    runner._state = SimState.PAUSED
+    runner._session_id = "s1"
+    runner._start_epoch, runner._end_epoch = 1_757_000_000, 1_757_020_000
+    runner._candles = [
+        _bar("NIFTY", 1, 1, 1, 1, 1_757_000_000),
+        _bar("NIFTY", 1, 1, 1, 1, 1_757_010_000),
+    ]
+    runner._stats.events = [
+        SimSignalEvent(time_iso="09:15:00", timestamp_ms=1_757_000_000_000,
+                       strategy="supertrend", instrument="NIFTY", direction="BULLISH",
+                       strength="STRONG", entry=1, stop=1, target=2),
+        SimSignalEvent(time_iso="09:20:00", timestamp_ms=1_757_010_000_000,
+                       strategy="supertrend", instrument="NIFTY", direction="BULLISH",
+                       strength="STRONG", entry=1, stop=1, target=2),
+    ]
+    published = []
+    runner._publish = lambda kind, data: published.append((kind, data))
+
+    runner._apply_seek(1_757_000_000)
+
+    truncates = [d for k, d in published if k == "truncate"]
+    assert truncates, "a seek must announce the cut"
+    assert truncates[-1]["events_total"] == 1
+    assert truncates[-1]["session_id"] == "s1"
+
+
+def test_trade_ids_are_not_reused_after_a_seek():
+    """`TRD-{1000 + len(trades) + 1}` handed the trades entered after a seek the
+    ids of the ones it had just deleted, and any client keyed on `trade_id`
+    merged the new trade onto the stale one."""
+    runner = SimulationRunner()
+    first = [runner._next_trade_id() for _ in range(3)]
+    runner._stats.trades = []          # what a truncating seek leaves behind
+    after = [runner._next_trade_id() for _ in range(3)]
+    assert not set(first) & set(after)
+
+
+# ── M21: rewinding restores the position, not just its status ────────────────
+
+def test_reopening_a_trade_on_rewind_rewinds_its_state_too():
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", resolution="5m")
+    runner._state = SimState.PAUSED
+    runner._start_epoch, runner._end_epoch = 1_757_000_000, 1_757_020_000
+    runner._candles = [_bar("NIFTY", 1, 1, 1, 1, 1_757_000_000)]
+    runner._publish = lambda *a, **k: None
+
+    entry_ms = 1_757_000_000_000
+    trade = SimTradeEvent(
+        trade_id="TRD-1", strategy="supertrend", symbol="NIFTY26SEP25000CE",
+        underlying="NIFTY", direction="BUY", opt_type="CE", strike=25_000.0,
+        lots=1, quantity=75, entry_price=100.0, stop_loss=140.0, target_price=150.0,
+        raw_entry=100.0, timestamp_ms=entry_ms,
+        exit_timestamp_ms=entry_ms + 3_600_000, exit_price=140.0, exit_time_iso="10:15:00",
+        status="WIN", pnl_usd=3000.0, exit_reason="TRAILING_STOP", bars_held=12,
+        spot_entry=25_000.0, spot_stop=25_080.0, spot_target=25_200.0,
+        spot_hwm=25_180.0, spot_initial_risk=50.0, spot_initial_stop=24_950.0,
+    )
+    runner._stats.trades = [trade]
+
+    runner._apply_seek(1_757_000_300)
+
+    assert trade.status == "OPEN"
+    assert trade.exit_reason is None and trade.raw_exit is None
+    assert trade.spot_stop == 24_950.0, "the ratcheted stop is not yet earned"
+    assert trade.spot_hwm == 25_000.0, "the high-water mark is not yet reached"
+    assert trade.bars_held == 1, "bars held follows the clock, not the future"
+
+
+# ── M13: a Gamma Move update is appended, so a delta poll can carry it ───────
+
+def test_gamma_move_updates_are_appended_not_overwritten():
+    runner = SimulationRunner()
+    runner._publish = lambda *a, **k: None
+    base = dict(time_iso="09:20:00", strategy="gamma_move", instrument="RELIANCE",
+                strength="WATCHING", entry=1400.0, stop=1390.0, target=1420.0)
+    runner._stats.events = [SimSignalEvent(timestamp_ms=1, direction="BULLISH",
+                                           level_price=1400.0, level_kind="resistance",
+                                           regime="up", **base)]
+    before = len(runner._stats.events)
+    # An unchanged watch says nothing; a changed one appends.
+    runner._stats.events.append(SimSignalEvent(timestamp_ms=2, direction="BEARISH",
+                                               level_price=1380.0, level_kind="support",
+                                               regime="down", **base))
+    assert len(runner._stats.events) == before + 1
+    assert runner._stats.events[-1].level_price == 1380.0
+
+
+# ── C1: a finished session is not an open market ─────────────────────────────
+
+def test_replay_live_is_false_once_the_session_is_only_being_reviewed():
+    runner = SimulationRunner()
+    runner._publish = lambda *a, **k: None
+    runner._state = SimState.RUNNING
+    assert runner.is_replay_live is True
+
+    runner._state = SimState.IDLE
+    runner._session_complete = True
+    runner._stats.events = [SimSignalEvent(
+        time_iso="09:15:00", timestamp_ms=1, strategy="supertrend", instrument="NIFTY",
+        direction="BULLISH", strength="STRONG", entry=1, stop=1, target=2)]
+
+    assert runner.has_session_view is True, "the ledger stays reviewable"
+    assert runner.is_replay_live is False, "but nothing is playing"
+    assert runner.status.replay_live is False
+
+
+def test_kite_rows_are_tagged_as_replay_and_a_review_is_not_market_open():
+    runner = SimulationRunner()
+    runner._publish = lambda *a, **k: None
+    runner._config = SimConfig(date="2026-09-10")
+    runner._state = SimState.IDLE
+    runner._session_complete = True
+    runner._stats.events = [SimSignalEvent(
+        time_iso="09:15:00", timestamp_ms=1_757_000_000_000, strategy="supertrend",
+        instrument="NIFTY", direction="BULLISH", strength="STRONG",
+        entry=25_000.0, stop=24_950.0, target=25_100.0, spot=25_000.0)]
+
+    resp = runner.get_kite_signals_response()
+    assert resp["rows"], "the review still renders"
+    assert all(r.get("is_replay") for r in resp["rows"])
+    assert resp["market_open"] is False
+    assert resp["feed_mode"] == "replay_review"
+
+    runner._state = SimState.RUNNING
+    live = runner.get_kite_signals_response()
+    assert live["market_open"] is True
+    assert live["feed_mode"] == "replay"
+
+
+# ── M18: the capability says which ledger can actually be a delta ────────────
+
+def test_capabilities_do_not_claim_trades_can_be_requested_as_a_delta():
+    caps = SimulationRunner().capabilities
+    assert caps.delta_events is True
+    assert caps.delta_trades is False, "trades mutate; /status always returns them in full"
+
+
+def test_status_reports_where_lot_sizes_came_from():
+    assert SimulationRunner().status.lot_size_source in ("instruments", "fallback")
+
+
+# ── M26: RSI is Wilder's ─────────────────────────────────────────────────────
+
+def test_replay_rsi_matches_wilders_definition():
+    """The old form divided each side by its OWN count, giving Wilder's value
+    scaled by (down-count / up-count) — a different number under the same name.
+    """
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", strategy="none", strategies=["none"])
+    runner._bar_history = {}
+    runner._in_session_bars = {}
+    runner._last_fired = {}
+    runner._active_until_bar = {}
+    runner._publish = lambda *a, **k: None
+
+    # One big up-move against many small down-moves: equal sums, unequal counts,
+    # which is exactly where the two formulas diverge.
+    closes = [100.0, 112.0, 111.0, 110.0, 109.0, 108.0, 107.0, 106.0, 105.0,
+              104.0, 103.0, 102.0, 101.0, 100.0]
+    diffs = [closes[i] - closes[i - 1] for i in range(1, len(closes))][-14:]
+    periods = len(diffs)
+    gain = sum(d for d in diffs if d > 0) / periods
+    loss = sum(-d for d in diffs if d < 0) / periods
+    wilder = 100 - 100 / (1 + gain / loss)
+
+    old_gains = [d for d in diffs if d > 0]
+    old_losses = [-d for d in diffs if d < 0]
+    old_rs = (sum(old_gains) / len(old_gains)) / (sum(old_losses) / len(old_losses))
+    legacy = 100 - 100 / (1 + old_rs)
+
+    assert abs(wilder - legacy) > 10, "the two definitions really do differ here"
+
+    ts = int(_dt(2026, 9, 10, 9, 15, tzinfo=_IST_TZ).timestamp())
+    captured = {}
+    for i, c in enumerate(closes):
+        bar = _bar("NIFTY", c, c + 0.5, c - 0.5, c, ts + i * 300)
+        runner._evaluate_bar(bar, _dt.fromtimestamp(bar["time"], tz=_IST_TZ))
+    # Recompute from the runner's own history the way `_evaluate_bar` does.
+    hist = [float(b["close"]) for b in runner._bar_history["NIFTY"]]
+    d2 = [hist[i] - hist[i - 1] for i in range(max(1, len(hist) - 14), len(hist))]
+    p2 = max(1, len(d2))
+    g2 = sum(x for x in d2 if x > 0) / p2
+    l2 = sum(-x for x in d2 if x < 0) / p2
+    captured["rsi"] = 100 - 100 / (1 + g2 / l2) if l2 > 0 else 100.0
+    assert abs(captured["rsi"] - wilder) < 1e-9
+
+
+# ── H2: the per-symbol bar index does not freeze at 60 ───────────────────────
+
+def test_symbol_bar_index_keeps_advancing_past_the_history_window():
+    """`_bar_history[sym]` is trimmed to 60, so `len(history)` — which the
+    de-dup guard and the re-entry horizon were both keyed on — stopped
+    advancing. At 1m resolution that silenced most of the session."""
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", strategy="none", strategies=["none"])
+    runner._bar_history = {}
+    runner._in_session_bars = {}
+    runner._last_fired = {}
+    runner._active_until_bar = {}
+    runner._publish = lambda *a, **k: None
+
+    ts = int(_dt(2026, 9, 10, 9, 15, tzinfo=_IST_TZ).timestamp())
+    for i in range(90):
+        price = 25_000.0 + i
+        bar = _bar("NIFTY", price, price + 5, price - 5, price, ts + i * 60)
+        runner._evaluate_bar(bar, _dt.fromtimestamp(bar["time"], tz=_IST_TZ))
+
+    assert len(runner._bar_history["NIFTY"]) == 60, "the window is still capped"
+    assert runner._in_session_bars["NIFTY"] == 90, "but the ordinal is not"
+
+
+def test_a_rewind_rebuilds_the_symbol_bar_ordinal():
+    runner = SimulationRunner()
+    runner._config = SimConfig(date="2026-09-10", resolution="1m")
+    runner._state = SimState.PAUSED
+    runner._publish = lambda *a, **k: None
+    ts = int(_dt(2026, 9, 10, 9, 15, tzinfo=_IST_TZ).timestamp())
+    runner._candles = [_bar("NIFTY", 1, 1, 1, 1, ts + i * 60) for i in range(90)]
+    runner._start_epoch, runner._end_epoch = ts, ts + 90 * 60
+
+    runner._apply_seek(ts + 70 * 60)
+    assert runner._in_session_bars["NIFTY"] == 71

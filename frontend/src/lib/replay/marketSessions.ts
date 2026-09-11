@@ -10,7 +10,7 @@
  * The only change from the original: preset labels no longer carry emoji. The
  * icon is the component's job; the label is data.
  */
-import { isNseClosed, shiftSessionIso } from '../astro/holidays';
+import { isNseClosed, nearestOpenIso, shiftSessionIso } from '../astro/holidays';
 
 export function getIstDateParts(d: Date = new Date()): { year: number; month: number; day: number; dayOfWeek: number; hours: number; minutes: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -139,4 +139,19 @@ export function getDynamicMarketPresets(refDate: Date = new Date()): MarketDateP
   });
 
   return presets;
+}
+
+
+/**
+ * The nearest day the exchange was actually open, at or before `iso`.
+ *
+ * The date pickers accepted any calendar day, so choosing a Saturday or a
+ * holiday started a replay that could only answer "No real candles available
+ * for 2026-09-12". Snapping is the honest response to a day that has no
+ * session: there is nothing to replay on it, and the nearest one is what the
+ * user meant.
+ */
+export function nearestOpenSession(iso: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  return isNseClosed(iso) ? nearestOpenIso(iso) : iso;
 }

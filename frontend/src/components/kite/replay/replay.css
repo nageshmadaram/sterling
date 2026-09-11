@@ -152,46 +152,11 @@
   color: var(--k-text);
   white-space: nowrap;
 }
-.rd-shell-mode {
-  font-size: var(--rd-fs-micro);
-  color: var(--k-faint);
-  white-space: nowrap;
-}
-.rd-shell-clock,
-.rd-shell-bars,
-.rd-shell-pct {
-  font-family: var(--rd-font-mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.rd-shell-clock { font-size: var(--rd-fs-body); color: var(--k-dim); }
-.rd-shell-bars  { font-size: var(--rd-fs-micro); color: var(--k-dim); }
-.rd-shell-pct   { font-size: var(--rd-fs-body); color: var(--k-cyan); font-weight: 600; }
-.rd-shell-msg {
-  font-size: var(--rd-fs-micro);
-  color: var(--k-dim);
-  /* Was a hard `max-width: 260px`, so a message like "Multi-day ranges are not
-     supported yet (2026-08-31 to 2026-09-04)" ellipsised even on a 1920px dock
-     with the room to show it. Take the space that is actually free, and only
-     clip when there genuinely is none. */
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .rd-shell-controls {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: 2px;
-}
-.rd-shell-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--k-border);
-  margin: 0 4px;
-  flex-shrink: 0;
 }
 
 .rd-grip {
@@ -207,72 +172,6 @@
   height: 2.5px;
   border-radius: 50%;
   background: currentColor;
-}
-
-/* ── State pill ───────────────────────────────────────────────────────── */
-
-.rd-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--rd-fs-micro);
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  font-family: var(--rd-font-mono);
-  padding: 2px 6px;
-  border-radius: 3px;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  transition: background var(--rd-dur-fast) var(--rd-ease-move),
-              color var(--rd-dur-fast) var(--rd-ease-move);
-}
-.rd-state-prefix { color: var(--k-cyan); font-weight: 700; }
-.rd-state[data-state="idle"],
-.rd-state[data-state="loading"] {
-  color: var(--k-dim);
-  background: color-mix(in srgb, var(--k-text) 5%, transparent);
-}
-.rd-state[data-state="running"] {
-  color: var(--k-green);
-  background: color-mix(in srgb, var(--k-green) 12%, transparent);
-  border-color: color-mix(in srgb, var(--k-green) 28%, transparent);
-}
-.rd-state[data-state="paused"] {
-  color: var(--k-amber);
-  background: color-mix(in srgb, var(--k-amber) 12%, transparent);
-  border-color: color-mix(in srgb, var(--k-amber) 28%, transparent);
-}
-.rd-state[data-state="error"] {
-  color: var(--k-red);
-  background: color-mix(in srgb, var(--k-red) 12%, transparent);
-  border-color: color-mix(in srgb, var(--k-red) 28%, transparent);
-}
-.rd-pulse {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: rd-pulse 1.6s ease-in-out infinite;
-}
-
-/* ── Command rail ─────────────────────────────────────────────────────── */
-
-.rd-rail {
-  height: var(--rd-h-rail);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 12px;
-  background: var(--k-surface);
-  border-bottom: 1px solid var(--k-border);
-}
-.replay-dock[data-width="sm"] .rd-rail {
-  height: auto;
-  flex-wrap: wrap;
-  padding: 6px 12px;
-  gap: 6px;
 }
 
 .rd-transport {
@@ -336,56 +235,6 @@
   height: 20px;
   background: var(--k-border);
   flex-shrink: 0;
-}
-
-/* ── Speed ────────────────────────────────────────────────────────────── */
-
-.rd-speeds {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-.rd-speed {
-  height: 22px;
-  min-width: 30px;
-  padding: 0 7px;
-  border: 1px solid var(--k-border);
-  border-radius: 3px;
-  background: var(--k-surface);
-  color: var(--k-dim);
-  font-family: var(--rd-font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--rd-fs-micro);
-  font-weight: 700;
-  letter-spacing: .04em;
-  cursor: pointer;
-  transition: background var(--rd-dur-instant) var(--rd-ease-out),
-              color var(--rd-dur-instant) var(--rd-ease-out),
-              border-color var(--rd-dur-instant) var(--rd-ease-out);
-}
-.rd-speed:hover:not(:disabled) { color: var(--k-text); background: var(--k-surface-hover); }
-.rd-speed:focus-visible { outline: 2px solid var(--k-brand); outline-offset: 1px; }
-.rd-speed[data-active="true"] {
-  border-color: var(--k-brand);
-  background: var(--k-brand);
-  color: var(--k-on-accent);   /* inverts in dark mode; #fff would fail contrast */
-}
-.rd-speed[data-max="true"] {
-  background-image: repeating-linear-gradient(
-    45deg,
-    transparent, transparent 3px,
-    color-mix(in srgb, var(--k-text) 8%, transparent) 3px,
-    color-mix(in srgb, var(--k-text) 8%, transparent) 6px
-  );
-}
-.rd-speed[data-active="true"][data-max="true"] {
-  background-image: repeating-linear-gradient(
-    45deg,
-    transparent, transparent 3px,
-    color-mix(in srgb, var(--k-on-accent) 22%, transparent) 3px,
-    color-mix(in srgb, var(--k-on-accent) 22%, transparent) 6px
-  );
 }
 
 /* ── Timeline ─────────────────────────────────────────────────────────── */
@@ -477,6 +326,10 @@
 .rd-dot[data-cluster="true"] { width: 7px; height: 7px; margin-left: -3.5px; }
 .rd-dot[data-selected="true"] { box-shadow: 0 0 0 2px var(--k-bg), 0 0 0 3px var(--k-brand); }
 
+/* Positioned with `left: %`, matching the fill beneath it. It used to be
+   translated by a pixel offset measured from `ResizeObserver.contentRect`
+   while the fill used a percentage — two coordinate systems that separate
+   under any ancestor CSS `zoom`. */
 .rd-playhead {
   position: absolute;
   top: 0; bottom: 0;
@@ -484,8 +337,8 @@
   margin-left: -1px;
   background: var(--k-cyan);
   pointer-events: none;
-  transition: transform var(--rd-dur-instant) linear;
-  will-change: transform;
+  transition: left var(--rd-dur-instant) linear;
+  will-change: left;
 }
 .rd-timeline[data-scrubbing="true"] .rd-playhead { transition: none; }
 .rd-playhead::after {
@@ -512,23 +365,6 @@
   pointer-events: none;
   z-index: 3;
 }
-
-/* ── Metric strip ─────────────────────────────────────────────────────── */
-
-.rd-metrics {
-  height: var(--rd-h-strip);
-  min-height: var(--rd-h-strip);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 0 12px;
-  background: var(--k-surface);
-  border-bottom: 1px solid var(--k-border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.rd-metrics::-webkit-scrollbar { display: none; }
 
 .rd-metric {
   display: inline-flex;
@@ -569,74 +405,6 @@
   font-weight: 500;
 }
 
-/* ── View bar + segmented ─────────────────────────────────────────────── */
-
-.rd-viewbar {
-  height: var(--rd-h-viewbar);
-  min-height: var(--rd-h-viewbar);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  background: var(--k-bg);
-  border-bottom: 1px solid var(--k-border);
-}
-.rd-viewbar-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.rd-seg {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  border: 1px solid var(--k-border);
-  border-radius: 4px;
-  background: var(--k-surface);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.rd-seg-indicator {
-  position: absolute;
-  top: 0; bottom: 0; left: 0;
-  background: var(--k-surface-hover);
-  border-radius: 3px;
-  transition: transform var(--rd-dur-fast) var(--rd-ease-move),
-              width var(--rd-dur-fast) var(--rd-ease-move);
-  pointer-events: none;
-}
-.rd-seg-btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 100%;
-  padding: 0 10px;
-  border: 0;
-  background: none;
-  color: var(--k-dim);
-  font-family: inherit;
-  font-size: var(--rd-fs-body);
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color var(--rd-dur-instant) var(--rd-ease-out);
-}
-.rd-seg-btn:hover { color: var(--k-text); }
-.rd-seg-btn[aria-selected="true"] { color: var(--k-text); }
-.rd-seg-btn:focus-visible { outline: 2px solid var(--k-brand); outline-offset: -2px; }
-.rd-seg-count {
-  font-family: var(--rd-font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--rd-fs-micro);
-  color: var(--k-dim);
-}
-
 /* ── Buttons and chips ────────────────────────────────────────────────── */
 
 .rd-btn {
@@ -669,40 +437,6 @@
 .rd-btn[data-variant="ghost"] { background: transparent; border-color: transparent; }
 .rd-btn[data-variant="danger"] { color: var(--k-red); border-color: color-mix(in srgb, var(--k-red) 28%, transparent); }
 .rd-btn-sm { height: var(--rd-h-chip); padding: 0 7px; font-size: var(--rd-fs-micro); }
-
-.rd-filter-chips {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-.rd-filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: var(--rd-h-chip);
-  padding: 0 4px 0 7px;
-  border: 1px solid var(--k-border);
-  border-radius: 10px;
-  background: var(--k-surface);
-  color: var(--k-text);
-  font-size: var(--rd-fs-micro);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.rd-filter-chip button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px; height: 14px;
-  border: 0; padding: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--k-dim);
-  cursor: pointer;
-}
-.rd-filter-chip button:hover { color: var(--k-red); background: color-mix(in srgb, var(--k-red) 12%, transparent); }
 
 .rd-dot-tone {
   width: 6px; height: 6px;
@@ -741,62 +475,6 @@
   color: var(--k-dim);
   background: color-mix(in srgb, var(--k-text) 6%, transparent);
 }
-
-/* ── Content ──────────────────────────────────────────────────────────── */
-
-.rd-content {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-.rd-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: rd-panel-in var(--rd-dur-fast) var(--rd-ease-out);
-}
-.rd-split {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 8px;
-  overflow: hidden;
-}
-.replay-dock[data-width="sm"] .rd-split,
-.replay-dock[data-width="md"] .rd-split { grid-template-columns: 1fr; }
-
-.rd-pane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--k-border);
-  border-radius: 6px;
-  background: var(--k-bg);
-}
-.rd-pane-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 26px;
-  flex-shrink: 0;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--k-border);
-  background: var(--k-surface);
-  font-size: var(--rd-fs-label);
-  font-weight: 700;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  color: var(--k-dim);
-}
-.rd-pane-head-actions { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
 .rd-pane-body {
   flex: 1;
   min-height: 0;
@@ -989,8 +667,6 @@
   border-color: color-mix(in srgb, var(--k-amber) 30%, var(--k-border));
 }
 
-.rd-split .rd-stat-pill-range,
-.rd-split .rd-stat-pill-dd,
 .replay-dock[data-width="sm"] .rd-stat-pill-range,
 .replay-dock[data-width="sm"] .rd-stat-pill-dd,
 .replay-dock[data-width="sm"] .rd-stat-pill:not([title*="Win"]) {
@@ -1093,7 +769,6 @@
   color: var(--k-dim);
   margin-bottom: 6px;
 }
-.rd-pop-head-actions { margin-left: auto; display: inline-flex; gap: 4px; }
 .rd-opt {
   display: flex;
   align-items: center;
@@ -1109,8 +784,6 @@
 }
 .rd-opt:hover { background: var(--k-surface-hover); }
 .rd-opt input { accent-color: var(--k-brand); margin: 0; cursor: pointer; }
-.rd-opt-hint { margin-left: auto; font-size: var(--rd-fs-micro); color: var(--k-dim); font-weight: 500; }
-.rd-opt-legs { display: flex; flex-wrap: wrap; gap: 4px; }
 
 .rd-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rd-field-label {
@@ -1134,165 +807,7 @@
 .rd-input:focus { outline: none; border-color: var(--k-brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--k-brand) 22%, transparent); }
 .rd-input[aria-invalid="true"] { border-color: var(--k-red); }
 .rd-input:disabled { opacity: .5; cursor: not-allowed; }
-.rd-field-error { font-size: var(--rd-fs-micro); color: var(--k-red); font-weight: 600; }
-.rd-field-warn { font-size: var(--rd-fs-micro); color: var(--k-amber); font-weight: 600; }
 .rd-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-
-/* ── Config sheet ─────────────────────────────────────────────────────── */
-
-.rd-sheet-scrim {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  background: color-mix(in srgb, var(--k-text) 32%, transparent);
-  animation: rd-fade var(--rd-dur-fast) var(--rd-ease-out);
-}
-/* Fills the dock rather than hanging off its right edge. The cards run
-   HORIZONTALLY inside it — see `.rd-sheet-body`. */
-.rd-sheet {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  display: flex;
-  flex-direction: column;
-  background: var(--k-bg);
-  border-top: 1px solid var(--k-border-strong);
-  box-shadow: 0 -12px 32px color-mix(in srgb, var(--k-text) 14%, transparent);
-  animation: rd-sheet-rise var(--rd-dur-base) var(--rd-ease-out);
-}
-.rd-sheet-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: var(--rd-h-shell);
-  flex-shrink: 0;
-  padding: 0 12px;
-  background: var(--k-surface);
-  border-bottom: 1px solid var(--k-border);
-  font-size: var(--rd-fs-data);
-  font-weight: 700;
-}
-/* Cards grid: max 3 or 4 tiles per row with smooth vertical scrolling.
-   Wide views (xl) display 4 columns; medium views (lg) display 3 columns;
-   compact views adapt to 2 columns or 1 column. */
-.rd-sheet-body {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  align-items: start;
-}
-.rd-sheet-body > .rd-card {
-  min-width: 0;
-  width: 100%;
-  max-height: none;
-  overflow-y: visible;
-}
-.replay-dock[data-width="xl"] .rd-sheet-body {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-.replay-dock[data-width="lg"] .rd-sheet-body {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.replay-dock[data-width="md"] .rd-sheet-body {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.replay-dock[data-width="sm"] .rd-sheet-body {
-  grid-template-columns: 1fr;
-}
-@media (max-width: 1200px) {
-  .rd-sheet-body {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-@media (max-width: 850px) {
-  .rd-sheet-body {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 550px) {
-  .rd-sheet-body {
-    grid-template-columns: 1fr;
-  }
-}
-.rd-sheet-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--k-border);
-  background: var(--k-surface);
-}
-.rd-sheet-foot-right { margin-left: auto; display: inline-flex; gap: 8px; }
-
-.rd-card {
-  /* The sheet body is a flex COLUMN, so a card's default `flex-shrink: 1` let
-     it be compressed below its content instead of overflowing. Every card was
-     rendered shorter than its natural height — Strategies 288px of 353px — so
-     labels clipped and ran into each other, and `overflow: auto` on the body
-     never engaged because nothing overflowed. Worse the shorter the dock: at a
-     ~280px dock the cards collapse to slivers.
-     Cards keep their height; the body scrolls. */
-  flex-shrink: 0;
-  border: 1px solid var(--k-border);
-  border-radius: 8px;
-  background: var(--k-bg);
-  overflow: hidden;
-}
-.rd-card > summary {
-  list-style: none;
-  cursor: pointer;
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  column-gap: 10px;
-  align-items: center;
-  padding: 9px 12px;
-  min-height: 44px;
-  user-select: none;
-  border-left: 2px solid transparent;
-}
-.rd-card > summary::-webkit-details-marker { display: none; }
-.rd-card[open] > summary { border-left-color: var(--k-brand); }
-.rd-card-caret {
-  color: var(--k-dim);
-  font-size: var(--rd-fs-data);
-  font-weight: 700;
-  line-height: 1;
-  justify-self: center;
-  transition: transform var(--rd-dur-fast) var(--rd-ease-move);
-}
-.rd-card[open] > summary .rd-card-caret { transform: rotate(90deg); color: var(--k-brand); }
-.rd-card-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rd-card-title { font-size: var(--rd-fs-data); font-weight: 700; color: var(--k-text); }
-.rd-card-desc { font-size: var(--rd-fs-body); color: var(--k-dim); line-height: 1.35; }
-.rd-card-meta {
-  font-family: var(--rd-font-mono);
-  font-size: var(--rd-fs-micro);
-  font-weight: 700;
-  color: var(--k-dim);
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: var(--k-surface);
-  border: 1px solid var(--k-border);
-  white-space: nowrap;
-}
-.rd-card-meta[data-tone="off"] { color: var(--k-amber); border-color: color-mix(in srgb, var(--k-amber) 30%, transparent); }
-.rd-card-body {
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--k-border-2);
-  background: var(--k-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.rd-card[data-disabled="true"] { opacity: .75; }
 .rd-note {
   font-size: var(--rd-fs-body);
   color: var(--k-dim);
@@ -1372,7 +887,9 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
 }
-@media (max-width: 720px) { .rd-statgrid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 720px) {
+  .rd-statgrid { grid-template-columns: repeat(2, 1fr); }
+}
 .rd-statbox {
   padding: 8px 10px;
   border: 1px solid var(--k-border);
@@ -1526,7 +1043,9 @@
 /* ── Shortcut sheet ───────────────────────────────────────────────────── */
 
 .rd-keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 18px; }
-@media (max-width: 720px) { .rd-keys { grid-template-columns: 1fr; } }
+@media (max-width: 720px) {
+  .rd-keys { grid-template-columns: 1fr; }
+}
 .rd-key-row {
   display: flex;
   align-items: baseline;
@@ -1551,20 +1070,48 @@ kbd.rd-kbd {
 /* ── Animations ───────────────────────────────────────────────────────── */
 
 @keyframes rd-dock-in   { from { opacity: .6; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes rd-panel-in  { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes rd-pop-in    { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
-@keyframes rd-sheet-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes rd-fade      { from { opacity: 0; } to { opacity: 1; } }
-@keyframes rd-modal-in  { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
-@keyframes rd-toast-in  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@keyframes rd-toast-out { to { opacity: 0; transform: translateY(-6px); } }
-@keyframes rd-dot-in    { from { transform: translateY(-50%) scale(0); } 70% { transform: translateY(-50%) scale(1.25); } to { transform: translateY(-50%) scale(1); } }
-@keyframes rd-row-in    { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-@keyframes rd-row-flash { from { background: color-mix(in srgb, var(--k-cyan) 20%, transparent); } to { background: transparent; } }
-@keyframes rd-flash     { from { background: color-mix(in srgb, var(--k-cyan) 24%, transparent); } to { background: transparent; } }
-@keyframes rd-pulse     { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-@keyframes rd-shimmer   { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@keyframes rd-spin      { to { transform: rotate(360deg); } }
+@keyframes rd-panel-in  {
+  from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-pop-in    {
+  from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-sheet-rise {
+  from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-fade      {
+  from { opacity: 0; } to { opacity: 1; }
+}
+@keyframes rd-modal-in  {
+  from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-toast-in  {
+  from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-toast-out {
+  to { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes rd-dot-in    {
+  from { transform: translateY(-50%) scale(0); } 70% { transform: translateY(-50%) scale(1.25); } to { transform: translateY(-50%) scale(1); }
+}
+@keyframes rd-row-in    {
+  from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; }
+}
+@keyframes rd-row-flash {
+  from { background: color-mix(in srgb, var(--k-cyan) 20%, transparent); } to { background: transparent; }
+}
+@keyframes rd-flash     {
+  from { background: color-mix(in srgb, var(--k-cyan) 24%, transparent); } to { background: transparent; }
+}
+@keyframes rd-pulse     {
+  0%, 100% { opacity: 1; } 50% { opacity: .35; }
+}
+@keyframes rd-shimmer   {
+  from { background-position: 200% 0; } to { background-position: -200% 0; }
+}
+@keyframes rd-spin      {
+  to { transform: rotate(360deg); }
+}
 
 .rd-spinner { animation: rd-spin .8s linear infinite; }
 
@@ -1587,7 +1134,6 @@ kbd.rd-kbd {
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
-  .rd-pulse,
   .rd-footer-dot,
   .rd-spinner { animation: none !important; opacity: 1 !important; }
   .rd-skel { animation: none !important; background: var(--k-surface-hover); }
@@ -1620,19 +1166,22 @@ kbd.rd-kbd {
 /* ═══════════════════════════════════════════════════════════════════════════
    CALM PASS
 
-   The dock stacked FOUR chrome bands — shell, rail, metrics, view — for 136px
-   before a single row of data, then wrapped the data in bordered, rounded
+   The dock stacked FOUR chrome bands — shell,
+rail,
+metrics,
+view — for 136px
+   before a single row of data,
+then wrapped the data in bordered,
+rounded
    panes that each carried their own header bar. Plus a coloured rule down every
-   row, a dot per strategy, and a sub-line under half the cells.
+   row,
+a dot per strategy,
+and a sub-line under half the cells.
 
-   Two bands now, ~68px, and the content is plain. Everything below overrides
-   the rules above rather than editing them in place, so the diff stays readable
-   and the earlier structure is recoverable.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* ── Two bands ────────────────────────────────────────────────────────── */
-
-.rd-bar {
+   Two bands now,
+~68px,
+and the content is plain. Everything below overrides
+   the rules above rather than editing them in place {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1640,15 +1189,6 @@ kbd.rd-kbd {
   padding: 0 10px;
   background: var(--k-bg);
 }
-.rd-bar-cmd {
-  height: 38px;
-  border-bottom: 1px solid var(--k-border);
-}
-.rd-bar-meta {
-  height: 30px;
-  border-bottom: 1px solid var(--k-border);
-}
-.replay-dock[data-width="sm"] .rd-bar { flex-wrap: wrap; height: auto; padding: 5px 10px; }
 
 /* The identity cluster loses its own band and its own surface. */
 .rd-shell {
@@ -1658,32 +1198,15 @@ kbd.rd-kbd {
   background: none;
   border-bottom: 0;
   flex-shrink: 0;
-}
-.rd-shell-mode,
-.rd-shell-bars,
-.rd-shell-pct { display: none; }          /* the timeline already says all three */
+}          /* the timeline already says all three */
 
-/* One quiet state marker instead of a bordered, tinted, prefixed pill. */
-.rd-state {
+/* One quiet state marker instead of a bordered,
+tinted {
   border: 0;
   background: none !important;
   padding: 0;
   letter-spacing: .05em;
 }
-.rd-state-prefix { display: none; }
-
-.rd-rail,
-.rd-metrics,
-.rd-viewbar {
-  height: auto;
-  min-height: 0;
-  padding: 0;
-  background: none;
-  border-bottom: 0;
-  flex-shrink: 0;
-}
-.rd-metrics { gap: 0; overflow: visible; }
-.rd-viewbar { flex: 1; min-width: 0; }
 
 /* ── Fewer lines ──────────────────────────────────────────────────────── */
 
@@ -1692,8 +1215,7 @@ kbd.rd-kbd {
 .rd-metric { padding: 0 9px 0 0; gap: 4px; }
 .rd-metric-sub { display: none; }         /* the detail lives in the tooltip */
 
-.rd-rail-divider,
-.rd-shell-divider { display: none; }
+.rd-rail-divider { display: none; }
 
 /* Transport: clean prominent controls */
 .rd-tbtn {
@@ -1725,52 +1247,15 @@ kbd.rd-kbd {
   font-weight: 750;
 }
 
-/* Speed: one quiet segmented run, no per-pill border or hatch. */
-.rd-speed {
+/* Speed: one quiet segmented run {
   border: 0;
   background: none;
   min-width: 26px;
   padding: 0 5px;
   height: 20px;
 }
-.rd-speed[data-active="true"] {
-  background: var(--k-surface-hover);
-  color: var(--k-text);
-  border: 0;
-}
-.rd-speed[data-max="true"] { background-image: none; }
-.rd-speed[data-active="true"][data-max="true"] { background-image: none; }
-.rd-speeds { border-radius: 4px; background: var(--k-surface); padding: 2px; }
 
-/* ── No boxes around the data ─────────────────────────────────────────── */
-
-.rd-split { gap: 0; padding: 0; }
-.rd-split > .rd-pane + .rd-pane { border-left: 1px solid var(--k-border); }
-
-.rd-pane {
-  border: 0;
-  border-radius: 0;
-  background: none;
-}
-.rd-pane-head {
-  height: 24px;
-  background: none;
-  border-bottom: 1px solid var(--k-border);
-  color: var(--k-dim);
-  font-size: var(--rd-fs-micro);
-  letter-spacing: .07em;
-}
-.rd-panel > .rd-pane { margin: 0 !important; border-radius: 0 !important; }
-
-/* Segmented control: type weight carries selection, not a filled chip. */
-.rd-seg { border: 0; background: none; height: 22px; }
-.rd-seg-indicator { display: none; }
-.rd-seg-btn { padding: 0 8px; }
-.rd-seg-btn[aria-selected="true"] {
-  color: var(--k-text);
-  font-weight: 700;
-  box-shadow: inset 0 -2px 0 0 var(--k-brand);
-}
+/* Segmented control: type weight carries selection { border: 0; background: none; height: 22px; }
 
 /* Buttons recede until hovered. */
 .rd-btn {
@@ -1827,16 +1312,8 @@ kbd.rd-kbd {
 }
 .rd-metric { padding-right: 12px; }
 
-/* Controls: icon-only, so the row stops competing with itself for width. */
-.rd-viewbar-right .rd-btn { padding: 0 6px; }
-.rd-viewbar-right { gap: 2px; }
+/* Controls: icon-only { padding: 0 6px; }
 
-/* Split view and narrow screens: secondary columns step out when constrained
-   and return in the single-tab views or wide layouts. */
-.rd-split .rd-table [data-col="strength"],
-.rd-split .rd-table [data-col="rr"],
-.rd-split .rd-table [data-col="held"],
-.rd-split .rd-table [data-col="sltgt"],
 .replay-dock[data-width="sm"] .rd-table [data-col="strength"],
 .replay-dock[data-width="sm"] .rd-table [data-col="rr"],
 .replay-dock[data-width="sm"] .rd-table [data-col="held"],
@@ -1855,12 +1332,10 @@ kbd.rd-kbd {
 }
 
 /* The trades table is 13 columns; a constrained container fits about seven.
-   In constrained views it keeps the ones that answer "what happened": time, what,
-   in, out, and the money. The rest return in the Trades tab. */
-.rd-split .rd-table [data-col="id"],
-.rd-split .rd-table [data-col="out"],
-.rd-split .rd-table [data-col="size"],
-.rd-split .rd-table [data-col="slip"],
+   In constrained views it keeps the ones that answer "what happened": time,
+what,
+in,
+out,
 .replay-dock[data-width="sm"] .rd-table [data-col="id"],
 .replay-dock[data-width="sm"] .rd-table [data-col="out"],
 .replay-dock[data-width="sm"] .rd-table [data-col="size"],
@@ -2092,45 +1567,6 @@ kbd.rd-kbd {
   overflow: hidden;
 }
 
-.rd-unified-section + .rd-unified-section {
-  border-top: 1px solid var(--k-border);
-}
-
-.rd-unified-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 14px;
-  background: var(--k-surface-sunken-2);
-  border-bottom: 1px solid var(--k-hairline);
-  flex-shrink: 0;
-}
-
-.rd-unified-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--k-text);
-}
-
-.rd-unified-title .rd-dim {
-  color: var(--k-dim);
-  font-weight: 600;
-}
-
-.rd-unified-head .rd-btn {
-  margin-left: auto;
-}
-
-.rd-unified-section {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
 /* ── Clean header bar ────────────────────────────────────────────────── */
 
 .rd-clean-header {
@@ -2151,9 +1587,8 @@ kbd.rd-kbd {
   letter-spacing: -0.01em;
 }
 
-/* ── Action bar (session picker, filters, config) ──────────────────── */
-
-.rd-action-bar {
+/* ── Action bar (session picker,
+filters {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2169,133 +1604,6 @@ kbd.rd-kbd {
   height: 16px;
   background: var(--k-border);
   flex-shrink: 0;
-}
-
-/* ── Welcome state ──────────────────────────────────────────────────── */
-
-.rd-welcome {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 24px 24px;
-  gap: 8px;
-  animation: rd-fade var(--rd-dur-base) var(--rd-ease-out);
-  flex: 1;
-  min-height: 200px;
-}
-
-.rd-welcome-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: var(--k-surface-warm);
-  border: 1px solid var(--k-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--k-brand);
-  margin-bottom: 4px;
-}
-
-.rd-welcome-title {
-  font-size: 16px;
-  font-weight: 750;
-  color: var(--k-text);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.rd-welcome-desc {
-  font-size: var(--rd-fs-body);
-  color: var(--k-dim);
-  text-align: center;
-  max-width: 360px;
-  margin: 0 0 12px;
-  line-height: 1.5;
-}
-
-.rd-welcome-presets {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-  margin-bottom: 8px;
-}
-
-.rd-welcome-preset {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 18px;
-  border-radius: 9px;
-  border: 1px solid var(--k-border);
-  background: var(--k-bg);
-  cursor: pointer;
-  font-family: inherit;
-  transition: all var(--rd-dur-fast) var(--rd-ease-out);
-  min-width: 100px;
-}
-
-.rd-welcome-preset:hover {
-  border-color: var(--k-border-strong-2);
-  background: var(--k-surface-warm);
-}
-
-.rd-welcome-preset[data-active="true"] {
-  border-color: var(--k-brand);
-  background: var(--k-tint-warm-1);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--k-brand) 20%, transparent);
-}
-
-.rd-welcome-preset-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--k-text);
-}
-
-.rd-welcome-preset-date {
-  font-size: var(--rd-fs-label);
-  color: var(--k-dim);
-  font-family: var(--rd-font-mono);
-}
-
-.rd-welcome-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--rd-fs-body);
-  color: var(--k-dim);
-  padding: 6px 0;
-}
-
-.rd-welcome-start {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 28px;
-  border-radius: 9px;
-  border: none;
-  background: var(--k-brand);
-  color: var(--k-bg);
-  font-size: 13px;
-  font-weight: 750;
-  font-family: inherit;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
-  transition: all var(--rd-dur-fast) var(--rd-ease-out);
-  margin-top: 4px;
-}
-
-.rd-welcome-start:hover {
-  filter: brightness(1.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
-  transform: translateY(-1px);
-}
-
-.rd-welcome-start:active {
-  transform: translateY(0);
 }
 
 /* ── Session row (fixed bottom, below player) ───────────────────────── */
@@ -2314,66 +1622,11 @@ kbd.rd-kbd {
 }
 .rd-session-row::-webkit-scrollbar { display: none; }
 
-.rd-session-dates,
-.rd-session-times,
 .rd-session-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-}
-
-.rd-session-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--k-border);
-  background: var(--k-bg);
-  font-size: var(--rd-fs-label);
-  font-weight: 650;
-  font-family: inherit;
-  color: var(--k-dim);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--rd-dur-instant) ease;
-}
-
-.rd-session-pill:hover:not(:disabled) {
-  border-color: var(--k-border-strong-2);
-  color: var(--k-text);
-}
-
-.rd-session-pill[data-active="true"] {
-  border-color: var(--k-brand);
-  background: var(--k-tint-warm-1);
-  color: var(--k-brand);
-  font-weight: 700;
-}
-
-.rd-session-pill:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.rd-session-date-input {
-  width: 100px;
-  padding: 2px 6px;
-  border-radius: 5px;
-  border: 1px solid var(--k-border);
-  background: var(--k-bg);
-  color: var(--k-text);
-  font-size: var(--rd-fs-label);
-  font-family: inherit;
-}
-
-.rd-session-range {
-  font-size: var(--rd-fs-label);
-  font-family: var(--rd-font-mono);
-  color: var(--k-text);
-  white-space: nowrap;
-  padding: 0 4px;
-  font-weight: 600;
 }
 
 /* ── Player bar fix: never scroll ───────────────────────────────────── */
@@ -2696,4 +1949,36 @@ kbd.rd-kbd {
 
 .replay-dock[data-width="sm"] .rd-stat-pill-invested {
   display: none;
+}
+
+
+/* ── Multi-day session strip ──────────────────────────────────────────────
+   The timeline axis is ONE session's times, so on a date range there has to be
+   a way to say WHICH session. Without it the scrubber could only ever move
+   inside whichever day the clock was already in. */
+.rd-day-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0 0;
+  overflow-x: auto;
+}
+
+/* ── Replay provenance banner ────────────────────────────────────────────
+   A live pane showing recorded rows has to say so, in the pane, at all times. */
+.rd-replay-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--k-amber);
+  background: color-mix(in srgb, var(--k-amber) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--k-amber) 35%, transparent);
+}
+.rd-replay-banner [data-detail] {
+  font-weight: 500;
+  color: var(--k-dim);
 }

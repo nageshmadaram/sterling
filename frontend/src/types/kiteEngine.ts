@@ -83,6 +83,10 @@ export interface EngineSignalRow {
   // engine computed them.
   navigator?: NavigatorDecision | null;
   resolution_reason?: string | null;
+  // This row came from the market REPLAY, not the live scanner. While a replay
+  // holds the session view the two are merged into one table, and without this
+  // a trader cannot tell a recording from the market.
+  is_replay?: boolean;
 }
 
 export interface SignalsResponse {
@@ -93,6 +97,11 @@ export interface SignalsResponse {
   next_scan_ms: number;
   auto_scan: boolean;
   market_open: boolean;
+  // "live" = every row is from the live scanner. Anything else means at least
+  // some rows are simulated; `replay_live` says whether the replay is still
+  // playing or is a finished session being reviewed.
+  feed_mode?: 'live' | 'replay' | 'replay_review';
+  replay_live?: boolean;
 }
 
 export interface ActivityEvent {

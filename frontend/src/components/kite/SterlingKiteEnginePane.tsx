@@ -2471,6 +2471,30 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
           is EMPTY — gating them on having rows meant the one press that could
           fill it disappeared exactly when nothing was there. Only the search box
           itself is pointless with no rows, so only it is gated. */}
+      {/* Provenance, above everything. While a replay holds the session view the
+          backend merges its recorded rows into this live table, so the table has
+          to say so — a live board that silently contains simulated rows is the
+          one failure this surface must not have. `feed_mode` comes from the
+          engine; it is never inferred from the rows. */}
+      {signals?.feed_mode && signals.feed_mode !== 'live' && (
+        <div
+          data-testid="kite-replay-provenance"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '5px 10px', flexShrink: 0,
+            fontSize: 11, fontWeight: 600, letterSpacing: '0.02em',
+            color: k.amber,
+            background: `color-mix(in srgb, ${k.amber} 12%, transparent)`,
+            borderBottom: `1px solid color-mix(in srgb, ${k.amber} 35%, transparent)`,
+          }}
+        >
+          <span>
+            {signals.feed_mode === 'replay'
+              ? 'MARKET REPLAY — these rows are a recording, not the live market.'
+              : 'FINISHED REPLAY — these rows are a recording. Clear the replay results to return to live.'}
+          </span>
+        </div>
+      )}
       {!settingsOpen && (
         <div style={{ position: 'sticky', top: 0, zIndex: 10, background: k.bg }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: `1px solid ${k.border}` }}>

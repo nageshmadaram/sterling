@@ -4,6 +4,7 @@ import {
   useFilteredReplayTrades,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
+import { replayHasFriction } from './replayColumns';
 import { ABSENT, fmtInt, fmtPct, fmtSignedInr } from './replayFormat';
 
 /**
@@ -25,6 +26,9 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
   const rawEvents = useReplayStore((s) => s.status.stats.events);
   const unrealised = useReplayStore((s) => s.status.unrealised_pnl);
   const openPositions = useReplayStore((s) => s.status.open_positions);
+  const config = useReplayStore((s) => s.status.config);
+  const capabilities = useReplayStore((s) => s.status.capabilities);
+  const lotSizeSource = useReplayStore((s) => s.status.lot_size_source);
 
   const trades = useFilteredReplayTrades();
   const events = useFilteredReplayEvents();
@@ -48,6 +52,8 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
     : 0;
   const effectiveUnrealised = isNarrowed ? filteredUnrealised : unrealised;
 
+  const modelled = replayHasFriction(config, capabilities, trades);
+  const frictionMode = config?.friction_mode;
   const decided = wins + losses;
   const openCount = isNarrowed ? openTrades.length : (openPositions ?? (trades.length - closed.length));
   const winRate = decided > 0 ? (wins / decided) * 100 : null;
@@ -90,11 +96,38 @@ export const ReplayMetricsCard = memo(function ReplayMetricsCard() {
         <span className="rd-metric-value">{fmtInt(signals)}</span>
         <span className="rd-metric-label">signals</span>
       </span>
+      {lotSizeSource === 'fallback' && (trades.length > 0) && (
+        <>
+          <span className="rd-metric-sep" aria-hidden>·</span>
+          <span className="rd-metric">
+            <span
+              className="rd-metric-value"
+              data-tone="dim"
+              title="Lot sizes came from the engine's built-in table, not the broker's instrument master. Every quantity and P&L here scales with them."
+            >
+              est. lots
+            </span>
+          </span>
+        </>
+      )}
       <span className="rd-metric-sep" aria-hidden>·</span>
       <span className="rd-metric">
         <span className="rd-metric-label">Slippage</span>
-        <span className="rd-metric-value" data-tone={drag == null || drag === 0 ? 'dim' : 'loss'}>
-          {drag == null ? ABSENT : drag === 0 ? '₹0.00' : fmtSignedInr(-drag)}
+        <span
+          className="rd-metric-value"
+          data-tone={!modelled || !drag ? 'dim' : 'loss'}
+          title={
+            modelled
+              ? 'Total execution drag across the session'
+              : frictionMode === 'ideal'
+                ? 'Ideal execution — friction was modelled and is exactly zero'
+                : 'This replay did not model execution friction'
+          }
+        >
+          {/* An em dash for "never measured", a real zero only for a measured
+              one. Printing ₹0.00 for a measurement that was never taken is
+              what told traders their strategy had no execution cost. */}
+          {!modelled ? ABSENT : fmtSignedInr(-(drag ?? 0))}
         </span>
       </span>
     </div>

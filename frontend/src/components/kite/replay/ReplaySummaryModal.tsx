@@ -3,13 +3,15 @@ import { createPortal } from 'react-dom';
 import {
   ReplaySignal,
   ReplayTrade,
+  useFilteredReplayEvents,
+  useFilteredReplayTrades,
   useReplayStore,
 } from '../../../hooks/useReplayStore';
 import { useReplayTransport } from '../../../hooks/useReplayTransport';
 import { InstrumentLabel } from '../InstrumentLabel';
 import { Sparkline } from './primitives/Sparkline';
 import { useFocusTrap, useScrollLock } from './primitives/useFocusTrap';
-import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './replayColumns';
+import { SIGNAL_CSV_COLUMNS, replayHasFriction, tradeCsvColumns } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
 import {
   ABSENT,
@@ -53,9 +55,21 @@ export function ReplaySummaryModal() {
   });
   useScrollLock(open);
 
-  const stats = status.stats;
-  const trades = stats.trades;
-  const events = stats.events;
+  // The FILTERED ledger, so the report agrees with the strip and the tables.
+  // Reading `status.stats` here made narrowing to one strategy produce three
+  // different P&L figures for what the user was told was one session.
+  const trades = useFilteredReplayTrades();
+  const events = useFilteredReplayEvents();
+  const stats = useMemo(() => {
+    const closed = trades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
+    const drag = trades.map((t) => t.slippage).filter((v): v is number => v != null);
+    return {
+      wins: closed.filter((t) => t.status === 'WIN').length,
+      losses: closed.filter((t) => t.status === 'LOSS').length,
+      pnl: Number(closed.reduce((a, t) => a + (t.pnl_usd || 0), 0).toFixed(2)),
+      slippage_total: drag.length ? Number(drag.reduce((a, b) => a + b, 0).toFixed(2)) : null,
+    };
+  }, [trades]);
 
   const derived = useMemo(() => {
     const closed = trades.filter((t) => t.status === 'WIN' || t.status === 'LOSS');
@@ -113,7 +127,7 @@ export function ReplaySummaryModal() {
   const date = status.config?.date ?? draft.date;
   const startTime = status.config?.start_time ?? draft.startTime;
   const endTime = status.config?.end_time ?? draft.endTime;
-  const hasFriction = tradesHaveFriction(trades);
+  const hasFriction = replayHasFriction(status.config, status.capabilities, trades);
   // Name the execution model the engine actually ran, not the one requested.
   const frictionMode: 'realistic' | 'ideal' | 'none' = hasFriction
     ? 'realistic'
@@ -191,7 +205,7 @@ export function ReplaySummaryModal() {
               </span>
             </div>
             <div className="rd-statgrid">
-              <Stat label="Signals" value={String(stats.signals_fired)} />
+              <Stat label="Signals" value={String(events.length)} />
               <Stat
                 label="Trades"
                 value={String(trades.length)}
@@ -207,7 +221,13 @@ export function ReplaySummaryModal() {
                 label="Net P&L"
                 value={fmtSignedInr(stats.pnl)}
                 tone={stats.pnl >= 0 ? 'profit' : 'loss'}
-                sub={hasFriction ? 'after execution friction' : 'friction not modelled'}
+                sub={
+                  hasFriction
+                    ? 'after execution friction'
+                    : frictionMode === 'ideal'
+                      ? 'ideal fills — zero friction'
+                      : 'friction not modelled'
+                }
               />
               <Stat label="Wins" value={String(stats.wins)} tone="profit" />
               <Stat label="Losses" value={String(stats.losses)} tone="loss" />

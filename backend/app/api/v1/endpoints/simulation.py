@@ -13,6 +13,11 @@ from app.services.simulation import simulation_runner, SimConfig, SimState, SimS
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
+#: How long the stream may stay silent before it emits a comment frame. Short
+#: enough to notice a vanished client and to keep an intermediary from timing
+#: the connection out; long enough to cost nothing.
+STREAM_KEEPALIVE_S = 15.0
+
 
 class SpeedBody(BaseModel):
     speed: float
@@ -156,13 +161,26 @@ async def stream_sim(request: Request):
     make this endpoint useless, and the client falls back to it.
     """
     async def gen():
+        # A disconnect check that only runs AFTER an event arrives never runs at
+        # all while the runner is idle: nothing is ever published, so the
+        # subscriber queue stays registered for a client that has gone. Race the
+        # queue against a timeout instead, which gives both the disconnect check
+        # and the keep-alive an idle stream needs to survive a proxy.
+        queue = simulation_runner.open_subscription()
         try:
-            async for evt in simulation_runner.subscribe():
+            while True:
                 if await request.is_disconnected():
                     break
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=STREAM_KEEPALIVE_S)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
                 yield f"event: {evt.kind}\ndata: {json.dumps(evt.data, default=str)}\n\n"
         except asyncio.CancelledError:
             return
+        finally:
+            simulation_runner.close_subscription(queue)
 
     return StreamingResponse(
         gen(),

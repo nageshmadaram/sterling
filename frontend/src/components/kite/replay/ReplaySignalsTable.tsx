@@ -28,6 +28,42 @@ import * as Icons from './ReplayIcons';
 const ROW_H = 28;
 const VIRTUALISE_ABOVE = 200;
 
+/**
+ * Entry, stop and target IN ONE UNIT.
+ *
+ * The Entry cell used to render `premium_entry` (an option premium) beside
+ * `stop`/`target` (UNDERLYING levels), so a NIFTY row read "entry ₹500, stop
+ * ₹24,850, target ₹25,100". The premium ladder the engine computes —
+ * `premium_sl` and `premium_target` — was populated, typed, and rendered
+ * nowhere. When the premium ladder is available the row is in premium terms
+ * and the underlying levels move to the sub-line; otherwise the row is in
+ * underlying terms throughout.
+ */
+export function signalLadder(ev: ReplaySignal): {
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  inPremium: boolean;
+} {
+  const watching = ev.strength === 'WATCHING';
+  const hasPremium =
+    ev.premium_entry != null && ev.premium_sl != null && ev.premium_target != null;
+  if (hasPremium) {
+    return {
+      entry: ev.premium_entry ?? null,
+      stop: ev.premium_sl ?? null,
+      target: ev.premium_target ?? null,
+      inPremium: true,
+    };
+  }
+  return {
+    entry: watching ? null : ev.entry,
+    stop: watching ? null : ev.stop,
+    target: watching ? null : ev.target,
+    inPremium: false,
+  };
+}
+
 export type SignalGroupBy = 'none' | 'date' | 'strategy';
 
 const SignalRow = memo(function SignalRow({
@@ -46,7 +82,10 @@ const SignalRow = memo(function SignalRow({
   showContract: boolean;
 }) {
   const bull = isBullish(ev.direction);
+  // R:R is a ratio, so it is the same in either unit — take it from the
+  // underlying triple, which is always present.
   const rr = rewardRisk(ev.entry, ev.stop, ev.target);
+  const ladder = signalLadder(ev);
   const key = rowKey;
 
   return (
@@ -103,10 +142,31 @@ const SignalRow = memo(function SignalRow({
       <td>
         <span className="rd-dir" data-tone={bull ? 'bull' : 'bear'}>{bull ? 'LONG' : 'SHORT'}</span>
       </td>
-      <td data-col="strength" style={{ color: 'var(--k-dim)' }}>{ev.strength}</td>
-      <td data-align="right" className="rd-num">{fmtInr(ev.premium_entry ?? (ev.strength === 'WATCHING' ? null : ev.entry))}</td>
-      <td data-align="right" className="rd-num rd-sl">{fmtInr(ev.stop)}</td>
-      <td data-align="right" className="rd-num rd-tp">{fmtInr(ev.target)}</td>
+      <td data-col="strength" style={{ color: 'var(--k-dim)' }}>
+        {ev.strength}
+        {ev.level_kind && (
+          <span className="rd-sub" title={`${ev.level_touches ?? 0} touches${ev.regime && ev.regime !== 'unknown' ? ` · ${ev.regime} regime` : ''}`}>
+            {ev.level_kind} {ev.level_price != null ? fmtInr(ev.level_price) : ''}
+          </span>
+        )}
+      </td>
+      <td data-align="right" className="rd-num">{fmtInr(ladder.entry)}</td>
+      <td data-align="right" className="rd-num rd-sl">
+        {fmtInr(ladder.stop)}
+        {ladder.inPremium && ev.stop != null && (
+          <span className="rd-sub" title="The underlying level this stop is enforced at">
+            spot {fmtInr(ev.stop)}
+          </span>
+        )}
+      </td>
+      <td data-align="right" className="rd-num rd-tp">
+        {fmtInr(ladder.target)}
+        {ladder.inPremium && ev.target != null && (
+          <span className="rd-sub" title="The underlying level this target is enforced at">
+            spot {fmtInr(ev.target)}
+          </span>
+        )}
+      </td>
       <td data-align="right" data-col="rr" className="rd-num">
         {rr == null ? <span className="rd-absent">{ABSENT}</span> : `${rr.toFixed(1)}×`}
       </td>

@@ -209,6 +209,7 @@ export function ReplayDock() {
   const multiDay = !!cfg?.end_date && cfg.end_date !== cfg?.date;
   const draft = useReplayStore((s) => s.draft);
   const historical = useReplayIsHistorical();
+  const statusMessage = useReplayStore((s) => s.status.status_message);
   const clearSession = useReplayStore((s) => s.clearSession);
   const setSummaryOpen = useReplayStore((s) => s.setSummaryOpen);
 
@@ -241,11 +242,14 @@ export function ReplayDock() {
     }
   }, [state, mode, height, setHeight]);
 
+  // Take focus ONLY when nothing else holds it. Stealing it from whatever the
+  // user was typing in, just because the dock changed mode, is hostile. (Both
+  // branches of the previous version returned, which said the same thing in
+  // four lines that read as if they did something else.)
   useEffect(() => {
     if (!open) return;
     const active = document.activeElement;
-    if (active && active !== document.body && rootRef.current?.contains(active)) return;
-    if (active && active !== document.body && !rootRef.current?.contains(active)) return;
+    if (active && active !== document.body) return;
     rootRef.current?.focus({ preventScroll: true });
   }, [mode, open]);
 
@@ -400,12 +404,39 @@ export function ReplayDock() {
 
       {/* ── Scrollable body ──────────────────────────────────────── */}
       <div className="rd-scroll-content">
+        {/* Provenance. While a session view is held, the LIVE panes across the
+            workspace are answering from this replay rather than the market —
+            that is the single most important thing this dock can say, and it
+            has to be said where the replay is, not only where the rows are. */}
+        {(state !== 'idle' || historical) && (
+          <div className="rd-replay-banner" role="status" data-testid="replay-provenance">
+            <Icons.Signal size={12} />
+            <span>
+              {state === 'idle'
+                ? 'Signal panes are showing this finished replay, not the live market.'
+                : 'Signal panes are showing this replay, not the live market.'}
+            </span>
+            {state === 'idle' && (
+              <span data-detail style={{ marginLeft: 'auto' }}>
+                Clear results to return them to live.
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Historical note */}
         {historical && !errorMsg && (
           <div className="rd-session-note" data-testid="replay-historical-note">
             <Icons.Alert size={13} />
             <span>
-              Showing results from finished session{cfg?.date ? ` (${cfg.date})` : ''} — Nothing is replaying now. {events.length} signals, {trades.length} trades.
+              {/* The engine's own closing message, when it has one to make.
+                  It is the only channel for "no candles for this date" and for
+                  "you jumped to the end, so those bars were never replayed" —
+                  both of which were being written and never shown. */}
+              {statusMessage
+                ? `${statusMessage} `
+                : `Showing results from finished session${cfg?.date ? ` (${cfg.date})` : ''} — Nothing is replaying now. `}
+              {events.length} signals, {trades.length} trades.
             </span>
             <span className="rd-error-strip-actions">
               <button type="button" className="rd-btn rd-btn-sm" aria-label="Clear results" onClick={() => { void clearSession(); setUserInteractedHeight(false); }}>Clear results</button>

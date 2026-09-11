@@ -184,6 +184,10 @@ export function ReplayFilters() {
               {(draft.adaptiveVersion ?? 'v2_hardened') === 'v2_hardened' ? '🛡️ V2 Hardened' : '🕰️ V1 Legacy'}
             </span>
           </div>
+          <div style={{ fontSize: '10px', color: 'var(--k-dim)', lineHeight: 1.35, marginBottom: 6 }}>
+            Applies to Adaptive Edge rows only. Every other strategy keeps its own
+            entry rules, stop management and fills.
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label className="rd-opt" style={{ width: 'auto', alignItems: 'flex-start' }}>
               <input
@@ -196,7 +200,8 @@ export function ReplayFilters() {
               <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <strong style={{ fontSize: '11.5px', color: 'var(--k-text)' }}>V2 Hardened (Production)</strong>
                 <span style={{ fontSize: '10px', color: 'var(--k-dim)', lineHeight: 1.3 }}>
-                  09:28 lockout, candle-body filter, 1.5R 50/50 partial scale, 4-bar decay stop
+                  09:28 lockout · candle-body filter · breakeven lock at 1.0R · 4-bar decay stop ·
+                  passive fills (half slippage)
                 </span>
               </span>
             </label>
@@ -211,7 +216,7 @@ export function ReplayFilters() {
               <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <strong style={{ fontSize: '11.5px', color: 'var(--k-text)' }}>V1 Legacy (Baseline)</strong>
                 <span style={{ fontSize: '10px', color: 'var(--k-dim)', lineHeight: 1.3 }}>
-                  Unrestricted 09:15 entries, all-or-nothing stop loss, standard volume surge
+                  Unrestricted 09:15 entries · fixed stop, no breakeven lock · no decay exit
                 </span>
               </span>
             </label>

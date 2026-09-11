@@ -1,7 +1,11 @@
 import { useEffect } from 'react';
-import { useReplayStore } from '../../../hooks/useReplayStore';
+import {
+  selectFilteredEvents,
+  selectFilteredTrades,
+  useReplayStore,
+} from '../../../hooks/useReplayStore';
 import type { ReplayTransport } from '../../../hooks/useReplayTransport';
-import { SIGNAL_CSV_COLUMNS, tradeCsvColumns, tradesHaveFriction } from './replayColumns';
+import { SIGNAL_CSV_COLUMNS, replayHasFriction, tradeCsvColumns } from './replayColumns';
 import { exportCsv, replayCsvName } from './replayCsv';
 import { REPLAY_SPEEDS, stepSpeed } from './replaySpeeds';
 
@@ -94,10 +98,6 @@ export function useReplayShortcuts(
           e.preventDefault();
           void transport.setSpeed(stepSpeed(speed, -1));
           return;
-        case 'd':
-        case 'D':
-          store.setTab('trades');
-          return;
         case 's':
         case 'S':
           store.setTab('signals');
@@ -112,26 +112,27 @@ export function useReplayShortcuts(
           const date = store.status.config?.date ?? store.draft.date;
           const startTime = store.status.config?.start_time ?? store.draft.startTime;
           const endTime = store.status.config?.end_time ?? store.draft.endTime;
-          if (store.tab === 'trades' && store.status.stats.trades.length > 0) {
-            const trades = store.status.stats.trades;
+          // Export WHAT IS ON SCREEN. Reading the raw ledger here handed the
+          // user a file that did not match the table they were looking at.
+          const trades = selectFilteredTrades(store);
+          const events = selectFilteredEvents(store);
+          const withFriction = replayHasFriction(store.status.config, store.status.capabilities, trades);
+          const exportTrades = () =>
             exportCsv(
               replayCsvName('trades', date, startTime, endTime),
               trades,
-              tradeCsvColumns(tradesHaveFriction(trades)),
+              tradeCsvColumns(withFriction),
             );
-          } else if (store.status.stats.events.length > 0) {
+          if (store.tab === 'trades' && trades.length > 0) {
+            exportTrades();
+          } else if (events.length > 0) {
             exportCsv(
               replayCsvName('signals', date, startTime, endTime),
-              store.status.stats.events,
+              events,
               SIGNAL_CSV_COLUMNS,
             );
-          } else if (store.status.stats.trades.length > 0) {
-            const trades = store.status.stats.trades;
-            exportCsv(
-              replayCsvName('trades', date, startTime, endTime),
-              trades,
-              tradeCsvColumns(tradesHaveFriction(trades)),
-            );
+          } else if (trades.length > 0) {
+            exportTrades();
           }
           return;
         }
@@ -149,7 +150,7 @@ export function useReplayShortcuts(
         default:
       }
 
-      // Speed presets 1..6, mapped onto the same ladder the pills render.
+      // Speed presets, one digit per rung of the ladder the dropdown renders.
       const digit = Number(e.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= REPLAY_SPEEDS.length) {
         e.preventDefault();
