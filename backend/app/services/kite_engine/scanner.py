@@ -39,7 +39,8 @@ from app.services.kite_engine.greeks import (
 from app.schemas.instruments import InstrumentMeta
 from app.services.kite_engine.strikes import (
     expiry_window_of,
-    ExpiryType, OptionPick, chain_rows_for, filter_liquid_contracts, pick_contracts, pick_strikes,
+    ExpiryType, OptionPick, chain_rows_for, filter_chain_by_expiry_types,
+    filter_liquid_contracts, pick_contracts, pick_strikes,
 )
 from app.services.kite_engine.universe import UniverseItem
 from app.services.kite_engine import state, market_hours
@@ -887,6 +888,11 @@ class KiteEngineScanner:
         expiry_types: Sequence[ExpiryType] = (),
         expiry_types_indices: Optional[Sequence[ExpiryType]] = None,
         expiry_types_stocks: Optional[Sequence[ExpiryType]] = None,
+        #: Expiry series for the DERIVATIVES pass only (premium-chart triple-ST).
+        #: None = follow the ordinary expiry selection. Defaults to monthly at the
+        #: config layer because a weekly is mute for ~70% of its life at 1H
+        #: (see EngineConfigModel.deriv_expiries).
+        expiry_types_derivatives: Optional[Sequence[ExpiryType]] = None,
         place_cb: Optional[PlaceCb] = None,
         deriv_universe: Optional[List[UniverseItem]] = None,
         confluence_universe: Optional[List[UniverseItem]] = None,
@@ -1060,6 +1066,19 @@ class KiteEngineScanner:
                 option_rows = nfo_rows if item.option_exchange == "NFO" else bfo_rows
                 chain = chain_rows_for(option_rows, item.tradingsymbol, today)
                 _expiry = expiry_types_indices if (expiry_types_indices is not None and item.is_index) else expiry_types_stocks if (expiry_types_stocks is not None and not item.is_index) else expiry_types
+                if expiry_types_derivatives:
+                    # This pass charts the CONTRACT's own premium, so the contract must
+                    # outlive the SuperTrend warmup. Narrow the series to the ones the
+                    # user allows here, but never invent a series the category does not
+                    # list (single stocks are monthly-only).
+                    narrowed = [e for e in _expiry if e in expiry_types_derivatives]
+                    if narrowed:
+                        _expiry = narrowed
+                        # Narrow the CHAIN too. `pick_contracts` iterates the series
+                        # ranks it is given, and the expiry-series runtime injects a
+                        # rank map for every listed kind — so `expiry_types` alone does
+                        # not stop a weekly being resolved.
+                        chain = filter_chain_by_expiry_types(chain, _expiry, today)
                 contracts = pick_contracts(chain, spot=spot, moneynesses=moneyness,
                                            expiry_types=_expiry, today=today)
                 diag.deriv_resolved += len(contracts)

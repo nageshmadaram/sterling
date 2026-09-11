@@ -392,6 +392,30 @@ class EngineConfigModel(BaseModel):
     # derivatives are exchange-listed monthly contracts only.
     scan_expiries_indices: Optional[List[Literal["weekly", "monthly"]]] = None
     scan_expiries_stocks: Optional[List[Literal["monthly"]]] = ["monthly"]
+    # ── Derivatives-source expiry series (this scan_source ONLY) ──────────────
+    # The derivatives scan runs the triple SuperTrend on the CONTRACT'S OWN premium
+    # chart, so the contract must live long enough to warm the indicators up.
+    #
+    # MEASURED (study/kite_st_derivatives.py, warmup arithmetic against the expiry
+    # calendar, cfg.warmup = 21 bars at the production 1H timeframe):
+    #
+    #   1H weekly   3.50 of 5 sessions consumed by warmup -> 1.50 tradeable (30.0%)
+    #   1H monthly  3.50 of 22 sessions consumed          -> 18.50 tradeable (84.1%)
+    #
+    # A weekly is structurally MUTE for the first ~70% of its life at 1H, and the
+    # window where it can finally signal is the back half, where theta is worst.
+    # Nothing is broken — the SuperTrend simply has no warmed-up history — but the
+    # setting looks like it works while being close to a no-op. Monthly contracts
+    # have no such problem, so ["monthly"] is the default for this source.
+    #
+    # None = follow the ordinary scan expiries (scan_expiries_indices /
+    # scan_expiries), i.e. the pre-2026-09-11 behaviour. Including "weekly" is only
+    # sensible on a timeframe faster than 1H (15m weekly is 83.2% tradeable, 5m 94.4%).
+    #
+    # Spot and confluence sources are NOT affected: both read the underlying's own
+    # chart for the regime, and confluence only asks whether the leg's premium is
+    # already trending on the latest bar.
+    deriv_expiries: Optional[List[Literal["weekly", "monthly"]]] = ["monthly"]
     # Granular universe selection — applied to BOTH the spot and derivatives scans.
     # Indices are kept by display name; stocks by name, unless scan_all_stocks is set.
     scan_indices: List[str] = ["NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE", "SENSEX"]

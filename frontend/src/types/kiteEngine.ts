@@ -233,6 +233,13 @@ export interface EngineConfigModel {
   scan_expiries: ScanExpiry[];
   scan_expiries_indices?: ScanExpiry[] | null;
   scan_expiries_stocks?: Array<'monthly'> | null;
+  /**
+   * Expiry cycles the DERIVATIVES chart source scans. Defaults to monthly only:
+   * that source runs SuperTrend on the contract's own premium, and at 1H a weekly
+   * spends ~70% of its life inside the 21-bar warmup. null = follow the index
+   * expiries above.
+   */
+  deriv_expiries?: ScanExpiry[] | null;
   // The API persists zero-based series ranks for compatibility. The UI resolves
   // these private values to exact Kite-listed contract dates before displaying them.
   /** The expiry window, shared by every engine under these names. */

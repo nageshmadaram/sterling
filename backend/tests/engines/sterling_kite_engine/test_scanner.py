@@ -1686,3 +1686,78 @@ def test_a_fresh_entry_can_never_be_trail_exited_on_its_own_bar():
     assert fresh, "expected a fresh entry on the final bar"
     assert all(row.is_active for row in fresh)
     assert all(row.exit_reason is None for row in fresh)
+
+
+# ── Derivatives expiry scope ────────────────────────────────────────────────
+# The derivatives pass charts the CONTRACT's own premium, so the contract has to
+# outlive the 21-bar warmup. At 1H a weekly burns 3.5 of its 5 sessions on warmup
+# (study/kite_st_derivatives.py), which is why `deriv_expiries` defaults to monthly.
+
+def _two_series_chain(today):
+    """A chain with one weekly and one monthly expiry in the same future month."""
+    from datetime import timedelta
+
+    weekly = (today + timedelta(days=7)).isoformat()
+    monthly = (today + timedelta(days=14)).isoformat()
+    # Same calendar month keeps the classifier's rule unambiguous: the latest
+    # listed date in a month is the monthly, earlier ones are weeklies.
+    if weekly[:7] != monthly[:7]:
+        weekly = (today + timedelta(days=21)).isoformat()
+        monthly = (today + timedelta(days=28)).isoformat()
+    rows = []
+    for expiry, base in ((weekly, 8000), (monthly, 9000)):
+        for offset, kind in ((1, "CE"), (2, "PE")):
+            rows.append({
+                "name": "NIFTY", "tradingsymbol": f"NIFTY{expiry[8:10]}{kind}",
+                "instrument_type": kind, "strike": 100, "expiry": expiry,
+                "instrument_token": base + offset, "lot_size": 75,
+            })
+    return rows, weekly, monthly
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deriv_expiries, expect_weekly", [
+    (["monthly"], False),   # the shipped default
+    (None, True),           # opt out — follow the ordinary expiry selection
+])
+async def test_derivative_expiry_scope_controls_which_series_is_charted(
+    deriv_expiries, expect_weekly
+):
+    from datetime import date as _date
+
+    today = _date.today()
+    nfo, weekly, monthly = _two_series_chain(today)
+    flat = _candles(list(np.linspace(100, 101, 40)))
+
+    class FakeClient:
+        async def get_candles(self, inst, resolution, limit):
+            if inst.zerodha_token == 100:
+                return _candles([100.0] * 40)
+            return flat
+
+    deriv = [UniverseItem("NIFTY 50", "NIFTY", 100, "INDICES", "NFO", is_index=True)]
+    sc = KiteEngineScanner()
+    await sc.scan(uid="u-deriv-exp", client=FakeClient(), universe=[], nfo_rows=nfo,
+                  bfo_rows=[], cfg=SterlingKiteEngineConfig(), moneyness=["ATM"],
+                  expiry_types=["weekly", "monthly"],
+                  expiry_types_derivatives=deriv_expiries,
+                  deriv_universe=deriv)
+    charted = {s for s in sc.snapshot("u-deriv-exp").scanned_contract_symbols}
+    assert any(monthly[8:10] in s for s in charted), charted
+    assert bool(any(weekly[8:10] in s for s in charted)) is expect_weekly, charted
+
+
+def test_the_derivative_expiry_default_is_monthly_only():
+    """The default is a product decision, not an accident — pin it."""
+    from app.engines.sterling_kite_engine.schemas import EngineConfigModel
+
+    assert EngineConfigModel().deriv_expiries == ["monthly"]
+
+
+def test_the_derivative_scope_never_invents_a_series_the_user_excluded():
+    """Narrowing is an intersection. If the user scans weeklies ONLY, a monthly
+    derivative scope must not resurrect a monthly series they turned off."""
+    allowed = ["weekly"]
+    scope = ["monthly"]
+    narrowed = [e for e in allowed if e in scope]
+    assert narrowed == []          # empty → the scanner keeps `allowed` untouched

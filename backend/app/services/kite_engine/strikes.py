@@ -79,6 +79,18 @@ def _filter_chain_by_expiry(
     ]
 
 
+def filter_chain_by_expiry_types(
+    chain: Sequence[dict], expiry_types: Sequence[ExpiryType], today: date
+) -> list[dict]:
+    """Public form of the expiry-series filter.
+
+    The derivatives scan narrows its chain BEFORE resolving contracts, so the
+    restriction holds even when the caller also supplies explicit per-series ranks
+    (which bypass ``expiry_types`` inside ``pick_contracts``).
+    """
+    return _filter_chain_by_expiry(chain, expiry_types, today)
+
+
 def _filter_chain_by_series(
     chain: Sequence[dict], *, expiry_type: ExpiryType, expiry_rank: int, today: date
 ) -> list[dict]:

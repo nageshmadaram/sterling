@@ -110,6 +110,13 @@ export const FIELDS = F({
     owner: 'market', applies: 'both', stage: 'discovery', rescan: true, home: 'engine',
     evidence: 'Handed to the scanner. Navigator falls back to it only when it has no expiry cycles of its own.',
   },
+  deriv_expiries: {
+    key: 'deriv_expiries',
+    label: 'Derivative expiries',
+    help: "Expiry cycles the derivatives chart source scans. It reads each contract's own premium, so the contract must outlive the 21-bar warmup.",
+    owner: 'market', applies: 'both', stage: 'discovery', rescan: true, home: 'engine',
+    evidence: 'scanner.scan narrows the derivatives pass to these cycles only. The spot and confluence passes read the underlying chart and are unaffected.',
+  },
   scan_indices: {
     key: 'scan_indices',
     label: 'Indices',

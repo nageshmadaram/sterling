@@ -96,6 +96,10 @@ export function SuperTrendEnginePanel() {
   const on = cfg.engine_enabled;
   const trailLabel = TRAIL_OPTIONS.find((o) => o.value === cfg.trail_target)?.label ?? cfg.trail_target;
   const indexExpiries = cfg.scan_expiries_indices ?? cfg.scan_expiries;
+  // The derivatives pass is the only one that charts a contract's own premium,
+  // so this knob is meaningless unless that pass actually runs.
+  const derivSourceActive = cfg.scan_source === 'derivatives' || cfg.scan_source === 'both';
+  const derivMonthlyOnly = (cfg.deriv_expiries ?? ['monthly']).join() === 'monthly';
   const instrumentsSummary = !(cfg.scan_stock_contracts ?? true)
     ? `${cfg.scan_indices.length} indices · no stocks`
     : cfg.scan_all_stocks
@@ -129,6 +133,43 @@ export function SuperTrendEnginePanel() {
             value={cfg.scan_source}
             onChange={(v) => patch({ scan_source: v })}
           />
+          {derivSourceActive && (
+            <Field
+              label={FIELDS.deriv_expiries.label}
+              hint={FIELDS.deriv_expiries.help}
+            >
+              <ChoiceRow
+                value={derivMonthlyOnly ? 'monthly' : 'follow'}
+                options={[
+                  { value: 'monthly', label: 'Monthly only', hint: 'Recommended. Every contract has room to warm up.' },
+                  { value: 'follow', label: 'Follow index expiries', hint: 'Also scans weeklies — mute for most of their life at 1H.' },
+                ]}
+                onChange={(v) => patch({ deriv_expiries: v === 'monthly' ? ['monthly'] : null })}
+              />
+              <ConfigNote>
+                {derivMonthlyOnly ? (
+                  <>
+                    <strong>Monthly only.</strong> The derivatives source charts each
+                    contract&apos;s <em>own premium</em>, and the three SuperTrends need 21
+                    bars before any of them can read. A monthly contract spends 3.5 of its
+                    22 sessions warming up, so <strong>84%</strong> of its life can signal.
+                    Weekly contracts are skipped by this source; they are still traded
+                    normally by the spot and confluence sources.
+                  </>
+                ) : (
+                  <>
+                    <strong>Weeklies included — expect far fewer signals per contract.</strong>{' '}
+                    A weekly has 5 sessions and 3.5 of them go to the 21-bar warmup, so it
+                    can only signal for the last <strong>1.5 sessions (30% of its life)</strong>
+                    {' '}— the stretch where time decay is worst. Nothing breaks and no
+                    signal is faked: the contract is simply silent until it has enough
+                    history. Worth choosing only if you move this engine to a timeframe
+                    faster than 1H, where a weekly warms up in well under a day.
+                  </>
+                )}
+              </ConfigNote>
+            </Field>
+          )}
         </Section>
 
         <Section
