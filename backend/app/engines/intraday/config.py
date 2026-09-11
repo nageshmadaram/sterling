@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Literal
 
-from app.engines.option_contracts import EXPIRY_SELECTIONS, EXPIRY_SERIES, MONEYNESS
+from app.engines.option_contracts import EXPIRY_SERIES, MONEYNESS
 
 TIMEFRAMES: frozenset[str] = frozenset({"1m", "3m", "5m", "10m", "15m", "30m"})
 PIVOT_TYPES: frozenset[str] = frozenset({"fibonacci", "classic"})
@@ -82,8 +82,9 @@ class IntradayConfig:
     #: level fires on every bar it recrosses.
     cooldown_bars: int = 6
     max_signals_per_symbol_per_day: int = 3
-    #: Contract picking, in the vocabulary every other option engine here uses.
-    expiry_selection: str = "nearest"
+    #: Contract picking. Only the SERIES, because that is the axis the strike
+    #: resolver actually takes — an `expiry_selection` knob alongside it would
+    #: be a second control for one decision, honoured by neither.
     expiry_series_indices: tuple[str, ...] = ("weekly",)
     expiry_series_stocks: tuple[str, ...] = ("monthly",)
     moneyness: str = "ATM"
@@ -261,8 +262,6 @@ class IntradayConfig:
             raise ValueError(f"sizing_mode must be one of {sorted(SIZING_MODES)}")
         if self.stop_mode not in STOP_MODES:
             raise ValueError(f"stop_mode must be one of {sorted(STOP_MODES)}")
-        if self.expiry_selection not in EXPIRY_SELECTIONS:
-            raise ValueError(f"expiry_selection must be one of {sorted(EXPIRY_SELECTIONS)}")
         if self.moneyness not in MONEYNESS:
             raise ValueError(f"moneyness must be one of {sorted(MONEYNESS)}")
         for name in ("expiry_series_indices", "expiry_series_stocks"):

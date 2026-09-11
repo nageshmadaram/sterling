@@ -368,6 +368,10 @@ async def scan_once(uid: str) -> dict:
     st.scanning = True
     st.failures = []
     st.last_error = None
+    # Cleared UP FRONT, not on success. A scan that throws halfway used to leave
+    # the rows it had already armed behind, and an armed row from a scan that
+    # did not finish is an invitation to buy a setup nothing has re-checked.
+    st.signals = {}
     try:
         from app.services.exchanges.kite import accounts
         from app.services.kite_engine.universe import build_universe, select_scan_universe
@@ -429,8 +433,6 @@ async def scan_once(uid: str) -> dict:
                                    cooldown=cooldown, quote=quote,
                                    underlying_token=int(item.token or 0))
                         rows.append(row)
-                        if row["state"] == "armed" and row["signal_id"]:
-                            st.signals[row["signal_id"]] = row
                 except Exception as exc:
                     st.failures.append(f"{item.name}: {exc}")
 

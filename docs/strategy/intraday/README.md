@@ -106,12 +106,26 @@ and the position can then never be stopped out at all. Of the two candidates the
 which work against a bought option. The stop rests at the broker as a GTT
 (`stop_mode`), so it survives this process dying.
 
-**Trailing.** Two stages, on ticks, not on a UI being open:
+**Trailing — two of them, and neither replaces the other.** An option can hold
+its premium on vega while the underlying walks back through the level the trade
+was taken against, and it can bleed premium to theta while the underlying does
+exactly what the entry predicted.
 
-1. at `trail_activate_r` the stop goes to what was actually paid;
-2. after that it rides `premium_trail_pct` below the best premium seen.
+*The premium trail* protects the money. On ticks, not on a UI being open: at
+`trail_activate_r` the stop goes to what was actually paid, then it rides
+`premium_trail_pct` below the best premium seen. It only ratchets up, and every
+move is pushed to the resting GTT.
 
-It only ever ratchets up, and every move is pushed to the resting GTT.
+*The spot trail* protects the thesis, at bar close, each strategy by its own
+rule — `pivot_break` follows `pb_trail_mode` (the swing that made the move, a
+multiple of ATR, breakeven only, or nothing); `vwap_supertrend` follows VWAP once
+`vs_trail_after_points` is banked, which is the trail its specification states;
+`ma_ribbon` has none, because it is held to the opposite cross and a trail that
+closed it earlier would be a different strategy.
+
+The underlying is subscribed alongside the contract, so the spot stop can
+actually fire. Without those ticks it existed on the row, in the docs and in the
+tests, and could never have triggered.
 
 **Dynamic stops and targets.** A structural stop can land two ticks from the
 close on a quiet bar — that is not a stop, it is a fee — so `stop_atr_floor_mult`

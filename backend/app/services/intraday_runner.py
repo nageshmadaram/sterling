@@ -25,7 +25,7 @@ from app.engines.intraday import IntradayConfig, STRATEGY_ID
 from app.engines.intraday.position import (ContractRef, IntradayPosition, OPEN,
                                            PENDING, align_to_tick, premium_stop_for,
                                            q2, should_exit, should_scale_out,
-                                           update_trail)
+                                           spot_trail, update_trail)
 from app.services import intraday_positions as store
 from app.services.intraday import get_config, ist_today, status as scan_status
 
@@ -291,7 +291,13 @@ async def _subscribe(uid: str) -> None:
     st = scan_status(uid)
     tokens = {int((r.get("contract") or {}).get("token") or 0)
               for r in st.signals.values()}
-    tokens |= {int(p.contract.token or 0) for p in store.open_positions(uid)}
+    for p in store.open_positions(uid):
+        tokens.add(int(p.contract.token or 0))
+        # The UNDERLYING as well. Every one of these three states its stop in
+        # the underlying's points, and without its ticks that stop can never
+        # fire — the position would be protected only by its premium stop,
+        # which is a different rule than the one on the board.
+        tokens.add(int(p.underlying_token or 0))
     tokens.discard(0)
     held = _subscribed.setdefault(uid, set())
     new, stale = tokens - held, held - tokens
@@ -664,7 +670,9 @@ async def on_ticks(uid: str, ticks: list) -> str:
     acted = "watching"
     for pos in open_now:
         tick = by_token.get(int(pos.contract.token or 0))
-        if not tick and not session_over:
+        spot_tick = by_token.get(int(pos.underlying_token or 0))
+        spot = float((spot_tick or {}).get("last_price") or 0.0) or None
+        if not tick and not spot_tick and not session_over:
             continue
         ltp = float((tick or {}).get("last_price") or 0.0)
         if ltp > 0:
@@ -684,11 +692,15 @@ async def on_ticks(uid: str, ticks: list) -> str:
             if await _scale_out(uid, client, pos, ltp, cfg):
                 acted = "scaled"
             continue
-        done, reason = should_exit(pos, ltp, session_over=session_over)
+        done, reason = should_exit(pos, ltp, spot=spot, session_over=session_over)
         if not done:
             continue
         client = client or await _client(uid)
-        if await _exit_position(uid, client, pos, reason, ltp or pos.stop, cfg):
+        # A session-end sweep can arrive with no tick for this contract. Pricing
+        # the exit at the stop would send a limit nowhere near the market, so
+        # the price is fetched rather than assumed.
+        price = ltp or await _last_price(client, pos) or pos.stop
+        if await _exit_position(uid, client, pos, reason, price, cfg):
             acted = "exited"
     if not store.open_positions(uid):
         await _subscribe(uid)
@@ -735,11 +747,51 @@ async def check_rules(uid: str) -> int:
                       pos.contract.tradingsymbol, exc)
             continue
         if not done:
+            # The thesis holds. Ratchet the SPOT stop, which is the trail these
+            # strategies actually state — the premium trail protects the money,
+            # this protects the idea, and neither replaces the other.
+            moved, trail_why = spot_trail(pos, cfg, spot=float(bars.close[-1]),
+                                          **_trail_inputs(bars, cfg))
+            if moved != pos.spot_stop:
+                pos.spot_stop = moved
+                store.put(uid, pos)
+                note(uid, "trail",
+                     f"{pos.contract.tradingsymbol} spot stop to {moved} ({trail_why})")
             continue
         premium = await _last_price(client, pos)
         if await _exit_position(uid, client, pos, why, premium, cfg):
             closed += 1
     return closed
+
+
+def _trail_inputs(bars, cfg: IntradayConfig) -> dict:
+    """ATR, the last swing, and VWAP — whichever the trail mode needs.
+
+    Computed once per position per bar rather than inside the trail, so the
+    trail itself stays a pure function of numbers and can be tested without a
+    bar series.
+    """
+    import numpy as np
+    from app.engines.indicators import compute_atr
+    from app.engines.intraday.indicators import session_vwap
+    out: dict = {}
+    try:
+        atr = compute_atr(bars.high, bars.low, bars.close, cfg.pb_atr_length)
+        out["atr"] = float(atr[-1]) if np.isfinite(atr[-1]) else 0.0
+    except Exception:                                              # noqa: BLE001
+        out["atr"] = 0.0
+    try:
+        look = max(3, int(cfg.pb_atr_length))
+        out["swing"] = float(np.min(bars.low[-look:]))
+    except Exception:                                              # noqa: BLE001
+        out["swing"] = None
+    try:
+        vwap = session_vwap(bars.high, bars.low, bars.close, bars.volume,
+                            bars.session_starts)
+        out["vwap"] = float(vwap[-1])
+    except Exception:                                              # noqa: BLE001
+        out["vwap"] = None
+    return out
 
 
 async def exit_one(uid: str, symbol: str, reason: str = "manual") -> dict:
@@ -864,6 +916,7 @@ async def _auto_enter(uid: str) -> int:
     reason and each attempt costs a quote.
     """
     st = scan_status(uid)
+    cfg = get_config(uid)
     armed = sorted(st.signals.values(),
                    key=lambda r: -float((r.get("signal") or {}).get("rr") or 0.0))
     taken = 0
@@ -871,13 +924,15 @@ async def _auto_enter(uid: str) -> int:
         sid = row.get("signal_id")
         if not sid:
             continue
-        res = await arm(uid, sid)
-        if res.get("ok"):
-            taken += 1
-            continue
-        msg = str(res.get("message") or "")
-        if any(w in msg for w in ("cap is", "limit", "positions open", "down Rs")):
+        # Ask the account-level gates BEFORE the row's own. They are about the
+        # account, not the row, so once one refuses, the next row is refused for
+        # the same reason and each attempt costs a quote. Matching on words in
+        # an error message was the earlier version of this, and a reworded
+        # blocker would have silently turned the cap off.
+        if entry_blocker(uid, cfg, ""):
             break
+        if (await arm(uid, sid)).get("ok"):
+            taken += 1
     return taken
 
 

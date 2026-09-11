@@ -423,7 +423,7 @@ async def get_intraday_config(user: UserContext = Depends(get_current_user)) -> 
                                       STOP_SOURCES, STRATEGY_KEYS, TIMEFRAMES,
                                       TRAIL_MODES, descriptor)
     from app.engines.intraday.config import SIZING_MODES, STOP_MODES
-    from app.engines.option_contracts import EXPIRY_SELECTIONS, EXPIRY_SERIES, MONEYNESS
+    from app.engines.option_contracts import EXPIRY_SERIES, MONEYNESS
     from app.services.kite_engine.stock_registry import HIGH_LIQUIDITY_STOCK_NAMES
     from app.services.intraday import get_config
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
@@ -442,7 +442,6 @@ async def get_intraday_config(user: UserContext = Depends(get_current_user)) -> 
             "vs_stop_source": sorted(STOP_SOURCES),
             "sizing_mode": sorted(SIZING_MODES),
             "stop_mode": sorted(STOP_MODES),
-            "expiry_selection": sorted(EXPIRY_SELECTIONS),
             "expiry_series_indices": sorted(EXPIRY_SERIES),
             "expiry_series_stocks": sorted(EXPIRY_SERIES),
             "moneyness": sorted(MONEYNESS),

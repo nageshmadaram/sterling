@@ -12,7 +12,7 @@ import pytest
 from app.engines.intraday import IntradayConfig
 from app.engines.intraday.position import (ContractRef, IntradayPosition,
                                            align_to_tick, premium_stop_for,
-                                           should_exit, update_trail)
+                                           should_exit, spot_trail, update_trail)
 
 
 def cfg(**over) -> IntradayConfig:
@@ -149,3 +149,71 @@ def test_a_buy_rounds_up_to_the_tick_and_a_sell_rounds_down():
     assert align_to_tick(100.02, 0.05, side="buy") == pytest.approx(100.05)
     assert align_to_tick(100.02, 0.05, side="sell") == pytest.approx(100.0)
     assert align_to_tick(100.05, 0.05, side="buy") == pytest.approx(100.05)
+
+
+class TestTheSpotTrail:
+    """The trail that protects the THESIS, not the money.
+
+    An option can hold its premium on vega while the underlying walks back
+    through the level the trade was taken against, and it can bleed premium to
+    theta while the underlying does exactly what the entry predicted. Neither
+    trail replaces the other.
+    """
+
+    def _pb(self, **over):
+        base = dict(strategy="pivot_break", spot_entry=24800.0, spot_stop=24780.0,
+                    spot_risk=20.0)
+        base.update(over)
+        return pos(**base)
+
+    def test_nothing_moves_before_the_breakeven_r(self):
+        p = self._pb()
+        assert spot_trail(p, cfg(pb_breakeven_at_r=1.0), spot=24810.0,
+                          atr=10.0, swing=24795.0) == (24780.0, "")
+
+    def test_at_one_r_the_spot_stop_goes_to_the_spot_entry(self):
+        p = self._pb()
+        stop, why = spot_trail(p, cfg(pb_breakeven_at_r=1.0, pb_trail_mode="breakeven"),
+                               spot=24825.0, atr=10.0)
+        assert stop == pytest.approx(24800.0) and why == "spot breakeven"
+
+    def test_the_atr_mode_follows_price(self):
+        p = self._pb()
+        stop, why = spot_trail(p, cfg(pb_trail_mode="atr", pb_trail_atr_mult=1.5),
+                               spot=24900.0, atr=20.0)
+        assert stop == pytest.approx(24870.0) and "ATR" in why
+
+    def test_the_structure_mode_follows_the_swing(self):
+        p = self._pb()
+        stop, why = spot_trail(p, cfg(pb_trail_mode="structure"),
+                               spot=24900.0, swing=24860.0)
+        assert stop == pytest.approx(24860.0) and "swing" in why
+
+    def test_none_leaves_the_stop_where_the_rule_put_it(self):
+        p = self._pb()
+        assert spot_trail(p, cfg(pb_trail_mode="none"), spot=24900.0,
+                          atr=20.0, swing=24860.0) == (24780.0, "")
+
+    def test_it_never_ratchets_backwards(self):
+        p = self._pb(spot_stop=24880.0)
+        stop, why = spot_trail(p, cfg(pb_trail_mode="structure"),
+                               spot=24900.0, swing=24810.0)
+        assert stop == pytest.approx(24880.0) and why == ""
+
+    def test_the_ribbon_has_no_spot_trail_because_it_is_held_to_the_cross(self):
+        p = pos(strategy="ma_ribbon", spot_entry=24800.0, spot_stop=24780.0,
+                spot_risk=20.0)
+        assert spot_trail(p, cfg(), spot=24900.0, atr=10.0, swing=24870.0) \
+            == (24780.0, "")
+
+    def test_vwap_supertrend_follows_vwap_once_its_points_are_banked(self):
+        p = pos(strategy="vwap_supertrend", spot_entry=24800.0, spot_stop=24830.0,
+                spot_risk=30.0, thesis="BEARISH")
+        c = cfg(vs_trail_after_points=12.0)
+        # Only 5 points in — the specification says wait.
+        assert spot_trail(p, c, spot=24795.0, vwap=24815.0) == (24830.0, "")
+        stop, why = spot_trail(p, c, spot=24780.0, vwap=24815.0)
+        assert stop == pytest.approx(24815.0) and "VWAP" in why
+
+    def test_a_position_with_no_spot_stop_is_left_alone(self):
+        assert spot_trail(pos(spot_stop=0.0), cfg(), spot=24900.0) == (0.0, "")

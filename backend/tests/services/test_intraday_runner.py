@@ -91,6 +91,9 @@ def live(tmp_path, monkeypatch):
     runner._subscribed.clear()
 
     client = FakeClient()
+    # The real subscribe is kept so one test can exercise it; everything else
+    # wants it inert, because a ticker subscription is not what those are about.
+    client.real_subscribe = runner._subscribe
     monkeypatch.setattr(runner, "_client", _const(client))
     monkeypatch.setattr(runner, "_subscribe", _noop)
     monkeypatch.setattr(runner, "_entries_allowed", lambda cfg: True)
@@ -537,3 +540,71 @@ class TestTheRunnerLeg:
         await runner.on_ticks("u1", [{"instrument_token": 1234, "last_price": 165.0}])
         pos = store.get("u1", "NIFTY26SEP24800CE")
         assert pos.quantity == 150 and pos.gtt_id, "left with no broker stop"
+
+
+@pytest.mark.asyncio
+class TestTheSpotStopIsActuallyEnforced:
+    """The stop these strategies actually state.
+
+    Every one of them states its stop in the UNDERLYING's points. Before this
+    the tick loop only ever saw the contract's ticks, so the spot stop existed
+    on the row, in the docs and in the tests — and could never fire.
+    """
+
+    async def test_the_underlying_is_subscribed_alongside_the_contract(self, live, monkeypatch):
+        held(underlying_token=256265)
+        seen: dict = {}
+
+        async def _sub(uid, tokens, mode, owner=None):
+            seen["tokens"] = set(tokens)
+        import app.services.exchanges.kite.ticker_manager as tm
+        monkeypatch.setattr(tm, "subscribe", _sub)
+        monkeypatch.setattr(tm, "release", _sub)
+        await live.real_subscribe("u1")
+        assert {1234, 256265} <= seen["tokens"]
+
+    async def test_spot_through_the_level_closes_a_stale_contract(self, live):
+        """An illiquid option can sit at a stale premium straight through the
+        level the entry was taken against."""
+        held(underlying_token=256265, spot_stop=24780.0)
+        await runner.on_ticks("u1", [
+            {"instrument_token": 1234, "last_price": 100.0},     # premium fine
+            {"instrument_token": 256265, "last_price": 24770.0},  # spot is not
+        ])
+        pos = store.get("u1", "NIFTY26SEP24800CE")
+        assert pos.status == "closed" and pos.exit_reason == "spot stop"
+
+    async def test_spot_still_above_the_level_changes_nothing(self, live):
+        held(underlying_token=256265, spot_stop=24780.0)
+        await runner.on_ticks("u1", [
+            {"instrument_token": 1234, "last_price": 100.0},
+            {"instrument_token": 256265, "last_price": 24810.0},
+        ])
+        assert store.get("u1", "NIFTY26SEP24800CE").is_open
+
+    async def test_a_session_end_sweep_prices_the_exit_instead_of_assuming_it(self, live, monkeypatch):
+        """With no tick for the contract, pricing at the stop would send a limit
+        nowhere near the market."""
+        monkeypatch.setattr(runner, "_is_market_open", lambda cfg: False)
+        live.premium = 143.0
+        held()
+        await runner.on_ticks("u1", [])
+        pos = store.get("u1", "NIFTY26SEP24800CE")
+        assert pos.status == "closed" and pos.exit_reason == "session end"
+        assert pos.exit_price == pytest.approx(143.0)
+
+
+@pytest.mark.asyncio
+class TestAutoEntryGating:
+    async def test_it_stops_at_the_first_account_level_refusal(self, live, monkeypatch):
+        """The caps are about the account, not the row, so the next row would be
+        refused for the same reason and each attempt costs a quote."""
+        svc.set_config({"max_concurrent_positions": 1, "sizing_mode": "LOTS",
+                        "lots": 1}, "u1")
+        held()                       # the one slot is taken
+        for i in range(3):
+            row = armed_row(signal_id=f"pivot_break:X{i}:1")
+            row["contract"] = {**row["contract"], "symbol": f"X{i}CE"}
+            svc.status("u1").signals[row["signal_id"]] = row
+        assert await runner._auto_enter("u1") == 0
+        assert not [o for o in live.orders if o["side"] == "buy"]

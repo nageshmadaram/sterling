@@ -39,7 +39,6 @@ export interface IntradayConfig {
   session_end: string;
   cooldown_bars: number;
   max_signals_per_symbol_per_day: number;
-  expiry_selection: string;
   expiry_series_indices: string[];
   expiry_series_stocks: string[];
   moneyness: string;

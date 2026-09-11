@@ -254,6 +254,66 @@ def update_trail(pos: IntradayPosition, premium: float,
     return q2(stop), why
 
 
+def spot_trail(pos: IntradayPosition, cfg: IntradayConfig, *, spot: float,
+               atr: float = 0.0, swing: Optional[float] = None,
+               vwap: Optional[float] = None) -> tuple[float, str]:
+    """Ratchet the SPOT stop as the underlying moves in the trade's favour.
+
+    The premium trail protects the money; this protects the thesis. They are
+    not the same thing and neither replaces the other: an option can hold its
+    premium on vega while the underlying walks back through the level the trade
+    was taken against, and it can lose premium to theta while the underlying is
+    doing exactly what the entry predicted.
+
+    Which rule applies is the strategy's own:
+
+    * ``pivot_break`` follows ``pb_trail_mode`` — the swing that made the move
+      (``structure``), a multiple of ATR, breakeven only, or nothing.
+    * ``vwap_supertrend`` follows VWAP once ``vs_trail_after_points`` is banked,
+      which is the trail its own specification states.
+    * ``ma_ribbon`` has no spot trail: it is held until the opposite full cross,
+      and a trail that closed it earlier would be a different strategy.
+
+    Only ever ratchets towards price, via the shared :func:`ratchet_trail`.
+    Returns ``(new_stop, why)``; ``why`` is "" when nothing moved.
+    """
+    if pos.spot_stop <= 0 or spot <= 0:
+        return pos.spot_stop, ""
+    side = "long" if pos.thesis == "BULLISH" else "short"
+    sign = 1.0 if pos.thesis == "BULLISH" else -1.0
+    moved = (spot - pos.spot_entry) * sign
+    stop = pos.spot_stop
+    why = ""
+
+    if pos.strategy == "vwap_supertrend":
+        if vwap is None or moved < cfg.vs_trail_after_points:
+            return stop, ""
+        cand = ratchet_trail(stop, q2(float(vwap)), side)
+        return (cand, f"VWAP after {cfg.vs_trail_after_points:g} pts") if cand != stop \
+            else (stop, "")
+
+    if pos.strategy != "pivot_break" or cfg.pb_trail_mode == "none":
+        return stop, ""
+
+    risk = pos.spot_risk or abs(pos.spot_entry - pos.spot_stop)
+    if risk <= 0:
+        return stop, ""
+    if moved / risk < cfg.pb_breakeven_at_r:
+        return stop, ""
+    cand = ratchet_trail(stop, q2(pos.spot_entry), side)
+    if cand != stop:
+        stop, why = cand, "spot breakeven"
+    if cfg.pb_trail_mode == "atr" and atr > 0:
+        cand = ratchet_trail(stop, q2(spot - sign * cfg.pb_trail_atr_mult * atr), side)
+        if cand != stop:
+            stop, why = cand, f"{cfg.pb_trail_atr_mult:g}x ATR behind {q2(spot)}"
+    elif cfg.pb_trail_mode == "structure" and swing is not None:
+        cand = ratchet_trail(stop, q2(float(swing)), side)
+        if cand != stop:
+            stop, why = cand, "the swing that made the move"
+    return stop, why
+
+
 def should_scale_out(pos: IntradayPosition, premium: float) -> bool:
     """Whether the first target has been reached on a position that has a runner.
 

@@ -592,7 +592,7 @@ export function IntradaySettings() {
       <Section
         title="Contracts"
         description="Which option a signal buys."
-        summary={`${cfg.moneyness} · ${cfg.expiry_selection}`}
+        summary={`${cfg.moneyness} · ${cfg.expiry_series_indices.join('/')}`}
         persistKey="intraday-contracts"
       >
         <Field label="Moneyness" hint="Where the strike sits against the money." wide>
