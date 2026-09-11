@@ -304,3 +304,44 @@ describe('the replayed history', () => {
     expect(board).toHaveLength(1);
   });
 });
+
+
+describe('a replayed row names the option, not the index', () => {
+  const estimated = {
+    symbol: 'NIFTY 23450 CE', strike: 23450, option_type: 'CE' as const,
+    expiry: null, dte: null, lot_size: 75, token: 0, exchange: 'NFO',
+    estimated: true, moneyness: 'ATM',
+  };
+
+  it('renders the ATM strike instead of EQUITY', () => {
+    // The complaint this fixes: the row said "NIFTY / EQUITY" and quoted the
+    // index — describing the thesis and calling it a trade.
+    const s = intradayRowToBoard(row({
+      state: 'ended', historical: true, contract: estimated,
+    }));
+    expect(s.instrument.kind).toBe('option');
+    expect(s.instrument.symbol).toBe('NIFTY 23450 CE');
+    expect(s.instrument.strike).toBe(23450);
+    expect(s.instrument.lotSize).toBe(75);
+  });
+
+  it('says the strike is estimated rather than resolved', () => {
+    const s = intradayRowToBoard(row({
+      state: 'ended', historical: true, contract: estimated,
+    }));
+    expect(s.flags?.map((f) => f.label)).toContain('ATM est.');
+  });
+
+  it('charts the UNDERLYING, because the synthetic symbol is not quotable', () => {
+    // There is nothing at the broker called "NIFTY 23450 CE".
+    const s = intradayRowToBoard(row({
+      state: 'ended', historical: true, contract: estimated,
+    }));
+    expect(s.instrument.quoteKey).toBe('NSE:NIFTY');
+  });
+
+  it('a REAL resolved contract still charts itself', () => {
+    const s = intradayRowToBoard(row());
+    expect(s.instrument.quoteKey).toBe('NFO:NIFTY26SEP24800CE');
+  });
+});

@@ -353,6 +353,18 @@ class IntradayConfig:
 
         if not (self.scan_indices or self.scan_stocks or self.scan_all_stocks):
             raise ValueError("nothing to scan: pick at least one index or stock")
+
+        # An instrument this pack cannot name a contract for is not scannable:
+        # the signal would be produced against a series whose options it cannot
+        # resolve, and the row would name the index rather than a trade. Refused
+        # rather than dropped, because silently discarding a name an operator
+        # typed is worse than telling them it is not tradable.
+        from .contracts import unknown as _unknown
+        bad = _unknown(tuple(self.scan_indices) + tuple(self.scan_stocks))
+        if bad:
+            raise ValueError(
+                f"no option contract is known for {', '.join(bad)} — "
+                "this engine can only scan instruments it can name a strike on")
         return self
 
     def warnings(self) -> list[str]:
@@ -408,6 +420,27 @@ class IntradayConfig:
     @property
     def timeframe_minutes(self) -> int:
         return {"1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15, "30m": 30}[self.timeframe]
+
+    def canonical(self) -> "IntradayConfig":
+        """The same config with its universe de-aliased and de-duplicated.
+
+        The store keeps index candles under "NIFTY 50" while options are listed
+        under "NIFTY", and both spellings reach this engine. Holding both meant
+        scanning one instrument twice and putting two identical rows on the
+        board, each inviting a separate trade.
+
+        Applied on READ as well as write, so a config stored before this
+        existed is repaired without anyone having to re-save it.
+        """
+        from dataclasses import replace as _replace
+        from .contracts import dedupe as _dedupe
+        indices, stocks = _dedupe(self.scan_indices), _dedupe(self.scan_stocks)
+        # An index named in the stock list (or the reverse) is one instrument,
+        # and it belongs wherever the operator put it once.
+        stocks = tuple(s for s in stocks if s not in indices)
+        if indices == self.scan_indices and stocks == self.scan_stocks:
+            return self
+        return _replace(self, scan_indices=indices, scan_stocks=stocks)
 
     def as_dict(self) -> dict:
         out: dict = {}

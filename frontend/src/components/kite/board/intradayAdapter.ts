@@ -54,8 +54,13 @@ function instrument(row: IntradayRow): BoardInstrument {
     strike: c.strike,
     expiry: c.expiry,
     lotSize: c.lot_size,
-    moneyness: null,
-    quoteKey: c.symbol ? `${c.exchange || 'NFO'}:${c.symbol}` : null,
+    moneyness: c.moneyness ?? null,
+    // An ESTIMATED contract's symbol is a description, not a tradingsymbol —
+    // there is nothing at the broker called "NIFTY 23450 CE". Chart the
+    // underlying, which is the series the signal was actually computed on.
+    quoteKey: c.estimated
+      ? (row.symbol ? `NSE:${row.symbol}` : null)
+      : (c.symbol ? `${c.exchange || 'NFO'}:${c.symbol}` : null),
   };
 }
 
@@ -82,6 +87,16 @@ function flags(row: IntradayRow): BoardOrigin[] {
     label: row.timeframe, hint: 'Candle interval these rules are evaluated on',
     tone: 'dim',
   }];
+  if (row.contract?.estimated) {
+    out.push({
+      label: 'ATM est.',
+      hint: 'The strike is the spot rounded to this instrument\u2019s published '
+        + 'step, not a contract resolved against the broker. The expiry is left '
+        + 'unknown rather than guessed \u2014 weekly expiry days have changed '
+        + 'more than once and differ by exchange.',
+      tone: 'dim',
+    });
+  }
   if (row.historical) {
     // Never let a replayed row read as a live one. It is the same rules on the
     // same bars, but nobody traded it.

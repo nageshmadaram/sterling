@@ -337,3 +337,43 @@ class TestRecentSignals:
         for r in svc.recent_signals("u1", sessions=30, symbols=["NIFTY"]):
             assert r["signal_id"] == svc.signal_id_for(
                 r["strategy"], r["symbol"], r["signal"]["timestamp_ms"])
+
+
+def test_an_unavailable_config_store_does_not_start_the_shipped_defaults(monkeypatch):
+    """`db.get_config` returns "" both for "nothing stored" and for "the store
+    is not reachable". Those must not mean the same thing: the first is the
+    real defaults, the second is an engine that has lost its settings and would
+    otherwise scan the SHIPPED universe with the operator's choices discarded.
+    """
+    from app.services import db
+    monkeypatch.setattr(db, "is_available", lambda: False)
+    cfg = svc.get_config("u1")
+    assert cfg.enabled is False
+
+
+def test_the_history_names_the_contract_each_signal_would_have_bought(monkeypatch):
+    from app.services import ohlcv_store
+    rows = _tape_5m(n=900)
+    monkeypatch.setattr(ohlcv_store, "get_candles", lambda sym, res, **kw: rows)
+    svc.clear_history_cache()
+    out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+    assert out
+    for r in out:
+        c = r["contract"]
+        assert c is not None, "a row that names the index is not naming a trade"
+        assert c["option_type"] in {"CE", "PE"}
+        assert c["strike"] % 50 == 0          # NIFTY's published step
+        assert c["estimated"] is True
+        assert c["symbol"].startswith("NIFTY ")
+
+
+def test_the_history_scans_one_instrument_once_however_it_is_spelled(monkeypatch):
+    from app.services import ohlcv_store
+    rows = _tape_5m(n=900)
+    monkeypatch.setattr(ohlcv_store, "get_candles", lambda sym, res, **kw: rows)
+    svc.clear_history_cache()
+    once = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+    svc.clear_history_cache()
+    twice = svc.recent_signals("u1", sessions=30, symbols=["NIFTY", "NIFTY 50"])
+    assert len(once) == len(twice)
+    assert len({r["signal_id"] for r in twice}) == len(twice)

@@ -422,3 +422,76 @@ def test_an_indices_only_universe_warns_that_a_third_of_the_pack_is_mute():
     assert any("can never fire" in w for w in c.warnings())
     # And the shipped default does not have that problem.
     assert not any("can never fire" in w for w in IntradayConfig().validate().warnings())
+
+
+# ------------------------------------------------------- naming the contract
+
+class TestContractNaming:
+    """The board's job is to name a tradable thing.
+
+    A row reading "NIFTY / EQUITY" at 23,438 is naming the index, and nobody
+    can buy the index — so the row describes the thesis and calls it a trade.
+    """
+
+    def test_one_instrument_under_two_names_is_one_instrument(self):
+        from app.engines.intraday.contracts import canonical, dedupe
+        assert canonical("NIFTY 50") == "NIFTY"
+        assert canonical("NIFTY BANK") == "BANKNIFTY"
+        assert canonical("nifty") == "NIFTY"
+        # Scanning both produced two identical rows for one signal, each
+        # inviting a separate trade.
+        assert dedupe(["NIFTY", "NIFTY 50", "BANKNIFTY", "NIFTY BANK"]) \
+            == ("NIFTY", "BANKNIFTY")
+
+    def test_canonicalising_twice_changes_nothing(self):
+        from app.engines.intraday.contracts import canonical
+        assert canonical(canonical("NIFTY 50")) == "NIFTY"
+
+    def test_the_atm_strike_is_the_published_step_not_a_guess(self):
+        from app.engines.intraday.contracts import atm_strike
+        assert atm_strike("NIFTY", 23_438.35) == 23_450.0       # 50-point step
+        assert atm_strike("BANKNIFTY", 56_476.60) == 56_500.0   # 100-point step
+        assert atm_strike("SENSEX", 74_865.13) == 74_900.0
+
+    def test_an_unknown_instrument_yields_no_strike_rather_than_a_wrong_one(self):
+        from app.engines.intraday.contracts import atm_strike, estimated_contract
+        assert atm_strike("MADEUP", 100.0) is None
+        assert estimated_contract("MADEUP", 100.0, "CE") is None
+
+    def test_the_expiry_is_left_unknown_rather_than_invented(self):
+        """Weekly expiry weekdays have changed more than once and differ by
+        exchange, so a date computed from a rule here would be wrong for part
+        of the history it is labelling."""
+        from app.engines.intraday.contracts import estimated_contract
+        c = estimated_contract("NIFTY", 23_438.35, "CE")
+        assert c["symbol"] == "NIFTY 23450 CE"
+        assert c["expiry"] is None and c["dte"] is None
+        # And it never passes for a real resolved contract.
+        assert c["estimated"] is True and c["token"] == 0
+
+    def test_a_bearish_thesis_names_the_put(self):
+        from app.engines.intraday.contracts import estimated_contract
+        assert estimated_contract("NIFTY", 23_438.35, "PE")["symbol"] \
+            == "NIFTY 23450 PE"
+
+    def test_a_universe_it_cannot_price_is_refused_not_scanned(self):
+        from app.engines.intraday import IntradayConfig
+        with pytest.raises(ValueError, match="no option contract is known"):
+            IntradayConfig(scan_indices=("NIFTY", "MADEUP")).validate()
+
+    def test_a_config_stored_with_aliases_repairs_itself_on_read(self):
+        """A config written before de-aliasing existed holds one instrument
+        twice. It must not need a re-save to stop double-scanning."""
+        from app.engines.intraday import IntradayConfig
+        cfg = IntradayConfig(
+            scan_indices=("NIFTY", "BANKNIFTY", "NIFTY 50", "NIFTY BANK"),
+            scan_stocks=(),
+        ).canonical().validate()
+        assert cfg.scan_indices == ("NIFTY", "BANKNIFTY")
+
+    def test_an_index_named_in_the_stock_list_is_not_scanned_twice(self):
+        from app.engines.intraday import IntradayConfig
+        cfg = IntradayConfig(scan_indices=("NIFTY",),
+                             scan_stocks=("NIFTY 50", "RELIANCE")).canonical().validate()
+        assert cfg.scan_indices == ("NIFTY",)
+        assert cfg.scan_stocks == ("RELIANCE",)

@@ -58,6 +58,15 @@ def get_config(uid: str | None = None) -> IntradayConfig:
     key = f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY
     try:
         from app.services import db
+        # `db.get_config` returns "" both for "nothing stored" and for "the
+        # store is not reachable", and those must not mean the same thing here:
+        # the first is the real defaults, the second is an engine that has lost
+        # its settings and would otherwise start scanning the SHIPPED universe
+        # with the operator's own choices silently discarded.
+        if hasattr(db, "is_available") and not db.is_available():
+            log.warning("%s: config store unavailable; running with defaults OFF",
+                        STRATEGY_ID)
+            return IntradayConfig(enabled=False)
         raw = db.get_config(key)
         if not raw and uid:
             raw = db.get_config(_CONFIG_KEY)
@@ -74,7 +83,11 @@ def get_config(uid: str | None = None) -> IntradayConfig:
         for name in TUPLE_FIELDS:
             if isinstance(merged.get(name), list):
                 merged[name] = tuple(merged[name])
-        return IntradayConfig(**merged).validate()
+        # Canonicalise BEFORE validating: a stored config written before the
+        # de-aliasing existed holds "NIFTY" and "NIFTY 50" as two instruments,
+        # and validation would now refuse names that are merely spelled the
+        # store's way rather than the option chain's.
+        return IntradayConfig(**merged).canonical().validate()
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         log.error("Stored %s config is invalid (%s); running with defaults OFF",
                   STRATEGY_ID, exc)
@@ -91,7 +104,7 @@ def set_config(values: dict[str, Any], uid: str | None = None) -> IntradayConfig
     for name in TUPLE_FIELDS:
         if isinstance(current.get(name), list):
             current[name] = tuple(current[name])
-    cfg = IntradayConfig(**current).validate()
+    cfg = IntradayConfig(**current).canonical().validate()
     from app.services import db
     db.set_config(f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY,
                   json.dumps(cfg.as_dict(), separators=(",", ":")))
@@ -534,19 +547,28 @@ def _trade_row(trade, cfg: IntradayConfig, *, symbol: str) -> dict:
     have taken" is much less useful than "here is one we would have taken and
     here is where it came out", and the second is free: the replay already knows.
     """
+    from app.engines.intraday.contracts import canonical, estimated_contract
     direction = str(getattr(trade, "thesis", "BULLISH"))
     bullish = direction == "BULLISH"
+    name = canonical(symbol)
+    opt = "CE" if bullish else "PE"
+    # The board's job is to name a tradable thing. Without this the row said
+    # "NIFTY / EQUITY" and quoted the index — describing the thesis and calling
+    # it a trade. The strike is arithmetic (spot rounded to the instrument's
+    # published step), and the row is flagged `estimated` so it cannot be
+    # mistaken for a contract resolved against the broker's real chain.
+    contract = estimated_contract(name, trade.entry, opt)
     return {
-        "signal_id": signal_id_for(trade.strategy, symbol, trade.entry_ms),
+        "signal_id": signal_id_for(trade.strategy, name, trade.entry_ms),
         "strategy": trade.strategy,
         "strategy_name": DESCRIPTORS.get(trade.strategy, {}).get("name", trade.strategy),
-        "symbol": symbol,
+        "symbol": name,
         "state": "ended",
         "blockers": [],
         "spot": round(trade.entry, 2),
         "underlying_token": 0,
         "timeframe": cfg.timeframe,
-        "contract": None,
+        "contract": contract,
         "quote": None,
         "historical": True,
         "outcome": {
@@ -558,8 +580,8 @@ def _trade_row(trade, cfg: IntradayConfig, *, symbol: str) -> dict:
             "exit_ms": trade.exit_ms,
         },
         "signal": {
-            "strategy": trade.strategy, "symbol": symbol, "direction": direction,
-            "opt_type": "CE" if bullish else "PE",
+            "strategy": trade.strategy, "symbol": name, "direction": direction,
+            "opt_type": opt,
             "timestamp_ms": trade.entry_ms,
             "entry": round(trade.entry, 2), "stop": round(trade.stop, 2),
             "target": round(trade.target, 2), "target2": None,
@@ -586,8 +608,14 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS,
     Cached briefly: it is a view of bars that are not changing, and recomputing
     it per poll would put a replay on a 5-second timer.
     """
+    from app.engines.intraday.contracts import dedupe
     cfg = get_config(uid)
-    names = symbols if symbols is not None else list(cfg.scan_indices) + list(cfg.scan_stocks)
+    raw_names = symbols if symbols is not None else (
+        list(cfg.scan_indices) + list(cfg.scan_stocks))
+    # One instrument, one row. The store keeps index candles under "NIFTY 50"
+    # and options under "NIFTY"; scanning both produced two identical rows for
+    # one signal, each inviting a separate trade.
+    names = list(dedupe(raw_names))
     if not names:
         return []
     key = f"{uid}:{cfg.timeframe}:{sessions}:{','.join(sorted(names))}"

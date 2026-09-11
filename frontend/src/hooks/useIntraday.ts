@@ -183,11 +183,19 @@ export interface IntradayContract {
   symbol: string;
   strike: number;
   option_type: 'CE' | 'PE';
-  expiry: string;
-  dte: number;
+  /** Null on a replayed row: the strike is determined, the expiry is not. */
+  expiry: string | null;
+  dte: number | null;
   lot_size: number;
   token: number;
   exchange: string;
+  /**
+   * The strike was computed arithmetically (spot rounded to the instrument's
+   * published step) rather than resolved against the broker's instrument list.
+   * True only on replayed history, and the row says so.
+   */
+  estimated?: boolean;
+  moneyness?: string | null;
 }
 
 /** What a historical signal went on to do. The replay already knows, and
