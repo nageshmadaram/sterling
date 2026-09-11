@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 from app.engines.opening_volume_decision import build_opening_decision
 from app.engines.opening_volume_leaders import ValidationState, evaluate_leader
 

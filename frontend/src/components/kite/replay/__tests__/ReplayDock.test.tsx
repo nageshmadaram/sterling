@@ -696,9 +696,9 @@ describe('configuration', () => {
     await renderDock();
     const trigger = screen.getByTestId('replay-strategy-trigger');
     await act(async () => { fireEvent.click(trigger); });
-    const orbLabel = screen.getByText('NIFTY ORB');
-    await act(async () => { fireEvent.click(orbLabel); });
-    expect(useReplayStore.getState().draft.strategies).toContain('nifty_orb');
+    const stLabel = screen.getByText('SuperTrend');
+    await act(async () => { fireEvent.click(stLabel); });
+    expect(useReplayStore.getState().draft.strategies).toContain('supertrend');
   });
 
   it('lists Gamma Move as a selectable replay strategy', async () => {

@@ -86,14 +86,11 @@ def _merge_signal_rows(base_rows: list[EngineSignalRow], navigator_rows: list[En
 
 def _signals_response(uid: str) -> SignalsResponse:
     from app.services.simulation import simulation_runner
-    if simulation_runner.has_session_view:
-        res = simulation_runner.get_kite_signals_response()
-        return SignalsResponse(**res)
 
     cfg = state.get_config(uid)
     us = scanner.snapshot(uid)
     st = state.status(uid)
-    rows = list(us.rows if cfg.engine_enabled else [])
+    live_rows = list(us.rows if cfg.engine_enabled else [])
     generated_ms = us.generated_ms if cfg.engine_enabled else 0
     scanning = bool(us.scanning and cfg.engine_enabled)
     scanning_label = us.scanning_label if scanning else ""
@@ -108,7 +105,7 @@ def _signals_response(uid: str) -> SignalsResponse:
         if nav_record.config.enabled:
             nav_snap = navigator_runtime.snapshot(uid)
             nav_status = navigator_runtime.status(uid)
-            rows = _merge_signal_rows(rows, list(nav_snap.rows))
+            live_rows = _merge_signal_rows(live_rows, list(nav_snap.rows))
             generated_ms = max(generated_ms, nav_snap.generated_ms)
             if nav_status.scanning:
                 scanning = True
@@ -119,11 +116,47 @@ def _signals_response(uid: str) -> SignalsResponse:
     except Exception as exc:  # noqa: BLE001
         log.debug("Navigator rows unavailable for shared signal response user=%s: %s", uid, exc)
 
+    if simulation_runner.has_session_view:
+        # Simulation is active or a finished session is being reviewed.
+        # Build simulation rows and merge them WITH the live scanner rows so that
+        # signals from strategies not covered by the simulation (e.g. SuperTrend rows
+        # from the live scanner while an Adaptive Edge replay is running) remain visible
+        # in the signals panel instead of being blanked out.
+        #
+        # Merge rule: simulation rows win on key collision (same source+underlying+
+        # direction+timestamp) — their `is_active`/`is_fresh` flags come from the
+        # replay clock, not the live market. Live rows for different instruments or
+        # strategy sources are appended and stay visible.
+        sim_res = simulation_runner.get_kite_signals_response()
+        try:
+            from app.engines.sterling_kite_engine.schemas import EngineSignalRow as SchemaRow
+            sim_rows = [SchemaRow(**r) if isinstance(r, dict) else r for r in sim_res.get("rows", [])]
+        except Exception:  # noqa: BLE001
+            sim_rows = []
+        merged_rows = _merge_signal_rows(live_rows, sim_rows)
+        replay_live = simulation_runner.is_replay_live
+        return SignalsResponse(
+            generated_ms=sim_res.get("generated_ms", generated_ms),
+            scanning=False,
+            # A finished session held for review is not a running replay, and it
+            # is certainly not an open market. Reporting `market_open=True` for
+            # it is what let a replay from hours ago keep the live board looking
+            # live; `feed_mode` lets the client label the table instead of
+            # guessing from the rows.
+            scanning_label="SIMULATION_REPLAY" if replay_live else "SIMULATION_REVIEW",
+            rows=merged_rows,
+            next_scan_ms=0,
+            auto_scan=False,
+            market_open=replay_live,
+            feed_mode="replay" if replay_live else "replay_review",
+            replay_live=replay_live,
+        )
+
     return SignalsResponse(
         generated_ms=generated_ms,
         scanning=scanning,
         scanning_label=scanning_label,
-        rows=rows,
+        rows=live_rows,
         next_scan_ms=next_scan_ms,
         auto_scan=auto_scan,
         market_open=is_market_open(),

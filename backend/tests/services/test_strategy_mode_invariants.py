@@ -24,9 +24,6 @@ import pytest
 AUTO_OPENING_PATHS = [
     ("opening_volume_leaders", "app.services.opening_volume_execution"),
     ("gamma_move", "app.services.gamma_move_runner"),
-    ("oi_wall_flow", "app.services.oi_wall_flow_runner"),
-    ("atm_premium_imbalance", "app.services.atm_premium_imbalance_runner"),
-    ("nifty_orb", "app.services.nifty_orb_execution"),
     ("supertrend", "app.services.kite_engine.service"),
     ("navigator", "app.services.navigator.runtime"),
 ]
@@ -44,8 +41,6 @@ def test_every_auto_opening_path_consults_auto_execute(label, module_path):
 CONFIGS = [
     ("opening_volume_leaders", "app.services.opening_volume_execution", "OpeningExecutionConfig"),
     ("gamma_move", "app.engines.gamma_move.config", "GammaMoveConfig"),
-    ("oi_wall_flow", "app.engines.oi_wall_flow.config", "OIWallFlowConfig"),
-    ("nifty_orb", "app.engines.nifty_orb_options", "StrategyConfig"),
 ]
 
 
@@ -61,21 +56,8 @@ def test_no_strategy_config_carries_its_own_paper_live_switch(label, module_path
     assert "is_paper" not in names
 
 
-def test_atm_pricing_proof_follows_the_account():
-    """ATM still has an `execution_mode` for its validation gates, but the rule
-    that decides whether a REAL order may be priced off an undatable quote now
-    follows the account instead."""
-    from app.engines.atm_premium_imbalance import ATMPremiumImbalanceStrategy
-    import dataclasses
-    assert "live" in {f.name for f in dataclasses.fields(ATMPremiumImbalanceStrategy)}
-    src = inspect.getsource(ATMPremiumImbalanceStrategy)
-    assert "require_proof=self.live" in src
-    assert 'require_proof=self.cfg.execution_mode == "live"' not in src
-
-
 EXIT_PATHS = [
     ("gamma_move exits", "app.services.gamma_move_runner", "on_ticks"),
-    ("oi_wall_flow exits", "app.services.oi_wall_flow_runner", "on_ticks"),
     ("supertrend monitor", "app.services.kite_engine.monitor", None),
 ]
 
@@ -96,20 +78,7 @@ def test_exits_are_never_gated_on_auto_execute(label, module_path, func_name):
 
 
 def test_option_engine_power_switch_defaults():
-    """Power-switch defaults are a product decision, not a copy-paste habit.
-
-    Gamma / OI-wall / ATM / opening-volume ship ON: they are the engines an
-    operator already expects to scan. ORB ships OFF — it is not unattended-live
-    eligible until walk-forward on real option history is green, and a fresh
-    install must not start scanning or showing tickets until someone turns it on.
-    """
     from app.engines.gamma_move import GammaMoveConfig
-    from app.engines.oi_wall_flow import OIWallFlowConfig
-    from app.engines.atm_premium_imbalance import ATMPremiumImbalanceConfig
-    from app.engines.nifty_orb_options import StrategyConfig
     from app.services.opening_volume_execution import OpeningExecutionConfig
     assert GammaMoveConfig().enabled is True
-    assert OIWallFlowConfig().enabled is True
-    assert ATMPremiumImbalanceConfig().enabled is True
-    assert StrategyConfig().enabled is False
     assert OpeningExecutionConfig().enabled is True

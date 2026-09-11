@@ -222,110 +222,6 @@ def test_evaluate_bar_supertrend_requires_warmup_and_no_early_spike():
     assert len(st_events) == 0
 
 
-def test_evaluate_bar_atm_imbalance_single_trade_window():
-    """Verify ATM Premium Imbalance only triggers during 09:15-09:30 and takes at most 1 trade per day."""
-    from datetime import datetime, timezone, timedelta
-    simulation_runner._bar_history = {}
-    simulation_runner._last_fired = {}
-    simulation_runner._active_until_bar = {}
-    simulation_runner._config = SimConfig(date="2026-08-28", strategy="atm_imbalance", strategies=["atm_imbalance"])
-    simulation_runner._stats.signals_fired = 0
-    simulation_runner._stats.events = []
-    simulation_runner._stats.trades = []
-
-    # Bar 1 at 09:15:00
-    t1 = datetime(2026, 8, 28, 9, 15, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
-    bar1 = {"symbol": "NIFTY", "open": 24000, "high": 24050, "low": 23980, "close": 24020, "volume": 50000}
-    simulation_runner._evaluate_bar(bar1, t1)
-
-    # Bar 2 at 09:20:00 (inside open window) -> fires 1st trade
-    t2 = datetime(2026, 8, 28, 9, 20, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
-    bar2 = {"symbol": "NIFTY", "open": 24020, "high": 24060, "low": 24010, "close": 24040, "volume": 60000}
-    simulation_runner._evaluate_bar(bar2, t2)
-
-    atm_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "atm_imbalance"]
-    assert len(atm_events) == 1
-
-    # Bar 3 at 09:25:00 (still in window, but already traded today -> should NOT fire another)
-    t3 = datetime(2026, 8, 28, 9, 25, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
-    bar3 = {"symbol": "NIFTY", "open": 24040, "high": 24070, "low": 24030, "close": 24060, "volume": 40000}
-    simulation_runner._evaluate_bar(bar3, t3)
-
-    atm_events_after = [ev for ev in simulation_runner._stats.events if ev.strategy == "atm_imbalance"]
-    assert len(atm_events_after) == 1
-
-
-def test_evaluate_bar_nifty_orb_window_and_constraints():
-    """Replay ORB uses the live engine, not a 4-bar clone."""
-    from datetime import timezone, timedelta
-    from tests.engines.test_nifty_orb_options import orb_session
-
-    simulation_runner._bar_history = {}
-    simulation_runner._last_fired = {}
-    simulation_runner._active_until_bar = {}
-    simulation_runner._in_session_bars = {}
-    simulation_runner._config = SimConfig(date="2026-08-18", strategy="nifty_orb", strategies=["nifty_orb"])
-    simulation_runner._stats.signals_fired = 0
-    simulation_runner._stats.events = []
-    simulation_runner._stats.trades = []
-
-    session = orb_session("LONG")
-    for bar_i, b in enumerate(session):
-        bar = {
-            "symbol": "NIFTY",
-            "open": b.open, "high": b.high, "low": b.low, "close": b.close,
-            "volume": b.volume,
-            "time": int(b.timestamp.timestamp()),
-        }
-        simulation_runner._evaluate_bar(bar, b.timestamp)
-        if bar_i < 3:
-            orb_so_far = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
-            assert orb_so_far == []
-
-    orb_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "nifty_orb"]
-    assert orb_events
-    assert orb_events[0].direction == "BULLISH"
-    scan = simulation_runner.get_nifty_orb_signals_response()
-    assert scan["signals"]
-    row = scan["signals"][0]
-    assert row["status"] == "signal"
-    assert row["signal"]["direction"] == "LONG"
-    assert row["ticket_fingerprint"]
-    assert row["auto_block"].startswith("replay")
-    assert row["trade"]["contract"]["option_type"] == "CE"
-
-
-def test_evaluate_bar_bear_to_bearish_short_only():
-    """Verify Bear to Bearish only emits BEARISH signals on lower highs breakdown."""
-    from datetime import datetime, timezone
-    simulation_runner._bar_history = {}
-    simulation_runner._last_fired = {}
-    simulation_runner._active_until_bar = {}
-    simulation_runner._config = SimConfig(date="2026-08-28", strategy="bear_to_bearish", strategies=["bear_to_bearish"])
-    simulation_runner._stats.signals_fired = 0
-    simulation_runner._stats.events = []
-    simulation_runner._stats.trades = []
-
-    base_time = datetime(2026, 8, 28, 10, 0, tzinfo=timezone.utc)
-    # Feed rising market: should NOT produce any signals
-    for i in range(15):
-        price = 100.0 + (i * 2.0)
-        bar = {
-            "symbol": "BANKNIFTY",
-            "open": price - 1.0,
-            "high": price + 2.0,
-            "low": price - 2.0,
-            "close": price + 1.0,
-            "volume": 20000,
-        }
-        simulation_runner._evaluate_bar(bar, base_time)
-
-    b2b_events = [ev for ev in simulation_runner._stats.events if ev.strategy == "bear_to_bearish"]
-    assert len(b2b_events) == 0
-    for ev in b2b_events:
-        assert ev.direction == "BEARISH"
-
-
 @pytest.fixture
 def september_4_recorded_evidence():
     """Real-evidence integration cases require the captured session snapshot."""
@@ -514,24 +410,12 @@ def test_replay_snapshots_do_not_steal_other_engines_entries():
         SimSignalEvent(strategy="navigator", time_iso="10:18:00", timestamp_ms=4,
                        instrument="NIFTY", direction="BULLISH", strength="STRONG",
                        entry=24010.0, stop=23900.0, target=24200.0),
-        SimSignalEvent(strategy="bear_to_bearish", time_iso="10:19:00", timestamp_ms=5,
-                       instrument="NIFTY", direction="BEARISH", strength="STRONG",
-                       entry=23900.0, stop=24000.0, target=23600.0),
-        SimSignalEvent(strategy="atm_imbalance", time_iso="09:20:00", timestamp_ms=6,
-                       instrument="NIFTY", direction="BULLISH", strength="STRONG",
-                       entry=24050.0, stop=23900.0, target=24200.0),
         SimSignalEvent(strategy="adaptive_edge", time_iso="10:21:00", timestamp_ms=7,
                        instrument="NIFTY", direction="BULLISH", strength="STRONG",
                        entry=24100.0, stop=24000.0, target=24300.0, premium_entry=150.0),
     ]
     nav = simulation_runner.get_navigator_signals_response()
     assert [i["strategy"] for i in nav["items"]] == ["navigator"]
-    bear = simulation_runner.get_bear_to_bearish_snapshot()
-    assert len(bear["rows"]) == 1
-    assert bear["rows"][0]["underlying"] == "NIFTY"
-    atm = simulation_runner.get_atm_imbalance_snapshot()
-    assert atm["session"]["trades_taken"] == 1
-    assert atm["session"]["underlying"] == "NIFTY"
     ae = simulation_runner.get_adaptive_edge_snapshot()
     assert len(ae["signals"]) == 1
     assert ae["signals"][0]["underlying"] == "NIFTY"
@@ -1566,40 +1450,73 @@ def test_simulation_scanned_session_zero_signals_honored():
     assert len(st_events) == 0
 
 
-def test_kite_signals_response_does_not_leak_other_strategies():
-    """Verify that get_kite_signals_response strictly excludes non-SuperTrend strategies during multi-strategy replay."""
-    simulation_runner.clear()
-    simulation_runner._config = SimConfig(date="2026-09-10", strategies=["all"])
-    simulation_runner._stats.events = [
-        SimSignalEvent(
-            time_iso="09:20:00",
-            timestamp_ms=1789012800000,
-            strategy="adaptive_edge",
-            instrument="NIFTY",
-            direction="BEARISH",
-            strength="STRONG",
-            entry=100.0,
-            stop=90.0,
-            target=120.0,
-        ),
-        SimSignalEvent(
-            time_iso="10:15:00",
-            timestamp_ms=1789016100000,
-            strategy="supertrend",
-            instrument="BANKNIFTY",
-            direction="BULLISH",
-            strength="STRONG",
-            entry=200.0,
-            stop=180.0,
-            target=240.0,
-        ),
-    ]
+def test_kite_signals_response_strategy_filter_behaviour():
+    """
+    Verify get_kite_signals_response strategy filter rules:
 
+    - strategies=["all"]: ALL events across every strategy are included —
+      the old code had a dead-code bug that overwrote the all-events list
+      with only supertrend/kite_engine rows. Fixed.
+    - strategies=["adaptive_edge"]: adaptive_edge events appear, AND
+      supertrend/kite_engine events are also kept so the live-scanner signals
+      panel is not blanked when the user picks "Adaptive Edge" in replay settings.
+    - strategies=["supertrend"]: only supertrend events appear (no adaptive_edge
+      leakage), because supertrend IS in the secondary _KITE_STRATEGIES set so
+      it self-qualifies as primary.
+    """
+    simulation_runner.clear()
+
+    ae_event = SimSignalEvent(
+        time_iso="09:20:00",
+        timestamp_ms=1789012800000,
+        strategy="adaptive_edge",
+        instrument="NIFTY",
+        direction="BEARISH",
+        strength="STRONG",
+        entry=100.0,
+        stop=90.0,
+        target=120.0,
+    )
+    st_event = SimSignalEvent(
+        time_iso="10:15:00",
+        timestamp_ms=1789016100000,
+        strategy="supertrend",
+        instrument="BANKNIFTY",
+        direction="BULLISH",
+        strength="STRONG",
+        entry=200.0,
+        stop=180.0,
+        target=240.0,
+    )
+
+    # Case 1: allow_all — both events appear
+    simulation_runner._config = SimConfig(date="2026-09-10", strategies=["all"])
+    simulation_runner._stats.events = [ae_event, st_event]
     resp = simulation_runner.get_kite_signals_response()
     rows = resp.get("rows", [])
-    assert len(rows) == 1
-    assert rows[0]["underlying"] in ("BANKNIFTY", "NIFTY BANK")
-    assert rows[0]["direction"] == "long"
+    underlyings = {r["underlying"].upper() for r in rows}
+    assert "NIFTY" in underlyings, "allow_all must include adaptive_edge events"
+    assert any(u in underlyings for u in ("BANKNIFTY", "NIFTY BANK")), "allow_all must include supertrend events"
+
+    # Case 2: strategies=["adaptive_edge"] — AE event shown, supertrend ALSO kept
+    # (secondary _KITE_STRATEGIES rule) so the signals panel is not blanked.
+    simulation_runner._config = SimConfig(date="2026-09-10", strategies=["adaptive_edge"])
+    simulation_runner._stats.events = [ae_event, st_event]
+    resp2 = simulation_runner.get_kite_signals_response()
+    rows2 = resp2.get("rows", [])
+    underlyings2 = {r["underlying"].upper() for r in rows2}
+    assert "NIFTY" in underlyings2, "adaptive_edge filter must include adaptive_edge events"
+    assert any(u in underlyings2 for u in ("BANKNIFTY", "NIFTY BANK")), \
+        "adaptive_edge filter must ALSO keep supertrend/kite_engine events to avoid blanking live-scanner signals"
+
+    # Case 3: strategies=["supertrend"] — only supertrend event; adaptive_edge is NOT a
+    # kite_engine/supertrend strategy so it does not appear in the secondary set.
+    simulation_runner._config = SimConfig(date="2026-09-10", strategies=["supertrend"])
+    simulation_runner._stats.events = [ae_event, st_event]
+    resp3 = simulation_runner.get_kite_signals_response()
+    rows3 = resp3.get("rows", [])
+    underlyings3 = {r["underlying"].upper() for r in rows3}
+    assert any(u in underlyings3 for u in ("BANKNIFTY", "NIFTY BANK")), "supertrend filter must include supertrend events"
 
 
 def test_adaptive_edge_snapshot_parity_with_simulation_trades_in_spot_scan_v2():

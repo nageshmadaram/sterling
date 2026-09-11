@@ -2,30 +2,17 @@ import React, { useEffect, useMemo, useReducer, useState } from 'react';
 import { useEffectiveNowMs } from '../../hooks/useReplayStore';
 import { SterlingKiteEngineWithExpiry } from './SterlingKiteEngineWithExpiry';
 import { rowsFromSnapshot } from './AdaptiveEdgePanel';
-import { NiftyOrbSignalsFeed } from './NiftyOrbSignalsFeed';
 import { AdaptiveEdgeBoard } from './board/AdaptiveEdgeBoard';
-import { AtmPremiumImbalanceBoard } from './board/AtmPremiumImbalanceBoard';
 import { GammaMoveBoard } from './board/GammaMoveBoard';
-import { OiWallFlowBoard } from './board/OiWallFlowBoard';
-import { BearToBearishBoard } from './board/BearToBearishBoard';
 import { EngineTabs, type EngineTabState } from './board/EngineToolbar';
 import { adaptiveEdgeToBoard } from './board/adaptiveEdgeAdapter';
-import { orbToBoard } from './board/orbAdapter';
-import { atmPremiumImbalanceToBoard } from './board/atmPremiumImbalanceAdapter';
 import { gammaMoveToBoard } from './board/gammaMoveAdapter';
-import { oiWallFlowToBoard } from './board/oiWallFlowAdapter';
-import { bearToBearishToBoard } from './board/bearToBearishAdapter';
 import { supertrendToBoard } from './board/supertrendAdapter';
 import { ACTIONABLE, type BoardSignal, type EngineId } from './board/boardTypes';
 import { useEngineEnabled } from '../../hooks/useEngineToggles';
 import { useAdaptiveEdgeSnapshot } from '../../hooks/useAdaptiveEdge';
 import { useEngineSignals, useEngineConfig } from '../../hooks/useSterlingKiteEngine';
-import { useOrbSignals } from '../../hooks/useOrbSignals';
-import { useAtmPremiumImbalanceSnapshot } from '../../hooks/useAtmPremiumImbalance';
 import { useGammaMoveSnapshot } from '../../hooks/useGammaMove';
-import { useOiWallFlowSnapshot } from '../../hooks/useOiWallFlow';
-import { useBearToBearishSnapshot, useBearToBearishConfig } from '../../hooks/useBearToBearish';
-import { useOrbConfig } from '../../hooks/useOrbConfig';
 import { useNavigatorConfig } from '../../hooks/useNavigator';
 import { k, Icons } from '../../styles/kiteUI';
 import { useKiteSettings } from '../../store/useKiteSettings';
@@ -61,61 +48,34 @@ interface Props {
 /** Which engine each nav destination should land on. */
 const NAV_TARGET: Record<string, EngineId> = {
   adaptiveEdge: 'adaptive_edge',
-  orbOptions: 'orb',
-  atmPremiumImbalance: 'atm_premium_imbalance',
   gammaMove: 'gamma_move',
-  oiWallFlow: 'oi_wall_flow',
 };
 
 export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBoardDetail }: Props) {
   const [engine, setEngine] = useState<EngineId>('supertrend');
-  // The same list the "What is running" section writes to, so a tab cannot
-  // survive its engine being switched off — nor vanish for any other reason.
   const engineOn = useEngineEnabled();
-  // Every board's Chart column needs this. Four of the five never received it, so
-  // `useBoardRowActions` returned null for the chart cell and the column rendered
-  // empty — present in the picker, headed "Chart", and permanently blank.
   const openChartFor = React.useCallback(
     (quoteKey: string) => onOpenChart?.(quoteKey, 'chart'),
     [onOpenChart],
   );
 
-  /**
-   * Rescan and the board settings, for every engine.
-   *
-   * They used to be rendered by SuperTrend's pane, which meant they existed on
-   * one tab out of five — yet rescan already scans all five, and every setting in
-   * that drawer lives in the shared store and governs every board. Two controls
-   * common to the whole dock were reachable from a fifth of it.
-   */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const rescanStrategies = useKiteSettings((st) => st.rescanStrategies);
   const { scanAll, isPending: scanPending } = useScanAllStrategies();
   const cancelScan = useCancelScan();
   const cancelNavigatorScan = useCancelNavigatorScan();
-  // Re-render once a second so the countdown ring actually counts down.
   const [, tickRing] = useReducer((x: number) => x + 1, 0);
   useEffect(() => {
     const id = setInterval(tickRing, 1000);
     return () => clearInterval(id);
   }, []);
-  // One clock per render, so every day heading in a paint agrees on "today".
   const nowMs = useEffectiveNowMs();
 
   const snapshot = useAdaptiveEdgeSnapshot();
   const engineSignals = useEngineSignals();
   const engineConfig = useEngineConfig();
-  const orbConfig = useOrbConfig();
-  const orbEnabled = orbConfig.data?.config?.enabled;
-  // Same path the pane reads: the flag lives under record.config, and absent
-  // means off rather than on — an engine nobody has enabled is not running.
   const navigatorEnabled = useNavigatorConfig().data?.record.config.enabled ?? false;
-  const orb = useOrbSignals(orbEnabled === true);
-  const apiSnapshot = useAtmPremiumImbalanceSnapshot();
   const gmSnapshot = useGammaMoveSnapshot();
-  const owfSnapshot = useOiWallFlowSnapshot();
-  const btbSnapshot = useBearToBearishSnapshot();
-  const btbConfig = useBearToBearishConfig();
 
   /**
    * The countdown to the next automatic scan, 0..1.
@@ -146,7 +106,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
    * now or in twenty seconds.
    */
   const scanOrder = useMemo<ScannableEngine[]>(() => {
-    const all: ScannableEngine[] = ['supertrend', 'navigator', 'orb', 'gamma_move', 'adaptive_edge', 'bear_to_bearish', 'oi_wall_flow'];
+    const all: ScannableEngine[] = ['supertrend', 'navigator', 'gamma_move', 'adaptive_edge'];
     const first = all.filter((e) => e === engine);
     return [...first, ...all.filter((e) => e !== engine)];
   }, [engine]);
@@ -172,16 +132,12 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
     // work already declined.
     if (e === 'supertrend') return engineConfig.data?.engine_enabled !== false;
     if (e === 'navigator') return navigatorEnabled;
-    if (e === 'orb') return orbEnabled === true;
     // Same contract as the three above: a switched-off engine is skipped
     // whatever is ticked in Trading Mode. Absent config (snapshot still
     // loading) means included, so a first press is not a no-op.
     if (e === 'gamma_move') return gmSnapshot.data?.config?.enabled !== false;
-    if (e === 'oi_wall_flow') return owfSnapshot.data?.config?.enabled !== false;
-    if (e === 'bear_to_bearish') return btbConfig.data?.enabled !== false;
-      return true;
-    }), [scanOrder, rescanStrategies, engineConfig.data?.engine_enabled, navigatorEnabled, orbEnabled,
-        gmSnapshot.data?.config?.enabled, owfSnapshot.data?.config?.enabled, btbConfig.data]);
+    return true;
+  }), [scanOrder, rescanStrategies, engineConfig.data?.engine_enabled, navigatorEnabled, gmSnapshot.data?.config?.enabled]);
 
   /**
    * Name what the press will actually run, in the order it will run it.
@@ -208,61 +164,21 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
   const tabs: EngineTabState[] = useMemo(() => {
     const st = supertrendToBoard(engineSignals.data?.rows ?? []);
     const ae = snapshot.data ? adaptiveEdgeToBoard(rowsFromSnapshot(snapshot.data)) : [];
-    const ob = orb.signals.map(orbToBoard);
-    const api = atmPremiumImbalanceToBoard(apiSnapshot.data);
     const gm = gammaMoveToBoard(gmSnapshot.data);
-    const owf = oiWallFlowToBoard(owfSnapshot.data);
-    const btb = bearToBearishToBoard(btbSnapshot.data);
     const live = (list: typeof st) => list.filter((s) => ACTIONABLE.includes(s.status)).length;
     const all: EngineTabState[] = [
       { id: 'supertrend', running: engineConfig.data?.engine_enabled !== false, live: live(st), scanned: st.length },
       { id: 'adaptive_edge', running: !!snapshot.data, live: live(ae), scanned: ae.length },
-      { id: 'orb', running: orbEnabled === true, live: live(ob), scanned: ob.length },
-      // "running" here means armed, not merely enabled: this engine does nothing
-      // until a session is armed, so an enabled-but-unarmed tab must not claim to
-      // be running.
-      { id: 'atm_premium_imbalance',
-        running: !!apiSnapshot.data?.session && !apiSnapshot.data.session.finished,
-        live: live(api), scanned: api.length },
-      // Scanning, not armed: this engine is running whenever it is enabled and
-      // inside its session, so the tab follows the config rather than a session.
       { id: 'gamma_move',
         running: gmSnapshot.data?.config?.enabled === true,
         live: live(gm), scanned: gm.length },
-      { id: 'oi_wall_flow',
-        running: owfSnapshot.data?.config?.enabled === true,
-        live: live(owf), scanned: owf.length },
-      { id: 'bear_to_bearish',
-        running: btbConfig.data?.enabled !== false,
-        live: live(btb), scanned: btb.length },
-    // A switched-off engine gets NO TAB now. It used to get one that explained
-    // itself, on the reasoning that a missing tab is harder to understand than a
-    // stopped one — but that filled the dock with engines the operator had
-    // deliberately stopped, and the explanation is in the switch that stopped it.
-    //
-    // `!== false` and not `=== true`: an engine whose config has not arrived yet
-    // keeps its tab. Hiding on "not loaded" would blink every tab out on each
-    // page load and look exactly like the operator's own setting.
-    //
-    // ORB is the exception: it ships OFF, so useEngineEnabled treats "not
-    // loaded" as off. A fresh install must not flash a live ORB tab.
     ];
     return all.filter((tab) => {
-      // The SuperTrend tab HOSTS Navigator — Navigator has no tab of its own, its
-      // rows render in this pane under the signal lens. So this tab survives
-      // SuperTrend being switched off as long as Navigator is on, or switching
-      // SuperTrend off would silently take a running engine's only surface with
-      // it. A test caught this: with SuperTrend off, re-scan stopped naming
-      // Navigator first, because the dock had moved to another engine entirely.
       if (tab.id === 'supertrend') return engineOn.supertrend || engineOn.navigator;
       return engineOn[tab.id as keyof typeof engineOn] !== false;
     });
-  }, [engineSignals.data, engineConfig.data, snapshot.data, orb.signals, orbEnabled,
-      apiSnapshot.data, gmSnapshot.data, owfSnapshot.data, btbSnapshot.data, btbConfig.data, engineOn]);
+  }, [engineSignals.data, engineConfig.data, snapshot.data, gmSnapshot.data, engineOn]);
 
-  // Switching off the engine you are looking at must move you somewhere real.
-  // Without this the dock keeps rendering a board whose tab is gone, which reads
-  // as the setting having failed.
   useEffect(() => {
     if (!tabs.length) return;
     if (!tabs.some((tab) => tab.id === engine)) setEngine(tabs[0].id);
@@ -282,15 +198,10 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
       <div style={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${k.border}`, background: k.bg }}>
         <EngineTabs tabs={tabs} active={engine} onSelect={setEngine} />
 
-        {/* Portalled into the pane's own title bar. Rendered here rather than by
-            any one engine's board, because both controls are common to all of
-            them. */}
         <PaneHeaderActions pane="signals">
           {scanning ? (
             <ToolbarButton
               title="Stop scan"
-              // Stops every engine a press could have started. Cancelling only
-              // SuperTrend left Navigator running with the button showing idle.
               onClick={() => {
                 if (engineConfig.data?.engine_enabled !== false) cancelScan.mutate();
                 if (navigatorEnabled) cancelNavigatorScan.mutate();
@@ -323,15 +234,8 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
           <SterlingKiteEngineWithExpiry onSelectSignal={onSelectSignal} onOpenChart={onOpenChart} />
         )}
         {engine === 'adaptive_edge' && <AdaptiveEdgeBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />}
-        {engine === 'orb' && <NiftyOrbSignalsFeed onOpenChart={openChartFor} onOpenDetail={onOpenBoardDetail} nowMs={nowMs} />}
-        {engine === 'atm_premium_imbalance' && (
-          <AtmPremiumImbalanceBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
-        )}
         {engine === 'gamma_move' && (
           <GammaMoveBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
-        )}
-        {engine === 'oi_wall_flow' && (
-          <OiWallFlowBoard nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
         )}
       </div>
     </div>

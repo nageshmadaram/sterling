@@ -18,19 +18,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 
 import gammaPayload from './fixtures/gamma-move.json';
-import atmPayload from './fixtures/atm-premium-imbalance.json';
-import orbPayload from './fixtures/nifty-orb-options.json';
-import owfPayload from './fixtures/oi-wall-flow.json';
 import { GammaMoveSettingsPanel } from '../kite/GammaMoveSettingsPanel';
-import { AtmPremiumImbalanceSettingsPanel } from '../kite/AtmPremiumImbalanceSettingsPanel';
-import { OrbMomentumOptionsSettingsPanel } from '../kite/OrbMomentumOptionsSettingsPanel';
-import { OiWallFlowSettingsPanel } from '../kite/OiWallFlowSettingsPanel';
 
 const PAYLOADS: Record<string, unknown> = {
   '/api/v1/config/gamma-move': gammaPayload,
-  '/api/v1/config/atm-premium-imbalance': atmPayload,
-  '/api/v1/config/nifty-orb-options': orbPayload,
-  '/api/v1/config/oi-wall-flow': owfPayload,
 };
 
 beforeEach(() => {
@@ -52,15 +43,10 @@ function mount(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
-/** Wait until the panel has rendered its sections.
- *  Keyed on the sections themselves rather than one engine's loading wording —
- *  waiting for text a panel never renders resolves instantly and asserts against
- *  an empty page, which is how a broken panel reads as a passing test. */
 async function settled() {
   await waitFor(() => expect(document.querySelectorAll('summary').length).toBeGreaterThan(0));
 }
 
-/** The section a person can actually read, not merely one present in the DOM. */
 function openSectionTitled(re: RegExp): boolean {
   const summary = [...document.querySelectorAll('summary')]
     .find((el) => re.test(el.textContent ?? ''));
@@ -68,18 +54,8 @@ function openSectionTitled(re: RegExp): boolean {
   return (summary.closest('details') as HTMLDetailsElement).open;
 }
 
-/**
- * ORB is in here on purpose, and it is the control.
- *
- * It is the page these controls were reported as appearing on. If the exact
- * same assertions pass for all three, the three pages are equivalent and a
- * difference seen in a browser is not coming from this code.
- */
 const PANELS: Array<[string, React.ReactElement]> = [
-  ['ORB + VWAP (control)', <OrbMomentumOptionsSettingsPanel key="orb" />],
   ['Gamma Move', <GammaMoveSettingsPanel key="gm" />],
-  ['ATM Premium Imbalance', <AtmPremiumImbalanceSettingsPanel key="atm" />],
-  ['OI Wall Flow', <OiWallFlowSettingsPanel key="owf" />],
 ];
 
 describe.each(PANELS)('%s settings, over the real API payload', (label, panel) => {

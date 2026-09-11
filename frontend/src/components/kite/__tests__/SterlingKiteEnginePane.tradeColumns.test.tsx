@@ -58,7 +58,6 @@ vi.mock('../../../hooks/useSterlingKiteEngine', () => ({
   useCancelScan: () => ({ mutate: vi.fn(), isPending: false }),
   useStockRegistry: () => ({ data: [] }),
 }));
-vi.mock('../../../hooks/useOrbConfig', () => ({ useOrbConfig: () => ({ data: { config: { enabled: true } } }), useSetOrbConfig: () => ({ mutate: vi.fn() }) }));
 vi.mock('../../../hooks/useNavigator', () => ({
   useNavigatorConfig: () => ({ data: { record: { config: { enabled: true } } } }),
   useSetNavigatorConfig: () => ({ mutate: vi.fn() }),
@@ -67,8 +66,6 @@ vi.mock('../../../hooks/useNavigator', () => ({
 }));
 vi.mock('../../../hooks/useGammaMove', () => ({ useGammaMoveConfig: () => ({ data: { config: { enabled: true } } }), useUpdateGammaMove: () => ({ mutate: vi.fn() }) }));
 vi.mock('../../../hooks/useAdaptiveEdge', () => ({ useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }), useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn() }) }));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({ useAtmPremiumImbalanceConfig: () => ({ data: { config: { enabled: true } } }), useSetAtmPremiumImbalanceConfig: () => ({ mutate: vi.fn() }) }));
-vi.mock('../../../hooks/useBearToBearish', () => ({ useBearToBearishConfig: () => ({ data: { enabled: true } }), useUpdateBearToBearishConfig: () => ({ mutate: vi.fn() }) }));
 
 function wrap(node: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });

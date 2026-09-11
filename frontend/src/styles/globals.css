@@ -321,9 +321,7 @@ body {
    lets the browser remember each row's real height, so the scrollbar stays
    stable. Applied to the big Kite lists (signals, option chain, search results). */
 .kv-rows > * {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 64px;
-  /* content-visibility: auto disabled to prevent blank unrendered top rows under sticky headers */
+  content-visibility: visible;
   contain: none;
 }
 

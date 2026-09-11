@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 from app.engines.opening_volume_decision import build_opening_decision
 from app.engines.opening_volume_leaders import (
     ChaseState,
@@ -34,6 +34,65 @@ _DAILY_CONTEXT_LIMIT = 50
 _FNO_OPTION_TYPES = {"CE", "PE"}
 _history_cache: dict[tuple[str, str, int, int, datetime], tuple[float, list[Bar]]] = {}
 _daily_cache: dict[tuple[str, str, int, date], tuple[float, list[Bar]]] = {}
+_META_CACHE: dict[str, tuple[float, Any]] = {}
+_META_CACHE_TTL_S = 300.0
+_KITE_INDEX_ALIASES = {
+    "NIFTY": [("NSE", "NIFTY 50"), ("NSE", "NIFTY FIFTY")],
+    "NIFTY 50": [("NSE", "NIFTY 50")],
+    "BANKNIFTY": [("NSE", "NIFTY BANK")],
+    "FINNIFTY": [("NSE", "NIFTY FIN SERVICE")],
+    "MIDCPNIFTY": [("NSE", "NIFTY MID SELECT")],
+    "SENSEX": [("BSE", "SENSEX")],
+    "BANKEX": [("BSE", "BANKEX")],
+}
+
+
+async def _kite_instrument(client: Any, underlying: str) -> Any:
+    import time
+    from app.schemas.instruments import InstrumentMeta
+    from app.services.exchanges import instrument_registry as reg
+
+    cached = _META_CACHE.get(underlying)
+    if cached and time.time() - cached[0] < _META_CACHE_TTL_S:
+        return cached[1]
+
+    meta = reg.get_instrument(underlying)
+    if meta is None:
+        attempts = [("NSE", underlying), *_KITE_INDEX_ALIASES.get(underlying, ())]
+        tried: list[str] = []
+        for exchange, tradingsymbol in attempts:
+            tried.append(f"{exchange}:{tradingsymbol}")
+            try:
+                rows = await client.search_instruments(tradingsymbol, exchange, limit=20)
+            except Exception:
+                continue
+            exact = next(
+                (r for r in (rows or [])
+                 if str(r.get("tradingsymbol") or "").upper() == tradingsymbol.upper()
+                 and str(r.get("instrument_type") or "").upper() in {"EQ", "INDICES", ""}),
+                None,
+            )
+            if exact is not None:
+                meta = InstrumentMeta(
+                    underlying=underlying,
+                    quote_currency="INR",
+                    contract_multiplier=1.0,
+                    tick_size=float(exact.get("tick_size") or 0.05),
+                    strike_step=1.0,
+                    has_options=True,
+                    exchange="zerodha",
+                    exchange_currency="INR",
+                    index_name=str(exact.get("tradingsymbol") or underlying),
+                    zerodha_token=int(exact.get("instrument_token") or 0),
+                    zerodha_symbol=f"{exchange}:{exact.get('tradingsymbol') or underlying}",
+                    lot_size=int(exact.get("lot_size") or 1),
+                )
+                break
+        if meta is None:
+            raise RuntimeError(f"No Kite instrument matches {underlying} (tried {', '.join(tried)})")
+    _META_CACHE[underlying] = (time.time(), meta)
+    return meta
+
 
 
 class _HistoricalPacer:
@@ -719,7 +778,6 @@ async def scan_kite_leaders(
         raise ValueError("the 09:15 one-minute candle is not complete until 09:16 IST")
 
     from app.services.exchanges.kite import accounts
-    from app.services.nifty_orb_scanner import _kite_instrument
 
     account = accounts.get_active(normalized_uid)
     if not account:

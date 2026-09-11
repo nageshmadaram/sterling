@@ -556,38 +556,7 @@ def _pick_moneyness(config: Optional["SimConfig"]) -> str:
     return "ATM"
 
 
-def _live_orb_direction(history: List[Dict], bar_dt) -> Optional[str]:
-    """LONG/SHORT from the live ORB engine, or None.
 
-    Replay used to clone ORB with a 4-bar VWAP test the production engine
-    would never fire. Same tickets require the same ``generate_signal``.
-    """
-    from dataclasses import replace
-    from datetime import timezone, timedelta
-    from app.engines.nifty_orb_options import Bar, StrategyConfig, generate_signal
-    from app.services.nifty_orb_options import get_config
-
-    ist = bar_dt.tzinfo or timezone(timedelta(hours=5, minutes=30))
-    bars = []
-    for b in history:
-        ts = datetime.fromtimestamp(int(b["time"]), tz=ist)
-        bars.append(Bar(
-            timestamp=ts,
-            open=float(b["open"]),
-            high=float(b["high"]),
-            low=float(b["low"]),
-            close=float(b["close"]),
-            volume=float(b.get("volume") or 0),
-        ))
-    try:
-        cfg = replace(get_config(), enabled=True)
-    except Exception:
-        cfg = StrategyConfig()
-    try:
-        sig = generate_signal(bars, cfg)
-    except ValueError:
-        return None
-    return sig.direction if sig.direction in ("LONG", "SHORT") else None
 
 
 def _expiry_from_synthetic_contract(name: str) -> str:
@@ -1655,7 +1624,7 @@ class SimulationRunner:
         # session. Without this flag an idle runner handed every client a
         # completed session's signals and trades, which the dock rendered as
         # though the replay were live — results before you pressed play.
-        self._session_complete = bool(self._stats.events or self._stats.trades)
+        self._session_complete = True
         self._publish_frame(force=True)
         self._publish_state()
         return self.status
@@ -1960,8 +1929,6 @@ class SimulationRunner:
                 if adaptive_src in ("ae_model", "ae"):
                     return
                 strat_to_emit = "adaptive_edge"
-            elif is_spot and "bear_to_bearish" in cfg_strats and rec.get("direction") in ("BEARISH", "SHORT", "SELL"):
-                strat_to_emit = "bear_to_bearish"
             elif is_spot and "supertrend" in cfg_strats:
                 strat_to_emit = "supertrend"
             else:
@@ -2453,7 +2420,7 @@ class SimulationRunner:
             if not self._stop_requested and (not generation or generation == self._run_generation):
                 self._state = SimState.IDLE
                 self._close_all_open("reached session end")
-                self._session_complete = bool(self._stats.events or self._stats.trades)
+                self._session_complete = True
                 if all_bars and bar_idx >= len(all_bars):
                     self._progress = 100.0
                     last_b = all_bars[-1]
@@ -2548,15 +2515,26 @@ class SimulationRunner:
         cfg_strats = [s.strip().lower() for s in (self._config.strategies if self._config and self._config.strategies else (self._config.strategy.split(",") if self._config and self._config.strategy else ["all"]))]
         allow_all = "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
 
+        # KITE-SIGNALS strategy selection rules:
+        #  - allow_all: show every event the simulation produced across all strategies.
+        #  - specific strategy: show events for that strategy AND always keep
+        #    supertrend/spot_scan/kite_engine events that have an authentic recorded-
+        #    signal entry so the live-scanner signals panel is not blanked when the
+        #    user picks "Adaptive Edge" in the replay settings.
+        _KITE_STRATEGIES = frozenset(("supertrend", "spot_scan", "kite_engine"))
         if allow_all:
             kite_events = list(self._stats.events)
-            kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine")]
         else:
-            kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in cfg_strats]
+            # Primary: events whose strategy matches the replay config selection
+            primary = [ev for ev in self._stats.events if ev.strategy.lower() in cfg_strats]
+            # Secondary: recorded-signal events (live SuperTrend/spot scan) — keep them
+            # visible so the signals table isn't blanked by an unrelated strategy filter.
+            secondary = [ev for ev in self._stats.events
+                         if ev.strategy.lower() in _KITE_STRATEGIES and ev not in primary]
+            kite_events = primary + secondary
             if not kite_events:
+                # Nothing matched at all — fall back to showing everything.
                 kite_events = list(self._stats.events)
-            if not kite_events and any(ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine") for ev in self._stats.events):
-                kite_events = [ev for ev in self._stats.events if ev.strategy.lower() in ("supertrend", "spot_scan", "kite_engine")]
 
 
         from app.services.ohlcv_store import INDEX_ALIASES
@@ -3133,152 +3111,7 @@ class SimulationRunner:
             "warnings": [],
         }
 
-    def get_atm_imbalance_snapshot(self) -> Dict[str, Any]:
-        """Return snapshot for ATM Premium Imbalance strategy during simulation."""
-        now_ms = int(time.time() * 1000)
-        atm_events = self._events_for("atm_imbalance")
-        first_event = atm_events[0] if atm_events else None
-        sym = first_event.instrument if first_event else "NIFTY"
-        price = first_event.entry if first_event else 24175.0
-        strike_val = round(price / 50.0) * 50.0
 
-        return {
-            "strategy": {
-                "id": "atm_premium_imbalance",
-                "name": "ATM Premium Imbalance",
-                "contract_version": "v1",
-                "tagline": "Exploits institutional ATM CE/PE premium skew",
-                "how_it_works": "Monitors ATM CE vs PE premium divergence during market replay.",
-                "provenance": "Sterling Quantitative Research",
-                "live_ready": True,
-                "enabled": True,
-            },
-            "config": {
-                "enabled": True,
-                "underlying": sym,
-                "expiry_policy": "SAME_DAY",
-                "explicit_expiry": "2026-08-28",
-                "strike_policy": "ATM",
-                "session_start": "09:15:00",
-                "session_end": "15:30:00",
-                "quote_mode": "SYNCHRONIZED",
-                "sizing_mode": "LOTS",
-                "lots": 1,
-                "stop_basis": "PERCENT",
-                "stop_percent": 15.0,
-                "signal_mode": "SKEW_BREAKOUT",
-                "minimum_difference": 10.0,
-                "data_source": "kite",
-                "execution_mode": "paper",
-            },
-            "defaults": {},
-            "vocabularies": {},
-            "research_only": {"entry_price_policy": [], "exit_policy": []},
-            "live_blockers": [],
-            "session": {
-                "armed": True,
-                "finished": False,
-                "session_date": self._config.date if self._config else "2026-08-28",
-                "session_open_ms": now_ms - 3600000,
-                "phase": "ARMED",
-                "halt_reason": None,
-                "underlying": sym,
-                "expiry": "2026-08-28",
-                "strike": strike_val,
-                "quantity": 25,
-                "execution_mode": "paper",
-                "quote_mode": "SYNCHRONIZED",
-                "protection_mode": "RESTING_TARGET_LIMIT",
-                "trades_taken": len(atm_events),
-                "legs": {
-                    "CE": {
-                        "instrument_id": f"NSE:{sym}26AUG{int(strike_val)}CE",
-                        "tradingsymbol": f"{sym}26AUG{int(strike_val)}CE",
-                        "option_type": "CE",
-                        "lot_size": 25,
-                        "ltp": round(price * 0.02, 2),
-                        "bid": round(price * 0.019, 2),
-                        "ask": round(price * 0.021, 2),
-                        "last_trade_ts_ms": now_ms,
-                        "session_origin": True,
-                        "age_ms": 100,
-                        "official_open": round(price * 0.02, 2),
-                    },
-                    "PE": {
-                        "instrument_id": f"NSE:{sym}26AUG{int(strike_val)}PE",
-                        "tradingsymbol": f"{sym}26AUG{int(strike_val)}PE",
-                        "option_type": "PE",
-                        "lot_size": 25,
-                        "ltp": round(price * 0.015, 2),
-                        "bid": round(price * 0.014, 2),
-                        "ask": round(price * 0.016, 2),
-                        "last_trade_ts_ms": now_ms,
-                        "session_origin": True,
-                        "age_ms": 100,
-                        "official_open": round(price * 0.015, 2),
-                    },
-                },
-                "difference": round(price * 0.005, 2),
-                "cheaper_leg": "PE",
-                "signal": {
-                    "action": "BUY_CE" if (first_event and first_event.direction == "BULLISH") else "BUY_PE",
-                    "reason": "Premium skew divergence exceeds minimum threshold",
-                    "option_type": "CE" if (first_event and first_event.direction == "BULLISH") else "PE",
-                },
-                "trade": None,
-            },
-        }
-
-    def get_bear_to_bearish_snapshot(self) -> Dict[str, Any]:
-        """Return snapshot for Bear to Bearish Strategy during simulation."""
-        now_ms = int(time.time() * 1000)
-        rows = []
-        for ev in self._events_for("bear_to_bearish"):
-            ev_ms = ev.timestamp_ms if ev.timestamp_ms > 0 else now_ms
-            strike_val = round(ev.entry / 50.0) * 50.0
-            rows.append({
-                "id": f"bear_sim_{ev.instrument}_{ev.time_iso}",
-                "underlying": ev.instrument,
-                "symbol": f"{ev.instrument}26AUG{int(strike_val)}PE",
-                "exchange": "NFO",
-                "direction": "BEARISH",
-                "status": "ARMED" if ev.strength == "STRONG" else "ACTIVE",
-                "timestamp_ms": ev_ms,
-                "pcr_open": 1.15,
-                "pcr_current": 0.72,
-                "pcr_change_5m": -0.08,
-                "lower_high_price": round(ev.entry * 1.005, 2),
-                "spot_price": ev.entry,
-                "spot_sl": ev.stop,
-                "spot_target": ev.target,
-                "option_premium": round(ev.entry * 0.02, 2),
-                "entry_price": ev.entry,
-                "stop_loss": ev.stop,
-                "target_price": ev.target,
-                "score": 92 if ev.strength == "STRONG" else 75,
-                "reason": "PCR breakdown below 0.80 + Lower-high structure breach",
-                "option_type": "PE",
-                "strike": strike_val,
-                "expiry": "2026-08-28",
-                "lot_size": 25 if ev.instrument == "NIFTY" else 15,
-                "quote_key": f"NSE:{ev.instrument}",
-            })
-        return {
-            "generated_ms": now_ms,
-            "scanning": False,
-            "scanning_label": "SIMULATION_REPLAY",
-            "rows": rows,
-            "pcr_history": [{"timestamp_ms": now_ms - 300000, "pcr": 0.85}, {"timestamp_ms": now_ms, "pcr": 0.72}],
-            "config": {
-                "pcr_threshold": 0.80,
-                "auto_execute": False,
-            },
-            "next_scan_ms": 0,
-            "auto_scan": False,
-            "market_open": True,
-            "is_paper": True,
-            "auto_execute": False,
-        }
 
     def get_gamma_move_snapshot(self) -> Dict[str, Any]:
         """Live board schema. Only events this engine actually emitted.
@@ -3484,61 +3317,7 @@ class SimulationRunner:
             "warnings": warnings,
         }
 
-    def get_nifty_orb_signals_response(self) -> Dict[str, Any]:
-        """Scan-shaped tickets the live board already knows how to render.
 
-        The previous payload had no nested ``signal``/``trade``, so the adapter
-        classified every replay row as ``scan failed``.
-        """
-        from app.services.nifty_orb_lifecycle import attach_ticket
-        from datetime import datetime, timezone, timedelta
-
-        ist = timezone(timedelta(hours=5, minutes=30))
-        signals = []
-        for ev in self._stats.events:
-            if getattr(ev, "strategy", None) != "nifty_orb":
-                continue
-            direction = "LONG" if ev.direction in ("BULLISH", "LONG") else "SHORT"
-            opt = ev.opt_type or ("CE" if direction == "LONG" else "PE")
-            ts = datetime.fromtimestamp((ev.timestamp_ms or 0) / 1000, tz=ist)
-            leg = _option_contract(ev.instrument, float(ev.spot or ev.entry or 0), ev.direction, self._config)
-            symbol = ev.contract or leg["contract"]
-            qty = int(leg["lot_size"] or 0)
-            premium = float(ev.premium_entry or leg["premium"] or 0)
-            row: Dict[str, Any] = {
-                "status": "signal" if symbol and premium > 0 else "signal_unresolved",
-                "underlying": ev.instrument,
-                "spot": ev.spot or ev.entry,
-                "signal": {
-                    "direction": direction,
-                    "timestamp": ts.isoformat(),
-                    "reason": "replay",
-                },
-                "exchange": "NFO",
-                "lot_size": qty,
-                "auto_block": "replay — Auto does not place from simulation",
-            }
-            if symbol and premium > 0:
-                row["trade"] = {
-                    "quantity": qty,
-                    "entry_premium": premium,
-                    "stop_premium": ev.premium_sl,
-                    "target_premium": ev.premium_target,
-                    "underlying_entry": ev.spot or ev.entry,
-                    "max_loss_inr": round(premium * qty, 2),
-                    "contract": {
-                        "symbol": symbol,
-                        "option_type": opt,
-                        "strike": ev.strike or leg["strike"],
-                        "expiry": _expiry_from_synthetic_contract(symbol),
-                        "lot_size": qty,
-                        "ltp": premium,
-                        "ask": premium,
-                    },
-                }
-                attach_ticket(row)
-            signals.append(row)
-        return {"count": len(signals), "signals": signals}
 
     def _evaluate_bar(self, bar: Dict, bar_dt):
         """Evaluate strategy signals on every replay bar.
@@ -3830,18 +3609,6 @@ class SimulationRunner:
             except Exception as e:
                 log.debug("Adaptive Edge bar evaluation error for %s: %s", sym, e)
 
-        # 4. Bear to Bearish: Canonical Lower Highs Breakdown (detect_lower_highs)
-        if len(history) >= 10:
-            from app.engines.bear_to_bearish.strategy import detect_lower_highs
-            has_lh, latest_peak, prev_peak = detect_lower_highs(history)
-            prior_support = min(float(b["low"]) for b in history[-6:-1])
-            if has_lh and close < prior_support and close < opens and rsi < 48:
-                signals_to_fire.append({
-                    "strategy": "bear_to_bearish",
-                    "direction": "BEARISH",
-                    "strength": "STRONG",
-                })
-
         # 4b. Gamma Move: shipped daily level+regime gates on a stock.
         # The 15m OI trigger cannot run on this tape, so strength stays WATCHING.
         try:
@@ -3860,32 +3627,6 @@ class SimulationRunner:
                 signals_to_fire.append(gm)
         except Exception as exc:
             log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
-
-        # 5. ATM Premium Imbalance: opening-window session trade, max 1/day.
-        #
-        # Restricted to INDICES. It used to run on every instrument in the
-        # window, so the default twenty-name universe produced twenty STRONG
-        # signals and twenty positions before 09:30 every session, diluting
-        # every aggregate the dock reports. ATM Premium Imbalance is an index
-        # strategy; on a stock it was noise wearing its name.
-        #
-        # The direction test below is still `close >= opens`, which is a
-        # placeholder, not the shipped rule — the real engine reads the ATM
-        # call/put premium spread, which this tape does not carry. The row is
-        # therefore indicative of timing, not of the live signal.
-        is_open_window = "09:15:00" <= bar_time_str <= "09:30:00"
-        atm_already_traded = any(
-            ev.strategy == "atm_imbalance"
-            and ev.instrument == sym
-            and datetime.fromtimestamp(ev.timestamp_ms / 1000, tz=ist).date() == bar_dt.date()
-            for ev in self._stats.events
-        )
-        if is_open_window and not atm_already_traded and len(history) >= 2 and _is_index(sym):
-            signals_to_fire.append({
-                "strategy": "atm_imbalance",
-                "direction": "BULLISH" if close >= opens else "BEARISH",
-                "strength": "STRONG",
-            })
 
         # 6. Navigator: Canonical Session-Anchored VWAP Cross
         session_bars = [b for b in history if datetime.fromtimestamp(b["time"], tz=ist).date() == bar_dt.date()]
@@ -3920,28 +3661,6 @@ class SimulationRunner:
                         "direction": "BEARISH",
                         "strength": "STRONG",
                     })
-
-        # 7. Nifty ORB — live engine, not a replay-local clone.
-        orb_trades_today = sum(
-            1 for ev in self._stats.events
-            if ev.strategy == "nifty_orb"
-            and ev.instrument == sym
-            and datetime.fromtimestamp(ev.timestamp_ms / 1000, tz=ist).date() == bar_dt.date()
-        )
-        if orb_trades_today < 2 and "09:30:00" <= bar_time_str <= "12:00:00":
-            live = _live_orb_direction(history, bar_dt)
-            if live == "LONG":
-                signals_to_fire.append({
-                    "strategy": "nifty_orb",
-                    "direction": "BULLISH",
-                    "strength": "STRONG",
-                })
-            elif live == "SHORT":
-                signals_to_fire.append({
-                    "strategy": "nifty_orb",
-                    "direction": "BEARISH",
-                    "strength": "STRONG",
-                })
 
         # Track recent signals per (symbol, strategy) to prevent flood
         if not hasattr(self, '_last_fired'):

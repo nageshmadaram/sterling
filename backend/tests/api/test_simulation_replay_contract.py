@@ -910,7 +910,6 @@ def test_v2_trade_management_does_not_reach_other_strategies():
     runner._config = SimConfig(date="2026-09-10", adaptive_version="v2_hardened")
     assert runner._is_ae_v2("adaptive_edge") is True
     assert runner._is_ae_v2("supertrend") is False
-    assert runner._is_ae_v2("nifty_orb") is False
 
 
 def test_adaptive_version_defaults_to_the_declared_default():

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.auth import UserContext, get_current_user
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 from app.engines.opening_volume_decision import OpeningDecisionConfig, WEIGHTS
 from app.engines.opening_volume_leaders import (
     STRATEGY_CONTRACT,

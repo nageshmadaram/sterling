@@ -48,9 +48,6 @@ vi.mock('../useNavigator', () => ({
 vi.mock('../useGammaMove', () => ({
   useGammaMoveScan: () => ({ mutateAsync: runner('gamma_move'), isPending: false }),
 }));
-vi.mock('../useOiWallFlow', () => ({
-  useOiWallFlowScan: () => ({ mutateAsync: runner('oi_wall_flow'), isPending: false }),
-}));
 vi.mock('../../utils/api', () => ({
   api: { post: (url: string) => runner(url.includes('adaptive-edge') ? 'adaptive_edge' : url)() },
 }));
@@ -59,9 +56,6 @@ import { useScanAllStrategies, SCANNABLE_ENGINE_LABEL } from '../useScanAllStrat
 
 function harness() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  // ORB's scan is a polling query that POSTs, so it is triggered by refetching
-  // its key rather than by a mutate. Register it so the refetch has something.
-  qc.setQueryDefaults(['nifty-orb-options-scan'], { queryFn: runner('orb') as never });
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
@@ -122,19 +116,7 @@ describe('useScanAllStrategies', () => {
     expect(results[0].error).toContain('refused');
   });
 
-  it('lists OI Wall Flow among the scannable engines', () => {
-    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toContain('oi_wall_flow');
-  });
-
   it('publishes which engine it is on, so the status line can name it', async () => {
-    // Four of the five publish no progress of their own. Without this the dock's
-    // status line has nothing to report while they run and falls back to "AUTO"
-    // in the middle of a sweep, which reads as nothing happening.
-    //
-    // Observed by SUBSCRIBING to the store rather than by instrumenting a runner:
-    // a `vi.doMock` after the module has been imported does not reach the already
-    // bound runner, so the first version of this test watched nothing and compared
-    // two empty arrays.
     const seen: Array<string | null> = [];
     const unsubscribe = useScanActivity.subscribe((s) => seen.push(s.current));
     const { result } = harness();
@@ -164,9 +146,7 @@ describe('useScanAllStrategies', () => {
     expect(useScanActivity.getState().current).toBeNull();
   });
 
-  it('includes ATM Premium Imbalance in scannable engines', () => {
-    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toContain('atm_imbalance');
-    // 8, not 7: this branch adds OI Wall Flow alongside the engines main registered.
-    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toHaveLength(8);
+  it('contains expected scannable engines', () => {
+    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toEqual(['supertrend', 'navigator', 'gamma_move', 'adaptive_edge']);
   });
 });

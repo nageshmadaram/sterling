@@ -16,9 +16,6 @@ CONFIGS = [
     ("supertrend", "app.engines.sterling_kite_engine.schemas", "EngineConfigModel"),
     ("navigator", "app.engines.navigator.schemas", "NavigatorConfigModel"),
     ("gamma_move", "app.engines.gamma_move.config", "GammaMoveConfig"),
-    ("oi_wall_flow", "app.engines.oi_wall_flow.config", "OIWallFlowConfig"),
-    ("atm", "app.engines.atm_premium_imbalance.config", "ATMPremiumImbalanceConfig"),
-    ("nifty_orb", "app.engines.nifty_orb_options", "StrategyConfig"),
 ]
 
 

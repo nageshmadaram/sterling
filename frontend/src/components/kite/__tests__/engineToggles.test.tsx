@@ -16,9 +16,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 const setNavigator = vi.fn();
 const patchSuperTrend = vi.fn();
-const setOrb = vi.fn();
 let navRecord: unknown = { config: { enabled: true, auto_execute_originated: false }, revision: 3 };
-let orbEnabled = true;
 
 vi.mock('../../../hooks/useSterlingKiteEngine', () => ({
   useEngineConfig: () => ({ data: { engine_enabled: true, auto_execute: false } }),
@@ -28,10 +26,6 @@ vi.mock('../../../hooks/useNavigator', () => ({
   useNavigatorConfig: () => ({ data: navRecord ? { record: navRecord } : undefined }),
   useSetNavigatorConfig: () => ({ mutate: setNavigator, isPending: false }),
 }));
-vi.mock('../../../hooks/useOrbConfig', () => ({
-  useOrbConfig: () => ({ data: { config: { enabled: orbEnabled } } }),
-  useSetOrbConfig: () => ({ mutate: setOrb, isPending: false }),
-}));
 vi.mock('../../../hooks/useGammaMove', () => ({
   useGammaMoveConfig: () => ({ data: { config: { enabled: true } } }),
   useUpdateGammaMove: () => ({ mutate: vi.fn(), isPending: false }),
@@ -40,21 +34,13 @@ vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({
-  useAtmPremiumImbalanceConfig: () => ({ data: { config: { enabled: true } } }),
-  useSetAtmPremiumImbalanceConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock('../../../hooks/useBearToBearish', () => ({
-  useBearToBearishConfig: () => ({ data: { enabled: true } }),
-  useUpdateBearToBearishConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
 vi.mock('../TradingModeControls', () => ({ TradingModeControls: () => <div>mode controls</div> }));
 
 import { TradingModePanel } from '../TradingModePanel';
 
 const ENGINES = [
-  'SuperTrend engine', 'Value-Flow Navigator', 'ORB + VWAP',
-  'Gamma Move', 'Adaptive Edge', 'ATM Premium Imbalance', 'Bear to Bearish',
+  'SuperTrend engine', 'Value-Flow Navigator',
+  'Gamma Move', 'Adaptive Edge',
 ];
 
 /**
@@ -72,20 +58,17 @@ function switchFor(label: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   navRecord = { config: { enabled: true, auto_execute_originated: false }, revision: 3 };
-  orbEnabled = true;
 });
 afterEach(cleanup);
 
 describe('What is running', () => {
-  it('names every engine, not just the two that had controls', () => {
+  it('names every engine', () => {
     render(<TradingModePanel />);
     for (const label of ENGINES) expect(switchFor(label)).toBeInTheDocument();
   });
 
   it('offers a switch for each of them', () => {
     render(<TradingModePanel />);
-    // Six switches in this section, one per engine. Previously two controls, only
-    // one of which was a switch.
     for (const label of ENGINES) expect(switchFor(label)).toBeInTheDocument();
   });
 
@@ -99,12 +82,6 @@ describe('What is running', () => {
     fireEvent.click(switchFor('SuperTrend engine'));
     // `engine_enabled`, not `enabled` — this engine predates the convention.
     expect(patchSuperTrend).toHaveBeenCalledWith({ engine_enabled: false });
-  });
-
-  it('switches ORB off with a plain enabled flag', () => {
-    render(<TradingModePanel />);
-    fireEvent.click(switchFor('ORB + VWAP'));
-    expect(setOrb).toHaveBeenCalledWith({ enabled: false });
   });
 
   it('sends Navigator its whole config and the revision it was read at', () => {

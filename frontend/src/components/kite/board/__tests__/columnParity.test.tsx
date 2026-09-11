@@ -21,10 +21,8 @@ import { SignalBoard, BOARD_COLUMNS, DEFAULT_HIDDEN_COLUMNS, visibleColumns, COL
 import type { BoardSignal } from '../boardTypes';
 import { BoardTicket } from '../BoardTicket';
 import { supertrendToBoard } from '../supertrendAdapter';
-import { orbToBoard } from '../orbAdapter';
 import { adaptiveEdgeToBoard } from '../adaptiveEdgeAdapter';
 import type { EngineSignalRow, OptionLeg } from '../../../../types/kiteEngine';
-import type { OrbFeedEntry } from '../../../../utils/niftyOrbSignalAdapter';
 import type { AdaptiveEdgeRow } from '../../AdaptiveEdgePanel';
 
 const IST = (5 * 60 + 30) * 60_000;
@@ -42,19 +40,6 @@ const stRow: EngineSignalRow = {
   timestamp_ms: NOW, is_active: true, source: 'spot',
 };
 
-const orbEntry: OrbFeedEntry = {
-  id: 'ORB-1', strategy: 'ORB', underlying: 'NIFTY', direction: 'long', state: 'SIGNAL',
-  spot: 24100, orbHigh: 24120, orbLow: 24000, vwap: 24050, atr: 30, volumeRatio: 1.4,
-  optionSymbol: 'NIFTY26AUG24100CE', optionStrike: 24100, optionType: 'CE',
-  optionExpiry: '2026-08-27', optionPremium: 180, stopPremium: 140, targetPremium: 260,
-  quantity: 150, riskInr: 3000, maxLossInr: 27000, deltaIsEstimated: true,
-  deltaSource: 'implied', delta: 0.56, impliedVol: 0.11, gamma: 0.0009,
-  thetaPerDay: -10, vegaPerPoint: 16.9, exchange: 'NFO', lotSize: 75,
-  underlyingEntry: 24120, underlyingStop: 24030, dataSource: 'kite',
-  quoteAgeS: 3, reason: null, timestamp: new Date(NOW).toISOString(),
-  vwapBasis: 'volume', volumeConfirmed: true,
-};
-
 const aeRow: AdaptiveEdgeRow = {
   id: 'ae-1', parentId: 'p1', kind: 'option', origin: 'spot_scan' as AdaptiveEdgeRow['origin'],
   instrument: 'TCS26AUG3200CE', exchange: 'NFO', moneyness: 'ATM', optionType: 'CE',
@@ -70,7 +55,6 @@ const aeRow: AdaptiveEdgeRow = {
 /** Same shape every board is mounted with. */
 const boards: Record<string, BoardSignal[]> = {
   supertrend: supertrendToBoard([stRow]),
-  orb: [orbToBoard(orbEntry)],
   adaptive_edge: adaptiveEdgeToBoard([aeRow]),
 };
 
@@ -101,7 +85,7 @@ describe('column parity across engines', () => {
   it('opens on SuperTrend’s own column names, in its order', () => {
     // Labels and widths come from signalRowSpec, the table SuperTrend's rows
     // use, so a cell sits in the same place whichever board you are on.
-    expect(headersOf(boards.orb, DEFAULTS)).toEqual([
+    expect(headersOf(boards.supertrend, DEFAULTS)).toEqual([
       'Instrument', 'Status', 'Exc.', 'Leg (Δ)', 'Entry (Δpts)', 'SL', 'TSL', 'Target', 'Exited', 'LTP', 'Time',
       // Trade and Chart are columns now, on every board rather than only the one
       // whose bespoke table happened to have them. They are hideable like any
@@ -112,11 +96,7 @@ describe('column parity across engines', () => {
   });
 
   it('keeps a column an engine cannot fill, rather than differing', () => {
-    // ORB does not trail. The TSL column stays and reads as dashes, which
-    // says so — the alternative is a board that silently differs from the
-    // one beside it.
-    expect(headersOf(boards.orb, DEFAULTS)).toContain('TSL');
-    expect(boards.orb[0].levels.trail).toBeNull();
+    expect(headersOf(boards.supertrend, DEFAULTS)).toContain('TSL');
   });
 
   it('offers the same extras to every board', () => {
@@ -138,8 +118,8 @@ describe('column parity across engines', () => {
   it('hides the engine tag on a single-engine board and shows it on a mixed one', () => {
     // The one column that still comes and goes, because on a single-engine
     // board it repeats the same three letters down every row.
-    const mixed = [...boards.orb, ...boards.adaptive_edge];
-    expect(visibleColumns(boards.orb, BOARD_COLUMNS).map((c) => c.id)).not.toContain('engine');
+    const mixed = [...boards.supertrend, ...boards.adaptive_edge];
+    expect(visibleColumns(boards.supertrend, BOARD_COLUMNS).map((c) => c.id)).not.toContain('engine');
     expect(visibleColumns(mixed, BOARD_COLUMNS).map((c) => c.id)).toContain('engine');
   });
 });
@@ -171,12 +151,7 @@ describe('expanded-row parity across engines', () => {
     const container = expand(boards[name]);
     const labels = [...container.querySelectorAll('button')].map((b) => b.textContent!.trim());
     expect(labels, `${name} has no BUY`).toContain('BUY');
-    if (name === 'orb') {
-      // Long-options-only: closing a held option is Positions, not this row.
-      expect(labels, `${name} must not offer Sell-to-open`).not.toContain('SELL');
-    } else {
-      expect(labels, `${name} has no SELL`).toContain('SELL');
-    }
+    expect(labels, `${name} has no SELL`).toContain('SELL');
   });
 
   it('offers sizing on every board', () => {
@@ -208,11 +183,6 @@ describe('each engine states its own provenance', () => {
 
   it('reads SuperTrend’s as the scan that found it', () => {
     expect(boards.supertrend[0].origin!.label).toBe('SPOT');
-  });
-
-  it('reads ORB’s as the feed behind the numbers', () => {
-    // ORB is configurable between Kite and TrueData, and the two disagree.
-    expect(boards.orb[0].origin!.label).toBe('KITE');
   });
 
   it('reads Adaptive Edge’s as which model produced it', () => {

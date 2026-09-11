@@ -93,7 +93,7 @@ def test_execution_candidate_gate_accepts_only_complete_decisions():
 
 @pytest.mark.asyncio
 async def test_paper_execution_is_sized_idempotent_and_protected(monkeypatch):
-    from app.services import live_safety, nifty_orb_execution
+    from app.services import live_safety, opening_volume_execution
     from app.services.exchanges.kite import accounts
     from app.services.kite_engine import positions, protection, state as engine_state
     from app.services.kite_engine import service as kite_service
@@ -156,7 +156,7 @@ async def test_paper_execution_is_sized_idempotent_and_protected(monkeypatch):
         lambda _client: _async_value(500_000.0),
     )
     monkeypatch.setattr(
-        nifty_orb_execution,
+        opening_volume_execution,
         "_find_contract",
         lambda *_: _async_value(
             (
@@ -172,7 +172,7 @@ async def test_paper_execution_is_sized_idempotent_and_protected(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        nifty_orb_execution,
+        opening_volume_execution,
         "_fresh_quote",
         lambda *_: _async_value(
             {
@@ -187,7 +187,7 @@ async def test_paper_execution_is_sized_idempotent_and_protected(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        nifty_orb_execution,
+        opening_volume_execution,
         "_existing_order_by_tag",
         lambda *_: _async_value((True, None)),
     )
@@ -195,7 +195,7 @@ async def test_paper_execution_is_sized_idempotent_and_protected(monkeypatch):
     def no_paper_poll(*_args):
         raise AssertionError("paper execution must not poll a fake broker order")
 
-    monkeypatch.setattr(nifty_orb_execution, "_resolve_fill", no_paper_poll)
+    monkeypatch.setattr(opening_volume_execution, "_resolve_fill", no_paper_poll)
     monkeypatch.setattr(
         protection,
         "arm_position",

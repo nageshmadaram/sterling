@@ -74,7 +74,6 @@ describe('every engine panel actually passes the window', () => {
     ['SuperTrendEnginePanel.tsx', PANEL_SOURCE],
     ['NavigatorSettingsPanel.tsx', PANEL_SOURCE],
     ['AdaptiveEdgeSettingsPanel.tsx', PANEL_SOURCE],
-    ['NiftyOrbOptionsSettings.tsx', ENGINE_SOURCE],
   ])('%s passes dteMin/dteMax/avoidExpiryDay to expiry/contracts controls', (file, dir) => {
     const src = sourceOf(dir, file);
     expect(src.includes('<ContractsGroup') || src.includes('<ExpirySettingsGroup')).toBe(true);
@@ -85,7 +84,6 @@ describe('every engine panel actually passes the window', () => {
 
   it.each([
     'GammaMoveSettings.tsx',
-    'AtmPremiumImbalanceSettings.tsx',
   ])('%s carries the same three labels', (file) => {
     /* These build their own Contracts section rather than using
        ContractsGroup — they resolve a single contract rather than a ladder — so
@@ -93,13 +91,6 @@ describe('every engine panel actually passes the window', () => {
     const src = sourceOf(ENGINE_SOURCE, file);
     for (const label of ['Minimum days to expiry', 'Maximum days to expiry', 'Expiry day']) {
       expect(src, `${file} is missing "${label}"`).toContain(label);
-    }
-  });
-
-  it('BearToBearishSettingsPanel.tsx carries the same three labels', () => {
-    const src = sourceOf(PANEL_SOURCE, 'BearToBearishSettingsPanel.tsx');
-    for (const label of ['Minimum days to expiry', 'Maximum days to expiry', 'Expiry day']) {
-      expect(src, `BearToBearishSettingsPanel.tsx is missing "${label}"`).toContain(label);
     }
   });
 });

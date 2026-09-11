@@ -23,10 +23,7 @@ export const REPLAY_STRATEGIES: readonly ReplayStrategy[] = [
   { id: 'supertrend', label: 'SuperTrend', tone: 'var(--k-blue)' },
   { id: 'vcp', label: 'VCP Squeeze', tone: 'var(--k-violet)' },
   { id: 'adaptive_edge', label: 'Adaptive Edge', tone: 'var(--k-cyan)' },
-  { id: 'bear_to_bearish', label: 'Bear to Bearish', tone: 'var(--k-purple)' },
-  { id: 'atm_imbalance', label: 'ATM Imbalance', tone: 'var(--k-amber)' },
   { id: 'navigator', label: 'Navigator', tone: 'var(--k-emerald)' },
-  { id: 'nifty_orb', label: 'NIFTY ORB', tone: 'var(--k-orange)' },
   { id: 'gamma_move', label: 'Gamma Move', tone: 'var(--k-violet)' },
 ] as const;
 

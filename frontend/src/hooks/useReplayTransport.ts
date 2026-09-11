@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, QueryClient } from '@tanstack/react-query';
 import {
   ReplayDraft,
   ReplayStatus,
@@ -116,6 +116,28 @@ function clearFeedCache() {
   }
 }
 
+/**
+ * Invalidate only the queries that the simulation engine affects.
+ *
+ * The previous implementation called `queryClient.invalidateQueries()` with no
+ * arguments, which nukes the entire React Query cache — including the live
+ * SuperTrend signals table. When the simulation backend immediately returns
+ * simulation-only rows (filtered to the replay strategy), the live scanner rows
+ * for OTHER strategies disappeared from the signals panel.
+ *
+ * Targeted invalidation lets the signals board re-fetch the merged
+ * live-scanner + simulation response (now handled by the backend) without
+ * clearing unrelated caches like portfolio, orders, or positions.
+ */
+function invalidateSimRelatedQueries(queryClient: QueryClient | null | undefined) {
+  if (!queryClient) return;
+  void queryClient.invalidateQueries({ queryKey: ['kite-engine-signals'] });
+  void queryClient.invalidateQueries({ queryKey: ['adaptive-edge-engine-snapshot'] });
+  void queryClient.invalidateQueries({ queryKey: ['adaptive-edge-engine-positions'] });
+  void queryClient.invalidateQueries({ queryKey: ['navigator-signals'] });
+  void queryClient.invalidateQueries({ queryKey: ['simulation-status'] });
+}
+
 export interface ReplayTransport {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -180,7 +202,7 @@ export function useReplayTransport(): ReplayTransport {
     try {
       const status = await call('/start', config);
       store.setStatus(status);
-      queryClient?.invalidateQueries();
+      invalidateSimRelatedQueries(queryClient);
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
       if (!(await confirmStarted())) {
         const current = useReplayStore.getState().status;
@@ -208,7 +230,7 @@ export function useReplayTransport(): ReplayTransport {
           clearFeedCache();
           const status = await call('/start', { ...config });
           store.setStatus(status);
-          queryClient?.invalidateQueries();
+          invalidateSimRelatedQueries(queryClient);
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
           if (!(await confirmStarted())) {
             const current = useReplayStore.getState().status;
@@ -238,7 +260,7 @@ export function useReplayTransport(): ReplayTransport {
     try {
       const status = await call('/stop');
       store.setStatus(status);
-      queryClient?.invalidateQueries();
+      invalidateSimRelatedQueries(queryClient);
       window.dispatchEvent(new CustomEvent('sterling-simulation-stop'));
       if (status.stats.signals_fired > 0) store.setSummaryOpen(true);
     } catch (err: any) {

@@ -16,15 +16,11 @@
 import { describe, it, expect } from 'vitest';
 import adaptiveEdge from '../AdaptiveEdgeBoard.tsx?raw';
 import gammaMove from '../GammaMoveBoard.tsx?raw';
-import atmPremium from '../AtmPremiumImbalanceBoard.tsx?raw';
-import orbFeed from '../../NiftyOrbSignalsFeed.tsx?raw';
 import superTrendShared from '../../SuperTrendSharedBoard.tsx?raw';
 
 const BOARDS: Array<[string, string]> = [
   ['Adaptive Edge', adaptiveEdge],
   ['Gamma Move', gammaMove],
-  ['ATM Premium Imbalance', atmPremium],
-  ['ORB + VWAP', orbFeed],
   ['SuperTrend (shared)', superTrendShared],
 ];
 

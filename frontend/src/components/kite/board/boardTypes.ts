@@ -17,18 +17,13 @@
  */
 import type { Stat } from './StatCard';
 
-export type EngineId = 'supertrend' | 'navigator' | 'adaptive_edge' | 'orb'
-  | 'atm_premium_imbalance' | 'gamma_move' | 'oi_wall_flow' | 'bear_to_bearish';
+export type EngineId = 'supertrend' | 'navigator' | 'adaptive_edge' | 'gamma_move';
 
 export const ENGINE_LABEL: Record<EngineId, string> = {
   supertrend: 'SuperTrend',
   navigator: 'Navigator',
   adaptive_edge: 'Adaptive Edge',
-  orb: 'ORB + VWAP',
-  atm_premium_imbalance: 'ATM Premium Imbalance',
   gamma_move: 'Gamma Move',
-  oi_wall_flow: 'OI Wall Flow',
-  bear_to_bearish: 'Bear to Bearish',
 };
 
 /** Short form for a badge, where the full name will not fit. */
@@ -36,11 +31,7 @@ export const ENGINE_TAG: Record<EngineId, string> = {
   supertrend: 'ST',
   navigator: 'NAV',
   adaptive_edge: 'AE',
-  orb: 'ORB',
-  atm_premium_imbalance: 'API',
   gamma_move: 'GM',
-  oi_wall_flow: 'OWF',
-  bear_to_bearish: 'BTB',
 };
 
 /**

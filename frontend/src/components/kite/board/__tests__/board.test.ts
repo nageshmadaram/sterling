@@ -9,9 +9,7 @@ import {
 } from '../boardTypes';
 import { visibleColumns, isMixedEngine, COLUMNS } from '../SignalBoard';
 import { supertrendLegToBoard } from '../supertrendAdapter';
-import { orbToBoard } from '../orbAdapter';
 import type { EngineSignalRow, OptionLeg } from '../../../../types/kiteEngine';
-import type { OrbFeedEntry } from '../../../../utils/niftyOrbSignalAdapter';
 
 const IST_OFFSET = (5 * 60 + 30) * 60_000;
 /** 2026-08-21 10:30 IST. */
@@ -19,7 +17,7 @@ const NOW = Date.UTC(2026, 7, 21, 10, 30) - IST_OFFSET;
 
 function signal(over: Partial<BoardSignal> = {}): BoardSignal {
   return {
-    id: 'x', engine: 'orb', underlying: 'NIFTY',
+    id: 'x', engine: 'supertrend', underlying: 'NIFTY',
     instrument: { symbol: 'NIFTY26AUG24000CE', exchange: 'NFO', kind: 'option', quoteKey: 'NFO:X' },
     direction: 'long', status: 'armed', atMs: NOW,
     levels: { ltp: null, entry: null, stop: null, trail: null, target: null, exit: null },
@@ -103,7 +101,7 @@ describe('column selection', () => {
 
   it('only tags the engine when more than one is on the board', () => {
     expect(isMixedEngine([signal(), signal()])).toBe(false);
-    expect(isMixedEngine([signal(), signal({ engine: 'supertrend' })])).toBe(true);
+    expect(isMixedEngine([signal(), signal({ engine: 'gamma_move' })])).toBe(true);
   });
 });
 
@@ -163,78 +161,6 @@ describe('SuperTrend adapter', () => {
     const s = supertrendLegToBoard(row(), leg(), 0);
     const trend = s.sections.find((x) => x.title === 'Trend & volatility')!;
     expect(trend.stats.find((x) => x.label === 'Alignment')!.value).toBe('▲▲▼');
-  });
-});
-
-describe('ORB adapter', () => {
-  const entry = (over: Partial<OrbFeedEntry> = {}): OrbFeedEntry => ({
-    id: 'ORB-1', strategy: 'ORB', underlying: 'NIFTY', direction: 'long', state: 'SIGNAL',
-    spot: 24100, orbHigh: 24120, orbLow: 24000, vwap: 24050, atr: 30, volumeRatio: 1.4,
-    optionSymbol: 'NIFTY26AUG24100CE', optionStrike: 24100, optionType: 'CE',
-    optionExpiry: '2026-08-27', optionPremium: 180, stopPremium: 140, targetPremium: 260,
-    quantity: 150, riskInr: 3000, maxLossInr: 27000, deltaIsEstimated: true,
-    deltaSource: 'implied', delta: 0.56, impliedVol: 0.11, gamma: 0.0009,
-    thetaPerDay: -10, vegaPerPoint: 16.9, exchange: 'NFO', lotSize: 75,
-    underlyingEntry: 24120, underlyingStop: 24030, dataSource: 'kite',
-    quoteAgeS: 3, reason: null, timestamp: new Date(NOW).toISOString(),
-    vwapBasis: 'volume', volumeConfirmed: true, ...over,
-  });
-
-  it('reports no trailing stop, because ORB does not produce one', () => {
-    // Trailing is Trading Mode's job. A number here would be invented.
-    expect(orbToBoard(entry()).levels.trail).toBeNull();
-  });
-
-  it('treats the whole premium as at risk', () => {
-    // A bought option can expire worthless, so the outlay is the loss.
-    const s = orbToBoard(entry());
-    expect(s.sizing.atRiskInr).toBe(27000);
-    expect(s.sizing.deployedInr).toBe(27000);
-  });
-
-  it('derives lots from quantity and lot size', () => {
-    expect(orbToBoard(entry()).sizing.lots).toBe(2);
-  });
-
-  it('marks solved Greeks as estimated, and broker Greeks as measured', () => {
-    const solved = orbToBoard(entry()).sections.find((s) => s.title === 'Greeks')!;
-    expect(solved.stats.find((s) => s.label === 'Δ delta')!.estimated).toBe(true);
-    const broker = orbToBoard(entry({ deltaSource: 'broker' })).sections.find((s) => s.title === 'Greeks')!;
-    expect(broker.stats.find((s) => s.label === 'Δ delta')!.estimated).toBe(false);
-  });
-
-  it('omits the Greeks block when nothing was solved', () => {
-    const s = orbToBoard(entry({ impliedVol: null, delta: null, gamma: null }));
-    expect(s.sections.map((x) => x.title)).not.toContain('Greeks');
-  });
-
-  it('maps scan states to board statuses', () => {
-    expect(orbToBoard(entry({ state: 'SIGNAL' })).status).toBe('armed');
-    expect(orbToBoard(entry({ state: 'WATCHING' })).status).toBe('watching');
-    expect(orbToBoard(entry({ state: 'ERROR' })).status).toBe('error');
-    expect(orbToBoard(entry({ state: 'ENDED' })).status).toBe('ended');
-  });
-
-  it('builds a quote key only when there is a contract to quote', () => {
-    expect(orbToBoard(entry()).instrument.quoteKey).toBe('NFO:NIFTY26AUG24100CE');
-    expect(orbToBoard(entry({ optionSymbol: null })).instrument.quoteKey).toBeNull();
-  });
-
-  it('puts an Auto refusal on the unexpanded row', () => {
-    const s = orbToBoard(entry({ autoBlock: 'daily trade limit reached' }));
-    expect(s.flags?.[0]?.label).toBe('AUTO BLOCK');
-    expect(s.flags?.[0]?.hint).toBe('daily trade limit reached');
-    expect(s.reason).toBe('daily trade limit reached');
-  });
-
-  it('keeps the ticket fingerprint on the board signal', () => {
-    const s = orbToBoard(entry({ ticketFingerprint: 'LONG|ts|NIFTY26AUG24100CE' }));
-    expect(s.ticketFingerprint).toBe('LONG|ts|NIFTY26AUG24100CE');
-  });
-
-  it('marks an assumed delta on the unexpanded row', () => {
-    const s = orbToBoard(entry({ deltaSource: 'assumed', delta: 0.5 }));
-    expect(s.flags?.some((f) => f.label === 'Δ ASSUMED')).toBe(true);
   });
 });
 

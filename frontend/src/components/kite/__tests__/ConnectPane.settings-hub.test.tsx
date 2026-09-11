@@ -4,9 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { ConnectPane } from '../ConnectPane';
 import gammaPayload from '../../__tests__/fixtures/gamma-move.json';
-import atmPayload from '../../__tests__/fixtures/atm-premium-imbalance.json';
-import orbPayload from '../../__tests__/fixtures/nifty-orb-options.json';
-import owfPayload from '../../__tests__/fixtures/oi-wall-flow.json';
 
 const setConfig = vi.fn();
 
@@ -118,23 +115,6 @@ describe('ConnectPane settings hub', () => {
     expect(screen.getByText('Adaptive Edge settings panel')).toBeInTheDocument();
   });
 
-  it('gives ORB + VWAP Options a home in the rail', () => {
-    // The panel existed but was mounted nowhere, so the whole ORB UI was
-    // unreachable from the app. This is the assertion that would have caught it.
-    render(<ConnectPane />);
-    const orb = screen.getByRole('button', { name: /ORB \+ VWAP Options Opening range breakout, buy-only/i });
-    fireEvent.click(orb);
-    expect(screen.getByRole('heading', { name: 'ORB + VWAP Options' })).toBeInTheDocument();
-    expect(screen.getByText('ORB options settings panel')).toBeInTheDocument();
-  });
-
-  it('groups ORB with the other signal engines', () => {
-    render(<ConnectPane />);
-    const adaptive = screen.getByRole('button', { name: /Adaptive Edge Score, modes, TBT structure/i });
-    const orb = screen.getByRole('button', { name: /ORB \+ VWAP Options/i });
-    expect(adaptive.compareDocumentPosition(orb) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
   it('gives manual and automatic rules separate homes, not one filtered page', () => {
     // The single page with an All / Manual / Automatic filter made the reader
     // decode a per-row badge to know whether a rule applied to them.
@@ -203,9 +183,6 @@ describe('ConnectPane — every option engine is reachable and complete', () => 
   // the app serves them. Anything less and the test proves the rail wiring only.
   const PAYLOADS: Record<string, unknown> = {
     '/api/v1/config/gamma-move': gammaPayload,
-    '/api/v1/config/atm-premium-imbalance': atmPayload,
-    '/api/v1/config/nifty-orb-options': orbPayload,
-    '/api/v1/config/oi-wall-flow': owfPayload,
   };
 
   beforeEach(() => {
@@ -228,10 +205,7 @@ describe('ConnectPane — every option engine is reachable and complete', () => 
   };
 
   const ENGINES: Array<[string, RegExp, string]> = [
-    ['ATM Premium Imbalance', /ATM Premium Imbalance\s*Cheaper ATM leg at the open/i,
-      'ATM Premium Imbalance'],
     ['Gamma Move', /Gamma Move\s*OI unwind at a level/i, 'Gamma Move'],
-    ['OI Wall Flow', /OI Wall Flow\s*First-resistance CE \/ first-support PE/i, 'OI Wall Flow'],
   ];
 
   it.each(ENGINES)('gives %s a home in the rail', (_label, railName, heading) => {

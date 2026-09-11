@@ -86,9 +86,15 @@ export function AdaptiveEdgeBoard({
   const filteredSignals = React.useMemo(() => {
     if (activeSourceFilter === 'ae') {
       return rawSignals.filter((s) => s.origin?.label !== 'SPOT SCAN');
+      const ae = rawSignals.filter((s) => s.origin?.label !== 'SPOT SCAN');
+      // If the filter would return nothing but there ARE signals, fall back to both
+      // so a stale localStorage value doesn't silently blank the panel.
+      return ae.length > 0 || rawSignals.length === 0 ? ae : rawSignals;
     }
     if (activeSourceFilter === 'spot') {
       return rawSignals.filter((s) => s.origin?.label === 'SPOT SCAN');
+      const spot = rawSignals.filter((s) => s.origin?.label === 'SPOT SCAN');
+      return spot.length > 0 || rawSignals.length === 0 ? spot : rawSignals;
     }
     return rawSignals;
   }, [rawSignals, activeSourceFilter]);

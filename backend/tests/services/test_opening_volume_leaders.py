@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 from app.engines.opening_volume_leaders import LeaderDirection, evaluate_leader
 from app.services import opening_volume_leaders as service
 
@@ -393,7 +393,6 @@ async def test_daily_market_context_excludes_forming_day(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_kite_runtime_returns_advisory_leaders_without_execution(monkeypatch):
-    from app.services import nifty_orb_scanner
     from app.services.exchanges.kite import accounts
 
     class FakeClient:
@@ -425,7 +424,7 @@ async def test_kite_runtime_returns_advisory_leaders_without_execution(monkeypat
         return _bars()
 
     monkeypatch.setattr(accounts, "acquire_client", acquire_client)
-    monkeypatch.setattr(nifty_orb_scanner, "_kite_instrument", instrument)
+    monkeypatch.setattr(service, "_kite_instrument", instrument)
     monkeypatch.setattr(service, "_history", history)
 
     result = await service.scan_kite_leaders(
@@ -461,7 +460,6 @@ async def test_kite_runtime_returns_advisory_leaders_without_execution(monkeypat
 
 @pytest.mark.asyncio
 async def test_runtime_keeps_prebreak_stocks_in_breadth_but_not_event_cards(monkeypatch):
-    from app.services import nifty_orb_scanner
     from app.services.exchanges.kite import accounts
 
     class FakeClient:
@@ -487,7 +485,7 @@ async def test_runtime_keeps_prebreak_stocks_in_breadth_but_not_event_cards(monk
         return rows
 
     monkeypatch.setattr(accounts, "acquire_client", acquire_client)
-    monkeypatch.setattr(nifty_orb_scanner, "_kite_instrument", instrument)
+    monkeypatch.setattr(service, "_kite_instrument", instrument)
     monkeypatch.setattr(service, "_history", history)
 
     result = await service.scan_kite_leaders(
@@ -509,7 +507,6 @@ async def test_runtime_keeps_prebreak_stocks_in_breadth_but_not_event_cards(monk
 async def test_full_runtime_evaluates_every_broker_discovered_reference_leader(
     monkeypatch,
 ):
-    from app.services import nifty_orb_scanner
     from app.services.exchanges.kite import accounts
 
     fake_client = FakeInstrumentClient()
@@ -531,7 +528,7 @@ async def test_full_runtime_evaluates_every_broker_discovered_reference_leader(
         return _bars()
 
     monkeypatch.setattr(accounts, "acquire_client", acquire_client)
-    monkeypatch.setattr(nifty_orb_scanner, "_kite_instrument", instrument)
+    monkeypatch.setattr(service, "_kite_instrument", instrument)
     monkeypatch.setattr(service, "_history", history)
 
     result = await service.scan_kite_leaders(

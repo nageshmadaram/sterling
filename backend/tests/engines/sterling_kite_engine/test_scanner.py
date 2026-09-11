@@ -13,6 +13,7 @@ from app.services.kite_engine.scanner import (
     _prior_leg_snapshots, _retain_signals, _stamp_leg_premium_stops, attach_strikes,
     drop_forming, evaluate_derivative_contract, evaluate_item, option_order_args,
 )
+from app.engines.sterling_kite_engine.schemas import AlignmentChip, EngineSignalRow, OptionLeg
 from app.services.kite_engine.strikes import OptionPick
 from app.services.kite_engine.universe import UniverseItem
 
@@ -1433,6 +1434,26 @@ def test_compile_rows_does_not_mutate_its_input_rows():
     assert rows[0].stop_loss == 30.0
     assert rows[0].entry_sl == pytest.approx(27.0)
     assert rows[0].legs[0].premium_spot == 42.5
+
+
+def test_compile_rows_is_idempotent_for_spot_rows():
+    """Non-derivative/spot rows must not duplicate when _compile_rows is called repeatedly."""
+    spot_row = EngineSignalRow(
+        underlying="RELIANCE", token=738561, exchange="NSE", regime="BULL",
+        alignment=AlignmentChip(fast=1, mid=1, slow=1), direction="long", option_type="CE",
+        legs=[], spot=2950.0, stop_loss=2900.0, entry_sl=2900.0,
+        score=85.0, timestamp_ms=1000, source="spot", is_active=True,
+    )
+    once = _compile_rows([spot_row])
+    twice = _compile_rows(once)
+    thrice = _compile_rows([*once, spot_row])
+    assert len(once) == 1
+    assert len(twice) == 1
+    assert len(thrice) == 1
+    assert once[0].underlying == "RELIANCE"
+    assert twice[0].underlying == "RELIANCE"
+    assert thrice[0].underlying == "RELIANCE"
+
 
 
 def test_derivative_contract_stamps_leg_premium_at_birth():

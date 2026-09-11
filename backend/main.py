@@ -95,26 +95,12 @@ async def lifespan(app: FastAPI):
     ticker_watchdog_task = asyncio.create_task(_kite_ticker_manager.supervise(interval=30))
     log.info("Kite ticker watchdog started (every 30s)")
 
-    # ATM Premium Imbalance: arm inside the pre-open lead so both legs are
-    # subscribed before the bell. Arming does not trade -- entry is still gated
-    # on verified market hours -- and the loop is a no-op whenever the strategy
-    # is disabled or unsized, which is the default.
-    from app.services.atm_premium_imbalance_runner import auto_arm_loop
-    atm_auto_arm_task = asyncio.create_task(auto_arm_loop(interval=30))
-
     # Gamma Move: levels -> strikes -> trigger, on the strategy's own cadence.
     # The loop is a no-op while the strategy is disabled, which is its default.
     # The loop reconciles against the broker before its first scan, so a restart
     # cannot open a second position in a contract it already holds.
     from app.services.gamma_move_runner import auto_scan_loop as _gamma_move_scan
     gamma_move_task = asyncio.create_task(_gamma_move_scan(interval=300))
-
-    # OI Wall Flow: universe -> one expiry chain -> classify, on the strategy's
-    # own cadence. The loop is a no-op while the strategy is disabled. It
-    # reconciles against the broker before its first scan, so a restart cannot
-    # open a second position in a contract it already holds.
-    from app.services.oi_wall_flow_runner import auto_scan_loop as _oi_wall_flow_scan
-    oi_wall_flow_task = asyncio.create_task(_oi_wall_flow_scan(interval=300))
 
     # Adaptive Edge: underlyings -> contracts -> candidates, on a faster cadence
     # because the source is a scalping strategy. Safe to run unconditionally:
@@ -222,19 +208,9 @@ async def lifespan(app: FastAPI):
         await navigator_task
     except (Exception, BaseException):
         pass
-    atm_auto_arm_task.cancel()
-    try:
-        await atm_auto_arm_task
-    except (Exception, BaseException):
-        pass
     gamma_move_task.cancel()
     try:
         await gamma_move_task
-    except (Exception, BaseException):
-        pass
-    oi_wall_flow_task.cancel()
-    try:
-        await oi_wall_flow_task
     except (Exception, BaseException):
         pass
 
@@ -360,9 +336,6 @@ def create_app() -> FastAPI:
 
     from app.api.v1.endpoints.pcr import router as pcr_router
     app.include_router(pcr_router, prefix="/api/v1")
-
-    from app.api.v1.endpoints.bear_to_bearish import router as bear_to_bearish_router
-    app.include_router(bear_to_bearish_router, prefix="/api/v1")
 
     from app.api.v1.endpoints.simulation import router as simulation_router
     app.include_router(simulation_router, prefix="/api/v1")

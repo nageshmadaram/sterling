@@ -26,11 +26,8 @@ vi.mock('../../../hooks/useSterlingKiteEngine', () => ({
 vi.mock('../../../hooks/useNavigator', () => ({
   useNavigatorConfig: () => ({ data: { record: { config: { enabled: false } } } }),
 }));
-vi.mock('../../../hooks/useOrbConfig', () => ({ useOrbConfig: () => ({ data: { config: { enabled: true } } }) }));
 vi.mock('../../../hooks/useAdaptiveEdge', () => ({ useAdaptiveEdgeSnapshot: () => ({ data: null }) }));
 vi.mock('../../../hooks/useGammaMove', () => ({ useGammaMoveSnapshot: () => ({ data: null }) }));
-vi.mock('../../../hooks/useOiWallFlow', () => ({ useOiWallFlowSnapshot: () => ({ data: null }) }));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({ useAtmPremiumImbalanceSnapshot: () => ({ data: null }) }));
 
 import { KiteFooterStatus } from '../KiteFooterStatus';
 
@@ -77,7 +74,7 @@ describe('the broker chip', () => {
 describe('the strategy chips', () => {
   it('lists every strategy', () => {
     render(<KiteFooterStatus onOpenSession={vi.fn()} />);
-    for (const label of ['ST', 'NAV', 'ORB', 'AE', 'GM', 'OWF', 'ATM']) {
+    for (const label of ['ST', 'NAV', 'AE', 'GM']) {
       expect(screen.getByText(label), label).toBeInTheDocument();
     }
   });
@@ -92,14 +89,6 @@ describe('the strategy chips', () => {
     signals = { scanning: false, auto_scan: true, market_open: false };
     render(<KiteFooterStatus onOpenSession={vi.fn()} />);
     expect(screen.getByText('market closed')).toBeInTheDocument();
-  });
-
-  it('invents no schedule for an engine that publishes none', () => {
-    // ORB is ON here and reports nothing about scanning. It must not show an
-    // idle-looking dash that reads as "checked, nothing happening".
-    render(<KiteFooterStatus onOpenSession={vi.fn()} />);
-    const orb = screen.getByTitle(/^ORB — on$/);
-    expect(orb.textContent, 'the label and nothing more').toBe('ORB');
   });
 
   it('marks a switched-off engine as off', () => {

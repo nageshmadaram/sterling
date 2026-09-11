@@ -167,25 +167,11 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run ORB strategy, replay, execution and validation tests
+      - name: Run safety tests
         working-directory: backend
         run: |
           set -euo pipefail
           pytest -q \
-            tests/strategies/test_nifty_orb_option_replay.py \
-            tests/strategies/test_nifty_orb_options.py \
-            tests/services/test_nifty_orb_execution.py \
-            tests/services/test_nifty_orb_execution_safety.py \
-            tests/services/test_nifty_orb_execution_e2e.py \
-            tests/services/test_nifty_orb_daily_loss_integration.py \
-            tests/services/test_nifty_orb_config_load.py \
-            tests/services/test_nifty_orb_scanner_internals.py \
-            tests/engines/test_nifty_orb_validation.py \
-            tests/engines/test_nifty_orb_options.py \
-            tests/engines/test_nifty_orb_options_contracts.py \
-            tests/engines/test_nifty_orb_plan_matches_executor.py \
-            tests/engines/test_nifty_orb_universe_repaint.py \
-            tests/api/test_nifty_orb_replay_api.py \
             tests/test_live_safety.py
         env:
           ENVIRONMENT: test

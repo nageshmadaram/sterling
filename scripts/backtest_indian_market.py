@@ -262,85 +262,6 @@ def strategy_supertrend(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return signals, directions
 
 
-# ── 2. ORB + VWAP ──
-
-def strategy_orb_vwap(df_session: pd.DataFrame, cfg_dict: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Opening Range Breakout + VWAP confirmation."""
-    n = len(df_session)
-    signals = np.zeros(n, dtype=bool)
-    directions = np.full(n, "LONG", dtype=object)
-
-    dates = df_session.index.date
-    unique_dates = sorted(set(dates))
-
-    for d in unique_dates:
-        day_mask = dates == d
-        day_df = df_session[day_mask]
-        if len(day_df) < 10:
-            continue
-
-        # Opening range: 09:15 - 09:30
-        or_mask = (day_df.index.time >= time(9, 15)) & (day_df.index.time < time(9, 30))
-        or_bars = day_df[or_mask]
-        if len(or_bars) < 2:
-            continue
-        or_high = or_bars["high"].max()
-        or_low  = or_bars["low"].min()
-
-        # Session VWAP
-        typical = (day_df["high"] + day_df["low"] + day_df["close"]) / 3.0
-        cum_pv = (typical * day_df["volume"].clip(lower=0)).cumsum()
-        cum_v  = day_df["volume"].clip(lower=0).cumsum()
-        session_vwap = cum_pv / cum_v.replace(0, np.nan)
-
-        # ATR from the day's bars
-        tr = pd.concat([
-            day_df["high"] - day_df["low"],
-            (day_df["high"] - day_df["close"].shift()).abs(),
-            (day_df["low"]  - day_df["close"].shift()).abs(),
-        ], axis=1).max(axis=1)
-        current_atr = tr.rolling(14, min_periods=5).mean()
-
-        # Volume ratio
-        vol_cumavg = day_df["volume"].expanding().mean()
-
-        # Entry window: 09:30 - 12:00
-        entry_mask = (day_df.index.time >= time(9, 30)) & (day_df.index.time <= time(12, 0))
-
-        # VWAP slope
-        vwap_slope = session_vwap - session_vwap.shift(3)
-
-        for idx in day_df[entry_mask].index:
-            pos = day_df.index.get_loc(idx)
-            c = day_df.iloc[pos]["close"]
-            v = session_vwap.iloc[pos] if pos < len(session_vwap) else np.nan
-            a = current_atr.iloc[pos] if pos < len(current_atr) else np.nan
-            vol_r = day_df.iloc[pos]["volume"] / vol_cumavg.iloc[pos] if vol_cumavg.iloc[pos] > 0 else 0
-            slope = vwap_slope.iloc[pos] if pos < len(vwap_slope) else 0
-
-            if not isfinite(a) or a <= 0 or not isfinite(v):
-                continue
-
-            threshold = 0.15 * a
-            long_break = c - or_high
-            short_break = or_low - c
-
-            if long_break > threshold and c > v and slope > 0 and vol_r >= 1.15:
-                global_pos = df_session.index.get_loc(idx)
-                if isinstance(global_pos, slice):
-                    global_pos = global_pos.start
-                signals[global_pos] = True
-                directions[global_pos] = "LONG"
-            elif short_break > threshold and c < v and slope < 0 and vol_r >= 1.15:
-                global_pos = df_session.index.get_loc(idx)
-                if isinstance(global_pos, slice):
-                    global_pos = global_pos.start
-                signals[global_pos] = True
-                directions[global_pos] = "SHORT"
-
-    return signals, directions
-
-
 # ── 3. Adaptive Edge (Volume Profile + IB) ──
 
 def strategy_adaptive_edge(df_15m: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -474,49 +395,6 @@ def strategy_flow_navigator(df_1h: pd.DataFrame) -> tuple[np.ndarray, np.ndarray
     return signals, directions
 
 
-# ── 5. ATM Premium Imbalance (Session-Open Directional) ──
-
-def strategy_atm_premium(df_5m: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    """ATM Premium Imbalance on spot: session-open directional impulse."""
-    n = len(df_5m)
-    signals = np.zeros(n, dtype=bool)
-    directions = np.full(n, "LONG", dtype=object)
-
-    dates = df_5m.index.date
-    unique_dates = sorted(set(dates))
-
-    for d in unique_dates:
-        day_mask = dates == d
-        day_df = df_5m[day_mask]
-        if len(day_df) < 6:
-            continue
-
-        open_bars = day_df.iloc[:3]
-        if len(open_bars) < 3:
-            continue
-
-        session_open = open_bars.iloc[0]["open"]
-        impulse = open_bars.iloc[-1]["close"] - session_open
-
-        threshold = session_open * 0.001
-        if abs(impulse) < threshold:
-            continue
-
-        signal_bar = 3
-        if signal_bar < len(day_df):
-            global_pos = df_5m.index.get_loc(day_df.index[signal_bar])
-            if isinstance(global_pos, slice):
-                global_pos = global_pos.start
-            signals[global_pos] = True
-            directions[global_pos] = "LONG" if impulse > 0 else "SHORT"
-
-    return signals, directions
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════
-
 PROFILES = {
     "Scalping":   {"sl": 1.0, "tp": 2.0},
     "Intraday":   {"sl": 2.0, "tp": 3.5},
@@ -525,10 +403,8 @@ PROFILES = {
 
 STRATEGY_CONFIGS = [
     {"name": "SuperTrend (Triple)",    "fn": strategy_supertrend,      "timeframes": ["5min", "15min", "1h"]},
-    {"name": "ORB + VWAP",             "fn": strategy_orb_vwap,        "timeframes": ["5min"]},
     {"name": "Adaptive Edge (Vol+IB)", "fn": strategy_adaptive_edge,   "timeframes": ["15min"]},
     {"name": "Flow Navigator (Vol)",   "fn": strategy_flow_navigator,  "timeframes": ["1h"]},
-    {"name": "ATM Premium (Open)",     "fn": strategy_atm_premium,     "timeframes": ["5min"]},
 ]
 
 def select_instruments() -> list[tuple[str, Path]]:

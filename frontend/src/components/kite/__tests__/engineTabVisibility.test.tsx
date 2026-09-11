@@ -33,11 +33,9 @@ const cfg: Record<string, unknown> = {
 };
 
 let stEnabled: boolean | undefined = true;
-let navEnabled = true;
-let orbEnabled: boolean | undefined = true;
+let navEnabled: boolean | undefined = true;
 let gmEnabled: boolean | undefined = true;
 let aeEnabled: boolean | undefined = true;
-let atmEnabled: boolean | undefined = true;
 
 vi.mock('../../../hooks/useSterlingKiteEngine', () => ({
   useEngineConfig: () => ({ data: { ...cfg, engine_enabled: stEnabled } }),
@@ -60,16 +58,6 @@ vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeSnapshot: () => ({ data: null }),
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: aeEnabled } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock('../../../hooks/useOrbSignals', () => ({ useOrbSignals: () => ({ signals: [] }) }));
-vi.mock('../../../hooks/useOrbConfig', () => ({
-  useOrbConfig: () => ({ data: { config: { enabled: orbEnabled } } }),
-  useSetOrbConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({
-  useAtmPremiumImbalanceSnapshot: () => ({ data: null }),
-  useAtmPremiumImbalanceConfig: () => ({ data: { config: { enabled: atmEnabled } } }),
-  useSetAtmPremiumImbalanceConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('../../../hooks/useGammaMove', () => ({
   useGammaMoveSnapshot: () => ({ data: null }),
@@ -97,15 +85,15 @@ const tab = (name: string) => screen.queryAllByRole('tab', { name: new RegExp(na
 
 beforeEach(() => {
   localStorage.clear();
-  stEnabled = true; navEnabled = true; orbEnabled = true;
-  gmEnabled = true; aeEnabled = true; atmEnabled = true;
+  stEnabled = true; navEnabled = true;
+  gmEnabled = true; aeEnabled = true;
 });
 afterEach(cleanup);
 
 describe('the dock follows the running switches', () => {
   it('shows every engine when all are on', () => {
     renderPane();
-    for (const name of ['SuperTrend', 'Adaptive Edge', 'ORB', 'ATM Premium', 'Gamma Move']) {
+    for (const name of ['SuperTrend', 'Adaptive Edge', 'Gamma Move']) {
       expect(tab(name).length, name).toBeGreaterThan(0);
     }
   });
@@ -115,16 +103,13 @@ describe('the dock follows the running switches', () => {
     renderPane();
     expect(tab('Gamma Move')).toHaveLength(0);
     // ...and takes nothing else with it.
-    expect(tab('ORB').length).toBeGreaterThan(0);
     expect(tab('Adaptive Edge').length).toBeGreaterThan(0);
   });
 
-  it('drops ORB, Adaptive Edge and ATM independently', () => {
-    orbEnabled = false; aeEnabled = false; atmEnabled = false;
+  it('drops Adaptive Edge independently', () => {
+    aeEnabled = false;
     renderPane();
-    expect(tab('ORB')).toHaveLength(0);
     expect(tab('Adaptive Edge')).toHaveLength(0);
-    expect(tab('ATM Premium')).toHaveLength(0);
     expect(tab('Gamma Move').length).toBeGreaterThan(0);
   });
 
@@ -144,15 +129,11 @@ describe('the dock follows the running switches', () => {
     expect(tab('SuperTrend')).toHaveLength(0);
   });
 
-  it('keeps a tab whose config has not answered yet, except ORB which ships off', () => {
+  it('keeps a tab whose config has not answered yet', () => {
     // `undefined` is "still loading", not "off". Treating it as off would blink
     // every tab out on each page load and look like the operator's own setting.
     gmEnabled = undefined;
-    orbEnabled = undefined;
     renderPane();
     expect(tab('Gamma Move').length).toBeGreaterThan(0);
-    // ORB's product default is OFF. Treating "not loaded" as on would flash a
-    // live tab on a fresh install, which is the opposite of that default.
-    expect(tab('ORB')).toHaveLength(0);
   });
 });

@@ -85,8 +85,6 @@ def test_contract_settings_use_the_shared_vocabulary():
     """Same field names and meanings as every other engine, so a reader does not
     have to learn a private vocabulary per strategy."""
     from app.engines.option_contracts import EXPIRY_SELECTIONS
-    from app.engines.nifty_orb_options import EXPIRY_SELECTIONS as ORB_SELECTIONS
-    assert EXPIRY_SELECTIONS is ORB_SELECTIONS      # one object, not two equal ones
     names = GammaMoveConfig.field_names()
     assert {"expiry_selection", "expiry_dte_min", "expiry_dte_max",
             "avoid_expiry_day"} <= names

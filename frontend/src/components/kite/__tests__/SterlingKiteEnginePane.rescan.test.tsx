@@ -74,20 +74,10 @@ vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   // The dock hides a switched-off engine, so it asks each one whether it is on.
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
 }));
-vi.mock('../../../hooks/useOrbSignals', () => ({ useOrbSignals: () => ({ signals: [] }) }));
-vi.mock('../../../hooks/useOrbConfig', () => ({ useOrbConfig: () => ({ data: { config: { enabled: true } } }) }));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({
-  useAtmPremiumImbalanceSnapshot: () => ({ data: null }),
-  useAtmPremiumImbalanceConfig: () => ({ data: { config: { enabled: true } } }),
-}));
 vi.mock('../../../hooks/useGammaMove', () => ({
   useGammaMoveSnapshot: () => ({ data: null }),
   useGammaMoveConfig: () => ({ data: { config: { enabled: true } } }),
   useGammaMoveScan: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(() => Promise.resolve()), isPending: false }),
-}));
-vi.mock('../../../hooks/useOiWallFlow', () => ({
-  useOiWallFlowSnapshot: () => ({ data: null }),
-  useOiWallFlowScan: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(() => Promise.resolve()), isPending: false }),
 }));
 // The boards themselves are not under test; stub them so the shell can mount.
 vi.mock('../SterlingKiteEngineWithExpiry', () => ({ SterlingKiteEngineWithExpiry: () => <div /> }));
@@ -136,11 +126,6 @@ describe('SterlingKiteEnginePane — manual re-scan across both engines', () => 
     fireEvent.click(button);
     await waitFor(() => expect(navigatorScan).toHaveBeenCalledTimes(1));
     expect(supertrendScan).toHaveBeenCalledTimes(1);
-  });
-
-  it('names OI Wall Flow among the strategies a press will scan', () => {
-    renderPane();
-    expect(screen.getByRole('button', { name: /OI Wall Flow/ })).toBeInTheDocument();
   });
 
   it('runs only Navigator when SuperTrend is off', async () => {

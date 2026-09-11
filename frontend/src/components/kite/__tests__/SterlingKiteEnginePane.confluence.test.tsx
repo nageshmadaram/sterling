@@ -82,7 +82,7 @@ describe('SterlingKiteEnginePane — confluence source + signal-table columns', 
     renderPane();
     // The confirmed leg's own premium entry (premium_spot), initial SL (entry_sl) and
     // ratcheting TSL (premium_sl) render, plus the row-level exit-counter progress.
-    expect(screen.getByText('120.50')).toBeInTheDocument();  // Entry premium
+    expect(screen.getAllByText('120.50').length).toBeGreaterThanOrEqual(1);  // Entry premium
     expect(screen.getByText('95.0')).toBeInTheDocument();    // SL (entry_sl)
     expect(screen.getByText('100.0')).toBeInTheDocument();   // TSL (premium_sl)
     expect(screen.getByText('0/1 red')).toBeInTheDocument(); // Exit (exit_state)

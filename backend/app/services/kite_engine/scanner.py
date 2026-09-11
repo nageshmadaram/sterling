@@ -314,11 +314,17 @@ def _compile_rows(rows: List[EngineSignalRow]) -> List[EngineSignalRow]:
     ``current_reds`` (which the red-count exit reads) with them.
     """
     grouped_derivs: Dict[tuple, EngineSignalRow] = {}
+    grouped_non_derivs: Dict[tuple, EngineSignalRow] = {}
     leg_ts: Dict[tuple, int] = {}
-    final_rows: List[EngineSignalRow] = []
     for r in rows:
         if r.source != "derivatives":
-            final_rows.append(r)
+            nd_key = (r.underlying, r.source, r.direction, r.timestamp_ms)
+            if nd_key not in grouped_non_derivs:
+                grouped_non_derivs[nd_key] = r
+            else:
+                existing = grouped_non_derivs[nd_key]
+                if r.is_active or not existing.is_active:
+                    grouped_non_derivs[nd_key] = r
             continue
         key = (r.underlying, r.option_type)
         for source_leg in (r.legs or []):
@@ -368,6 +374,7 @@ def _compile_rows(rows: List[EngineSignalRow]) -> List[EngineSignalRow]:
                 # keep the underlying-spot aligned with the displayed (latest) trigger bar
                 if (r.underlying_spot or 0) > 0:
                     parent.underlying_spot = r.underlying_spot
+    final_rows: List[EngineSignalRow] = list(grouped_non_derivs.values())
     final_rows.extend(grouped_derivs.values())
     for r in final_rows:
         if r.source == "derivatives" and len(r.legs) > 1:

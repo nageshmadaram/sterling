@@ -27,7 +27,7 @@ from math import isfinite
 from statistics import mean
 from zoneinfo import ZoneInfo
 
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 
 IST = ZoneInfo("Asia/Kolkata")
 SESSION_OPEN = time(9, 15)

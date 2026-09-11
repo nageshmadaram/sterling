@@ -40,10 +40,6 @@ vi.mock('../TradingModeControls', () => ({ TradingModeControls: () => <div>mode 
 // "What is running" now lists every engine, so the panel asks all six for their
 // config. Mocked rather than wrapped in a QueryClientProvider so this file stays a
 // unit test of the panel and each engine's state is something it can set.
-vi.mock('../../../hooks/useOrbConfig', () => ({
-  useOrbConfig: () => ({ data: { config: { enabled: true } } }),
-  useSetOrbConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
 vi.mock('../../../hooks/useGammaMove', () => ({
   useGammaMoveConfig: () => ({ data: { config: { enabled: true } } }),
   useUpdateGammaMove: () => ({ mutate: vi.fn(), isPending: false }),
@@ -51,14 +47,6 @@ vi.mock('../../../hooks/useGammaMove', () => ({
 vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock('../../../hooks/useAtmPremiumImbalance', () => ({
-  useAtmPremiumImbalanceConfig: () => ({ data: { config: { enabled: true } } }),
-  useSetAtmPremiumImbalanceConfig: () => ({ mutate: vi.fn(), isPending: false }),
-}));
-vi.mock('../../../hooks/useBearToBearish', () => ({
-  useBearToBearishConfig: () => ({ data: { enabled: true } }),
-  useUpdateBearToBearishConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 import { TradingModePanel } from '../TradingModePanel';
@@ -73,12 +61,8 @@ import { useKiteSettings } from '../../../store/useKiteSettings';
 const ROWS: Array<{ label: string; note: string }> = [
   { label: 'SuperTrend', note: 'Triple SuperTrend across the configured universe' },
   { label: 'Value-Flow Navigator', note: 'AVWAP and flow evidence, its own source' },
-  { label: 'ORB + VWAP', note: 'Opening range breakout on the index options' },
   { label: 'Gamma Move', note: 'Open-interest unwind around the levels' },
   { label: 'Adaptive Edge', note: 'Order-flow scalping' },
-  { label: 'OI Wall Flow', note: 'First-resistance CE / first-support PE the chain is writing' },
-  { label: 'ATM Premium Imbalance', note: 'ATM straddle/strangle premium imbalance scan' },
-  { label: 'Bear to Bearish', note: 'PCR short momentum & lower high structure scan' },
 ];
 
 function boxFor(note: string): HTMLInputElement {
@@ -101,7 +85,6 @@ describe('Trading Mode — which strategies a re-scan covers', () => {
   it('lists every strategy that actually has a scan', () => {
     render(<TradingModePanel />);
     for (const { note } of ROWS) expect(screen.getByText(note)).toBeInTheDocument();
-    expect(screen.getAllByText('ATM Premium Imbalance').length).toBeGreaterThanOrEqual(1);
   });
 
   it('starts with everything included, because absent means covered', () => {
@@ -124,11 +107,11 @@ describe('Trading Mode — which strategies a re-scan covers', () => {
 
   it('toggles back', () => {
     render(<TradingModePanel />);
-    const orb = noteOf('ORB + VWAP');
-    fireEvent.click(boxFor(orb));
-    expect(boxFor(orb).checked).toBe(false);
-    fireEvent.click(boxFor(orb));
-    expect(boxFor(orb).checked).toBe(true);
+    const nav = noteOf('Value-Flow Navigator');
+    fireEvent.click(boxFor(nav));
+    expect(boxFor(nav).checked).toBe(false);
+    fireEvent.click(boxFor(nav));
+    expect(boxFor(nav).checked).toBe(true);
   });
 
   it('says plainly that the running switch beats the tick box', () => {

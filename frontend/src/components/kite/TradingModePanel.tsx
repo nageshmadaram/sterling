@@ -98,22 +98,11 @@ export function RunningRow({ label, description, on, children }: {
   );
 }
 
-/**
- * The strategies a re-scan can cover.
- *
- * ATM Premium Imbalance is deliberately absent: it has no scan. It resolves one
- * option pair and arms it, so there is no universe to sweep and nothing for this
- * button to do. Listing it would offer a choice that changes nothing.
- */
 const RESCANNABLE: Array<{ engine: string; label: string; note: string }> = [
   { engine: 'supertrend', label: 'SuperTrend', note: 'Triple SuperTrend across the configured universe' },
   { engine: 'navigator', label: 'Value-Flow Navigator', note: 'AVWAP and flow evidence, its own source' },
-  { engine: 'orb', label: 'ORB + VWAP', note: 'Opening range breakout on the index options' },
   { engine: 'gamma_move', label: 'Gamma Move', note: 'Open-interest unwind around the levels' },
   { engine: 'adaptive_edge', label: 'Adaptive Edge', note: 'Order-flow scalping' },
-  { engine: 'oi_wall_flow', label: 'OI Wall Flow', note: 'First-resistance CE / first-support PE the chain is writing' },
-  { engine: 'atm_imbalance', label: 'ATM Premium Imbalance', note: 'ATM straddle/strangle premium imbalance scan' },
-  { engine: 'bear_to_bearish', label: 'Bear to Bearish', note: 'PCR short momentum & lower high structure scan' },
 ];
 
 export function TradingModePanel() {

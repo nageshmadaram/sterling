@@ -853,7 +853,7 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
 
           const rawEntryPx = (leg as any).premium_spot;
           const entryPx = rawEntryPx != null && rawEntryPx > 0 ? rawEntryPx : null;
-          let lastPx = q?.last_price ?? (leg as any).last_price ?? null;
+          let lastPx = q?.last_price ?? (leg as any).last_price ?? (leg as any).ltp ?? (leg as any).premium_spot ?? null;
 
           let chgAbs = null;
           let chgPct = null;
@@ -873,7 +873,8 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
               chgAbs = q.net_change;
               color = s.showPriceDirection ? (chgAbs >= 0 ? k.green : k.red) : k.text;
             }
-          } else if (lastPx != null && entryPx != null && entryPx > 0) {
+          }
+          if (chgAbs == null && lastPx != null && entryPx != null && entryPx > 0) {
             chgAbs = (leg as any).net_change ?? (leg as any).change ?? (lastPx - entryPx);
             chgPct = (leg as any).chg_pct ?? (((lastPx - entryPx) / entryPx) * 100);
             color = s.showPriceDirection ? (chgAbs >= 0 ? k.green : k.red) : k.text;
@@ -893,11 +894,18 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
           const rawInitSl = (leg as any).entry_sl;
           const initSlPx = rawInitSl != null && rawInitSl > 0 ? rawInitSl : null;
           const rawTargetPx = (leg as any).premium_target ?? (leg as any).target ?? (isDeriv ? null : row.target);
-          const targetPx = rawTargetPx != null && rawTargetPx > 0 ? rawTargetPx : null;
+          const defaultTgt = (entryPx != null && initSlPx != null && entryPx > initSlPx)
+            ? Number((entryPx + 2 * (entryPx - initSlPx)).toFixed(1))
+            : (entryPx != null && slPx != null && entryPx > slPx)
+              ? Number((entryPx + 2 * (entryPx - slPx)).toFixed(1))
+              : null;
+          const targetPx = rawTargetPx != null && rawTargetPx > 0 ? rawTargetPx : defaultTgt;
           // Exit column — red-counter progress ("<reds>/<threshold> red") toward the
           // auto-exit rule. Row-level (the underlying/premium regime), coloured by how
           // close it is to firing: green→safe, amber→approaching, red→at/over threshold.
-          const legExitState = leg.exit_state ?? row.exit_state ?? (row.source === 'navigator' ? null : '0/1 red');
+          const legExitState = (leg.exit_state && String(leg.exit_state).trim())
+            || (row.exit_state && String(row.exit_state).trim())
+            || (row.source === 'navigator' ? null : '0/1 red');
           const exitReds = legExitState ? (parseInt(legExitState, 10) || 0) : 0;
           const exitThr = legExitState ? (parseInt(legExitState.split('/')[1] || '1', 10) || 1) : 1;
           const exitColor = !legExitState ? k.dim : exitReds <= 0 ? k.dim : exitReds >= exitThr ? k.red : k.orange;
@@ -915,9 +923,8 @@ function SignalCard({ row, onClick, onSelectSignal, onOpenChart, quotes, viewLay
           // with zero gamma/theta/vega — and rendering that as "(Δ1.00)" reports a
           // fabricated number as the most responsive contract on the board.
           const deltaTxt = hasUsableGreeks(legGreeks) ? Math.abs(legGreeks.delta).toFixed(2) : null;
-          // How far the live LTP has moved from the fired entry (points). Only meaningful
-          // while the leg is live; for ended legs the entry is frozen history.
-          const entryDiff = (!ended && lastPx != null && entryPx != null) ? lastPx - entryPx : null;
+          // How far the live LTP has moved from the fired entry (points).
+          const entryDiff = (lastPx != null && entryPx != null) ? lastPx - entryPx : null;
           // A dead leg has no live trade plan — showing its old entry/stop next to a live
           // LTP is misleading (e.g. entry 3420 vs LTP 459), so blank them inline and keep
           // the fire-time values in the tooltip for anyone reviewing the history.
@@ -2173,8 +2180,18 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
       return null;  // 'Custom' — keep each bucket's own natural order
     };
     const applyUserSort = (list: typeof filteredRows) => {
-      if (s.sortBy === 'Custom') return list;
-      return [...list].sort((a, b) => userSort(a, b) ?? 0);
+      const sorted = [...list].sort((a, b) => {
+        if (s.sortBy === 'Custom') {
+          const aIdx = INDEX_NAMES.has(a.underlying) ? 1 : 0;
+          const bIdx = INDEX_NAMES.has(b.underlying) ? 1 : 0;
+          if (aIdx !== bIdx) return bIdx - aIdx; // indices first
+          const cmp = a.underlying.localeCompare(b.underlying);
+          if (cmp !== 0) return cmp;
+          return (b.timestamp_ms || 0) - (a.timestamp_ms || 0);
+        }
+        return userSort(a, b) ?? 0;
+      });
+      return sorted;
     };
 
     const sorted = [...filteredRows].sort((a, b) => b.timestamp_ms - a.timestamp_ms);
@@ -2260,9 +2277,38 @@ export function SterlingKiteEnginePane({ onSelectSignal, onOpenChart }: Props) {
         const hasActive = label === todayLabel ? activeToday.length > 0
           : label === yesterdayLabel ? activeYesterday.length > 0
           : false;
-        const bucketRows = (!showEnded && hasActive)
+        const dedupeStockRows = (rows: typeof filteredRows) => {
+          // Collapse duplicate signals only when they are truly for the same setup:
+          // same underlying, same scan source, same direction — CE and PE are
+          // independent positions and must NOT be merged into one. Key on
+          // (underlying, source, direction) so a BHARTIARTL CE and PE remain separate.
+          // Live-scanner vs simulation rows are distinguished by the backend's merge
+          // logic (Fix 2) which gives simulation rows different timestamp_ms values
+          // so the `rowKey` used for mid-scan merging already differentiates them.
+          const byStock = new Map<string, EngineSignalRow>();
+          for (const r of rows) {
+            const key = `${r.underlying}|${r.source ?? 'spot'}|${r.direction ?? ''}`;
+            const existing = byStock.get(key);
+            if (!existing) {
+              byStock.set(key, r);
+            } else {
+              const curLive = rowIsRunning(r, quotes);
+              const exLive = rowIsRunning(existing, quotes);
+              if (curLive && !exLive) {
+                byStock.set(key, r);
+              } else if (!curLive && exLive) {
+                // keep existing live
+              } else if ((r.timestamp_ms || 0) > (existing.timestamp_ms || 0)) {
+                byStock.set(key, r);
+              }
+            }
+          }
+          return Array.from(byStock.values());
+        };
+        const rawBucketRows = (!showEnded && hasActive)
           ? groups[label].filter(r => rowIsRunning(r, quotes))
           : groups[label];
+        const bucketRows = dedupeStockRows(rawBucketRows);
         if (bucketRows.length > 0) {
           dayBuckets.push({ label, rows: applyUserSort(bucketRows), active: hasActive });
         }

@@ -12,8 +12,8 @@ describe('settings section registry', () => {
   // so the compiler enforces the list even before the runtime assertions below.
   const EVERY_SECTION: Record<SectionId, true> = {
     account: true, truedata: true, diagnostics: true, mode: true, manualRules: true,
-    autoRules: true, engine: true, navigator: true, adaptiveEdge: true, orbOptions: true,
-    atmPremiumImbalance: true, gammaMove: true, bearToBearish: true, oiWallFlow: true,
+    autoRules: true, engine: true, navigator: true, adaptiveEdge: true,
+    gammaMove: true,
     markets: true, notifications: true,
     experience: true, dataLake: true,
   };
@@ -29,7 +29,7 @@ describe('settings section registry', () => {
     }
   });
 
-  it.each(['diagnostics', 'orbOptions', 'atmPremiumImbalance', 'gammaMove', 'oiWallFlow'] as SectionId[])(
+  it.each(['diagnostics', 'gammaMove'] as SectionId[])(
     'can deep-link and persist %s',
     (section) => {
       localStorage.clear();

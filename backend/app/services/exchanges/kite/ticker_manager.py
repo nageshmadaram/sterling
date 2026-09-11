@@ -59,19 +59,6 @@ def _make_broadcaster(user_id: str):
                     await monitor.on_ticks(user_id, ticks, client=client)
         except Exception as exc:  # never let the monitor kill the tick loop
             log.debug("kite monitor on_ticks failed for %s: %s", user_id, exc)
-        # Then the ATM Premium Imbalance session, for the same reason: it enters
-        # and exits on ticks, and must not depend on a UI being connected.
-        try:
-            from app.services import atm_premium_imbalance_runner as api_runner
-            session = api_runner.active_session(user_id)
-            if session is not None and not session.finished:
-                client = await _warm_client(user_id)
-                if client is not None:
-                    await api_runner.on_ticks(
-                        user_id, ticks, api_runner.KiteBrokerPort(client, session.pair)
-                    )
-        except Exception as exc:  # never let this kill the tick loop
-            log.debug("ATM PI on_ticks failed for %s: %s", user_id, exc)
         # Then Adaptive Edge, for the same reason: its stop and trail are
         # enforced on ticks, and a protective stop that only runs while a UI is
         # open is not a protective stop.
@@ -82,16 +69,6 @@ def _make_broadcaster(user_id: str):
                 await ae_runner.on_ticks(user_id, ticks)
         except Exception as exc:  # never let this kill the tick loop
             log.debug("Adaptive Edge on_ticks failed for %s: %s", user_id, exc)
-        # Then OI Wall Flow: premium stop and opposing-wall invalidation both
-        # fire on ticks, and a protective stop that only runs while a UI is
-        # open is not a protective stop.
-        try:
-            from app.services import oi_wall_flow_positions as owf_positions
-            from app.services import oi_wall_flow_runner as owf_runner
-            if owf_positions.open_positions(user_id):
-                await owf_runner.on_ticks(user_id, ticks)
-        except Exception as exc:  # never let this kill the tick loop
-            log.debug("OI Wall Flow on_ticks failed for %s: %s", user_id, exc)
         # Then Gamma Move: trailing stop and market-exit triggers both fire on
         # ticks, and must not depend on a UI being connected.
         try:

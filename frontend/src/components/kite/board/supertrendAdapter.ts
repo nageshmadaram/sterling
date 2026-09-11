@@ -256,6 +256,8 @@ export function supertrendLegToBoard(
       // drawdown is building.
       ltp: price(
         (opts.quotes?.[quoteKey]?.last_price as number | undefined)
+        ?? (leg as any).last_price
+        ?? (leg as any).ltp
         ?? leg.premium_spot,
       ),
       entry: price(leg.premium_spot),
@@ -263,8 +265,8 @@ export function supertrendLegToBoard(
       // the board shows both: one says what was risked, the other what is left.
       stop: price(leg.entry_sl),
       trail: price(leg.premium_sl),
-      target: price(leg.premium_target),
-      exit: null,
+      target: price(leg.premium_target) ?? (price(leg.premium_spot) != null && price(leg.entry_sl) != null ? Number((price(leg.premium_spot)! + 2 * Math.max(1, price(leg.premium_spot)! - price(leg.entry_sl)!)).toFixed(1)) : null),
+      exit: price(leg.premium_sl),
     },
     // On the LEG, not the parent. The parent stands for the idea and its
     // instrument is the underlying; giving it a contract's day move would label

@@ -29,23 +29,23 @@ describe('the re-scan selection', () => {
     // Absent means included. The map holds only EXCLUSIONS, so an engine added
     // tomorrow is covered rather than silently missing from every saved map.
     expect(s.getState().rescanStrategies).toEqual({});
-    for (const e of ['supertrend', 'navigator', 'orb', 'gamma_move', 'adaptive_edge', 'oi_wall_flow']) {
+    for (const e of ['supertrend', 'navigator', 'gamma_move', 'adaptive_edge']) {
       expect(s.getState().rescanStrategies[e], e).not.toBe(false);
     }
   });
 
   it('excludes one without touching the others', async () => {
     const s = await store();
-    s.getState().toggleRescanStrategy('orb');
-    expect(s.getState().rescanStrategies.orb).toBe(false);
+    s.getState().toggleRescanStrategy('navigator');
+    expect(s.getState().rescanStrategies.navigator).toBe(false);
     expect(s.getState().rescanStrategies.supertrend).toBeUndefined();
   });
 
   it('toggles back', async () => {
     const s = await store();
-    s.getState().toggleRescanStrategy('orb');
-    s.getState().toggleRescanStrategy('orb');
-    expect(s.getState().rescanStrategies.orb).toBe(true);
+    s.getState().toggleRescanStrategy('navigator');
+    s.getState().toggleRescanStrategy('navigator');
+    expect(s.getState().rescanStrategies.navigator).toBe(true);
   });
 
   it('survives a reload, because a scan budget is not a per-session whim', async () => {

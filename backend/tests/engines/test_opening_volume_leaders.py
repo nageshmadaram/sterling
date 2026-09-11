@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 
-from app.engines.nifty_orb_options import Bar
+from app.engines.option_contracts import Bar
 from app.engines.opening_volume_leaders import (
     CandleQuality,
     ChaseState,

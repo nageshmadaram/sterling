@@ -8,12 +8,133 @@ risk sizing, idempotency, and protection checks all agree.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict, dataclass, fields
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engines.opening_volume_leaders import IST
+
+
+async def _find_contract(client, symbol: str, underlying: str):
+    for exchange in ("NFO", "BFO"):
+        try:
+            rows = await client.search_instruments(underlying, exchange, limit=10000)
+        except Exception:
+            continue
+        for row in rows or []:
+            if str(row.get("tradingsymbol") or "").upper() == symbol.upper():
+                return exchange, row
+    return None, None
+
+
+async def _existing_order_by_tag(client, tag: str):
+    try:
+        orders = await client.get_orders()
+    except Exception:
+        return False, None
+    return True, next((o for o in orders or [] if str(o.get("tag") or "") == tag), None)
+
+
+def _parse_timestamp(value: Any):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=IST)
+    if isinstance(value, (int, float)):
+        x = float(value)
+        x = x / 1000 if x > 10_000_000_000 else x
+        return datetime.fromtimestamp(x, tz=timezone.utc).astimezone(IST)
+    s = str(value).strip().replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(s)
+        return d if d.tzinfo else d.replace(tzinfo=IST)
+    except ValueError:
+        return None
+
+
+async def _resolve_fill(client, order_id: str, timeout_s: float = 5.0):
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    last_status = "UNKNOWN"
+    while True:
+        latest = {}
+        try:
+            h = await client.get_order_history(order_id)
+            latest = h[-1] if isinstance(h, list) and h else (h if isinstance(h, dict) else {})
+        except Exception:
+            pass
+        status = str(latest.get("status") or "").upper()
+        last_status = status or last_status
+        filled = int(float(latest.get("filled_quantity") or latest.get("filled_qty") or 0))
+        avg = float(latest.get("average_price") or latest.get("average_price_filled") or 0)
+        try:
+            trades = await client.get_order_trades(order_id)
+            if trades:
+                q = sum(int(float(t.get("quantity") or 0)) for t in trades)
+                v = sum(float(t.get("quantity") or 0) * float(t.get("average_price") or t.get("price") or 0) for t in trades)
+                if q:
+                    filled, avg = q, v / q
+        except Exception:
+            pass
+        if status in {"COMPLETE", "PARTIALLY FILLED", "PARTIAL", "CANCELLED", "REJECTED", "EXPIRED"} or filled > 0:
+            return filled, avg, status or last_status
+        if asyncio.get_running_loop().time() >= deadline:
+            return filled, avg, last_status
+        await asyncio.sleep(0.25)
+
+
+async def _cancel_and_reconcile(client, order_id: str, expected_total: int):
+    try:
+        await client.cancel_order(order_id)
+    except Exception:
+        return (*await _resolve_fill(client, order_id, 2.0), False)
+    filled, avg, status = await _resolve_fill(client, order_id, 3.0)
+    return filled, avg, status, (status in {"CANCELLED", "REJECTED", "EXPIRED"} and filled < expected_total) or filled >= expected_total
+
+
+async def _sell_and_verify(client, symbol: str, exchange: str, quantity: int):
+    if quantity <= 0:
+        return True, "nothing to close"
+    try:
+        r = await client.place_order_option(symbol, "sell", quantity, exchange=exchange, tag="OPENING-PROTECTION-FAIL-CLOSE")
+        oid = str((r or {}).get("order_id") or (r or {}).get("orderId") or "")
+        if not oid:
+            return False, "emergency close returned no order id"
+        filled, _, status = await _resolve_fill(client, oid, 5.0)
+        return (filled >= quantity, f"closed {filled}/{quantity} ({status})")
+    except Exception as exc:
+        return False, f"emergency close failed: {exc}"
+
+
+def _quote_age(value: Any):
+    ts = _parse_timestamp(value)
+    return None if ts is None else max(0, (datetime.now(IST) - ts.astimezone(IST)).total_seconds())
+
+
+async def _fresh_quote(client, exchange, symbol, max_age_s, max_spread_pct):
+    key = f"{exchange}:{symbol}"
+    payload = await client.get_quote([key])
+    q = (payload or {}).get(key)
+    if not q:
+        raise RuntimeError("live option quote unavailable")
+    dep = q.get("depth") or {}
+    buys = dep.get("buy") or []
+    sells = dep.get("sell") or []
+    bid = float((buys[0] if buys else {}).get("price") or 0)
+    ask = float((sells[0] if sells else {}).get("price") or 0)
+    ltp = float(q.get("last_price") or 0)
+    if bid <= 0 or ask <= 0 or ask < bid or ltp <= 0:
+        raise RuntimeError("option quote is not executable")
+    age = _quote_age(q.get("timestamp") or q.get("last_trade_time"))
+    if age is None or age > max_age_s:
+        raise RuntimeError(f"option quote stale/untimestamped: age={age}")
+    mid = (bid + ask) / 2
+    spread = (ask - bid) / mid * 100 if mid else float("inf")
+    if spread > max_spread_pct:
+        raise RuntimeError(f"spread {spread:.2f}% exceeds {max_spread_pct:.2f}%")
+    return {"bid": bid, "ask": ask, "ltp": ltp, "spread_pct": spread, "age_s": age, "volume": float(q.get("volume") or 0), "oi": float(q.get("oi") or 0)}
 
 
 @dataclass(frozen=True)
@@ -149,15 +270,6 @@ async def execute_opening_scan(
     from app.services.kite_engine import positions, protection, state as engine_state
     from app.services.kite_engine.service import available_fo_capital
     from app.services.kite_engine.sizing import size_position
-    from app.services.nifty_orb_execution import (
-        _cancel_and_reconcile,
-        _existing_order_by_tag,
-        _find_contract,
-        _fresh_quote,
-        _parse_timestamp,
-        _resolve_fill,
-        _sell_and_verify,
-    )
 
     config = (config or get_config(uid)).validate()
     if not config.enabled:

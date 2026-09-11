@@ -3,48 +3,17 @@ import { k, tint } from '../../styles/kiteUI';
 import { useKiteStatus } from '../../hooks/useKite';
 import { useEngineSignals, useEngineConfig } from '../../hooks/useSterlingKiteEngine';
 import { useNavigatorConfig } from '../../hooks/useNavigator';
-import { useOrbConfig } from '../../hooks/useOrbConfig';
 import { useAdaptiveEdgeSnapshot } from '../../hooks/useAdaptiveEdge';
 import { useGammaMoveSnapshot } from '../../hooks/useGammaMove';
-import { useOiWallFlowSnapshot } from '../../hooks/useOiWallFlow';
-import { useAtmPremiumImbalanceSnapshot } from '../../hooks/useAtmPremiumImbalance';
 
-
-/**
- * Broker connection and per-strategy state, in the footer.
- *
- * The replay chip that used to live here has moved to `ReplayFooterChip`.
- * Replay is a mode, not an engine, and sitting in this cluster implied it was
- * a seventh strategy — while duplicating the clock the dock toggle already
- * rendered forty pixels away.
- *
- * **On what these chips can honestly say.** Only SuperTrend reports scan
- * timing — `scanning`, `scanning_label`, `generated_ms`, `next_scan_ms`. ORB and
- * Adaptive Edge expose nothing about scanning at all, and Gamma Move and the ATM
- * bot expose a phase rather than a schedule. So a strip promising
- * "scanning / next scan / last scan" for all five would be inventing four
- * fifths of itself.
- *
- * Each chip therefore shows what its engine actually publishes: whether it is
- * ON, and the scan state where there is one. An engine that reports no schedule
- * says nothing about a schedule rather than showing a plausible dash that reads
- * as "idle". Adding the timing to the other engines is backend work per engine,
- * and this strip is where it would surface once it exists.
- */
 export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void }) {
   const status = useKiteStatus().data;
   const sig = useEngineSignals().data;
   const engineOn = useEngineConfig().data?.engine_enabled !== false;
   const navOn = useNavigatorConfig().data?.record.config.enabled ?? false;
-  const orbOn = useOrbConfig().data?.config?.enabled === true;
   const aeOn = !!useAdaptiveEdgeSnapshot().data;
   const gmOn = !!useGammaMoveSnapshot().data?.strategy?.enabled;
-  const owfOn = !!useOiWallFlowSnapshot().data?.strategy?.enabled;
-  const atmArmed = !!useAtmPremiumImbalanceSnapshot().data?.session?.armed;
 
-  // A failed CHECK is not a disconnection: the token is intact and Sterling
-  // simply could not ask. Showing it as "offline" is the same conflation that
-  // produced a session-expired modal over a good session.
   const unknown = !!status?.transient;
   const connected = !!status?.connected;
   const brokerTone = connected ? k.green : unknown ? k.dim : k.red;
@@ -64,7 +33,6 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
     {
       label: 'ST',
       on: engineOn,
-      // The only engine that publishes a schedule, so the only one that gets one.
       note: !engineOn ? 'off'
         : sig?.scanning ? (sig.scanning_label || 'scanning')
         : sig?.auto_scan === false ? 'manual'
@@ -72,11 +40,8 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
         : 'auto',
     },
     { label: 'NAV', on: navOn, note: navOn ? undefined : 'off' },
-    { label: 'ORB', on: orbOn, note: orbOn ? undefined : 'off' },
     { label: 'AE', on: aeOn, note: aeOn ? undefined : 'off' },
     { label: 'GM', on: gmOn, note: gmOn ? undefined : 'off' },
-    { label: 'OWF', on: owfOn, note: owfOn ? undefined : 'off' },
-    { label: 'ATM', on: atmArmed, note: atmArmed ? 'armed' : 'not armed' },
   ];
 
   return (
