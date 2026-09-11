@@ -1,0 +1,263 @@
+"""The runtime around the three intraday strategies.
+
+The engine tests prove each rule. These prove the things that only break in the
+wiring: a config that will not round-trip, a resample that makes the replay and
+the live scan disagree, and a simulation that quietly runs a different strategy
+than the one on the board.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.engines.intraday import IntradayConfig
+from app.services import intraday as svc
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+@pytest.fixture(autouse=True)
+def _db(tmp_path, monkeypatch):
+    monkeypatch.setenv("STERLING_DB_PATH", str(tmp_path / "t.db"))
+    from app.services import db
+    monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "t.db"), raising=False)
+    db.init()
+    svc._state.clear()
+    yield
+    svc._state.clear()
+
+
+def _ts(day: str, hh: int, mm: int) -> float:
+    y, mo, d = (int(x) for x in day.split("-"))
+    return datetime(y, mo, d, hh, mm, tzinfo=IST).timestamp()
+
+
+def _tape_5m(day: str = "2026-09-10", n: int = 120) -> list[dict]:
+    """A steadily falling tape across two sessions — enough for a 55 EMA."""
+    out, price, i_in_day, cur = [], 200.0, 0, day
+    for i in range(n):
+        if i_in_day >= 75:
+            i_in_day = 0
+            cur = (datetime(*(int(x) for x in cur.split("-")), tzinfo=IST)
+                   + timedelta(days=1)).strftime("%Y-%m-%d")
+        o = price
+        price -= 0.4
+        out.append({"time": _ts(cur, 9, 15) + i_in_day * 300, "open": o,
+                    "high": max(o, price) + 0.5, "low": min(o, price) - 0.5,
+                    "close": price, "volume": 5000.0})
+        i_in_day += 1
+    return out
+
+
+# --------------------------------------------------------------------- config
+
+class TestConfig:
+    def test_an_unset_config_is_the_real_defaults(self):
+        cfg = svc.get_config("u1")
+        assert cfg.enabled is True
+        assert cfg.as_dict() == IntradayConfig().as_dict()
+
+    def test_a_partial_change_leaves_everything_else_alone(self):
+        svc.set_config({"vs_target_points": 25.0}, "u1")
+        cfg = svc.get_config("u1")
+        assert cfg.vs_target_points == 25.0
+        assert cfg.pb_ema_length == IntradayConfig().pb_ema_length
+
+    def test_an_unknown_field_is_refused_not_dropped(self):
+        # A silently ignored setting is worse than an error: the UI has no way
+        # to tell that it did not take.
+        with pytest.raises(ValueError, match="Unknown"):
+            svc.set_config({"pb_ema_lenght": 9}, "u1")
+
+    def test_an_invalid_value_never_becomes_a_trading_config(self):
+        with pytest.raises(ValueError):
+            svc.set_config({"rb_ema_slow": 5}, "u1")   # must exceed the faster lines
+        assert svc.get_config("u1").rb_ema_slow == 55
+
+    def test_stored_but_unreadable_falls_back_with_the_engine_off(self):
+        from app.services import db
+        db.set_config("intraday_config:u1", "{not json at all")
+        assert svc.get_config("u1").enabled is False
+
+    def test_lists_round_trip_as_tuples(self):
+        svc.set_config({"scan_indices": ["NIFTY", "FINNIFTY"]}, "u1")
+        assert svc.get_config("u1").scan_indices == ("NIFTY", "FINNIFTY")
+
+    def test_auto_execute_is_off_by_default_and_says_why_when_on(self):
+        assert IntradayConfig().auto_execute is False
+        cfg = IntradayConfig(auto_execute=True).validate()
+        assert any("walk-forward" in w for w in cfg.warnings())
+
+
+# ------------------------------------------------------------------ resampling
+
+def test_one_minute_tape_and_five_minute_tape_agree():
+    """The replay reads 1m bars and the live scan reads 5m. Same signal or the
+    replay proves nothing about the live engine."""
+    five = _tape_5m(n=120)
+    one: list[dict] = []
+    for b in five:
+        for k in range(5):
+            one.append({"time": b["time"] + k * 60, "open": b["open"],
+                        "high": b["high"], "low": b["low"], "close": b["close"],
+                        "volume": b["volume"] / 5.0})
+    cfg = IntradayConfig(warmup_bars=70).validate()
+    from_five = [e.as_dict() for e in svc.evaluate_symbol(five, cfg, "NIFTY")]
+    from_one = [e.as_dict() for e in svc.evaluate_symbol(one, cfg, "NIFTY")]
+    assert [e["strategy"] for e in from_five] == [e["strategy"] for e in from_one]
+    assert [e["state"] for e in from_five] == [e["state"] for e in from_one]
+
+
+# ------------------------------------------------------------------- cooldown
+
+def test_the_same_strategy_will_not_re_fire_inside_its_cooldown():
+    cfg = IntradayConfig(cooldown_bars=6).validate()
+    st = svc.status("u1")
+    bar_ms = 1_757_000_000_000
+    assert svc._cooldown_ok(st, cfg, "NIFTY", "pivot_break", bar_ms) is None
+    svc._record_fire(st, "NIFTY", "pivot_break", bar_ms)
+    blocked = svc._cooldown_ok(st, cfg, "NIFTY", "pivot_break", bar_ms + 5 * 60_000)
+    assert blocked and "cooling down" in blocked
+    # And a different strategy on the same symbol is unaffected.
+    assert svc._cooldown_ok(st, cfg, "NIFTY", "ma_ribbon", bar_ms + 60_000) is None
+    # Past the cooldown it is allowed again.
+    assert svc._cooldown_ok(st, cfg, "NIFTY", "pivot_break",
+                            bar_ms + 31 * 60_000) is None
+
+
+def test_the_daily_cap_is_a_hard_stop():
+    cfg = IntradayConfig(max_signals_per_symbol_per_day=2, cooldown_bars=0).validate()
+    st = svc.status("u1")
+    for i in range(2):
+        svc._record_fire(st, "NIFTY", "pivot_break", 1_757_000_000_000 + i * 60_000)
+    blocked = svc._cooldown_ok(st, cfg, "NIFTY", "pivot_break", 1_757_000_600_000)
+    assert blocked and "cap 2" in blocked
+
+
+# ------------------------------------------------------------ the replay path
+
+def test_the_simulation_calls_the_same_evaluator_the_live_scan_does():
+    """The caller path, not the function. A strategy that fires in a unit test
+    and never in the replay is the bug this test exists to catch."""
+    from app.services import simulation as sim
+
+    class _Runner:
+        _candles: list = []
+        _bar_history: dict = {}
+        _uid = None
+
+    tape = _tape_5m(n=200)
+    runner = _Runner()
+    runner._bar_history = {"NIFTY": tape}
+    out = sim._intraday_signals_from_bars(runner, "NIFTY", tape[-1]["time"], tape, None)
+    assert isinstance(out, list)
+    for sdef in out:
+        assert sdef["strategy"] in {"pivot_break", "ma_ribbon", "vwap_supertrend"}
+        assert sdef["opt_type"] in {"CE", "PE"}
+        # The stop and target travel with the signal. The replay must not
+        # substitute its generic ATR envelope for a rule-derived stop.
+        assert sdef["stop"] is not None and sdef["target"] is not None
+
+
+def test_a_disabled_engine_emits_nothing_into_the_replay():
+    from app.services import simulation as sim
+
+    class _Runner:
+        _candles: list = []
+        _bar_history: dict = {}
+        _uid = None
+        _cached_intraday_cfg = IntradayConfig(enabled=False)
+
+    tape = _tape_5m(n=200)
+    r = _Runner()
+    r._bar_history = {"NIFTY": tape}
+    assert sim._intraday_signals_from_bars(r, "NIFTY", tape[-1]["time"], tape, None) == []
+
+
+def test_a_strategy_turned_off_is_absent_from_the_replay():
+    from app.services import simulation as sim
+
+    class _Runner:
+        _candles: list = []
+        _bar_history: dict = {}
+        _uid = None
+        _cached_intraday_cfg = IntradayConfig(pb_enabled=False, rb_enabled=False)
+
+    tape = _tape_5m(n=200)
+    r = _Runner()
+    r._bar_history = {"NIFTY": tape}
+    out = sim._intraday_signals_from_bars(r, "NIFTY", tape[-1]["time"], tape, None)
+    assert all(s["strategy"] == "vwap_supertrend" for s in out)
+
+
+# ------------------------------------------------------------------- snapshot
+
+def test_a_snapshot_before_any_scan_is_empty_but_well_formed():
+    snap = svc.snapshot("u1")
+    assert snap["rows"] == [] and snap["armed"] == 0
+    assert snap["strategy"]["id"] == "intraday"
+    assert [s["id"] for s in snap["strategy"]["strategies"]] == [
+        "pivot_break", "ma_ribbon", "vwap_supertrend"]
+    # Nothing here is calibrated, and the payload says so rather than letting
+    # the settings page render bare numbers as measurements.
+    assert snap["strategy"]["calibrated_fields"] == []
+    assert snap["strategy"]["validated"] is False
+
+
+def _near_expiry() -> str:
+    """A weekly-ish expiry relative to TODAY.
+
+    Hardcoding a date makes a greeks test that passes until the date passes,
+    then fails for a reason that has nothing to do with the code.
+    """
+    return (svc.ist_today() + timedelta(days=5)).isoformat()
+
+
+# ---------------------------------------------------------------- solved delta
+
+class TestSolvedDelta:
+    """Kite quotes carry no greeks, so delta is backed out of the traded premium.
+
+    It matters because the premium stop is a spot stop converted by delta. Get
+    it wrong high and the stop lands below zero — a position that can never be
+    stopped out at all.
+    """
+
+    def test_an_atm_contract_solves_near_a_half(self):
+        d = svc.solved_delta({"strike": 24800.0, "expiry": _near_expiry(),
+                              "option_type": "CE"}, 120.0, 24800.0)
+        assert d is not None and 0.35 <= d <= 0.65
+
+    def test_a_premium_too_low_for_its_tenor_refuses_rather_than_guessing(self):
+        """A 120-rupee ATM with months to run implies an IV the solver cannot
+        reach. None is the honest answer, and the caller falls back."""
+        assert svc.solved_delta({"strike": 24800.0, "expiry": "2027-12-31",
+                                 "option_type": "CE"}, 120.0, 24800.0) is None
+
+    def test_a_far_otm_contract_solves_small(self):
+        d = svc.solved_delta({"strike": 26000.0, "expiry": _near_expiry(),
+                              "option_type": "CE"}, 2.0, 24800.0)
+        assert d is not None and d < 0.2
+
+    def test_a_premium_below_intrinsic_refuses_rather_than_guessing(self):
+        assert svc.solved_delta({"strike": 24800.0, "expiry": _near_expiry(),
+                                 "option_type": "CE"}, 0.5, 26000.0) is None
+
+    def test_missing_inputs_refuse(self):
+        near = _near_expiry()
+        for c, px, spot in (({"strike": 0, "expiry": near,
+                              "option_type": "CE"}, 100.0, 24800.0),
+                            ({"strike": 24800.0, "expiry": "",
+                              "option_type": "CE"}, 100.0, 24800.0),
+                            ({"strike": 24800.0, "expiry": near,
+                              "option_type": "CE"}, 100.0, 0.0)):
+            assert svc.solved_delta(c, px, spot) is None
+
+    def test_the_delta_is_returned_unsigned_for_a_put(self):
+        """`premium_stop_for` takes a distance, not a direction — a signed delta
+        there would move the stop the wrong way on every PE."""
+        d = svc.solved_delta({"strike": 24800.0, "expiry": _near_expiry(),
+                              "option_type": "PE"}, 120.0, 24800.0)
+        assert d is not None and d > 0

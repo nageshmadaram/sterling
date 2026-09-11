@@ -22,6 +22,7 @@ import { NavigatorSettingsPanel } from './NavigatorSettingsPanel';
 import { NavigatorCalibrationPanel } from './NavigatorCalibrationPanel';
 import { DataLakeSettingsPanel } from '../datalake/DataLakeSettingsPanel';
 import { GammaMoveSettingsPanel } from './GammaMoveSettingsPanel';
+import { IntradaySettings } from '../IntradaySettings';
 import { AdaptiveEdgeSettingsPanel } from './AdaptiveEdgeSettingsPanel';
 import { AutomaticRulesPanel, ManualRulesPanel } from './TradeRulesPanels';
 import { SuperTrendEnginePanel } from './SuperTrendEnginePanel';
@@ -849,6 +850,7 @@ const SECTION_ICONS: Record<ConnectSection, React.ReactNode> = {
   navigator: <Icons.Pulse />,
   adaptiveEdge: <Icons.Chart />,
   gammaMove: <Icons.Pulse />,
+  intraday: <Icons.Chart />,
   markets: <Icons.Basket />,
   notifications: <Icons.Bell />,
   experience: <Icons.Settings />,
@@ -876,6 +878,8 @@ const SECTION_DEFS: (SectionDef & { pageDescription: string })[] = [
     pageDescription: 'Score, modes, structure and protection.' },
   { id: 'gammaMove', label: 'Gamma Move', eyebrow: 'OI unwind at a level, buy the gamma', group: 'Signal engines',
     pageDescription: 'Buys the option that writers are covering: an F&O stock at a support or resistance level, the highest open-interest strike there, entered when open interest falls while volume and premium rise on the same 15-minute bar. Held one to two sessions. Calibrated against real market data, which found the entry trigger alone has no edge — the level filter is where it is — so it stays paper-only until the readiness gate passes.' },
+  { id: 'intraday', label: 'Intraday Pack', eyebrow: 'Pivot break, MA ribbon, VWAP SuperTrend', group: 'Signal engines',
+    pageDescription: 'Three 5-minute option strategies on one tape. A strong candle closing through EMA9 and a Fibonacci pivot; the 55 EMA crossing the whole 8/13/21 ribbon (never one line of it); and a SuperTrend(18, 1.46) flip confirmed by which side of session VWAP the candle closed. None has been through the walk-forward harness, so every threshold is a judgement call and auto-execution is off.' },
   { id: 'markets', label: 'Markets & Tools', eyebrow: 'Funds & live data', group: 'Platform',
     pageDescription: 'Exchanges, funds, charges and live ticker tools.' },
   { id: 'notifications', label: 'Notifications', eyebrow: 'Kite Telegram alerts', group: 'Platform',
@@ -1136,6 +1140,12 @@ export function ConnectPane() {
             {section === 'gammaMove' && (
               <>
                 <GammaMoveSettingsPanel />
+              </>
+            )}
+
+            {section === 'intraday' && (
+              <>
+                <IntradaySettings />
               </>
             )}
 

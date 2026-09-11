@@ -147,6 +147,7 @@ describe('useScanAllStrategies', () => {
   });
 
   it('contains expected scannable engines', () => {
-    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toEqual(['supertrend', 'navigator', 'gamma_move', 'adaptive_edge']);
+    expect(Object.keys(SCANNABLE_ENGINE_LABEL)).toEqual(
+      ['supertrend', 'navigator', 'gamma_move', 'adaptive_edge', 'intraday']);
   });
 });

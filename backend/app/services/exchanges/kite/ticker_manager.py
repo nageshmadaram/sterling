@@ -78,6 +78,16 @@ def _make_broadcaster(user_id: str):
                 await gm_runner.on_ticks(user_id, ticks)
         except Exception as exc:  # never let this kill the tick loop
             log.debug("Gamma Move on_ticks failed for %s: %s", user_id, exc)
+        # Then the intraday pack: its premium trail and its stop are both
+        # enforced on ticks. A trailing stop that only runs while a browser is
+        # open is not a trailing stop.
+        try:
+            from app.services import intraday_positions as id_positions
+            from app.services import intraday_runner as id_runner
+            if id_positions.open_positions(user_id):
+                await id_runner.on_ticks(user_id, ticks)
+        except Exception as exc:  # never let this kill the tick loop
+            log.debug("Intraday on_ticks failed for %s: %s", user_id, exc)
         try:
             from app.api.v1.endpoints.stream import stream_manager
             await stream_manager.broadcast_to_channel(

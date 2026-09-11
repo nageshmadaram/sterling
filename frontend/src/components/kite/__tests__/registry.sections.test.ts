@@ -13,7 +13,7 @@ describe('settings section registry', () => {
   const EVERY_SECTION: Record<SectionId, true> = {
     account: true, truedata: true, diagnostics: true, mode: true, manualRules: true,
     autoRules: true, engine: true, navigator: true, adaptiveEdge: true,
-    gammaMove: true,
+    gammaMove: true, intraday: true,
     markets: true, notifications: true,
     experience: true, dataLake: true,
   };
@@ -29,7 +29,7 @@ describe('settings section registry', () => {
     }
   });
 
-  it.each(['diagnostics', 'gammaMove'] as SectionId[])(
+  it.each(['diagnostics', 'gammaMove', 'intraday'] as SectionId[])(
     'can deep-link and persist %s',
     (section) => {
       localStorage.clear();

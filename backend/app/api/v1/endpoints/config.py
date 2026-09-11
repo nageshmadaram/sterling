@@ -402,3 +402,189 @@ async def adaptive_edge_evidence(user: UserContext = Depends(get_current_user)) 
         raise HTTPException(status_code=401, detail="authenticated user is required")
     from app.services.adaptive_edge_evidence import summary
     return summary(uid)
+
+
+# ------------------------------------------------------------------- Intraday
+
+@router.get("/intraday")
+async def get_intraday_config(user: UserContext = Depends(get_current_user)) -> dict:
+    """Current config plus the pack's own defaults and vocabularies.
+
+    Published rather than mirrored in the client, for the same reason as every
+    other engine here: the recurring bug in this codebase is a UI that claims
+    backend behaviour the backend does not honour.
+
+    ``calibrated_fields`` is deliberately EMPTY. Nothing in these three
+    strategies has been through the walk-forward harness, and the settings page
+    needs that fact to mark each number as a judgement call rather than render a
+    bare figure a reader may take for a measurement.
+    """
+    from app.engines.intraday import (IntradayConfig, PIVOT_PERIODS, PIVOT_TYPES,
+                                      STOP_SOURCES, STRATEGY_KEYS, TIMEFRAMES,
+                                      TRAIL_MODES, descriptor)
+    from app.engines.intraday.config import SIZING_MODES, STOP_MODES
+    from app.engines.option_contracts import EXPIRY_SELECTIONS, EXPIRY_SERIES, MONEYNESS
+    from app.services.kite_engine.stock_registry import HIGH_LIQUIDITY_STOCK_NAMES
+    from app.services.intraday import get_config
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
+    cfg = get_config(uid)
+    return {
+        "strategy": {**descriptor(), "enabled": cfg.enabled},
+        "config": cfg.as_dict(),
+        "defaults": IntradayConfig().as_dict(),
+        "enabled_strategies": list(cfg.enabled_strategies()),
+        "vocabularies": {
+            "strategy_key": list(STRATEGY_KEYS),
+            "timeframe": sorted(TIMEFRAMES),
+            "pb_pivot_type": sorted(PIVOT_TYPES),
+            "pb_pivot_period": sorted(PIVOT_PERIODS),
+            "pb_trail_mode": sorted(TRAIL_MODES),
+            "vs_stop_source": sorted(STOP_SOURCES),
+            "sizing_mode": sorted(SIZING_MODES),
+            "stop_mode": sorted(STOP_MODES),
+            "expiry_selection": sorted(EXPIRY_SELECTIONS),
+            "expiry_series_indices": sorted(EXPIRY_SERIES),
+            "expiry_series_stocks": sorted(EXPIRY_SERIES),
+            "moneyness": sorted(MONEYNESS),
+            "scan_stocks": sorted(HIGH_LIQUIDITY_STOCK_NAMES),
+        },
+        "warnings": cfg.warnings(),
+    }
+
+
+@router.put("/intraday")
+async def update_intraday_config(body: dict = Body(...),
+                                 user: UserContext = Depends(get_current_user)) -> dict:
+    """Apply a partial config change.
+
+    Unknown keys are refused rather than ignored: a silently dropped setting is
+    worse than a 422, because the UI has no way to tell that it did not take.
+    """
+    from app.services.intraday import set_config
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
+    values = {k: v for k, v in dict(body).items() if v is not None}
+    if not values:
+        raise HTTPException(status_code=422, detail="no settings to change")
+    try:
+        cfg = set_config(values, uid)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"config": cfg.as_dict(), "warnings": cfg.warnings()}
+
+
+@router.get("/intraday/snapshot")
+async def intraday_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
+    """Config, what the last scan found, and every reason nothing is armed."""
+    from app.services.simulation import simulation_runner
+    if simulation_runner.has_session_view:
+        return simulation_runner.get_intraday_snapshot()
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="authenticated user is required")
+    from app.services.intraday import snapshot
+    return snapshot(uid)
+
+
+@router.post("/intraday/scan")
+async def intraday_scan(user: UserContext = Depends(get_current_user)) -> dict:
+    """Run one on-demand universe -> candles -> evaluations pass."""
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="authenticated user is required")
+    from app.services.intraday import scan_once
+    try:
+        return await scan_once(uid)
+    except Exception as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"Intraday scan failed: {exc}") from exc
+
+
+def _intraday_uid(user: UserContext) -> str:
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="authenticated user is required")
+    return str(uid)
+
+
+@router.post("/intraday/arm")
+async def intraday_arm(body: dict = Body(...),
+                       user: UserContext = Depends(get_current_user)) -> dict:
+    """Enter one armed signal by id.
+
+    Every gate the runner applies is applied here too, because the runner is
+    where they live — this route does not get its own copy to drift from.
+    """
+    uid = _intraday_uid(user)
+    signal_id = str(dict(body).get("signal_id") or "").strip()
+    if not signal_id:
+        raise HTTPException(status_code=422, detail="signal_id is required")
+    from app.services.intraday_runner import arm
+    return await arm(uid, signal_id)
+
+
+@router.post("/intraday/adopt")
+async def intraday_adopt(body: dict = Body(...),
+                         user: UserContext = Depends(get_current_user)) -> dict:
+    """Take responsibility for a position this engine did not open.
+
+    Protection is placed as part of adopting: a position the engine manages but
+    has not protected is the worst of both worlds.
+    """
+    uid = _intraday_uid(user)
+    data = dict(body)
+    symbol = str(data.get("symbol") or "").strip()
+    try:
+        quantity = int(data.get("quantity") or 0)
+        entry_price = float(data.get("entry_price") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422,
+                            detail="quantity and entry_price must be numbers") from exc
+    if not symbol or quantity <= 0 or entry_price <= 0:
+        raise HTTPException(status_code=422,
+                            detail="symbol, a positive quantity and entry_price are required")
+    from app.services.intraday_runner import adopt
+    return await adopt(uid, symbol, quantity, entry_price)
+
+
+@router.post("/intraday/exit")
+async def intraday_exit(body: dict = Body(...),
+                        user: UserContext = Depends(get_current_user)) -> dict:
+    """Close one position now.
+
+    Deliberately available whatever the manual/auto setting says: auto gates
+    opening, and an operator must always be able to close.
+    """
+    uid = _intraday_uid(user)
+    symbol = str(dict(body).get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol is required")
+    from app.services.intraday_runner import exit_one
+    return await exit_one(uid, symbol)
+
+
+@router.post("/intraday/square-off")
+async def intraday_square_off(user: UserContext = Depends(get_current_user)) -> dict:
+    """Flatten everything this engine holds, now."""
+    uid = _intraday_uid(user)
+    from app.services.intraday_runner import square_off_all
+    return await square_off_all(uid)
+
+
+@router.post("/intraday/reconcile")
+async def intraday_reconcile(user: UserContext = Depends(get_current_user)) -> dict:
+    """Re-sync against the broker: close what it no longer holds, re-protect the rest."""
+    uid = _intraday_uid(user)
+    from app.services.intraday_runner import reconcile
+    return await reconcile(uid)
+
+
+@router.get("/intraday/positions")
+async def intraday_positions(user: UserContext = Depends(get_current_user)) -> dict:
+    """What this engine is holding, and whether each position has a broker stop."""
+    uid = _intraday_uid(user)
+    from app.services.intraday_positions import load_record
+    from app.services.intraday_runner import positions_view, realised_pnl_today
+    from app.services.intraday import ist_today
+    return {"positions": positions_view(uid),
+            "realised_pnl_today": realised_pnl_today(uid),
+            "record": load_record(uid).roll(ist_today().isoformat()).as_dict()}

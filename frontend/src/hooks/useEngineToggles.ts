@@ -2,9 +2,10 @@ import { useEngineConfig, usePatchEngineConfig } from './useSterlingKiteEngine';
 import { useNavigatorConfig, useSetNavigatorConfig } from './useNavigator';
 import { useGammaMoveConfig, useUpdateGammaMove } from './useGammaMove';
 import { useAdaptiveEdgeEngineConfig, useSetAdaptiveEdgeEngineConfig } from './useAdaptiveEdge';
+import { useIntradayConfig, useUpdateIntraday } from './useIntraday';
 
 export type EngineToggleId =
-  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge';
+  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge' | 'intraday';
 
 export interface EngineToggle {
   id: EngineToggleId;
@@ -20,12 +21,14 @@ export function useEngineEnabled(): Record<EngineToggleId, boolean> {
   const nav = useNavigatorConfig();
   const gm = useGammaMoveConfig();
   const ae = useAdaptiveEdgeEngineConfig();
+  const id = useIntradayConfig();
 
   return {
     supertrend: st.data?.engine_enabled !== false,
     navigator: nav.data?.record ? !!nav.data.record.config.enabled : true,
     gamma_move: (gm.data?.config as { enabled?: boolean } | undefined)?.enabled !== false,
     adaptive_edge: (ae.data?.config as { enabled?: boolean } | undefined)?.enabled !== false,
+    intraday: id.data?.config?.enabled !== false,
   };
 }
 
@@ -43,11 +46,15 @@ export function useEngineToggles(): EngineToggle[] {
   const ae = useAdaptiveEdgeEngineConfig();
   const aeSet = useSetAdaptiveEdgeEngineConfig();
 
+  const idCfg = useIntradayConfig();
+  const idSet = useUpdateIntraday();
+
   const stOn = on.supertrend;
   const navRecord = nav.data?.record;
   const navOn = on.navigator;
   const gmOn = on.gamma_move;
   const aeOn = on.adaptive_edge;
+  const idOn = on.intraday;
 
   return [
     {
@@ -94,6 +101,16 @@ export function useEngineToggles(): EngineToggle[] {
       description: aeOn
         ? 'Order-flow scalping. Signals only — live execution stays gated.'
         : 'Off — no order-flow scanning and no Adaptive Edge candidates.',
+    },
+    {
+      id: 'intraday',
+      label: 'Intraday pack',
+      enabled: idOn,
+      pending: idSet.isPending,
+      toggle: idCfg.data ? () => idSet.mutate({ enabled: !idOn }) : null,
+      description: idOn
+        ? 'Pivot Break, MA Ribbon and VWAP SuperTrend on 5-minute candles. Signals only.'
+        : 'Off — none of the three intraday strategies scans or signals.',
     },
   ];
 }

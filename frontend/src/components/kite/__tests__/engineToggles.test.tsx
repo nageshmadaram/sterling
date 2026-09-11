@@ -34,13 +34,17 @@ vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+vi.mock('../../../hooks/useIntraday', () => ({
+  useIntradayConfig: () => ({ data: { config: { enabled: true } } }),
+  useUpdateIntraday: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 vi.mock('../TradingModeControls', () => ({ TradingModeControls: () => <div>mode controls</div> }));
 
 import { TradingModePanel } from '../TradingModePanel';
 
 const ENGINES = [
   'SuperTrend engine', 'Value-Flow Navigator',
-  'Gamma Move', 'Adaptive Edge',
+  'Gamma Move', 'Adaptive Edge', 'Intraday pack',
 ];
 
 /**

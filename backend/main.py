@@ -111,6 +111,15 @@ async def lifespan(app: FastAPI):
     from app.services.adaptive_edge_runner import auto_scan_loop as _adaptive_edge_scan
     adaptive_edge_task = asyncio.create_task(_adaptive_edge_scan(interval=60))
 
+    # Intraday pack (pivot break / MA ribbon / VWAP SuperTrend): 5-minute rules,
+    # so the loop runs on a 5-minute cadence rather than the engine default.
+    # It also carries the session-end sweep: an intraday strategy holding
+    # overnight is a different strategy, and `close_at_session_end` is only real
+    # if something actually runs after the close.
+    from app.services.intraday_runner import auto_scan_loop as _intraday_scan
+    intraday_task = asyncio.create_task(_intraday_scan(interval=300))
+    log.info("Intraday pack auto-scan loop started (every 5 min)")
+
     log.info("ATM PI auto-arm loop started (every 30s)")
     log.info("Adaptive Edge auto scan loop started (every 60s)")
 
@@ -217,6 +226,12 @@ async def lifespan(app: FastAPI):
     adaptive_edge_task.cancel()
     try:
         await adaptive_edge_task
+    except (Exception, BaseException):
+        pass
+
+    intraday_task.cancel()
+    try:
+        await intraday_task
     except (Exception, BaseException):
         pass
     ticker_watchdog_task.cancel()

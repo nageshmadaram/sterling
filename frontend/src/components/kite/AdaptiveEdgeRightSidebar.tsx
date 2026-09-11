@@ -4,6 +4,7 @@ import { SterlingKiteEngineWithExpiry } from './SterlingKiteEngineWithExpiry';
 import { rowsFromSnapshot } from './AdaptiveEdgePanel';
 import { AdaptiveEdgeBoard } from './board/AdaptiveEdgeBoard';
 import { GammaMoveBoard } from './board/GammaMoveBoard';
+import { IntradayBoard } from './board/IntradayBoard';
 import { EngineTabs, type EngineTabState } from './board/EngineToolbar';
 import { adaptiveEdgeToBoard } from './board/adaptiveEdgeAdapter';
 import { gammaMoveToBoard } from './board/gammaMoveAdapter';
@@ -12,6 +13,8 @@ import { ACTIONABLE, type BoardSignal, type EngineId } from './board/boardTypes'
 import { useEngineEnabled } from '../../hooks/useEngineToggles';
 import { useAdaptiveEdgeSnapshot } from '../../hooks/useAdaptiveEdge';
 import { useEngineSignals, useEngineConfig } from '../../hooks/useSterlingKiteEngine';
+import { useIntradaySnapshot } from '../../hooks/useIntraday';
+import { intradayToBoard } from './board/intradayAdapter';
 import { useGammaMoveSnapshot } from '../../hooks/useGammaMove';
 import { useNavigatorConfig } from '../../hooks/useNavigator';
 import { k, Icons } from '../../styles/kiteUI';
@@ -49,6 +52,7 @@ interface Props {
 const NAV_TARGET: Record<string, EngineId> = {
   adaptiveEdge: 'adaptive_edge',
   gammaMove: 'gamma_move',
+  intraday: 'intraday',
 };
 
 export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBoardDetail }: Props) {
@@ -76,6 +80,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
   const engineConfig = useEngineConfig();
   const navigatorEnabled = useNavigatorConfig().data?.record.config.enabled ?? false;
   const gmSnapshot = useGammaMoveSnapshot();
+  const idSnapshot = useIntradaySnapshot();
 
   /**
    * The countdown to the next automatic scan, 0..1.
@@ -106,7 +111,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
    * now or in twenty seconds.
    */
   const scanOrder = useMemo<ScannableEngine[]>(() => {
-    const all: ScannableEngine[] = ['supertrend', 'navigator', 'gamma_move', 'adaptive_edge'];
+    const all: ScannableEngine[] = ['supertrend', 'navigator', 'gamma_move', 'adaptive_edge', 'intraday'];
     const first = all.filter((e) => e === engine);
     return [...first, ...all.filter((e) => e !== engine)];
   }, [engine]);
@@ -136,8 +141,10 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
     // whatever is ticked in Trading Mode. Absent config (snapshot still
     // loading) means included, so a first press is not a no-op.
     if (e === 'gamma_move') return gmSnapshot.data?.config?.enabled !== false;
+    if (e === 'intraday') return idSnapshot.data?.config?.enabled !== false;
     return true;
-  }), [scanOrder, rescanStrategies, engineConfig.data?.engine_enabled, navigatorEnabled, gmSnapshot.data?.config?.enabled]);
+  }), [scanOrder, rescanStrategies, engineConfig.data?.engine_enabled, navigatorEnabled,
+       gmSnapshot.data?.config?.enabled, idSnapshot.data?.config?.enabled]);
 
   /**
    * Name what the press will actually run, in the order it will run it.
@@ -165,6 +172,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
     const st = supertrendToBoard(engineSignals.data?.rows ?? []);
     const ae = snapshot.data ? adaptiveEdgeToBoard(rowsFromSnapshot(snapshot.data)) : [];
     const gm = gammaMoveToBoard(gmSnapshot.data);
+    const id = intradayToBoard(idSnapshot.data);
     const live = (list: typeof st) => list.filter((s) => ACTIONABLE.includes(s.status)).length;
     const all: EngineTabState[] = [
       { id: 'supertrend', running: engineConfig.data?.engine_enabled !== false, live: live(st), scanned: st.length },
@@ -172,12 +180,15 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
       { id: 'gamma_move',
         running: gmSnapshot.data?.config?.enabled === true,
         live: live(gm), scanned: gm.length },
+      { id: 'intraday',
+        running: idSnapshot.data?.config?.enabled === true,
+        live: live(id), scanned: id.length },
     ];
     return all.filter((tab) => {
       if (tab.id === 'supertrend') return engineOn.supertrend || engineOn.navigator;
       return engineOn[tab.id as keyof typeof engineOn] !== false;
     });
-  }, [engineSignals.data, engineConfig.data, snapshot.data, gmSnapshot.data, engineOn]);
+  }, [engineSignals.data, engineConfig.data, snapshot.data, gmSnapshot.data, idSnapshot.data, engineOn]);
 
   useEffect(() => {
     if (!tabs.length) return;
@@ -236,6 +247,9 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
         {engine === 'adaptive_edge' && <AdaptiveEdgeBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />}
         {engine === 'gamma_move' && (
           <GammaMoveBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
+        )}
+        {engine === 'intraday' && (
+          <IntradayBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
         )}
       </div>
     </div>

@@ -25,6 +25,12 @@ export const REPLAY_STRATEGIES: readonly ReplayStrategy[] = [
   { id: 'adaptive_edge', label: 'Adaptive Edge', tone: 'var(--k-cyan)' },
   { id: 'navigator', label: 'Navigator', tone: 'var(--k-emerald)' },
   { id: 'gamma_move', label: 'Gamma Move', tone: 'var(--k-violet)' },
+  // The intraday pack. Three ids, because the replay emits three distinct
+  // strategies and merging them here would make the timeline heatmap and the
+  // summary breakdown unable to tell which rule produced a session's trades.
+  { id: 'pivot_break', label: 'Pivot Break', tone: 'var(--k-amber)' },
+  { id: 'ma_ribbon', label: 'MA Ribbon', tone: 'var(--k-green)' },
+  { id: 'vwap_supertrend', label: 'VWAP SuperTrend', tone: 'var(--k-blue)' },
 ] as const;
 
 const BY_ID = new Map(REPLAY_STRATEGIES.map((s) => [s.id, s]));

@@ -3,16 +3,18 @@ import { api } from '../utils/api';
 import { useRunScan } from './useSterlingKiteEngine';
 import { useRunNavigatorScan } from './useNavigator';
 import { useGammaMoveScan } from './useGammaMove';
+import { useIntradayScan } from './useIntraday';
 import { useScanActivity } from '../store/useScanActivity';
 
 export type ScannableEngine =
-  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge';
+  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge' | 'intraday';
 
 export const SCANNABLE_ENGINE_LABEL: Record<ScannableEngine, string> = {
   supertrend: 'SuperTrend',
   navigator: 'Navigator',
   gamma_move: 'Gamma Move',
   adaptive_edge: 'Adaptive Edge',
+  intraday: 'Intraday',
 };
 
 export interface EngineScanResult {
@@ -36,12 +38,14 @@ export function useScanAllStrategies() {
   const navigator = useRunNavigatorScan();
   const gammaMove = useGammaMoveScan();
   const adaptiveEdge = useAdaptiveEdgeScan();
+  const intraday = useIntradayScan();
 
   const runners: Record<ScannableEngine, () => Promise<unknown>> = {
     supertrend: () => supertrend.mutateAsync(),
     navigator: () => navigator.mutateAsync(),
     gamma_move: () => gammaMove.mutateAsync(),
     adaptive_edge: () => adaptiveEdge.mutateAsync(),
+    intraday: () => intraday.mutateAsync(),
   };
 
   const scanAll = async (order: readonly ScannableEngine[]): Promise<EngineScanResult[]> => {
@@ -70,7 +74,7 @@ export function useScanAllStrategies() {
   return {
     scanAll,
     isPending: supertrend.isPending || navigator.isPending
-      || gammaMove.isPending || adaptiveEdge.isPending,
+      || gammaMove.isPending || adaptiveEdge.isPending || intraday.isPending,
   };
 }
 

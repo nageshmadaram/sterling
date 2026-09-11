@@ -44,6 +44,12 @@ vi.mock('../../../hooks/useGammaMove', () => ({
   useGammaMoveConfig: () => ({ data: { config: { enabled: true } } }),
   useUpdateGammaMove: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+vi.mock('../../../hooks/useIntraday', () => ({
+  useIntradayConfig: () => ({ data: { config: { enabled: true } } }),
+  useUpdateIntraday: () => ({ mutate: vi.fn(), isPending: false }),
+  useIntradayScan: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useIntradaySnapshot: () => ({ data: undefined }),
+}));
 vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),

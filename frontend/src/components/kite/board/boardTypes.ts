@@ -17,13 +17,18 @@
  */
 import type { Stat } from './StatCard';
 
-export type EngineId = 'supertrend' | 'navigator' | 'adaptive_edge' | 'gamma_move';
+export type EngineId =
+  | 'supertrend' | 'navigator' | 'adaptive_edge' | 'gamma_move' | 'intraday';
 
 export const ENGINE_LABEL: Record<EngineId, string> = {
   supertrend: 'SuperTrend',
   navigator: 'Navigator',
   adaptive_edge: 'Adaptive Edge',
   gamma_move: 'Gamma Move',
+  // Three strategies share one tab. They share a universe, a timeframe and a
+  // contract picker and differ only in what makes them fire, so three tabs
+  // would be three copies of the same board — the row says which fired.
+  intraday: 'Intraday',
 };
 
 /** Short form for a badge, where the full name will not fit. */
@@ -32,6 +37,7 @@ export const ENGINE_TAG: Record<EngineId, string> = {
   navigator: 'NAV',
   adaptive_edge: 'AE',
   gamma_move: 'GM',
+  intraday: 'ID',
 };
 
 /**

@@ -835,6 +835,127 @@ def _gamma_move_watch_from_bars(history: list, close: float, *,
     }
 
 
+# ------------------------------------------------------------------ Intraday pack
+
+def _intraday_config(runner: Any):
+    """The live config, read once per run rather than once per bar per symbol."""
+    cached = getattr(runner, "_cached_intraday_cfg", None)
+    if cached is None:
+        from app.services.intraday import get_config
+        cached = get_config(getattr(runner, "_uid", None))
+        runner._cached_intraday_cfg = cached
+    return cached
+
+
+def _intraday_store_bars(sym: str, asof_ts: Optional[float], cfg: Any) -> list:
+    """Completed bars from the OHLCV store, as-of ``asof_ts``. Empty on a miss.
+
+    The replay's own warmup is FIFTY bars at the replay's resolution, and this
+    pack's slowest input is a 55 EMA on 5-minute candles. On a 1-minute replay
+    those fifty bars are ten 5-minute candles, so the ribbon strategy could
+    never have fired — not once, on any session, however long the replay ran.
+    It would have looked like "the rule is strict", which is the worst kind of
+    silence because it is indistinguishable from working.
+
+    So the tape is read from the store the same way Gamma Move reads its daily
+    bars: as-of the replay clock, never past it.
+    """
+    if not sym or asof_ts is None:
+        return []
+    try:
+        from app.services.ohlcv_store import get_candles
+    except Exception:
+        return []
+    minutes = getattr(cfg, "timeframe_minutes", 5)
+    need = int(getattr(cfg, "warmup_bars", 80)) + 40
+    until = int(asof_ts)
+    since = until - need * minutes * 60 * 4      # ×4 for weekends and half days
+    for res in (getattr(cfg, "timeframe", "5m"), "1m"):
+        try:
+            rows = get_candles(sym, res, limit=need * 6, since=since, until=until) or []
+        except Exception:
+            rows = []
+        if rows:
+            return [{**r, "symbol": sym} for r in rows]
+    return []
+
+
+def _intraday_tape(runner: Any, sym: str, bar_time: Any, history: list,
+                   cfg: Any = None) -> list:
+    """Everything printed for ``sym`` up to this bar, warmup included.
+
+    Three sources, in order of how much history they hold: the OHLCV store, the
+    replay's own loaded session, and the in-memory bar history (trimmed to 60).
+    They are merged rather than chosen between, because none of the three is
+    complete on its own — and a 55 EMA seeded on a short tape is not undefined,
+    it is WRONG, and it reads plausible while it is wrong.
+    """
+    asof = _asof_symbol_bars(getattr(runner, "_candles", None) or [], sym, bar_time)
+    tape = list(asof or history)
+    warm = list((getattr(runner, "_bar_history", None) or {}).get(sym) or [])
+    stored = _intraday_store_bars(sym, _bar_epoch_seconds({"time": bar_time})
+                                  if bar_time is not None else None, cfg)
+    merged: list = []
+    seen: set = set()
+    for source in (stored, warm, tape):
+        for b in source:
+            ts = _bar_epoch_seconds(b)
+            # A bar with no readable timestamp cannot be placed on the tape at
+            # all. Keeping it would put it wherever the sort happened to leave
+            # it, which is a silent reordering of price history.
+            if ts is None:
+                continue
+            key = (ts, b.get("open"), b.get("close"))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(b)
+    # One ascending tape. The three sources overlap and do not arrive in order.
+    merged.sort(key=lambda b: _bar_epoch_seconds(b) or 0.0)
+    # Never past the replay clock. A bar from the future is the lookahead bug
+    # this repo has already had to fix once.
+    cutoff = _bar_epoch_seconds({"time": bar_time}) if bar_time is not None else None
+    if cutoff is not None:
+        merged = [b for b in merged if (_bar_epoch_seconds(b) or 0.0) <= cutoff]
+    return merged
+
+
+def _intraday_signals_from_bars(runner: Any, sym: str, bar_time: Any,
+                                history: list, sim_cfg: Any) -> List[Dict[str, Any]]:
+    """Run the three intraday strategies on the replay tape.
+
+    Calls the same ``evaluate_symbol`` the live scan calls. The stop and target
+    travel with the signal, because each of these three derives them from its
+    own rule — a candle's low, the slow EMA, VWAP — and replacing them with a
+    generic ATR envelope would replay a strategy nobody wrote.
+    """
+    cfg = _intraday_config(runner)
+    if not cfg.enabled:
+        return []
+    wanted = cfg.enabled_strategies()
+    if not wanted:
+        return []
+    tape = _intraday_tape(runner, sym, bar_time, history, cfg)
+    if len(tape) < cfg.warmup_bars:
+        return []
+    from app.services.intraday import evaluate_symbol
+    out: List[Dict[str, Any]] = []
+    for ev in evaluate_symbol(tape, cfg, sym):
+        sig = ev.signal
+        if sig is None or sig.strategy not in wanted:
+            continue
+        out.append({
+            "strategy": sig.strategy,
+            "direction": sig.direction,
+            "strength": sig.strength,
+            "opt_type": sig.option_type,
+            "stop": sig.stop,
+            "target": sig.target,
+            "origin": sig.origin,
+        })
+    return out
+
+
 def _gamma_move_candidate(ev: "SimSignalEvent", sim_date: str) -> Dict[str, Any]:
     opt = ev.opt_type or ("CE" if ev.direction.upper() in ("BULLISH", "LONG", "BUY") else "PE")
     kind = ev.level_kind or ("resistance" if opt == "CE" else "support")
@@ -2721,6 +2842,70 @@ class SimulationRunner:
         want = {n.lower() for n in names}
         return [ev for ev in self._stats.events if str(ev.strategy).lower() in want]
 
+    def get_intraday_snapshot(self) -> Dict[str, Any]:
+        """The live board schema, filled from what the replay actually emitted.
+
+        Deliberately the SAME shape the live ``snapshot()`` returns, so the board
+        has one adapter rather than a replay variant that drifts from it. Rows
+        are replay events only — no watching rows are invented, because a
+        watching row the replay never evaluated would be a claim about a bar
+        that was never scanned.
+        """
+        from app.engines.intraday import DESCRIPTORS, STRATEGY_KEYS, descriptor
+        from app.services.intraday import get_config
+        cfg = get_config(getattr(self, "_uid", None))
+        now_ms = int(time.time() * 1000)
+        rows: List[Dict[str, Any]] = []
+        for ev in self._events_for(*STRATEGY_KEYS):
+            is_long = ev.direction.upper() in ("BULLISH", "LONG", "BUY")
+            entry = float(ev.entry or 0.0)
+            stop = float(ev.stop) if ev.stop is not None else None
+            risk = abs(entry - stop) if stop is not None else None
+            rows.append({
+                "strategy": ev.strategy,
+                "strategy_name": DESCRIPTORS.get(ev.strategy, {}).get("name", ev.strategy),
+                "symbol": ev.instrument,
+                "state": "armed",
+                "blockers": [],
+                "spot": round(entry, 2) if entry else None,
+                "timeframe": cfg.timeframe,
+                "contract": None,
+                "generated_at_ms": ev.timestamp_ms or now_ms,
+                "signal": {
+                    "strategy": ev.strategy, "symbol": ev.instrument,
+                    "direction": ev.direction,
+                    "opt_type": ev.opt_type or ("CE" if is_long else "PE"),
+                    "timestamp_ms": ev.timestamp_ms or now_ms,
+                    "entry": round(entry, 2),
+                    "stop": round(stop, 2) if stop is not None else None,
+                    "target": round(float(ev.target), 2) if ev.target is not None else None,
+                    "target2": None,
+                    "risk": round(risk, 2) if risk else None,
+                    "rr": (round(abs(float(ev.target) - entry) / risk, 2)
+                           if (risk and ev.target is not None) else None),
+                    "strength": ev.strength,
+                    "origin": "replay",
+                    "reasons": [], "metrics": {},
+                },
+                "metrics": {},
+            })
+        armed = len(rows)
+        return {
+            "strategy": {**descriptor(), "enabled": cfg.enabled},
+            "config": cfg.as_dict(),
+            "warnings": cfg.warnings(),
+            "enabled_strategies": list(cfg.enabled_strategies()),
+            "rows": rows,
+            "armed": armed,
+            "scanned": len(getattr(self, "_bar_history", {}) or {}),
+            "scanning": False,
+            "failures": [],
+            "last_scan_ms": now_ms,
+            "last_error": None,
+            "generated_at_ms": now_ms,
+            "source": "simulation",
+        }
+
     def get_navigator_signals_response(self) -> Dict[str, Any]:
         """Return signals formatted for /api/v1/navigator/signals during simulation."""
         now_ms = int(time.time() * 1000)
@@ -3628,6 +3813,18 @@ class SimulationRunner:
         except Exception as exc:
             log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
 
+        # 4c. Intraday pack: pivot_break, ma_ribbon, vwap_supertrend.
+        # The SAME functions the live scan calls — bars in, signals out — so a
+        # signal that appears here and not live (or the reverse) is a data
+        # difference, never a second implementation drifting.
+        try:
+            for sdef in _intraday_signals_from_bars(
+                self, sym, bar.get("time"), history, cfg
+            ):
+                signals_to_fire.append(sdef)
+        except Exception as exc:
+            log.debug("Intraday bar evaluation error for %s: %s", sym, exc)
+
         # 6. Navigator: Canonical Session-Anchored VWAP Cross
         session_bars = [b for b in history if datetime.fromtimestamp(b["time"], tz=ist).date() == bar_dt.date()]
         if len(session_bars) >= 5:
@@ -3701,7 +3898,14 @@ class SimulationRunner:
 
             self._last_fired[key] = (direction, sym_bar_idx)
 
-            if direction == "BULLISH":
+            # A strategy that computed its own stop and target keeps them. The
+            # ATR envelope below is a fallback for the strategies that never
+            # stated one — overwriting a rule-derived stop with 1.5×ATR would
+            # replay a different strategy than the one being tested.
+            if sdef.get("stop") is not None and sdef.get("target") is not None:
+                stop = round(float(sdef["stop"]), 2)
+                target = round(float(sdef["target"]), 2)
+            elif direction == "BULLISH":
                 stop = round(close - 1.5 * atr, 2)
                 target = round(close + 2.5 * atr, 2)
             else:
