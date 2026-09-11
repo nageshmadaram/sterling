@@ -66,8 +66,11 @@ class SterlingKiteEngine:
         r = compute_regime(o, h, l, c, self.cfg)
         longs, shorts = entry_transitions(r)
         i = len(c) - 1
-        if not (longs[i] or shorts[i]):
-            return []  # latest closed bar is not a fresh transition
+        # Entry gate only — `manage()` keeps the full `shorts` mask, which the
+        # red counter needs to close a LONG.
+        can_short = bool(shorts[i]) and self.cfg.allow_short
+        if not (longs[i] or can_short):
+            return []  # latest closed bar is not a fresh transition (or a short we do not take)
         if self.cfg.adx_min is not None:
             from app.engines.indicators.adx import adx as _adx
             adx_arr = _adx(h, l, c, 14)

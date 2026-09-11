@@ -1,0 +1,617 @@
+{
+  "n_trials": 9,
+  "rows": [
+    {
+      "variant": "base",
+      "label": "Shipped baseline",
+      "full_trades": 2218,
+      "full_ret_pct": 31.4,
+      "full_cagr_pct": 3.7,
+      "full_pf": 1.25,
+      "full_sharpe": 0.67,
+      "full_max_dd_pct": -5.6,
+      "full_win_rate": 39.7,
+      "full_avg_hold_days": 2.4,
+      "lots_min": 1,
+      "lots_max": 1,
+      "sizing_is_inert": false,
+      "dsr": 0.549,
+      "oos_trades": 1773,
+      "oos_ret_pct": 27.9,
+      "oos_pf": 1.26,
+      "oos_sharpe": 0.72,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "long_only",
+      "label": "Long only",
+      "full_trades": 1134,
+      "full_ret_pct": 32.7,
+      "full_cagr_pct": 3.8,
+      "full_pf": 1.54,
+      "full_sharpe": 0.9,
+      "full_max_dd_pct": -3.0,
+      "full_win_rate": 43.0,
+      "full_avg_hold_days": 2.8,
+      "lots_min": 1,
+      "lots_max": 1,
+      "sizing_is_inert": false,
+      "dsr": 0.847,
+      "oos_trades": 905,
+      "oos_ret_pct": 29.5,
+      "oos_pf": 1.59,
+      "oos_sharpe": 0.97,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "htf",
+      "label": "Daily-trend gate",
+      "full_trades": 1161,
+      "full_ret_pct": 13.6,
+      "full_cagr_pct": 1.8,
+      "full_pf": 1.2,
+      "full_sharpe": 0.43,
+      "full_max_dd_pct": -5.2,
+      "full_win_rate": 40.2,
+      "full_avg_hold_days": 2.4,
+      "lots_min": 1,
+      "lots_max": 1,
+      "sizing_is_inert": false,
+      "dsr": 0.23,
+      "oos_trades": 911,
+      "oos_ret_pct": 9.7,
+      "oos_pf": 1.17,
+      "oos_sharpe": 0.38,
+      "folds_positive": "3/4"
+    },
+    {
+      "variant": "vol",
+      "label": "Volatility-targeted size",
+      "full_trades": 2218,
+      "full_ret_pct": 56.3,
+      "full_cagr_pct": 6.1,
+      "full_pf": 1.33,
+      "full_sharpe": 0.86,
+      "full_max_dd_pct": -5.8,
+      "full_win_rate": 39.7,
+      "full_avg_hold_days": 2.4,
+      "lots_min": 1,
+      "lots_max": 4,
+      "sizing_is_inert": false,
+      "dsr": 0.798,
+      "oos_trades": 1773,
+      "oos_ret_pct": 50.0,
+      "oos_pf": 1.38,
+      "oos_sharpe": 0.96,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "tstop",
+      "label": "48-bar time stop",
+      "full_trades": 2220,
+      "full_ret_pct": 32.0,
+      "full_cagr_pct": 3.8,
+      "full_pf": 1.25,
+      "full_sharpe": 0.66,
+      "full_max_dd_pct": -5.6,
+      "full_win_rate": 39.6,
+      "full_avg_hold_days": 2.3,
+      "lots_min": 1,
+      "lots_max": 1,
+      "sizing_is_inert": false,
+      "dsr": 0.536,
+      "oos_trades": 1775,
+      "oos_ret_pct": 28.8,
+      "oos_pf": 1.27,
+      "oos_sharpe": 0.72,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "nofin",
+      "label": "Drop FINNIFTY",
+      "full_trades": 1659,
+      "full_ret_pct": 23.6,
+      "full_cagr_pct": 2.9,
+      "full_pf": 1.25,
+      "full_sharpe": 0.66,
+      "full_max_dd_pct": -4.3,
+      "full_win_rate": 39.7,
+      "full_avg_hold_days": 2.4,
+      "lots_min": 1,
+      "lots_max": 1,
+      "sizing_is_inert": false,
+      "dsr": 0.535,
+      "oos_trades": 1329,
+      "oos_ret_pct": 20.7,
+      "oos_pf": 1.26,
+      "oos_sharpe": 0.71,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "lo_vol",
+      "label": "Long-only + vol target",
+      "full_trades": 1134,
+      "full_ret_pct": 52.3,
+      "full_cagr_pct": 5.8,
+      "full_pf": 1.64,
+      "full_sharpe": 1.04,
+      "full_max_dd_pct": -3.4,
+      "full_win_rate": 43.1,
+      "full_avg_hold_days": 2.8,
+      "lots_min": 1,
+      "lots_max": 4,
+      "sizing_is_inert": false,
+      "dsr": 0.95,
+      "oos_trades": 905,
+      "oos_ret_pct": 46.4,
+      "oos_pf": 1.73,
+      "oos_sharpe": 1.13,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "combo",
+      "label": "Long-only + daily gate + vol target",
+      "full_trades": 699,
+      "full_ret_pct": 29.2,
+      "full_cagr_pct": 3.6,
+      "full_pf": 1.58,
+      "full_sharpe": 0.81,
+      "full_max_dd_pct": -3.7,
+      "full_win_rate": 42.9,
+      "full_avg_hold_days": 2.7,
+      "lots_min": 1,
+      "lots_max": 4,
+      "sizing_is_inert": false,
+      "dsr": 0.745,
+      "oos_trades": 545,
+      "oos_ret_pct": 28.3,
+      "oos_pf": 1.75,
+      "oos_sharpe": 0.95,
+      "folds_positive": "4/4"
+    },
+    {
+      "variant": "combo_nofin",
+      "label": "Combo, without FINNIFTY",
+      "full_trades": 522,
+      "full_ret_pct": 29.4,
+      "full_cagr_pct": 3.6,
+      "full_pf": 1.58,
+      "full_sharpe": 0.77,
+      "full_max_dd_pct": -4.2,
+      "full_win_rate": 42.9,
+      "full_avg_hold_days": 2.8,
+      "lots_min": 1,
+      "lots_max": 5,
+      "sizing_is_inert": false,
+      "dsr": 0.689,
+      "oos_trades": 410,
+      "oos_ret_pct": 29.0,
+      "oos_pf": 1.74,
+      "oos_sharpe": 0.9,
+      "folds_positive": "3/4"
+    }
+  ],
+  "folds": {
+    "base": [
+      {
+        "fold": 1,
+        "from": 1594283580000,
+        "to": 1641734460000,
+        "trades": 435,
+        "ret_pct": 14.6,
+        "pf": 1.64
+      },
+      {
+        "fold": 2,
+        "from": 1641734460000,
+        "to": 1689185340000,
+        "trades": 461,
+        "ret_pct": 6.6,
+        "pf": 1.26
+      },
+      {
+        "fold": 3,
+        "from": 1689185340000,
+        "to": 1736636220000,
+        "trades": 433,
+        "ret_pct": 5.2,
+        "pf": 1.21
+      },
+      {
+        "fold": 4,
+        "from": 1736636220000,
+        "to": 1784087100000,
+        "trades": 444,
+        "ret_pct": 1.5,
+        "pf": 1.04
+      }
+    ],
+    "long_only": [
+      {
+        "fold": 1,
+        "from": 1594149660000,
+        "to": 1641466620000,
+        "trades": 226,
+        "ret_pct": 13.4,
+        "pf": 2.24
+      },
+      {
+        "fold": 2,
+        "from": 1641466620000,
+        "to": 1688783580000,
+        "trades": 257,
+        "ret_pct": 3.9,
+        "pf": 1.29
+      },
+      {
+        "fold": 3,
+        "from": 1688783580000,
+        "to": 1736100540000,
+        "trades": 219,
+        "ret_pct": 6.5,
+        "pf": 1.59
+      },
+      {
+        "fold": 4,
+        "from": 1736100540000,
+        "to": 1783417500000,
+        "trades": 203,
+        "ret_pct": 5.6,
+        "pf": 1.39
+      }
+    ],
+    "htf": [
+      {
+        "fold": 1,
+        "from": 1599068700000,
+        "to": 1645155900000,
+        "trades": 228,
+        "ret_pct": 4.0,
+        "pf": 1.3
+      },
+      {
+        "fold": 2,
+        "from": 1645155900000,
+        "to": 1691243100000,
+        "trades": 241,
+        "ret_pct": 5.9,
+        "pf": 1.49
+      },
+      {
+        "fold": 3,
+        "from": 1691243100000,
+        "to": 1737330300000,
+        "trades": 211,
+        "ret_pct": 0.8,
+        "pf": 1.06
+      },
+      {
+        "fold": 4,
+        "from": 1737330300000,
+        "to": 1783417500000,
+        "trades": 231,
+        "ret_pct": -1.0,
+        "pf": 0.94
+      }
+    ],
+    "vol": [
+      {
+        "fold": 1,
+        "from": 1594283580000,
+        "to": 1641734460000,
+        "trades": 435,
+        "ret_pct": 20.3,
+        "pf": 1.66
+      },
+      {
+        "fold": 2,
+        "from": 1641734460000,
+        "to": 1689185340000,
+        "trades": 461,
+        "ret_pct": 13.5,
+        "pf": 1.4
+      },
+      {
+        "fold": 3,
+        "from": 1689185340000,
+        "to": 1736636220000,
+        "trades": 433,
+        "ret_pct": 12.7,
+        "pf": 1.41
+      },
+      {
+        "fold": 4,
+        "from": 1736636220000,
+        "to": 1784087100000,
+        "trades": 444,
+        "ret_pct": 3.5,
+        "pf": 1.09
+      }
+    ],
+    "tstop": [
+      {
+        "fold": 1,
+        "from": 1594283580000,
+        "to": 1641734460000,
+        "trades": 435,
+        "ret_pct": 15.0,
+        "pf": 1.66
+      },
+      {
+        "fold": 2,
+        "from": 1641734460000,
+        "to": 1689185340000,
+        "trades": 461,
+        "ret_pct": 7.1,
+        "pf": 1.28
+      },
+      {
+        "fold": 3,
+        "from": 1689185340000,
+        "to": 1736636220000,
+        "trades": 435,
+        "ret_pct": 4.9,
+        "pf": 1.2
+      },
+      {
+        "fold": 4,
+        "from": 1736636220000,
+        "to": 1784087100000,
+        "trades": 444,
+        "ret_pct": 1.8,
+        "pf": 1.05
+      }
+    ],
+    "nofin": [
+      {
+        "fold": 1,
+        "from": 1594283580000,
+        "to": 1641734460000,
+        "trades": 326,
+        "ret_pct": 10.6,
+        "pf": 1.65
+      },
+      {
+        "fold": 2,
+        "from": 1641734460000,
+        "to": 1689185340000,
+        "trades": 347,
+        "ret_pct": 5.1,
+        "pf": 1.27
+      },
+      {
+        "fold": 3,
+        "from": 1689185340000,
+        "to": 1736636220000,
+        "trades": 324,
+        "ret_pct": 3.4,
+        "pf": 1.18
+      },
+      {
+        "fold": 4,
+        "from": 1736636220000,
+        "to": 1784087100000,
+        "trades": 332,
+        "ret_pct": 1.6,
+        "pf": 1.06
+      }
+    ],
+    "lo_vol": [
+      {
+        "fold": 1,
+        "from": 1594149660000,
+        "to": 1641466620000,
+        "trades": 226,
+        "ret_pct": 18.9,
+        "pf": 2.29
+      },
+      {
+        "fold": 2,
+        "from": 1641466620000,
+        "to": 1688783580000,
+        "trades": 257,
+        "ret_pct": 9.5,
+        "pf": 1.53
+      },
+      {
+        "fold": 3,
+        "from": 1688783580000,
+        "to": 1736100540000,
+        "trades": 219,
+        "ret_pct": 11.7,
+        "pf": 1.8
+      },
+      {
+        "fold": 4,
+        "from": 1736100540000,
+        "to": 1783417500000,
+        "trades": 203,
+        "ret_pct": 6.3,
+        "pf": 1.38
+      }
+    ],
+    "combo": [
+      {
+        "fold": 1,
+        "from": 1599068700000,
+        "to": 1645155900000,
+        "trades": 170,
+        "ret_pct": 8.6,
+        "pf": 1.72
+      },
+      {
+        "fold": 2,
+        "from": 1645155900000,
+        "to": 1691243100000,
+        "trades": 135,
+        "ret_pct": 12.2,
+        "pf": 2.6
+      },
+      {
+        "fold": 3,
+        "from": 1691243100000,
+        "to": 1737330300000,
+        "trades": 127,
+        "ret_pct": 5.9,
+        "pf": 1.59
+      },
+      {
+        "fold": 4,
+        "from": 1737330300000,
+        "to": 1783417500000,
+        "trades": 113,
+        "ret_pct": 1.6,
+        "pf": 1.19
+      }
+    ],
+    "combo_nofin": [
+      {
+        "fold": 1,
+        "from": 1599068700000,
+        "to": 1645155900000,
+        "trades": 128,
+        "ret_pct": 8.4,
+        "pf": 1.69
+      },
+      {
+        "fold": 2,
+        "from": 1645155900000,
+        "to": 1691243100000,
+        "trades": 99,
+        "ret_pct": 13.4,
+        "pf": 2.77
+      },
+      {
+        "fold": 3,
+        "from": 1691243100000,
+        "to": 1737330300000,
+        "trades": 99,
+        "ret_pct": 8.0,
+        "pf": 1.78
+      },
+      {
+        "fold": 4,
+        "from": 1737330300000,
+        "to": 1783417500000,
+        "trades": 84,
+        "ret_pct": -0.8,
+        "pf": 0.92
+      }
+    ]
+  },
+  "long_short": [
+    {
+      "symbol": "NIFTY",
+      "side": "long",
+      "trades": 286,
+      "win_rate": 43.7,
+      "net": 759483.0,
+      "pf": 1.54
+    },
+    {
+      "symbol": "NIFTY",
+      "side": "short",
+      "trades": 267,
+      "win_rate": 36.0,
+      "net": 140421.0,
+      "pf": 1.09
+    },
+    {
+      "symbol": "BANKNIFTY",
+      "side": "long",
+      "trades": 266,
+      "win_rate": 44.7,
+      "net": 900108.0,
+      "pf": 1.56
+    },
+    {
+      "symbol": "BANKNIFTY",
+      "side": "short",
+      "trades": 290,
+      "win_rate": 37.6,
+      "net": -129016.0,
+      "pf": 0.94
+    },
+    {
+      "symbol": "FINNIFTY",
+      "side": "long",
+      "trades": 286,
+      "win_rate": 42.3,
+      "net": 803959.0,
+      "pf": 1.48
+    },
+    {
+      "symbol": "FINNIFTY",
+      "side": "short",
+      "trades": 273,
+      "win_rate": 36.6,
+      "net": -28222.0,
+      "pf": 0.98
+    },
+    {
+      "symbol": "SENSEX",
+      "side": "long",
+      "trades": 278,
+      "win_rate": 41.4,
+      "net": 680356.0,
+      "pf": 1.55
+    },
+    {
+      "symbol": "SENSEX",
+      "side": "short",
+      "trades": 272,
+      "win_rate": 34.9,
+      "net": 11906.0,
+      "pf": 1.01
+    }
+  ],
+  "permutation": {
+    "per_symbol": [
+      {
+        "symbol": "NIFTY",
+        "real_net": 749997.0,
+        "null_mean": 269148.0,
+        "null_p95": 837994.0,
+        "p_value": 0.0818,
+        "z": 1.4
+      },
+      {
+        "symbol": "BANKNIFTY",
+        "real_net": 956594.0,
+        "null_mean": 213363.0,
+        "null_p95": 829058.0,
+        "p_value": 0.026,
+        "z": 1.96
+      },
+      {
+        "symbol": "FINNIFTY",
+        "real_net": 877347.0,
+        "null_mean": 252538.0,
+        "null_p95": 876943.0,
+        "p_value": 0.0498,
+        "z": 1.65
+      },
+      {
+        "symbol": "SENSEX",
+        "real_net": 687635.0,
+        "null_mean": 202192.0,
+        "null_p95": 699582.0,
+        "p_value": 0.0538,
+        "z": 1.57
+      }
+    ],
+    "portfolio": {
+      "real_net": 3271573.0,
+      "null_mean": 937242.0,
+      "null_p95": 2126394.0,
+      "p_value": 0.0006,
+      "z": 3.28
+    },
+    "n_sim": 5000
+  },
+  "buy_and_hold": {
+    "net": 3711744.0,
+    "max_dd_pct": -14.5,
+    "sharpe": 0.6
+  }
+}

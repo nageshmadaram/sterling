@@ -188,6 +188,33 @@ export function SuperTrendEnginePanel() {
         </Section>
 
         <Section
+          title="Direction"
+          description="Which side of a SuperTrend alignment may open a trade."
+          summary={(cfg.allow_short ?? false) ? 'Long and short' : 'Long only'}
+          persistKey="st-direction">
+          <Field label={FIELDS.allow_short.label} hint={FIELDS.allow_short.help}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <Switch
+                checked={cfg.allow_short ?? false}
+                label="Take short entries on a bear alignment"
+                onChange={() => patch({ allow_short: !(cfg.allow_short ?? false) })}
+              />
+              <span style={{ color: TEXT, fontSize: 11.5 }}>
+                {(cfg.allow_short ?? false) ? 'Both directions' : 'Long only'}
+              </span>
+            </div>
+          </Field>
+          <ConfigNote>
+            Measured on 7.5 years of real 1H candles across all four indices, with
+            costs and slippage: the short book netted about zero over 1102 trades
+            while the long book earned the entire return. Long-only takes slightly
+            more money on half the trades, with a quarter less drawdown
+            (profit factor 1.54 vs 1.25, worst drawdown 19.9% vs 26.0%). Closing a
+            position is unaffected either way.
+          </ConfigNote>
+        </Section>
+
+        <Section
           title="Trail tightness"
           description="Which line the stop follows once a trade is running."
           summary={`${trailLabel}${cfg.exit_aligned_trail ? ' · anchored to exit counter' : ''}`}

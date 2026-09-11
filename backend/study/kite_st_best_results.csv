@@ -1,0 +1,10 @@
+variant,label,full_trades,full_ret_pct,full_cagr_pct,full_pf,full_sharpe,full_max_dd_pct,full_win_rate,full_avg_hold_days,lots_min,lots_max,sizing_is_inert,dsr,oos_trades,oos_ret_pct,oos_pf,oos_sharpe,folds_positive
+base,Shipped baseline,2218,31.4,3.7,1.25,0.67,-5.6,39.7,2.4,1,1,False,0.549,1773,27.9,1.26,0.72,4/4
+long_only,Long only,1134,32.7,3.8,1.54,0.9,-3.0,43.0,2.8,1,1,False,0.847,905,29.5,1.59,0.97,4/4
+htf,Daily-trend gate,1161,13.6,1.8,1.2,0.43,-5.2,40.2,2.4,1,1,False,0.23,911,9.7,1.17,0.38,3/4
+vol,Volatility-targeted size,2218,56.3,6.1,1.33,0.86,-5.8,39.7,2.4,1,4,False,0.798,1773,50.0,1.38,0.96,4/4
+tstop,48-bar time stop,2220,32.0,3.8,1.25,0.66,-5.6,39.6,2.3,1,1,False,0.536,1775,28.8,1.27,0.72,4/4
+nofin,Drop FINNIFTY,1659,23.6,2.9,1.25,0.66,-4.3,39.7,2.4,1,1,False,0.535,1329,20.7,1.26,0.71,4/4
+lo_vol,Long-only + vol target,1134,52.3,5.8,1.64,1.04,-3.4,43.1,2.8,1,4,False,0.95,905,46.4,1.73,1.13,4/4
+combo,Long-only + daily gate + vol target,699,29.2,3.6,1.58,0.81,-3.7,42.9,2.7,1,4,False,0.745,545,28.3,1.75,0.95,4/4
+combo_nofin,"Combo, without FINNIFTY",522,29.4,3.6,1.58,0.77,-4.2,42.9,2.8,1,5,False,0.689,410,29.0,1.74,0.9,3/4

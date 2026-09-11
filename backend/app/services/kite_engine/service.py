@@ -54,6 +54,7 @@ def _ts_cfg(c: EngineConfigModel) -> SterlingKiteEngineConfig:
     return SterlingKiteEngineConfig(
         trail_target=c.trail_target,
         exit_mode=c.exit_mode,
+        allow_short=getattr(c, 'allow_short', False),
         exit_aligned_trail=getattr(c, 'exit_aligned_trail', False),
         price_stop_exit=getattr(c, 'price_stop_exit', True),
         max_contract_staleness_bars=getattr(c, 'max_contract_staleness_bars', 0),

@@ -352,6 +352,16 @@ class EngineConfigModel(BaseModel):
     # beats two_red/three_red on both delta1 and options lenses (see config.py). Was
     # "two_red" (asserted, never measured). Looser modes stay selectable.
     exit_mode: ExitMode = "one_red"
+    # ── Direction ─────────────────────────────────────────────────────────────
+    # Whether a BEAR alignment may open a position. Default OFF.
+    #
+    # MEASURED (study/kite_st_best.py, real 7.5y 1H on all four indices, delta-1,
+    # costs and slippage included): 1102 short trades netted -4,911 rupees. The
+    # short book is not a loser to fear, it is noise — it doubles the fill count
+    # and widens the drawdown while returning nothing. Long-only earns slightly
+    # MORE (PF 1.54 vs 1.25, Sharpe 0.90 vs 0.67, max DD -19.9% vs -26.0%).
+    # Turn it on to restore symmetric behaviour.
+    allow_short: bool = False
     # Opt-in: anchor the price stop to the exit_mode-th ST line (one_red→fast,
     # two_red→mid, three_red→slow) so the stop breach coincides with the red count
     # instead of the tightest line pre-empting it. OFF (default) = validated fast trail.

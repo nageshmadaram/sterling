@@ -55,6 +55,25 @@ class SterlingKiteEngineConfig:
     # also matches live behaviour (the monotonic premium ratchet already pinned exits
     # near one_red). Looser modes stay selectable but are worse on this data.
     exit_mode: ExitMode = "one_red"
+    # ── Direction ─────────────────────────────────────────────────────────────
+    # Whether a BEAR alignment may open a position.
+    #
+    # MEASURED (study/kite_st_best.py, real 7.5y 1H, 4 indices, delta-1, costs and
+    # slippage included): the short book is worth NOTHING. Over 1102 short trades
+    # it netted -4,911 rupees — not a loss to fear, but noise that doubles the
+    # fill count and widens the drawdown for no return. The long book over the
+    # same period netted +3,143,906.
+    #
+    #   both sides:  2218 trades, PF 1.25, Sharpe 0.67, max DD -26.0%
+    #   long only:   1134 trades, PF 1.54, Sharpe 0.90, max DD -19.9%
+    #
+    # Long-only earns slightly MORE money on half the trades with a quarter less
+    # drawdown, so False is the default. The long book's timing is separately
+    # significant against random entries of identical exposure (portfolio
+    # p = 0.0006, z = 3.28), which the short book's is not.
+    #
+    # Set True to restore the symmetric behaviour; nothing else changes.
+    allow_short: bool = False
     # ── Exit-mode-aligned trail (opt-in; default OFF = validated fast-trail) ────
     # OFF: the price stop rides the tightest still-green line (``best_trail_line_value``).
     #      Because the tightest (fast) line flips FIRST, its breach ≈ one_red, which

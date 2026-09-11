@@ -140,6 +140,17 @@ export const FIELDS = F({
   },
 
   // ── SuperTrend strategy mechanics ─────────────────────────────────────────
+  allow_short: {
+    key: 'allow_short',
+    label: 'Short entries',
+    help: 'Whether a bear alignment may open a trade. Measured over 7.5 years on all '
+      + 'four indices, the short book netted about zero across 1102 trades while the '
+      + 'long book earned the entire return — so it is off, and turning it on doubles '
+      + 'the fills and widens the drawdown for no measured gain.',
+    owner: 'supertrend', applies: 'both', stage: 'entry', rescan: true, home: 'engine',
+    evidence: 'Gates the entry masks in scanner.evaluate_item and engine.generate. The '
+      + 'exit path keeps the full shorts mask — the red counter needs it to close a long.',
+  },
   trail_target: {
     key: 'trail_target',
     label: 'Trail tightness',

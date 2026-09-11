@@ -217,6 +217,10 @@ export interface EngineConfigModel {
   engine_enabled: boolean;
   trail_target: TrailTarget;
   exit_mode: ExitMode;
+  // Whether a BEAR alignment may open a trade. Default off: measured over 7.5y on
+  // all four indices the short book netted ~zero across 1102 trades, while the
+  // long book earned the whole return (PF 1.54 vs 1.25, max DD -19.9% vs -26.0%).
+  allow_short?: boolean;
   // Opt-in: anchor the price stop to the exit_mode-th ST line (one_red→fast,
   // two_red→mid, three_red→slow) instead of always the tightest. Default off =
   // validated fast trail. Changes the computed stop → a scan-affecting setting.

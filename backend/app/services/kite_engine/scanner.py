@@ -242,7 +242,11 @@ def evaluate_item(
     longs, shorts = entry_transitions(r)
 
     rows = []
-    indices = np.where(longs | shorts)[0]
+    # Entry gate only. `shorts` is still handed to `resolve_exit` below, because
+    # the red counter reads it to decide when a LONG closes — zeroing the mask
+    # itself would look like a tidier fix and would stop long positions exiting.
+    entry_shorts = shorts if cfg.allow_short else np.zeros_like(shorts)
+    indices = np.where(longs | entry_shorts)[0]
     latest_ts = int(candles[-1].timestamp_ms)
     # Trend-quality readings for the optional directional-mode entry filters
     # (computed once over the raw OHLC; never gate anything on their own).
@@ -1331,7 +1335,10 @@ async def build_setup_chart(
                 out.append(SetupLine(time=secs[i], value=v))
         return out
 
-    fresh = np.where(longs | shorts)[0]
+    # The chart's entry marker follows the same gate as the scanner: marking a
+    # bear alignment as an entry on a long-only engine would draw a trade the
+    # engine will not take.
+    fresh = np.where(longs | (shorts if cfg.allow_short else np.zeros_like(shorts)))[0]
     entry_index = int(fresh[-1]) if len(fresh) else None
     return SetupChart(
         underlying=underlying or str(token), candles=points,
