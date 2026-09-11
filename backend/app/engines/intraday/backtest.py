@@ -304,8 +304,17 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
             if hit_stop:
                 # Both in one bar is a LOSS. Nothing in the data says which came
                 # first, so the harness assumes the worse.
+                #
+                # And the fill is the WORSE of the stop and this bar's open. A
+                # stop is not a limit: a bar that opens through it fills at the
+                # open, not at the price you asked for. Booking every stop at
+                # exactly its own level is a systematic gift, and it is largest
+                # for exactly the strategies that trail tightly — the stop sits
+                # right under price, so gaps through it are the common case, not
+                # the rare one.
+                fill_px = min(open_pos.stop, o) if bull else max(open_pos.stop, o)
                 reason, px = ("trailing stop" if open_pos.breakeven_done
-                              else "stop"), open_pos.stop
+                              else "stop"), fill_px
             else:
                 # The first target BANKS half on a two-stage trade rather than
                 # closing it, which is what the live path does.

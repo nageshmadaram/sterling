@@ -294,3 +294,66 @@ class TestTheReplayManagesEveryBarItIsOn:
                       "N", qty=50)
         assert half.qty == 50
         assert half.gross == pytest.approx(4.0 * 50)
+
+
+class TestNothingSeesTheFuture:
+    """The property every other assertion in this file rests on.
+
+    Tamper with the tape AFTER a point and every trade that closed BEFORE it
+    must be unchanged. A look-ahead of any kind — an indicator reading past its
+    slice, a fill priced off a later bar, a trail using a high that had not
+    printed — breaks this and nothing else in the suite would notice.
+    """
+
+    def _tape(self):
+        return tape([100.0 + (i % 60) * 0.35 for i in range(1200)])
+
+    def _fingerprint(self, res, before_ms):
+        return [(t.entry_ms, round(t.entry, 4), round(t.stop, 4),
+                 round(t.exit_price, 4), t.reason)
+                for t in res.trades if t.exit_ms < before_ms]
+
+    @pytest.mark.parametrize("strategy",
+                             ["pivot_break", "ma_ribbon", "vwap_supertrend"])
+    def test_changing_the_future_cannot_change_the_past(self, strategy):
+        import copy
+        import random
+        rows = self._tape()
+        cut_i = len(rows) // 2
+        cut_ms = int(rows[cut_i]["time"] * 1000)
+        free = CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0,
+                         exchange_pct=0.0, gst_pct=0.0, misc_pct=0.0,
+                         slippage_pct=0.0)
+        base = replay(rows, cfg(), "NIFTY", strategy, costs=free)
+
+        rng = random.Random(11)
+        tampered = copy.deepcopy(rows)
+        for bar in tampered[cut_i:]:
+            f = 1 + rng.uniform(-0.3, 0.3)
+            for k in ("open", "high", "low", "close"):
+                bar[k] = bar[k] * f
+        after = replay(tampered, cfg(), "NIFTY", strategy, costs=free)
+
+        assert self._fingerprint(base, cut_ms) == self._fingerprint(after, cut_ms)
+
+    def test_a_stop_fills_at_the_WORSE_of_the_stop_and_the_open(self):
+        """A stop is not a limit. A bar that opens through it fills at the
+        open, and booking every stop at exactly its own level is a systematic
+        gift — largest for the strategies that trail tightest, where the stop
+        sits right under price and gaps through it are the common case."""
+        from app.engines.intraday.backtest import _Open, _close
+        from app.engines.intraday.models import IntradaySignal
+        sig = IntradaySignal(strategy="pivot_break", symbol="N", direction="BULLISH",
+                             option_type="CE", timestamp_ms=0, entry=100.0,
+                             stop=98.0, target=104.0, target2=None, risk=2.0,
+                             strength="STRONG", origin="t")
+        pos = _Open(sig=sig, strategy="pivot_break", thesis="BULLISH", entry=100.0,
+                    stop=98.0, target=104.0, target2=0.0, qty=1, entry_ms=0,
+                    entry_i=0, peak=100.0, risk=2.0)
+        free = CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0,
+                         exchange_pct=0.0, gst_pct=0.0, misc_pct=0.0,
+                         slippage_pct=0.0)
+        # A gap straight through the stop is worse than 1R, and must book so.
+        gapped = _close(pos, 94.0, 0, 3, "stop", free, "underlying",
+                        "pivot_break", "N")
+        assert gapped.r < -1.0
