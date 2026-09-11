@@ -58,18 +58,18 @@ class TestFolds:
 class TestSelector:
     def test_a_configuration_with_too_few_trades_cannot_win(self):
         thin = Summary(trades=3, wins=3, win_rate=100.0, net=900.0, gross=1000.0,
-                       costs=100.0, cost_share_pct=10.0, sharpe=9.9,
-                       max_drawdown_pct=-1.0, profit_factor=9.0, avg_r=3.0,
-                       expectancy=300.0)
+                       costs=100.0, cost_share_pct=10.0, gross_positive=True,
+                       sharpe=9.9, max_drawdown_pct=-1.0, profit_factor=9.0,
+                       avg_r=3.0, expectancy=300.0, max_drawdown_r=-0.5)
         assert score_in_sample(thin) == float("-inf")
 
     def test_it_scores_on_sharpe_not_on_net(self):
         """Net rewards a single lucky trade; that is the thing a walk-forward
         is supposed to stop selecting."""
         a = Summary(trades=40, wins=20, win_rate=50.0, net=100.0, gross=200.0,
-                    costs=100.0, cost_share_pct=50.0, sharpe=1.4,
-                    max_drawdown_pct=-5.0, profit_factor=1.2, avg_r=0.1,
-                    expectancy=2.5)
+                    costs=100.0, cost_share_pct=50.0, gross_positive=True,
+                    sharpe=1.4, max_drawdown_pct=-5.0, profit_factor=1.2,
+                    avg_r=0.1, expectancy=2.5, max_drawdown_r=-3.0)
         b = dataclasses.replace(a, net=10_000.0, sharpe=0.2)
         assert score_in_sample(a) > score_in_sample(b)
 
@@ -129,9 +129,9 @@ def test_an_empty_grid_is_refused():
 
 def _summary(**over) -> Summary:
     base = dict(trades=120, wins=70, win_rate=58.3, net=50_000.0, gross=60_000.0,
-                costs=10_000.0, cost_share_pct=16.7, sharpe=1.4,
-                max_drawdown_pct=-12.0, profit_factor=1.6, avg_r=0.3,
-                expectancy=416.0)
+                costs=10_000.0, cost_share_pct=16.7, gross_positive=True,
+                sharpe=1.4, max_drawdown_pct=-12.0, profit_factor=1.6, avg_r=0.3,
+                expectancy=416.0, max_drawdown_r=-8.0)
     base.update(over)
     return Summary(**base)
 
@@ -160,15 +160,25 @@ class TestTheGate:
         assert any("symbols profitable" in r for r in v.reasons)
 
     def test_an_unsurvivable_drawdown_blocks_it(self):
-        v = judge(_summary(max_drawdown_pct=-60.0), dsr=0.8, p=0.01,
+        """Measured in R, because the percentage depends on a capital figure
+        the harness does not size to."""
+        v = judge(_summary(max_drawdown_r=-40.0), dsr=0.8, p=0.01,
                   per_symbol={"A": 10.0})
         assert not v.promoted
-        assert any("drawdown" in r for r in v.reasons)
+        assert any("R is worse than" in r for r in v.reasons)
 
-    def test_a_loss_names_what_the_costs_took(self):
-        v = judge(_summary(net=-4000.0, cost_share_pct=140.0), dsr=0.8, p=0.01,
-                  per_symbol={"A": -10.0})
-        assert any("140.0% of gross went to costs" in r for r in v.reasons)
+    def test_costs_eating_a_real_edge_reads_differently_from_having_no_edge(self):
+        """Conflating them is misleading. Costs eating an edge is a cost
+        problem; a gross that was never positive is the SIGNAL, and no cost
+        model fixes that."""
+        eaten = judge(_summary(net=-4000.0, gross=10_000.0, costs=14_000.0,
+                               cost_share_pct=140.0, gross_positive=True),
+                      dsr=0.8, p=0.01, per_symbol={"A": -10.0})
+        assert any("the edge was there" in r and "140.0%" in r for r in eaten.reasons)
+        none = judge(_summary(net=-4000.0, gross=-1_000.0, costs=3_000.0,
+                              cost_share_pct=None, gross_positive=False),
+                     dsr=0.8, p=0.01, per_symbol={"A": -10.0})
+        assert any("BEFORE any cost" in r for r in none.reasons)
 
     def test_the_thresholds_are_published_rather_than_buried(self):
         # A reader must be able to disagree with the bar instead of

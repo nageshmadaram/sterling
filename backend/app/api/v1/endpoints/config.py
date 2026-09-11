@@ -603,3 +603,20 @@ async def intraday_validation(user: UserContext = Depends(get_current_user)) -> 
     return {"gate": GATE,
             "strategies": {k: v.as_dict() for k, v in load().items()},
             "how_to_measure": "python -m study.intraday_walkforward --record"}
+
+
+@router.get("/intraday/history")
+async def intraday_history(sessions: int = 5,
+                           user: UserContext = Depends(get_current_user)) -> dict:
+    """What these strategies fired over the last few sessions, from stored bars.
+
+    Works with the market closed, with no broker session, and before any live
+    scan has ever run. Every rule in this pack fires on ONE bar, and the live
+    scan only evaluates the last closed one — so without this the board is
+    blank almost always, and an operator cannot tell a quiet strategy from a
+    broken one.
+    """
+    uid = _intraday_uid(user)
+    from app.services.intraday import recent_signals
+    rows = recent_signals(uid, sessions=max(1, min(int(sessions), 30)))
+    return {"sessions": sessions, "signals": rows, "count": len(rows)}

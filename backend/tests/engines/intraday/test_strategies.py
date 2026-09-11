@@ -394,3 +394,31 @@ def test_nothing_is_decided_before_warmup():
     from app.engines.intraday import thesis_broken
     short = to_bars(session("2026-09-10", [100.0] * 10))
     assert thesis_broken(short, cfg(), "ma_ribbon", "BULLISH") == (False, "")
+
+
+def test_the_no_volume_blocker_says_what_to_do_about_it():
+    """"No volume" is a property of the INSTRUMENT, not of today. Index spot
+    reports none and always will, so a row that only states the fact leaves an
+    operator watching a strategy that can never fire with no way to know why."""
+    rows = _vs_tape(volume=0.0)
+    ev = evaluate_vwap_supertrend(to_bars(rows), cfg(vs_max_stop_points=400.0),
+                                  "NIFTY")
+    why = " ".join(ev.blockers)
+    assert "Scan stocks" in why and "require real volume" in why
+
+
+def test_the_row_says_which_vwap_basis_was_used():
+    with_vol = evaluate_vwap_supertrend(to_bars(_vs_tape()),
+                                        cfg(vs_max_stop_points=400.0), "X")
+    assert with_vol.metrics["vwap_basis"] == "volume"
+    without = evaluate_vwap_supertrend(to_bars(_vs_tape(volume=0.0)),
+                                       cfg(vs_max_stop_points=400.0), "X")
+    assert without.metrics["vwap_basis"] == "session_mean"
+
+
+def test_an_indices_only_universe_warns_that_a_third_of_the_pack_is_mute():
+    from app.engines.intraday import IntradayConfig
+    c = IntradayConfig(scan_stocks=(), scan_all_stocks=False).validate()
+    assert any("can never fire" in w for w in c.warnings())
+    # And the shipped default does not have that problem.
+    assert not any("can never fire" in w for w in IntradayConfig().validate().warnings())

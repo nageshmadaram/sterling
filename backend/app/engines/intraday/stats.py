@@ -150,6 +150,20 @@ def max_drawdown(rets: np.ndarray) -> float:
     return float(((equity - peak) / peak).min() * 100.0)
 
 
+def drawdown_r(trades: Sequence) -> float:
+    """Peak-to-trough of the cumulative R curve, in R.
+
+    Free of the capital assumption the percentage drawdown carries: this
+    harness places one lot per trade whatever ``capital`` says, so a percentage
+    drawdown measures the assumption as much as the strategy.
+    """
+    if not trades:
+        return 0.0
+    curve = np.cumsum([float(getattr(t, "r", 0.0)) for t in trades])
+    peak = np.maximum.accumulate(curve)
+    return float((curve - peak).min())
+
+
 def profit_factor(trades: Sequence) -> Optional[float]:
     wins = sum(float(t.net) for t in trades if float(t.net) > 0)
     losses = -sum(float(t.net) for t in trades if float(t.net) < 0)
@@ -199,12 +213,25 @@ class Summary:
     costs: float
     #: What share of the gross edge the costs ate. The number that decides
     #: whether a 5-minute strategy is viable at all.
+    #:
+    #: ``None`` when gross is not positive, and that is the important case: a
+    #: ratio against a negative gross reads as "costs destroyed a profit" when
+    #: what actually happened is that there was never a profit. ``gross_positive``
+    #: is what tells the two apart, and the gate reads THAT.
     cost_share_pct: Optional[float]
+    gross_positive: bool
     sharpe: float
     max_drawdown_pct: float
     profit_factor: Optional[float]
     avg_r: float
     expectancy: float
+    #: Peak-to-trough of the cumulative R curve, in R.
+    #:
+    #: Reported beside the percentage because the percentage is against a
+    #: capital figure this harness does not size to — one lot per trade whatever
+    #: the capital says — so it measures the assumption as much as the strategy.
+    #: R drawdown has no such dependency, and the gate reads THIS one.
+    max_drawdown_r: float = 0.0
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -221,9 +248,11 @@ def summarise(trades: Sequence, capital: float) -> Summary:
         trades=n, wins=wins,
         win_rate=round(wins / n * 100.0, 2) if n else None,
         net=net, gross=gross, costs=costs,
-        cost_share_pct=round(costs / abs(gross) * 100.0, 1) if gross else None,
+        cost_share_pct=round(costs / gross * 100.0, 1) if gross > 0 else None,
+        gross_positive=gross > 0,
         sharpe=round(sharpe(rets), 3),
         max_drawdown_pct=round(max_drawdown(rets), 2),
         profit_factor=profit_factor(trades),
         avg_r=round(float(np.mean([t.r for t in trades])), 3) if n else 0.0,
-        expectancy=round(net / n, 2) if n else 0.0)
+        expectancy=round(net / n, 2) if n else 0.0,
+        max_drawdown_r=round(drawdown_r(trades), 2))

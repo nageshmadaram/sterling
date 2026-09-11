@@ -99,6 +99,31 @@ The board and the settings page read the same record, per strategy. The three do
 not stand or fall together, and a banner that keeps saying "not validated" after
 one of them passes is the same kind of lie as one that claims the reverse.
 
+## What the first real run found
+
+The harness's first act was to find a bug in itself. It charged the **options**
+schedule — 0.1% STT on premium — against an index **notional**, and reported an
+average of **-14.5R per trade**. A book whose stop is 1R cannot average -14.5R:
+the number was the cost model, not the strategy. `CostModel.for_lens` now picks
+the schedule that matches what is actually traded, and lot sizes are passed so
+a flat per-order brokerage is charged against a trade somebody could place.
+
+Two reporting defects came out of the same run and are fixed:
+
+- **"% of gross" against a negative gross** reads as "costs destroyed a profit"
+  when what happened is that there was never a profit. The summary now carries
+  `gross_positive`, and the gate says which of the two it is — because costs
+  eating a real edge is a cost problem, and a gross that was never positive is
+  the signal, which no cost model will fix.
+- **Percentage drawdown** is against a capital figure the harness does not size
+  to (one lot per trade whatever `capital` says), so it measured the assumption
+  as much as the strategy. Drawdown in **R** is reported beside it, and the gate
+  reads that one.
+
+With the cost model corrected, `pivot_break` over six folds on six symbols:
+**1054 out-of-sample trades, gross negative before any cost.** The entries lose
+on their own. That is not a costs problem and no threshold tuning fixes it.
+
 ## Honest limits
 
 - The store currently holds about **8.5 months** of 5-minute bars. That is

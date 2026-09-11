@@ -42,6 +42,13 @@ CALIBRATED_FIELDS: frozenset[str] = frozenset()
 
 _INDEX_DEFAULTS = ("NIFTY", "BANKNIFTY")
 
+#: Stocks are in the DEFAULT universe, not an opt-in, because one of the three
+#: strategies cannot work without them. VWAP needs volume; Kite reports none on
+#: index spot and always will. A pack that shipped scanning indices only had a
+#: third of itself permanently mute, and nothing on the board said so.
+_STOCK_DEFAULTS = ("RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS",
+                   "SBIN", "AXISBANK")
+
 
 def _hhmm(value: str, label: str) -> str:
     parts = str(value).split(":")
@@ -65,7 +72,7 @@ class IntradayConfig:
     auto_execute: bool = False
     timeframe: str = "5m"
     scan_indices: tuple[str, ...] = _INDEX_DEFAULTS
-    scan_stocks: tuple[str, ...] = ()
+    scan_stocks: tuple[str, ...] = _STOCK_DEFAULTS
     scan_all_stocks: bool = False
     #: Bars of history before any strategy may fire. The slowest input is the
     #: 55 EMA, which is not merely undefined before bar 55 — it is *wrong*, and
@@ -371,9 +378,14 @@ class IntradayConfig:
             out.append("auto_execute is ON and none of these three strategies has a "
                        "walk-forward result — every number here is a judgement call")
         if not self.vs_require_volume_vwap:
-            out.append("vs_require_volume_vwap is OFF: on index spot Kite reports no "
-                       "volume, so VWAP collapses onto the typical price and the "
-                       "close-vs-VWAP test becomes close-vs-itself")
+            out.append("vs_require_volume_vwap is OFF, so VWAP SuperTrend will "
+                       "trade the session MEAN on instruments with no volume "
+                       "(index spot). That is a different anchor than the one "
+                       "the strategy specifies")
+        elif self.vs_enabled and not (self.scan_stocks or self.scan_all_stocks):
+            out.append("VWAP SuperTrend is on but the universe is indices only — "
+                       "index spot reports no volume, so it can never fire. Add "
+                       "stocks, or turn the strategy off")
         if self.rb_stop_atr_mult == 0:
             out.append("rb_stop_atr_mult=0 leaves the ribbon trade with no price stop — "
                        "it exits only on the opposite full cross, which can be days")

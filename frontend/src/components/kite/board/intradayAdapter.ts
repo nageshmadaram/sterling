@@ -82,6 +82,23 @@ function flags(row: IntradayRow): BoardOrigin[] {
     label: row.timeframe, hint: 'Candle interval these rules are evaluated on',
     tone: 'dim',
   }];
+  if (row.historical) {
+    // Never let a replayed row read as a live one. It is the same rules on the
+    // same bars, but nobody traded it.
+    out.push({
+      label: 'replay',
+      hint: 'Replayed from stored bars — the same rules on the same candles, '
+        + 'but this was not traded.',
+      tone: 'dim',
+    });
+    if (row.outcome) {
+      out.push({
+        label: `${row.outcome.r >= 0 ? '+' : ''}${row.outcome.r.toFixed(2)}R`,
+        hint: `Closed ${row.outcome.reason} after ${row.outcome.bars_held} bars.`,
+        tone: row.outcome.r >= 0 ? 'green' : 'amber',
+      });
+    }
+  }
   const rr = row.signal?.rr;
   if (rr != null && Number.isFinite(rr)) {
     out.push({
@@ -142,12 +159,18 @@ function sections(row: IntradayRow): BoardSection[] {
 /** A watching row must say why, in one line, on the row itself. */
 function reason(row: IntradayRow): string | null {
   if (row.state === 'armed') return null;
+  if (row.outcome) {
+    const r = row.outcome.r;
+    return `${row.outcome.reason} · ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`;
+  }
   return row.blockers[0] ?? 'No setup on the last closed candle.';
 }
 
 export function intradayRowToBoard(row: IntradayRow): BoardSignal {
   const sig = row.signal;
-  const status: BoardStatus = row.state === 'armed' ? 'armed' : 'watching';
+  const status: BoardStatus = row.state === 'armed'
+    ? 'armed'
+    : (row.state === 'ended' ? 'ended' : 'watching');
   return {
     id: `intraday:${row.strategy}:${row.symbol}:${sig?.timestamp_ms ?? row.generated_at_ms}`,
     engine: 'intraday',
@@ -166,7 +189,7 @@ export function intradayRowToBoard(row: IntradayRow): BoardSignal {
       stop: price(sig?.stop),
       trail: null,
       target: price(sig?.target),
-      exit: null,
+      exit: price(row.outcome?.exit),
     },
     sizing: { lots: null, quantity: null, atRiskInr: null, deployedInr: null },
     score: null,
@@ -316,5 +339,9 @@ export function intradayToBoard(snap: IntradaySnapshot | undefined): BoardSignal
   const scanned = (snap?.rows ?? [])
     .filter((r) => !r.contract || !heldSymbols.has(r.contract.symbol))
     .map(intradayRowToBoard);
-  return [...positions, ...scanned];
+  // Held, then live, then the replayed history. A row an operator can act on
+  // must never be below one nobody can.
+  const history = (snap?.history ?? []).map(intradayRowToBoard);
+  const seen = new Set([...positions, ...scanned].map((s) => s.id));
+  return [...positions, ...scanned, ...history.filter((h) => !seen.has(h.id))];
 }

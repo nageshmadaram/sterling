@@ -451,9 +451,17 @@ def evaluate_vwap_supertrend(bars: Bars, cfg: IntradayConfig, symbol: str) -> Ev
 
     volume_weighted = vwap_is_volume_weighted(bars.volume, starts)
     metrics["vwap_volume_weighted"] = volume_weighted
+    metrics["vwap_basis"] = "volume" if volume_weighted else "session_mean"
     if cfg.vs_require_volume_vwap and not volume_weighted:
-        blockers.append("this session has no volume — VWAP is a session mean, so "
-                        "close-vs-VWAP is not the test the strategy specifies")
+        # Actionable, because "no volume" is a property of the INSTRUMENT, not
+        # of today. Kite reports none on index spot and always will, so a row
+        # that only states the fact leaves an operator watching a strategy that
+        # can never fire and no way to know that is why.
+        blockers.append(
+            "no volume on this instrument — index spot reports none, so VWAP "
+            "would be a session mean rather than volume-weighted. Scan stocks "
+            "or futures for this strategy, or turn off 'require real volume' to "
+            "trade the session mean instead")
 
     # Which bar the colour changed on, looking back only as far as a flip may
     # still be called fresh.

@@ -175,3 +175,38 @@ def test_the_evaluation_window_is_bounded_the_way_the_live_scanner_is():
     assert _slice(bars, 1500, window=400).close[-1] == bars.close[1499]
     # And never past the cut, whatever the window.
     assert len(_slice(bars, 50, window=400)) == 50
+
+
+class TestTheCostModelMatchesWhatIsTraded:
+    """The bug the harness found in itself on its first real run.
+
+    It charged the OPTIONS schedule — 0.1% STT on premium — against an index
+    NOTIONAL, and reported an average of -14.5R per trade. A book whose stop is
+    1R cannot average -14.5R; the number was the cost model.
+    """
+
+    def test_the_two_lenses_are_different_schedules(self):
+        opt = CostModel.for_lens("option")
+        und = CostModel.for_lens("underlying")
+        assert opt.stt_sell_pct > und.stt_sell_pct * 4
+        assert opt.slippage_pct > und.slippage_pct * 10
+
+    def test_the_option_schedule_against_an_index_notional_is_absurd(self):
+        """Kept as a test so nobody reintroduces it: the wrong schedule makes
+        costs several times the entire risk of the trade."""
+        wrong = CostModel.for_lens("option").round_trip(23_000.0, 23_000.0, 75)
+        right = CostModel.for_lens("underlying").round_trip(23_000.0, 23_000.0, 75)
+        risk_rupees = 20.0 * 75          # a 20-point stop on one NIFTY lot
+        assert wrong > 2 * risk_rupees
+        assert right < 0.5 * risk_rupees
+
+    def test_one_unit_makes_the_brokerage_the_whole_result(self):
+        """`qty` is UNITS, not lots. A flat per-order fee against one unit of an
+        index is a trade nobody places."""
+        c = CostModel.for_lens("underlying")
+        per_unit_1 = c.round_trip(23_000.0, 23_000.0, 1) / 1
+        per_unit_lot = c.round_trip(23_000.0, 23_000.0, 75) / 75
+        assert per_unit_1 > 5 * per_unit_lot
+
+    def test_an_explicit_slippage_overrides_the_lens_default(self):
+        assert CostModel.for_lens("underlying", slippage_pct=0.4).slippage_pct == 0.4

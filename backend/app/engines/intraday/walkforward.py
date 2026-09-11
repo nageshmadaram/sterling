@@ -168,6 +168,9 @@ GATE = {
     "max_permutation_p": 0.05,
     "min_symbols_positive_pct": 60.0,
     "max_drawdown_pct": -35.0,
+    #: In R, and it is THIS the gate leans on. The percentage depends on a
+    #: capital figure the harness does not size to.
+    "max_drawdown_r": -25.0,
 }
 
 
@@ -195,6 +198,7 @@ def run(
     costs: Optional[CostModel] = None,
     capital: float = 100_000.0,
     qty: int = 1,
+    lot_sizes: Optional[dict[str, int]] = None,
     selector: Callable[[Summary], float] = score_in_sample,
 ) -> WalkForwardReport:
     """Walk one strategy forward across every symbol's tape.
@@ -202,6 +206,10 @@ def run(
     ``tapes`` is symbol -> candles. Folds are cut on the SHORTEST tape so every
     symbol contributes the same windows, which is what makes the per-symbol
     consistency check meaningful rather than an artefact of who has more data.
+
+    ``lot_sizes`` is symbol -> units per lot. Pass it: a flat per-order
+    brokerage charged against ONE unit of an index makes the brokerage the
+    entire result, and the run reports a strategy that nobody could have placed.
     """
     costs = costs or CostModel()
     symbols = sorted(tapes)
@@ -227,7 +235,8 @@ def run(
             for sym in symbols:
                 window = list(tapes[sym])[fold.is_start:fold.is_end]
                 trades.extend(replay(window, cfg, sym, strategy, costs=costs,
-                                     qty=qty, capital=capital).trades)
+                                     qty=(lot_sizes or {}).get(sym, qty),
+                                     capital=capital).trades)
             s = summarise(trades, capital)
             scores[label] = round(s.sharpe, 3)
             trial_sharpes.append(s.sharpe)
@@ -243,7 +252,8 @@ def run(
                 # replayed here, so a trade cannot straddle the boundary.
                 window = list(tapes[sym])[fold.oos_start:fold.oos_end]
                 got = replay(window, chosen_cfg, sym, strategy, costs=costs,
-                             qty=qty, capital=capital).trades
+                             qty=(lot_sizes or {}).get(sym, qty),
+                             capital=capital).trades
                 result.oos_trades.extend(got)
                 per_symbol[sym] += sum(t.net for t in got)
             result.oos = summarise(result.oos_trades, capital)
@@ -284,15 +294,24 @@ def judge(oos: Summary, dsr: float, p: Optional[float],
         # test" and "tested and passed" must not look the same from here.
         "beats_random_timing": p is not None and p <= GATE["max_permutation_p"],
         "consistent_across_symbols": pct >= GATE["min_symbols_positive_pct"],
-        "survivable_drawdown": oos.max_drawdown_pct >= GATE["max_drawdown_pct"],
+        "survivable_drawdown": oos.max_drawdown_r >= GATE["max_drawdown_r"],
     }
     reasons: list[str] = []
     if not checks["enough_trades"]:
         reasons.append(f"{oos.trades} out-of-sample trades, needs "
                        f"{GATE['min_oos_trades']}")
     if not checks["profitable"]:
-        reasons.append(f"out-of-sample net {oos.net:,.0f} after costs "
-                       f"({oos.cost_share_pct}% of gross went to costs)")
+        # Two different failures, and conflating them is misleading. Costs
+        # eating a real edge is a cost problem; a gross that was never positive
+        # is the SIGNAL, and no cost model will fix it.
+        if oos.gross_positive:
+            reasons.append(f"out-of-sample net {oos.net:,.0f} after costs — "
+                           f"the edge was there ({oos.gross:,.0f} gross) and "
+                           f"{oos.cost_share_pct}% of it went to costs")
+        else:
+            reasons.append(f"out-of-sample net {oos.net:,.0f}: gross was "
+                           f"{oos.gross:,.0f} BEFORE any cost, so the entries "
+                           "lose on their own and no cost model fixes that")
     if not checks["sharpe"]:
         reasons.append(f"out-of-sample Sharpe {oos.sharpe} < {GATE['min_oos_sharpe']}")
     if not checks["deflated_sharpe"]:
@@ -306,6 +325,6 @@ def judge(oos: Summary, dsr: float, p: Optional[float],
         reasons.append(f"only {pct:.0f}% of symbols profitable, needs "
                        f"{GATE['min_symbols_positive_pct']:.0f}%")
     if not checks["survivable_drawdown"]:
-        reasons.append(f"max drawdown {oos.max_drawdown_pct}% is worse than "
-                       f"{GATE['max_drawdown_pct']}%")
+        reasons.append(f"max drawdown {oos.max_drawdown_r}R is worse than "
+                       f"{GATE['max_drawdown_r']}R")
     return Verdict(promoted=all(checks.values()), reasons=reasons, checks=checks)

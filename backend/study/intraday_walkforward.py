@@ -37,6 +37,20 @@ OUT_DIR = os.path.dirname(__file__)
 DEFAULT_SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "RELIANCE", "HDFCBANK",
                    "ICICIBANK", "INFY", "TCS", "SBIN", "AXISBANK"]
 
+#: Units per lot, so costs are charged against a trade somebody could place.
+#:
+#: A flat per-order brokerage against ONE unit of an index makes the brokerage
+#: the entire result. The first run of this harness did that and reported an
+#: average of -14.5R per trade, which is arithmetically impossible for a book
+#: whose stop is 1R — the number was the cost model, not the strategy.
+LOT_SIZES = {
+    "NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 65, "MIDCPNIFTY": 120,
+    "SENSEX": 20, "RELIANCE": 500, "HDFCBANK": 550, "ICICIBANK": 700,
+    "INFY": 400, "TCS": 175, "SBIN": 750, "AXISBANK": 625,
+    "BAJFINANCE": 750, "LT": 150, "BHARTIARTL": 475,
+}
+DEFAULT_LOT = 100
+
 #: One knob per strategy, three values each. Deliberately SMALL.
 #:
 #: Every extra variant raises the bar the deflated Sharpe sets, so a wide grid
@@ -95,10 +109,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--purge-bars", type=int, default=75,
                     help="gap between the windows — one session, so no trade "
                          "straddles the boundary")
-    ap.add_argument("--slippage", type=float, default=0.05,
-                    help="half-spread per leg, %% of price. The default is an "
-                         "INDEX-FUTURE-like 0.05%%; pass 0.5 or more for what "
-                         "an intraday option book actually pays")
+    ap.add_argument("--lens", choices=("underlying", "option"), default="underlying",
+                    help="what is traded. 'underlying' measures the SIGNAL on a "
+                         "delta-1 proxy at futures costs; 'option' applies the "
+                         "options schedule to a premium")
+    ap.add_argument("--slippage", type=float, default=None,
+                    help="half-spread per leg, %% of price. Defaults to the "
+                         "lens's own: 0.01%% delta-1, 0.5%% options")
     ap.add_argument("--capital", type=float, default=100_000.0)
     ap.add_argument("--json", default=os.path.join(OUT_DIR, "intraday_walkforward.json"))
     ap.add_argument("--record", action="store_true",
@@ -117,12 +134,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     base = IntradayConfig(scan_indices=("NIFTY",), scan_stocks=(),
                           close_at_session_end=True).validate()
-    costs = CostModel(slippage_pct=args.slippage)
+    costs = CostModel.for_lens(args.lens, slippage_pct=args.slippage)
     verdicts: dict[str, StrategyValidation] = {}
     report: dict = {"config": {"symbols": sorted(tapes), "bars": n,
                                "is_bars": args.is_bars, "oos_bars": args.oos_bars,
                                "purge_bars": args.purge_bars,
-                               "slippage_pct": args.slippage,
+                               "lens": args.lens,
+                               "slippage_pct": costs.slippage_pct,
                                "capital": args.capital},
                     "gate": GATE, "strategies": {}}
 
@@ -132,18 +150,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             res = run(tapes, strategy, build_grid(strategy, base),
                       is_bars=args.is_bars, oos_bars=args.oos_bars,
                       purge_bars=args.purge_bars, costs=costs,
-                      capital=args.capital)
+                      capital=args.capital,
+                      lot_sizes={s: LOT_SIZES.get(s, DEFAULT_LOT) for s in tapes})
         except ValueError as exc:
             print(f"  cannot evaluate: {exc}\n")
             report["strategies"][strategy] = {"error": str(exc)}
             continue
         o = res.oos
         print(f"  folds {len(res.folds)} · trials {res.n_trials}")
+        cost_note = (f"{o.cost_share_pct}% of gross" if o.gross_positive
+                     else "gross was negative BEFORE costs")
         print(f"  OOS trades {o.trades} · net {o.net:,.0f} · gross {o.gross:,.0f} "
-              f"· costs {o.costs:,.0f} ({o.cost_share_pct}% of gross)")
+              f"· costs {o.costs:,.0f} ({cost_note})")
         print(f"  win rate {o.win_rate} · PF {o.profit_factor} · avg R {o.avg_r}")
-        print(f"  Sharpe {o.sharpe} · maxDD {o.max_drawdown_pct}% "
-              f"· DSR {res.dsr:.3f} · permutation p {res.permutation_p}")
+        print(f"  Sharpe {o.sharpe} · maxDD {o.max_drawdown_r}R "
+              f"({o.max_drawdown_pct}% of capital) · DSR {res.dsr:.3f} "
+              f"· permutation p {res.permutation_p}")
         print(f"  VERDICT: {'PROMOTED' if res.verdict.promoted else 'NOT PROMOTED'}")
         for r in res.verdict.reasons:
             print(f"    - {r}")
@@ -156,7 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             permutation_p=res.permutation_p,
             max_drawdown_pct=o.max_drawdown_pct,
             checks=res.verdict.checks, reasons=res.verdict.reasons,
-            slippage_pct=args.slippage, symbols=sorted(tapes))
+            slippage_pct=costs.slippage_pct, symbols=sorted(tapes))
 
     if args.record:
         # The verdicts are what gate unattended execution, so writing them is an

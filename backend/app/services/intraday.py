@@ -460,6 +460,15 @@ def snapshot(uid: str) -> dict:
     cfg = get_config(uid)
     st = status(uid)
     armed = [r for r in st.rows if r["state"] == "armed"]
+    # The live scan only ever evaluates the LAST closed bar, and every rule here
+    # fires on ONE bar. Outside the session — and for most of any session — the
+    # honest live answer is "nothing right now", so a board showing only that is
+    # blank almost always. The recent history is what makes it readable.
+    history: list[dict] = []
+    try:
+        history = recent_signals(uid)
+    except Exception as exc:                                       # noqa: BLE001
+        log.debug("intraday: history unavailable for %s: %s", uid, exc)
     positions: list[dict] = []
     record: dict = {}
     mode: dict = {}
@@ -491,6 +500,8 @@ def snapshot(uid: str) -> dict:
         "warnings": cfg.warnings(),
         "enabled_strategies": list(cfg.enabled_strategies()),
         "rows": st.rows,
+        "history": history,
+        "history_sessions": HISTORY_SESSIONS,
         "armed": len(armed),
         "scanned": st.scanned,
         "scanning": st.scanning,
@@ -499,3 +510,128 @@ def snapshot(uid: str) -> dict:
         "last_error": st.last_error,
         "generated_at_ms": ist_now_ms(),
     }
+
+
+# ------------------------------------------------------------------- history
+
+#: Sessions of history the board shows behind the live row.
+#:
+#: Every rule in this pack fires on ONE bar — a break, a cross, a flip — and the
+#: live scan only ever evaluates the last closed bar. So outside market hours,
+#: and for most of any session, the honest live answer is "nothing right now",
+#: and a board that showed only that would be blank almost always. That is not
+#: the strategies being quiet; it is the board asking a question with a very
+#: narrow answer.
+HISTORY_SESSIONS = 5
+_history_cache: dict[str, tuple[float, list[dict]]] = {}
+_HISTORY_TTL_S = 300.0
+
+
+def _trade_row(trade, cfg: IntradayConfig, *, symbol: str) -> dict:
+    """One historical signal, with what it would have done next.
+
+    Deliberately the outcome too, not just the entry. "Here is a signal we would
+    have taken" is much less useful than "here is one we would have taken and
+    here is where it came out", and the second is free: the replay already knows.
+    """
+    direction = str(getattr(trade, "thesis", "BULLISH"))
+    bullish = direction == "BULLISH"
+    return {
+        "signal_id": signal_id_for(trade.strategy, symbol, trade.entry_ms),
+        "strategy": trade.strategy,
+        "strategy_name": DESCRIPTORS.get(trade.strategy, {}).get("name", trade.strategy),
+        "symbol": symbol,
+        "state": "ended",
+        "blockers": [],
+        "spot": round(trade.entry, 2),
+        "underlying_token": 0,
+        "timeframe": cfg.timeframe,
+        "contract": None,
+        "quote": None,
+        "historical": True,
+        "outcome": {
+            "exit": round(trade.exit_price, 2),
+            "reason": trade.reason,
+            "points": round(trade.gross, 2),
+            "r": trade.r,
+            "bars_held": trade.bars_held,
+            "exit_ms": trade.exit_ms,
+        },
+        "signal": {
+            "strategy": trade.strategy, "symbol": symbol, "direction": direction,
+            "opt_type": "CE" if bullish else "PE",
+            "timestamp_ms": trade.entry_ms,
+            "entry": round(trade.entry, 2), "stop": round(trade.stop, 2),
+            "target": round(trade.target, 2), "target2": None,
+            "risk": round(abs(trade.entry - trade.stop), 2),
+            "rr": round(abs(trade.target - trade.entry) / abs(trade.entry - trade.stop), 2)
+            if trade.entry != trade.stop else None,
+            "strength": "STRONG", "origin": "replay",
+            "reasons": [f"closed {trade.reason} after {trade.bars_held} bars"],
+            "metrics": {},
+        },
+        "generated_at_ms": trade.entry_ms,
+    }
+
+
+def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS,
+                   symbols: Optional[list[str]] = None) -> list[dict]:
+    """What these strategies fired over the last few sessions, from stored bars.
+
+    Reads the OHLCV store, so it works with the market closed, with no broker
+    session, and before any live scan has ever run. It replays the SAME
+    evaluators the live scan uses — a history built from a second implementation
+    would be a history of something else.
+
+    Cached briefly: it is a view of bars that are not changing, and recomputing
+    it per poll would put a replay on a 5-second timer.
+    """
+    cfg = get_config(uid)
+    names = symbols if symbols is not None else list(cfg.scan_indices) + list(cfg.scan_stocks)
+    if not names:
+        return []
+    key = f"{uid}:{cfg.timeframe}:{sessions}:{','.join(sorted(names))}"
+    hit = _history_cache.get(key)
+    now = time.monotonic()
+    if hit and (now - hit[0]) < _HISTORY_TTL_S:
+        return hit[1]
+
+    from app.engines.intraday.backtest import CostModel, replay
+    from app.services.ohlcv_store import get_candles
+    bars_per_session = max(1, 375 // max(1, cfg.timeframe_minutes))
+    # Enough tape for the warmup AND the sessions being shown. Asking for only
+    # the visible window would evaluate bars whose indicators are still wrong.
+    need = cfg.warmup_bars + bars_per_session * (sessions + 2)
+    # Costs OFF for the history view: this shows WHERE the rules fired, and a
+    # cost model would quietly turn it into a P&L claim the board is not making.
+    free = CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0, exchange_pct=0.0,
+                     gst_pct=0.0, misc_pct=0.0, slippage_pct=0.0)
+    rows: list[dict] = []
+    for name in names:
+        try:
+            candles = get_candles(name, cfg.timeframe, limit=need) or []
+        except Exception as exc:                                   # noqa: BLE001
+            log.debug("intraday history: %s unreadable (%s)", name, exc)
+            continue
+        if len(candles) < cfg.warmup_bars + 5:
+            continue
+        cutoff = 0
+        if candles:
+            last = float(candles[-1].get("time") or 0)
+            cutoff = int(last - sessions * 86400 * 1.6)   # calendar, not trading
+        for strategy in cfg.enabled_strategies():
+            try:
+                res = replay(candles, cfg, name, strategy, costs=free)
+            except Exception as exc:                               # noqa: BLE001
+                log.debug("intraday history: %s/%s failed (%s)", name, strategy, exc)
+                continue
+            for t in res.trades:
+                if t.entry_ms // 1000 >= cutoff:
+                    rows.append(_trade_row(t, cfg, symbol=name))
+    rows.sort(key=lambda r: -int(r["generated_at_ms"]))
+    _history_cache[key] = (now, rows)
+    return rows
+
+
+def clear_history_cache() -> None:
+    _history_cache.clear()

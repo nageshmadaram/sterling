@@ -42,28 +42,62 @@ Lens = Literal["underlying", "option"]
 class CostModel:
     """What one round trip actually costs, in the instrument's own units.
 
-    Defaults are the Zerodha options schedule as of 2026 plus a slippage
-    assumption. Slippage is the term that decides whether a 5-minute strategy
-    is viable at all, and it is a PARAMETER rather than a constant precisely so
-    a sweep can show how sensitive the answer is to it.
+    The percentages are charged on TRADED VALUE, so a model built for one
+    instrument cannot be pointed at another. Options pay STT of 0.1% on the
+    premium; a futures or delta-1 book pays 0.02% on the whole notional — a
+    different rate against a different base. Charging the option schedule
+    against an index notional overstates the cost by roughly two orders of
+    magnitude.
+
+    That is not hypothetical. The first run of this harness did exactly that and
+    reported an average of -14.5R per trade, which is arithmetically impossible
+    for a book whose stop is 1R: the number was the cost model, not the
+    strategy. Use :meth:`for_lens` rather than the raw constructor unless you
+    know which schedule you want.
+
+    Slippage is the term that decides whether a 5-minute strategy is viable at
+    all, and it is a PARAMETER rather than a constant precisely so a sweep can
+    show how sensitive the answer is to it.
     """
 
     #: Flat brokerage per executed order, in rupees.
     brokerage_per_order: float = 20.0
-    #: STT, charged on the SELL side of an option, on premium.
+    #: STT on the SELL side, as a percentage of traded value.
     stt_sell_pct: float = 0.10
-    #: Exchange transaction charge, on premium, both sides.
+    #: Exchange transaction charge, both sides.
     exchange_pct: float = 0.0495
     #: GST on (brokerage + exchange charges).
     gst_pct: float = 18.0
     #: SEBI turnover + stamp, rolled together. Small but not zero.
     misc_pct: float = 0.0031
-    #: Half the bid/ask, paid on each leg, as a percentage of price. THE number
-    #: that decides whether an intraday option strategy survives.
+    #: Half the bid/ask, paid on each leg, as a percentage of price.
     slippage_pct: float = 0.50
 
+    @classmethod
+    def for_lens(cls, lens: "Lens", *,
+                 slippage_pct: Optional[float] = None) -> "CostModel":
+        """The right schedule for what is actually being traded.
+
+        ``option`` is the Zerodha options schedule on premium. ``underlying`` is
+        the index-futures schedule on notional, which is what a delta-1 proxy
+        for these signals would pay — and its slippage default is far smaller,
+        because an index future's book is nothing like a weekly option's.
+        """
+        if lens == "option":
+            return cls(brokerage_per_order=20.0, stt_sell_pct=0.10,
+                       exchange_pct=0.0495, gst_pct=18.0, misc_pct=0.0031,
+                       slippage_pct=0.50 if slippage_pct is None else slippage_pct)
+        return cls(brokerage_per_order=20.0, stt_sell_pct=0.02,
+                   exchange_pct=0.0019, gst_pct=18.0, misc_pct=0.0021,
+                   slippage_pct=0.01 if slippage_pct is None else slippage_pct)
+
     def round_trip(self, entry: float, exit_price: float, qty: int) -> float:
-        """Rupees of cost for one complete trade. Never negative."""
+        """Rupees of cost for one complete trade. Never negative.
+
+        ``qty`` is UNITS, not lots. One unit of an index against a flat
+        per-order brokerage makes the brokerage the entire result — a trade
+        nobody places. Pass the real lot.
+        """
         if qty <= 0 or entry <= 0:
             return 0.0
         buy_value = entry * qty

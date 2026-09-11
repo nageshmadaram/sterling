@@ -24,7 +24,8 @@ export type TrailMode = 'none' | 'breakeven' | 'atr' | 'structure';
 export type StopSource = 'vwap' | 'supertrend' | 'wider';
 export type SizingMode = 'RISK_PCT' | 'LOTS';
 export type StopMode = 'broker' | 'monitor' | 'both';
-export type SignalState = 'armed' | 'watching';
+/** `ended` is a replayed row: the same rules on the same bars, not traded. */
+export type SignalState = 'armed' | 'watching' | 'ended';
 
 export interface IntradayConfig {
   enabled: boolean;
@@ -189,7 +190,22 @@ export interface IntradayContract {
   exchange: string;
 }
 
+/** What a historical signal went on to do. The replay already knows, and
+ *  "a signal we would have taken" is much less useful than "and here is where
+ *  it came out". */
+export interface IntradayOutcome {
+  exit: number;
+  reason: string;
+  points: number;
+  r: number;
+  bars_held: number;
+  exit_ms: number;
+}
+
 export interface IntradayRow {
+  /** The id the SCAN minted. Arming takes this, because arming something the
+   *  scan did not produce is exactly what the route refuses. */
+  signal_id: string | null;
   strategy: IntradayStrategyId;
   strategy_name: string;
   symbol: string;
@@ -201,6 +217,11 @@ export interface IntradayRow {
   generated_at_ms: number;
   signal: IntradaySignalRow | null;
   metrics: Record<string, unknown>;
+  /** Replayed from stored bars rather than scanned live. */
+  historical?: boolean;
+  outcome?: IntradayOutcome | null;
+  underlying_token?: number;
+  quote?: { premium: number; spread_pct: number | null; blockers: string[] } | null;
 }
 
 export interface IntradayContractRef {
@@ -284,6 +305,10 @@ export interface IntradaySnapshot {
   warnings: string[];
   enabled_strategies: IntradayStrategyId[];
   rows: IntradayRow[];
+  /** The last few sessions, replayed. Keeps the board readable when the live
+   *  answer is "nothing on this bar", which it usually is. */
+  history?: IntradayRow[];
+  history_sessions?: number;
   armed: number;
   scanned: number;
   scanning: boolean;

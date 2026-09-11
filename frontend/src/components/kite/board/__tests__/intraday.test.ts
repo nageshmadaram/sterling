@@ -16,6 +16,7 @@ import type {
 
 function row(over: Partial<IntradayRow> = {}): IntradayRow {
   return {
+    signal_id: 'pivot_break:NIFTY:1789009200000',
     strategy: 'pivot_break',
     strategy_name: 'Pivot Break',
     symbol: 'NIFTY',
@@ -241,5 +242,65 @@ describe('the runner leg', () => {
     const s = intradayPositionToBoard(position({ target2: 0 }));
     const tile = s.sections[0].stats.find((st) => st.label === 'Runner');
     expect(tile?.value).toBe('—');
+  });
+});
+
+
+describe('the replayed history', () => {
+  function historical(over: Partial<IntradayRow> = {}): IntradayRow {
+    return {
+      ...row(),
+      state: 'ended',
+      historical: true,
+      contract: null,
+      outcome: { exit: 24_845, reason: 'target', points: 45, r: 2.1,
+                 bars_held: 9, exit_ms: 1_789_012_000_000 },
+      ...over,
+    };
+  }
+
+  it('is drawn as ended, never as something to act on', () => {
+    const s = intradayRowToBoard(historical());
+    expect(s.status).toBe('ended');
+    expect(s.levels.exit).toBe(24_845);
+  });
+
+  it('is marked as a replay so it cannot read as a live signal', () => {
+    // Same rules on the same bars — but nobody traded it.
+    const labels = intradayRowToBoard(historical()).flags?.map((f) => f.label) ?? [];
+    expect(labels).toContain('replay');
+    expect(labels).toContain('+2.10R');
+  });
+
+  it('says how it ended, on the row', () => {
+    expect(intradayRowToBoard(historical()).reason).toBe('target · +2.10R');
+    const lost = intradayRowToBoard(historical({
+      outcome: { exit: 24_780, reason: 'stop', points: -20, r: -1.0,
+                 bars_held: 3, exit_ms: 1 },
+    }));
+    expect(lost.reason).toBe('stop · -1.00R');
+    expect(lost.flags?.find((f) => f.label === '-1.00R')?.tone).toBe('amber');
+  });
+
+  it('sits BELOW anything an operator can act on', () => {
+    // A row nobody can act on must never be above one they can.
+    const board = intradayToBoard(snapshot([row()], {
+      positions: [position({ contract: { ...position().contract,
+                                         tradingsymbol: 'OTHER26SEP1CE' } })],
+      history: [historical({
+        signal: { ...row().signal!, timestamp_ms: 1_788_000_000_000 },
+      })],
+    }));
+    expect(board[0].id).toMatch(/^intraday:pos:/);
+    expect(board[1].status).toBe('armed');
+    expect(board[board.length - 1].status).toBe('ended');
+  });
+
+  it('does not duplicate a signal the live scan already shows', () => {
+    const live = row();
+    const board = intradayToBoard(snapshot([live], {
+      history: [historical({ signal_id: live.signal_id })],
+    }));
+    expect(board).toHaveLength(1);
   });
 });

@@ -35,15 +35,20 @@ def _ts(day: str, hh: int, mm: int) -> float:
 
 
 def _tape_5m(day: str = "2026-09-10", n: int = 120) -> list[dict]:
-    """A steadily falling tape across two sessions — enough for a 55 EMA."""
+    """A tape that RISES then falls, so every rule has something to fire on.
+
+    A monotonic tape has its ribbon cross before the window starts and never
+    again, which looks exactly like a broken strategy.
+    """
     out, price, i_in_day, cur = [], 200.0, 0, day
+    turn = n // 2
     for i in range(n):
         if i_in_day >= 75:
             i_in_day = 0
             cur = (datetime(*(int(x) for x in cur.split("-")), tzinfo=IST)
                    + timedelta(days=1)).strftime("%Y-%m-%d")
         o = price
-        price -= 0.4
+        price += 0.4 if i < turn else -0.6
         out.append({"time": _ts(cur, 9, 15) + i_in_day * 300, "open": o,
                     "high": max(o, price) + 0.5, "low": min(o, price) - 0.5,
                     "close": price, "volume": 5000.0})
@@ -261,3 +266,74 @@ class TestSolvedDelta:
         d = svc.solved_delta({"strike": 24800.0, "expiry": _near_expiry(),
                               "option_type": "PE"}, 120.0, 24800.0)
         assert d is not None and d > 0
+
+
+# ------------------------------------------------------------------- history
+
+class TestRecentSignals:
+    """The answer to "why is the board empty?".
+
+    Every rule in this pack fires on ONE bar, and the live scan only evaluates
+    the last closed one. Outside the session — and for most of any session —
+    the honest live answer is "nothing right now", so without a history an
+    operator cannot tell a quiet strategy from a broken one.
+    """
+
+    def _store(self, monkeypatch, rows: list[dict], symbols=("NIFTY",)):
+        from app.services import ohlcv_store
+        monkeypatch.setattr(ohlcv_store, "get_candles",
+                            lambda sym, res, **kw: rows if sym in symbols else [])
+
+    def test_it_replays_stored_bars_with_no_broker_and_no_live_scan(self, monkeypatch):
+        rows = _tape_5m(n=900)
+        self._store(monkeypatch, rows)
+        svc.clear_history_cache()
+        out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+        assert out, "expected the stored tape to have fired something"
+        assert all(r["historical"] is True for r in out)
+        assert all(r["state"] == "ended" for r in out)
+
+    def test_every_historical_row_carries_its_outcome(self, monkeypatch):
+        """"A signal we would have taken" is much less useful than "and here is
+        where it came out", and the replay already knows."""
+        self._store(monkeypatch, _tape_5m(n=900))
+        svc.clear_history_cache()
+        out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+        for r in out:
+            o = r["outcome"]
+            assert o["reason"] and o["exit"] > 0
+            assert isinstance(o["r"], float)
+
+    def test_rows_are_newest_first(self, monkeypatch):
+        self._store(monkeypatch, _tape_5m(n=900))
+        svc.clear_history_cache()
+        out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+        stamps = [r["generated_at_ms"] for r in out]
+        assert stamps == sorted(stamps, reverse=True)
+
+    def test_a_symbol_with_too_little_history_is_skipped_not_fatal(self, monkeypatch):
+        self._store(monkeypatch, _tape_5m(n=10))
+        svc.clear_history_cache()
+        assert svc.recent_signals("u1", sessions=5, symbols=["NIFTY"]) == []
+
+    def test_the_history_is_cached_rather_than_replayed_per_poll(self, monkeypatch):
+        calls: list[int] = []
+        rows = _tape_5m(n=900)
+
+        def _get(sym, res, **kw):
+            calls.append(1)
+            return rows
+        from app.services import ohlcv_store
+        monkeypatch.setattr(ohlcv_store, "get_candles", _get)
+        svc.clear_history_cache()
+        svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+        first = len(calls)
+        svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
+        assert len(calls) == first, "a replay on a 5-second poll timer"
+
+    def test_the_signal_ids_match_the_live_scan_s_shape(self, monkeypatch):
+        self._store(monkeypatch, _tape_5m(n=900))
+        svc.clear_history_cache()
+        for r in svc.recent_signals("u1", sessions=30, symbols=["NIFTY"]):
+            assert r["signal_id"] == svc.signal_id_for(
+                r["strategy"], r["symbol"], r["signal"]["timestamp_ms"])
