@@ -199,6 +199,7 @@ def run(
     capital: float = 100_000.0,
     qty: int = 1,
     lot_sizes: Optional[dict[str, int]] = None,
+    prior_sharpes: Sequence[float] = (),
     selector: Callable[[Summary], float] = score_in_sample,
 ) -> WalkForwardReport:
     """Walk one strategy forward across every symbol's tape.
@@ -210,6 +211,14 @@ def run(
     ``lot_sizes`` is symbol -> units per lot. Pass it: a flat per-order
     brokerage charged against ONE unit of an index makes the brokerage the
     entire result, and the run reports a strategy that nobody could have placed.
+
+    ``prior_sharpes`` carries the in-sample Sharpes of every configuration
+    tried EARLIER IN THE SAME SEARCH — a previous timeframe, a previous grid,
+    a previous day of looking. Deflation is about how many variants were
+    examined before one looked good, and a search spread across several runs
+    deflates by exactly as much as the same search inside one run. Omitting it
+    reports a deflated Sharpe that is too HIGH, which is the one direction this
+    statistic must never be wrong in.
     """
     costs = costs or CostModel()
     symbols = sorted(tapes)
@@ -224,7 +233,8 @@ def run(
 
     fold_results: list[FoldResult] = []
     all_oos: list[BacktestTrade] = []
-    trial_sharpes: list[float] = []
+    # Seeded with the rest of the search, not just this run's grid.
+    trial_sharpes: list[float] = [float(x) for x in prior_sharpes]
     per_symbol: dict[str, float] = {s: 0.0 for s in symbols}
 
     for fold in folds:

@@ -26,6 +26,7 @@ from typing import Sequence
 
 from app.engines.intraday import IntradayConfig, STRATEGY_KEYS
 from app.engines.intraday.backtest import CostModel
+from app.engines.intraday.contracts import SPECS
 from app.engines.intraday.walkforward import GATE, run
 from app.services.intraday_validation import StrategyValidation, record
 
@@ -37,18 +38,19 @@ OUT_DIR = os.path.dirname(__file__)
 DEFAULT_SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "RELIANCE", "HDFCBANK",
                    "ICICIBANK", "INFY", "TCS", "SBIN", "AXISBANK"]
 
-#: Units per lot, so costs are charged against a trade somebody could place.
+#: Units per lot, read from the engine's own contract registry rather than
+#: repeated here.
 #:
-#: A flat per-order brokerage against ONE unit of an index makes the brokerage
-#: the entire result. The first run of this harness did that and reported an
-#: average of -14.5R per trade, which is arithmetically impossible for a book
-#: whose stop is 1R — the number was the cost model, not the strategy.
-LOT_SIZES = {
-    "NIFTY": 75, "BANKNIFTY": 30, "FINNIFTY": 65, "MIDCPNIFTY": 120,
-    "SENSEX": 20, "RELIANCE": 500, "HDFCBANK": 550, "ICICIBANK": 700,
-    "INFY": 400, "TCS": 175, "SBIN": 750, "AXISBANK": 625,
-    "BAJFINANCE": 750, "LT": 150, "BHARTIARTL": 475,
-}
+#: It WAS repeated here, which is the recurring bug class in this codebase: one
+#: fact stored twice, honoured in one place. A lot size that disagreed between
+#: the harness and the live engine would make the backtest price a trade the
+#: engine would never place, and nothing would have said so.
+#:
+#: Why it matters at all: a flat per-order brokerage against ONE unit of an
+#: index makes the brokerage the entire result. The first run of this harness
+#: did that and reported an average of -14.5R per trade, arithmetically
+#: impossible for a book whose stop is 1R — the number was the cost model.
+LOT_SIZES = {name: spec.lot_size for name, spec in SPECS.items()}
 DEFAULT_LOT = 100
 
 #: One knob per strategy, three values each. Deliberately SMALL.
@@ -101,7 +103,22 @@ def build_grid(strategy: str, base: IntradayConfig) -> list[tuple[str, IntradayC
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--symbols", nargs="*", default=DEFAULT_SYMBOLS)
-    ap.add_argument("--resolution", default="5m")
+    ap.add_argument("--resolution", default="5m",
+                    help="the stored series to read")
+    ap.add_argument("--sweep-timeframes", default=None,
+                    help="comma-separated timeframes to search, e.g. "
+                         "'5m,15m,30m'. Every configuration tried at EVERY "
+                         "timeframe counts toward the deflation, because "
+                         "searching three timeframes for one that looks good "
+                         "is a search — running them as separate invocations "
+                         "and quoting the best is how a result gets a deflated "
+                         "Sharpe it has not earned")
+    ap.add_argument("--timeframe", default=None,
+                    help="evaluate on THIS timeframe, resampling the stored "
+                         "series up to it. The whole pack is specified on 5m, "
+                         "but 92%% of one strategy's gross edge went to costs "
+                         "there — fewer, larger trades is the one change the "
+                         "measurement actually points at")
     ap.add_argument("--is-bars", type=int, default=3000,
                     help="in-sample window, in bars (~40 sessions at 5m)")
     ap.add_argument("--oos-bars", type=int, default=1500,
@@ -124,53 +141,99 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     print(f"Loading {args.resolution} tapes…")
-    tapes = load_tapes(args.symbols, args.resolution)
-    if not tapes:
+    raw_tapes = load_tapes(args.symbols, args.resolution)
+    if not raw_tapes:
         print("No usable tapes in the OHLCV store. Nothing to walk forward.")
         return 2
-    n = min(len(v) for v in tapes.values())
-    print(f"  {len(tapes)} symbols, shortest tape {n} bars "
-          f"(~{n // 75} sessions)\n")
+    timeframes = ([t.strip() for t in args.sweep_timeframes.split(",") if t.strip()]
+                  if args.sweep_timeframes else [args.timeframe or args.resolution])
+    if len(timeframes) > 1:
+        print(f"  sweeping {len(timeframes)} timeframes — every configuration "
+              "tried at every one of them counts toward the deflation")
+    print(f"  {len(raw_tapes)} symbols\n")
 
-    base = IntradayConfig(scan_indices=("NIFTY",), scan_stocks=(),
-                          close_at_session_end=True).validate()
     costs = CostModel.for_lens(args.lens, slippage_pct=args.slippage)
     verdicts: dict[str, StrategyValidation] = {}
-    report: dict = {"config": {"symbols": sorted(tapes), "bars": n,
-                               "is_bars": args.is_bars, "oos_bars": args.oos_bars,
-                               "purge_bars": args.purge_bars,
+    report: dict = {"config": {"symbols": sorted(raw_tapes),
+                               "timeframes": timeframes,
                                "lens": args.lens,
                                "slippage_pct": costs.slippage_pct,
                                "capital": args.capital},
-                    "gate": GATE, "strategies": {}}
+                    "gate": GATE, "strategies": {}, "by_timeframe": {}}
 
-    for strategy in STRATEGY_KEYS:
-        print(f"── {strategy} " + "─" * (60 - len(strategy)))
-        try:
-            res = run(tapes, strategy, build_grid(strategy, base),
-                      is_bars=args.is_bars, oos_bars=args.oos_bars,
-                      purge_bars=args.purge_bars, costs=costs,
-                      capital=args.capital,
-                      lot_sizes={s: LOT_SIZES.get(s, DEFAULT_LOT) for s in tapes})
-        except ValueError as exc:
-            print(f"  cannot evaluate: {exc}\n")
-            report["strategies"][strategy] = {"error": str(exc)}
-            continue
+    # The Sharpe of every configuration tried so far, PER STRATEGY, carried
+    # across timeframes. Searching three timeframes for one that looks good is
+    # a search, and deflating only against the last leg of it reports a number
+    # the result has not earned.
+    seen_sharpes: dict[str, list[float]] = {k: [] for k in STRATEGY_KEYS}
+    best: dict[str, tuple[str, object]] = {}
+
+    for timeframe in timeframes:
+        tapes = raw_tapes
+        if timeframe != args.resolution:
+            from app.engines.intraday import resample
+            mins = {"1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15,
+                    "30m": 30}[timeframe]
+            tapes = {k: resample(v, mins) for k, v in raw_tapes.items()}
+        # Windows are in BARS, so a slower timeframe needs proportionally fewer
+        # of them to cover the same calendar span. Scaling keeps folds
+        # comparable instead of silently shortening the history.
+        scale = 5 / {"1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15,
+                     "30m": 30}[timeframe]
+        is_bars = max(400, int(args.is_bars * scale))
+        oos_bars = max(200, int(args.oos_bars * scale))
+        purge_bars = max(10, int(args.purge_bars * scale))
+        n = min(len(v) for v in tapes.values())
+        base = IntradayConfig(scan_indices=("NIFTY",), scan_stocks=(),
+                              timeframe=timeframe,
+                              close_at_session_end=True).validate()
+        print(f"══ {timeframe} · {n} bars · IS {is_bars} / OOS {oos_bars} "
+              f"/ purge {purge_bars}")
+        report["by_timeframe"][timeframe] = {}
+
+        for strategy in STRATEGY_KEYS:
+            print(f"── {strategy} " + "─" * (56 - len(strategy)))
+            try:
+                res = run(tapes, strategy, build_grid(strategy, base),
+                          is_bars=is_bars, oos_bars=oos_bars,
+                          purge_bars=purge_bars, costs=costs,
+                          capital=args.capital,
+                          prior_sharpes=seen_sharpes[strategy],
+                          lot_sizes={s: LOT_SIZES.get(s, DEFAULT_LOT) for s in tapes})
+            except ValueError as exc:
+                print(f"  cannot evaluate: {exc}\n")
+                report["by_timeframe"][timeframe][strategy] = {"error": str(exc)}
+                continue
+            o = res.oos
+            # Carry this leg's own trials into the next timeframe's deflation.
+            # `res.n_trials` already counts the ones carried IN, so only this
+            # leg's grid scores are appended — adding them twice would deflate
+            # by a search larger than the one actually run.
+            seen_sharpes[strategy] = list(seen_sharpes[strategy]) + [
+                v for fold in res.folds for v in fold.in_sample.values()]
+            print(f"  folds {len(res.folds)} · trials {res.n_trials} "
+                  f"(whole search so far)")
+            cost_note = (f"{o.cost_share_pct}% of gross" if o.gross_positive
+                         else "gross was negative BEFORE costs")
+            print(f"  OOS trades {o.trades} · net {o.net:,.0f} "
+                  f"· gross {o.gross:,.0f} · costs {o.costs:,.0f} ({cost_note})")
+            print(f"  win rate {o.win_rate} · PF {o.profit_factor} "
+                  f"· avg R {o.avg_r}")
+            print(f"  Sharpe {o.sharpe} · maxDD {o.max_drawdown_r}R "
+                  f"· DSR {res.dsr:.3f} · permutation p {res.permutation_p}")
+            print(f"  VERDICT: "
+                  f"{'PROMOTED' if res.verdict.promoted else 'NOT PROMOTED'}")
+            for r in res.verdict.reasons:
+                print(f"    - {r}")
+            print()
+            report["by_timeframe"][timeframe][strategy] = res.as_dict()
+            prev = best.get(strategy)
+            if prev is None or res.dsr > prev[1].dsr:
+                best[strategy] = (timeframe, res)
+
+    for strategy, (timeframe, res) in best.items():
         o = res.oos
-        print(f"  folds {len(res.folds)} · trials {res.n_trials}")
-        cost_note = (f"{o.cost_share_pct}% of gross" if o.gross_positive
-                     else "gross was negative BEFORE costs")
-        print(f"  OOS trades {o.trades} · net {o.net:,.0f} · gross {o.gross:,.0f} "
-              f"· costs {o.costs:,.0f} ({cost_note})")
-        print(f"  win rate {o.win_rate} · PF {o.profit_factor} · avg R {o.avg_r}")
-        print(f"  Sharpe {o.sharpe} · maxDD {o.max_drawdown_r}R "
-              f"({o.max_drawdown_pct}% of capital) · DSR {res.dsr:.3f} "
-              f"· permutation p {res.permutation_p}")
-        print(f"  VERDICT: {'PROMOTED' if res.verdict.promoted else 'NOT PROMOTED'}")
-        for r in res.verdict.reasons:
-            print(f"    - {r}")
-        print()
-        report["strategies"][strategy] = res.as_dict()
+        report["strategies"][strategy] = {**res.as_dict(), "timeframe": timeframe}
         verdicts[strategy] = StrategyValidation(
             strategy=strategy, promoted=res.verdict.promoted,
             measured_at=date.today().isoformat(), oos_trades=o.trades,
@@ -178,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             permutation_p=res.permutation_p,
             max_drawdown_pct=o.max_drawdown_pct,
             checks=res.verdict.checks, reasons=res.verdict.reasons,
-            slippage_pct=costs.slippage_pct, symbols=sorted(tapes))
+            slippage_pct=costs.slippage_pct, symbols=sorted(raw_tapes))
 
     if args.record:
         # The verdicts are what gate unattended execution, so writing them is an

@@ -34,7 +34,7 @@ const NOW = Date.UTC(2026, 7, 21, 10, 30) - IST;
 function sig(over: Partial<BoardSignal> = {}): BoardSignal {
   return {
     id: 'a',
-    engine: 'orb',
+    engine: 'intraday',
     underlying: 'NIFTY',
     instrument: {
       symbol: 'NIFTY26AUG24000CE', exchange: 'NFO', kind: 'option',

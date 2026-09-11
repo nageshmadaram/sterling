@@ -253,6 +253,28 @@ export interface BoardSignal {
    * signal, which is a comparison only worth making between siblings.
    */
   delta?: number | null;
+  /**
+   * This row's levels are a PLAN, so price an order off `levels.entry` rather
+   * than off the live tick.
+   *
+   * The distinction is real and not cosmetic: a strategy whose stop and target
+   * were computed against a signal bar has a fixed risk in points, and pricing
+   * the order off a premium that has moved since silently resizes it. A trade
+   * taken at 1:2 on the plan becomes 1:0.8 on a tick that ran away.
+   *
+   * This replaces `signal.engine === 'orb'` checks that survived that engine's
+   * removal. Naming the PROPERTY rather than the engine is what lets a second
+   * engine with the same property get the same behaviour without another
+   * string comparison — which is how the first one ended up hardcoded.
+   */
+  planPriced?: boolean;
+  /**
+   * This engine has no trailing stop to configure in the order window.
+   *
+   * Long-options strategies whose trail is enforced server-side on ticks: a
+   * TSL field there would offer a second, competing trail.
+   */
+  noTrailingStop?: boolean;
   /** Everything this engine knows that the others do not. */
   sections: BoardSection[];
   /**

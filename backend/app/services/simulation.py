@@ -1727,6 +1727,12 @@ class SimulationRunner:
     async def stop(self) -> SimStatus:
         self._stop_requested = True
         self._pause_event.set()  # unblock if paused
+        # Whether a session actually RAN, captured before the state is reset.
+        # "Complete" has to mean "a session ran and finished", not "stop() was
+        # called": stopping a runner that never started marked it complete, and
+        # a runner that has never played has no finished session to report.
+        ran = self._state != SimState.IDLE or bool(
+            self._stats.events or self._stats.trades)
         if self._task and not self._task.done():
             self._task.cancel()
             try:
@@ -1745,7 +1751,10 @@ class SimulationRunner:
         # session. Without this flag an idle runner handed every client a
         # completed session's signals and trades, which the dock rendered as
         # though the replay were live — results before you pressed play.
-        self._session_complete = True
+        #
+        # Only when one actually ran, though. A never-started runner reporting
+        # a complete session is the same lie in the other direction.
+        self._session_complete = ran
         self._publish_frame(force=True)
         self._publish_state()
         return self.status

@@ -89,7 +89,7 @@ describe('the exit counter and the exit price are separate columns', () => {
   it('reads as a dash when the engine has no counter, rather than borrowing the price', () => {
     render(
       <SignalBoard
-        signals={[sig({ engine: 'orb', exitProgress: null, levels: { ...sig().levels, exit: 205.5 } })]}
+        signals={[sig({ engine: 'intraday', exitProgress: null, levels: { ...sig().levels, exit: 205.5 } })]}
         nowMs={NOW}
         columns={['instrument', 'exitState']}
         openId={null}

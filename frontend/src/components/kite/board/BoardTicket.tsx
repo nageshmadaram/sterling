@@ -73,10 +73,10 @@ export function BoardTicket({ signal, tag }: {
   }, [strike, expiry, optionType, spot, quote, lotSize]);
 
   const ended = signal.status === 'ended';
-  const orb = signal.engine === 'orb';
-  // ORB Manual must open the scan ticket: qty and SL from the plan, priced
-  // off the plan entry so a live premium move cannot silently resize the GTT.
-  const planPx = (orb ? signal.levels.entry : null) || live || 0;
+  // A planned row opens its own ticket: qty and SL from the plan, priced off
+  // the PLAN entry so a live premium move cannot silently resize the risk. A
+  // trade taken at 1:2 on the plan becomes 1:0.8 on a tick that ran away.
+  const planPx = (signal.planPriced ? signal.levels.entry : null) || live || 0;
   const raiseOrder = (side: 'BUY' | 'SELL') => openOrderWindow({
     symbol,
     exchange,
@@ -84,8 +84,13 @@ export function BoardTicket({ signal, tag }: {
     lotSize: lotSize || 1,
     initialQty: signal.sizing.quantity ?? undefined,
     lastPrice: planPx,
-    initialSlPct: bracketPct(orb ? (signal.levels.entry ?? live) : live, signal.levels.stop),
-    initialTgtPct: bracketPct(orb ? (signal.levels.entry ?? live) : live, signal.levels.target),
+    // Bracket percentages off the PLAN entry on a planned row, so the stop
+    // stays the distance the strategy chose rather than a distance from
+    // wherever the premium happens to be now.
+    initialSlPct: bracketPct(
+      signal.planPriced ? (signal.levels.entry ?? live) : live, signal.levels.stop),
+    initialTgtPct: bracketPct(
+      signal.planPriced ? (signal.levels.entry ?? live) : live, signal.levels.target),
     tag,
   });
 
@@ -107,7 +112,7 @@ export function BoardTicket({ signal, tag }: {
         optionType={(optionType ?? 'CE') as 'CE' | 'PE'}
         exitState={signal.status === 'weakening' ? 'EXIT' : 'HOLD'}
         tag={tag}
-        hideTsl={signal.engine === 'orb'}
+        hideTsl={signal.noTrailingStop === true}
       />
 
       <QuoteDetail
@@ -121,7 +126,7 @@ export function BoardTicket({ signal, tag }: {
         // A closed position has nothing to buy. Selling stays available,
         // because a leg can end on the board while the broker still holds it.
         onBuy={ended ? undefined : () => raiseOrder('BUY')}
-        onSell={orb ? undefined : () => raiseOrder('SELL')}
+        onSell={signal.noTrailingStop ? undefined : () => raiseOrder('SELL')}
       />
     </>
   );

@@ -54,8 +54,8 @@ export function useBoardRowActions({ onOpenChart }: {
     }
     const { symbol, exchange, lotSize } = signal.instrument;
     const ended = signal.status === 'ended';
-    const orb = signal.engine === 'orb';
-    const planPx = (orb ? signal.levels.entry : null) || signal.levels.ltp || 0;
+    const planned = signal.planPriced === true;
+    const planPx = (planned ? signal.levels.entry : null) || signal.levels.ltp || 0;
     const order = (side: 'BUY' | 'SELL') => () => openOrderWindow({
       symbol,
       exchange,
@@ -63,7 +63,7 @@ export function useBoardRowActions({ onOpenChart }: {
       lotSize: lotSize || 1,
       lastPrice: planPx,
       tag: signal.engine.toUpperCase(),
-      ...(orb ? {
+      ...(planned ? {
         initialQty: signal.sizing.quantity ?? undefined,
         initialSlPct: levelPct(signal.levels.entry, signal.levels.stop),
         initialTgtPct: levelPct(signal.levels.entry, signal.levels.target),
@@ -73,7 +73,7 @@ export function useBoardRowActions({ onOpenChart }: {
       <KiteActionButtons
         className="sb-row-trade"
         onBuy={order('BUY')}
-        onSell={orb ? undefined : order('SELL')}
+        onSell={signal.noTrailingStop ? undefined : order('SELL')}
         buyDisabled={ended}
         sellDisabled={ended}
         disabledHint="This row has ended — its levels are a frozen record, not a live plan."
