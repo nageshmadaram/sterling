@@ -15,6 +15,17 @@ off and should stay off until a study exists.
 
 A break up buys the CE, a break down buys the PE, in all three.
 
+## Has any of this been measured?
+
+See [VALIDATION.md](VALIDATION.md). The short version: a walk-forward harness
+exists, it is deliberately hard to pass, and what it finds is what gates
+**unattended** execution. Manual arming is not gated on it — an operator taking
+an unproven setup with their eyes open is their call.
+
+```bash
+python -m study.intraday_walkforward --record
+```
+
 ## Where the code is
 
 | | |
@@ -28,6 +39,11 @@ A break up buys the CE, a break down buys the PE, in all three.
 | Replay | `_intraday_signals_from_bars` in `backend/app/services/simulation.py` |
 | Board | `frontend/src/components/kite/board/IntradayBoard.tsx` |
 | Settings | `frontend/src/components/IntradaySettings.tsx` |
+| Replay harness (costs, fills, no lookahead) | `backend/app/engines/intraday/backtest.py` |
+| Sharpe, deflated Sharpe, permutation null | `backend/app/engines/intraday/stats.py` |
+| Folds, selection, the promotion gate | `backend/app/engines/intraday/walkforward.py` |
+| What a verdict permits | `backend/app/services/intraday_validation.py` |
+| The runner | `study/intraday_walkforward.py` |
 
 The simulation calls the same `evaluate_symbol` the live scan calls, so a signal
 that appears in one and not the other is a data difference, never a second

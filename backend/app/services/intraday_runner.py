@@ -39,7 +39,8 @@ _subscribed: dict[str, set[int]] = {}
 
 __all__ = ["arm", "adopt", "on_ticks", "square_off_all", "exit_one", "reconcile",
            "scan_all_once", "auto_scan_loop", "notes", "realised_pnl_today",
-           "positions_view", "is_paper", "auto_execute"]
+           "positions_view", "is_paper", "auto_execute", "auto_blocker_for",
+           "check_rules", "entry_blocker"]
 
 
 def _lock_for(uid: str) -> asyncio.Lock:
@@ -908,6 +909,23 @@ def _kite_user_ids() -> list[str]:
         return []
 
 
+def auto_blocker_for(strategy: str) -> Optional[str]:
+    """Whether this strategy may trade UNATTENDED, and why not if not.
+
+    Manual arming is deliberately not gated on this. An operator taking an
+    unproven setup with their eyes open is their call; refusing it would be
+    paternalism rather than safety. Trading it while nobody is watching is a
+    different thing, and that is what the harness has to earn.
+    """
+    try:
+        from app.services.intraday_validation import auto_execution_blocker
+        return auto_execution_blocker(strategy)
+    except Exception as exc:                                       # noqa: BLE001
+        # A validation record we cannot read means nothing is proven, which is
+        # the safe reading.
+        return f"validation record unreadable ({exc})"
+
+
 async def _auto_enter(uid: str) -> int:
     """Take the armed rows, best reward-to-risk first, until a cap refuses.
 
@@ -931,6 +949,13 @@ async def _auto_enter(uid: str) -> int:
         # blocker would have silently turned the cap off.
         if entry_blocker(uid, cfg, ""):
             break
+        # Unattended execution is what the walk-forward harness gates. A
+        # strategy that has not cleared it is skipped here and stays armable by
+        # hand, which is the whole difference between the two.
+        why = auto_blocker_for(str(row.get("strategy") or ""))
+        if why:
+            note(uid, "blocked", f"auto entry skipped: {why}")
+            continue
         if (await arm(uid, sid)).get("ok"):
             taken += 1
     return taken

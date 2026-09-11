@@ -106,9 +106,35 @@ describe('IntradayBoard', () => {
     expect(screen.getByText(/judgement call/)).toBeTruthy();
   });
 
+  it('stops claiming unproven once a strategy clears the harness', () => {
+    // A banner that keeps saying "not validated" after one of them passes is
+    // the same kind of lie as one that claims the reverse.
+    const metas = META.map((m) => m.id === 'ma_ribbon'
+      ? { ...m, validated: true,
+          validation: { deflated_sharpe: 0.61, oos_trades: 180,
+                        slippage_pct: 0.05, reasons: [] } }
+      : m);
+    snap = {
+      data: snapshot({
+        strategy: { ...snapshot().strategy, strategies: metas, validated: false },
+      }),
+      isLoading: false, error: null,
+    };
+    render(<IntradayBoard />);
+    expect(screen.getByText('VALIDATED')).toBeTruthy();
+    expect(screen.getByText(/MA Ribbon \(DSR 0.61/)).toBeTruthy();
+    // And the other two are still named as unproven, individually.
+    expect(screen.getByText(/Pivot Break, VWAP SuperTrend/)).toBeTruthy();
+  });
+
+  it('says an unproven strategy can be armed by hand but never automatically', () => {
+    render(<IntradayBoard />);
+    expect(screen.getByText(/armed by hand, never automatically/)).toBeTruthy();
+  });
+
   it('says the levels are the underlying, not premium', () => {
     render(<IntradayBoard />);
-    expect(screen.getByText(/UNDERLYING's points, not premium/)).toBeTruthy();
+    expect(screen.getByText(/points, not premium/)).toBeTruthy();
   });
 
   it('runs a scan on demand', () => {

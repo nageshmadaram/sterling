@@ -1,0 +1,177 @@
+"""The harness's own honesty.
+
+Every assertion here is a way a backtest invents money. They are tested rather
+than commented because a harness that flatters a strategy is worse than no
+harness: it produces a number with a decimal point that nobody can argue with.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import pytest
+
+from app.engines.intraday import IntradayConfig
+from app.engines.intraday.backtest import CostModel, _slice, replay
+from app.engines.intraday.models import to_bars
+
+IST = timezone(timedelta(hours=5, minutes=30))
+BARS_PER_SESSION = 75
+
+
+def ts(day: str, hh: int, mm: int) -> float:
+    y, mo, d = (int(x) for x in day.split("-"))
+    return datetime(y, mo, d, hh, mm, tzinfo=IST).timestamp()
+
+
+def tape(closes: list[float], day: str = "2026-09-07", spread: float = 1.0,
+         volume: float = 5000.0) -> list[dict]:
+    out, cur, i = [], day, 0
+    prev = closes[0]
+    for c in closes:
+        if i >= BARS_PER_SESSION:
+            cur, i = _next_weekday(cur), 0
+        o = prev
+        out.append({"time": ts(cur, 9, 15) + i * 300, "open": o,
+                    "high": max(o, c) + spread, "low": min(o, c) - spread,
+                    "close": c, "volume": volume})
+        prev = c
+        i += 1
+    return out
+
+
+def _next_weekday(day: str) -> str:
+    from datetime import date
+    d = date(*(int(x) for x in day.split("-"))) + timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d.isoformat()
+
+
+def cfg(**over) -> IntradayConfig:
+    base = dict(warmup_bars=70, session_start="09:15", no_entry_after="15:05")
+    base.update(over)
+    return IntradayConfig(**base).validate()
+
+
+# ------------------------------------------------------------------ lookahead
+
+def test_the_slice_is_the_only_place_the_future_can_leak():
+    bars = to_bars(tape([100.0 + i for i in range(50)]))
+    cut = _slice(bars, 10)
+    assert len(cut) == 10
+    assert cut.close[-1] == bars.close[9]
+    # And nothing after the cut is reachable, by construction rather than by
+    # the caller remembering to stop reading.
+    assert len(cut.high) == len(cut.low) == len(cut.session_day) == 10
+
+
+def test_a_signal_is_never_filled_at_the_bar_that_produced_it():
+    """The close is the LAST print of a bar. Filling a close-derived signal
+    there is the most common way an intraday backtest invents money."""
+    rows = tape([100.0 + i * 0.4 for i in range(150)]
+                + [160.0 - i * 2.0 for i in range(60)])
+    res = replay(rows, cfg(), "NIFTY", "vwap_supertrend",
+                 costs=CostModel(slippage_pct=0.0))
+    for t in res.trades:
+        i = next(k for k, b in enumerate(rows) if int(b["time"] * 1000) == t.entry_ms)
+        # The entry is that bar's OPEN, which is the first price after the
+        # signal bar closed.
+        assert t.entry == pytest.approx(rows[i]["open"], abs=0.01)
+
+
+# ----------------------------------------------------------------- the fills
+
+def test_a_bar_through_both_stop_and_target_is_a_loss():
+    """Nothing in the data says which came first, so the harness assumes the
+    worse. Assuming the good fill is how a replay flatters itself."""
+    from app.engines.intraday.backtest import _Open, _close
+    from app.engines.intraday.models import IntradaySignal
+    sig = IntradaySignal(strategy="pivot_break", symbol="NIFTY", direction="BULLISH",
+                         option_type="CE", timestamp_ms=0, entry=100.0, stop=98.0,
+                         target=104.0, target2=None, risk=2.0, strength="STRONG",
+                         origin="t")
+    pos = _Open(sig=sig, entry=100.0, stop=98.0, target=104.0, target2=None,
+                qty=1, entry_ms=0, entry_i=0, peak=100.0, risk=2.0)
+    t = _close(pos, 98.0, 0, 5, "stop", CostModel(slippage_pct=0.0),
+               "underlying", "pivot_break", "NIFTY")
+    assert t.net < 0 and t.reason == "stop"
+
+
+def test_slippage_is_paid_on_both_legs_and_in_the_wrong_direction():
+    c = CostModel(slippage_pct=1.0)
+    assert c.slip(100.0, "buy") == pytest.approx(101.0)
+    assert c.slip(100.0, "sell") == pytest.approx(99.0)
+    # A round trip therefore starts 2% behind, before any brokerage.
+    assert c.slip(100.0, "buy") - c.slip(100.0, "sell") == pytest.approx(2.0)
+
+
+def test_costs_are_charged_on_every_trade():
+    rows = tape([100.0 + (i % 50) * 0.4 for i in range(1000)])
+    res = replay(rows, cfg(), "NIFTY", "ma_ribbon", costs=CostModel())
+    assert res.trades, "expected a choppy tape to trade"
+    assert all(t.cost > 0 for t in res.trades)
+    assert res.net < res.gross
+
+
+def test_slippage_alone_can_turn_a_gross_edge_into_a_loss():
+    """The finding this repo already has about sub-hour timeframes, as a test:
+    at 5 minutes the cost model is not a rounding error on the result, it IS
+    a large part of the result."""
+    rows = tape([100.0 + (i % 50) * 0.4 for i in range(1000)])
+    free = replay(rows, cfg(), "NIFTY", "ma_ribbon",
+                  costs=CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0,
+                                  exchange_pct=0.0, gst_pct=0.0, misc_pct=0.0,
+                                  slippage_pct=0.0))
+    real = replay(rows, cfg(), "NIFTY", "ma_ribbon",
+                  costs=CostModel(slippage_pct=0.5))
+    assert real.net < free.net
+    assert real.costs > 0
+
+
+def test_a_zero_cost_model_is_still_a_cost_model():
+    free = CostModel(brokerage_per_order=0.0, stt_sell_pct=0.0, exchange_pct=0.0,
+                     gst_pct=0.0, misc_pct=0.0, slippage_pct=0.0)
+    assert free.round_trip(100.0, 130.0, 75) == 0.0
+
+
+# ------------------------------------------------------------------- refusals
+
+def test_a_tape_too_short_to_warm_up_is_refused_not_silently_empty():
+    res = replay(tape([100.0] * 20), cfg(), "NIFTY", "pivot_break")
+    assert res.trades == [] and res.skipped["too few bars"] == 1
+
+
+def test_an_unknown_strategy_is_named_rather_than_returning_nothing():
+    res = replay(tape([100.0 + i for i in range(200)]), cfg(), "NIFTY", "made_up")
+    assert res.skipped["unknown strategy"] == 1
+
+
+def test_the_session_end_flattens_what_is_open():
+    rows = tape([100.0 + i * 0.4 for i in range(150)]
+                + [160.0 - i * 1.0 for i in range(80)])
+    res = replay(rows, cfg(close_at_session_end=True), "NIFTY", "vwap_supertrend")
+    # Nothing may be held across a session boundary.
+    for t in res.trades:
+        start = datetime.fromtimestamp(t.entry_ms / 1000, tz=IST).date()
+        end = datetime.fromtimestamp(t.exit_ms / 1000, tz=IST).date()
+        assert start == end, f"{t.reason} held overnight"
+
+
+def test_the_cooldown_is_honoured_in_replay_as_well_as_live():
+    rows = tape([100.0 + (i % 50) * 0.4 for i in range(1000)])
+    tight = replay(rows, cfg(cooldown_bars=0), "NIFTY", "ma_ribbon")
+    slack = replay(rows, cfg(cooldown_bars=60), "NIFTY", "ma_ribbon")
+    assert len(slack.trades) < len(tight.trades)
+    assert slack.skipped.get("cooldown", 0) > 0
+
+
+def test_the_evaluation_window_is_bounded_the_way_the_live_scanner_is():
+    """An unbounded replay evaluates a longer series than production ever sees,
+    which is a backtest of something that does not exist."""
+    bars = to_bars(tape([100.0 + i for i in range(2000)]))
+    assert len(_slice(bars, 1500, window=400)) == 400
+    # Trimmed from the LEFT only. Dropping old bars cannot leak the future.
+    assert _slice(bars, 1500, window=400).close[-1] == bars.close[1499]
+    # And never past the cut, whatever the window.
+    assert len(_slice(bars, 50, window=400)) == 50

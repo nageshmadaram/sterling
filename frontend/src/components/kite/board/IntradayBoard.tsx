@@ -89,6 +89,8 @@ export function IntradayBoard({ nowMs, onOpenDetail, onOpenChart }: {
   }
 
   const metas = data?.strategy?.strategies ?? [];
+  const proven = metas.filter((m) => m.validated);
+  const unproven = metas.filter((m) => !m.validated);
   const enabled = new Set<string>(data?.enabled_strategies ?? []);
   const armed = signals.filter((s) => s.status === 'armed');
   const countFor = (id: string) => all.filter((s) => s.id.startsWith(`intraday:${id}:`)).length;
@@ -166,14 +168,42 @@ export function IntradayBoard({ nowMs, onOpenDetail, onOpenChart }: {
         )}
       </div>
 
-      {/* Never validated, said once, above the rows. */}
-      <div style={{
-        ...note, borderBottom: `1px solid ${k.border}`,
-        background: 'color-mix(in srgb, var(--k-amber) 8%, transparent)',
-      }}>
-        <strong style={{ color: k.amber }}>NOT VALIDATED</strong>{' '}
-        No walk-forward run has been done on these three, so every threshold is a
-        judgement call. Levels below are the UNDERLYING's points, not premium.
+      {/* What the harness found, said once, above the rows — and said per
+          strategy, because the three do not stand or fall together. A banner
+          that keeps claiming "not validated" after one of them passes is the
+          same kind of lie as one that claims the reverse. */}
+      {unproven.length > 0 && (
+        <div
+          title={unproven.map((m) => {
+            const r = m.validation?.reasons?.[0];
+            return r ? `${m.name}: ${r}` : `${m.name}: never measured`;
+          }).join('\n')}
+          style={{
+            ...note, borderBottom: `1px solid ${k.border}`, cursor: 'help',
+            background: 'color-mix(in srgb, var(--k-amber) 8%, transparent)',
+          }}
+        >
+          <strong style={{ color: k.amber }}>NOT VALIDATED</strong>{' '}
+          {unproven.map((m) => m.name).join(', ')}
+          {unproven.length === metas.length
+            ? ' — no walk-forward run has cleared any of these, so every threshold is a judgement call.'
+            : ' — these have not cleared the walk-forward harness. Hover for why.'}
+          {' '}They can be armed by hand, never automatically.
+        </div>
+      )}
+      {proven.length > 0 && (
+        <div style={{
+          ...note, borderBottom: `1px solid ${k.border}`,
+          background: 'color-mix(in srgb, var(--k-green) 8%, transparent)',
+        }}>
+          <strong style={{ color: k.green }}>VALIDATED</strong>{' '}
+          {proven.map((m) => `${m.name} (DSR ${m.validation?.deflated_sharpe?.toFixed(2)}, `
+            + `${m.validation?.oos_trades} OOS trades at `
+            + `${m.validation?.slippage_pct}% slippage)`).join(' · ')}
+        </div>
+      )}
+      <div style={{ ...note, borderBottom: `1px solid ${k.border}` }}>
+        Levels below are the <strong>UNDERLYING&rsquo;s</strong> points, not premium.
       </div>
 
       {metas.length > 0 && (

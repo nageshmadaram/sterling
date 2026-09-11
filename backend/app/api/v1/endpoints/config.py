@@ -587,3 +587,19 @@ async def intraday_positions(user: UserContext = Depends(get_current_user)) -> d
     return {"positions": positions_view(uid),
             "realised_pnl_today": realised_pnl_today(uid),
             "record": load_record(uid).roll(ist_today().isoformat()).as_dict()}
+
+
+@router.get("/intraday/validation")
+async def intraday_validation(user: UserContext = Depends(get_current_user)) -> dict:
+    """What the walk-forward harness found, per strategy.
+
+    Published because it is what gates unattended execution: a reader deciding
+    whether to switch AUTO on needs the measurement and the reasons, not a
+    boolean. Manual arming is deliberately NOT gated on this — an operator
+    taking an unproven setup with their eyes open is their call.
+    """
+    from app.engines.intraday.walkforward import GATE
+    from app.services.intraday_validation import load
+    return {"gate": GATE,
+            "strategies": {k: v.as_dict() for k, v in load().items()},
+            "how_to_measure": "python -m study.intraday_walkforward --record"}

@@ -68,20 +68,37 @@ DESCRIPTORS: dict[str, dict] = {
 
 
 def descriptor() -> dict:
-    """Static identity for the whole pack.
+    """Static identity, plus what the walk-forward harness has actually found.
 
-    ``validated`` is a measurement, not a checklist: none of these three has been
-    through the walk-forward harness, so it is False and the settings page says
-    so rather than letting a reader assume otherwise.
+    ``validated`` is a MEASUREMENT, never a checklist. It is read from the
+    validation record rather than hardcoded, so the day a strategy clears the
+    harness the board and the settings page stop calling it unproven — and the
+    day it stops clearing, they start again. A hardcoded False was honest while
+    nothing had been measured and would have become a lie the moment something
+    was.
     """
+    standings: dict[str, dict] = {}
+    try:
+        from app.services.intraday_validation import load as _load
+        standings = {k: v.as_dict() for k, v in _load().items()}
+    except Exception:                                              # noqa: BLE001
+        standings = {}
+    strategies = []
+    for key in STRATEGY_KEYS:
+        meta = dict(DESCRIPTORS[key])
+        st = standings.get(key) or {}
+        meta["validated"] = bool(st.get("promoted"))
+        meta["validation"] = st or None
+        strategies.append(meta)
     return {
         "id": STRATEGY_ID,
         "name": STRATEGY_NAME,
         "contract_version": CONTRACT_VERSION,
         "tagline": "Three 5-minute option strategies on one tape.",
-        "strategies": [DESCRIPTORS[k] for k in STRATEGY_KEYS],
+        "strategies": strategies,
         "provenance": "Specified by the operator; see docs/strategy/intraday/",
-        "validated": False,
+        # The pack is validated only when every strategy in it is.
+        "validated": bool(strategies) and all(s["validated"] for s in strategies),
         "calibration": CALIBRATION,
         "calibrated_fields": sorted(CALIBRATED_FIELDS),
     }

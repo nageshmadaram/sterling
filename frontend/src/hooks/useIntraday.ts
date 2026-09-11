@@ -116,12 +116,33 @@ export interface IntradayConfig {
   vs_target_atr_mult: number;
 }
 
+/** What the walk-forward harness found for one strategy. */
+export interface IntradayValidation {
+  strategy: string;
+  promoted: boolean;
+  measured_at: string;
+  oos_trades: number;
+  oos_net: number;
+  sharpe: number;
+  deflated_sharpe: number;
+  permutation_p: number | null;
+  max_drawdown_pct: number;
+  checks: Record<string, boolean>;
+  reasons: string[];
+  /** A promotion at 0.05% slippage says nothing about a book paying 0.5%. */
+  slippage_pct: number | null;
+  symbols: string[];
+}
+
 export interface IntradayStrategyMeta {
   id: IntradayStrategyId;
   name: string;
   tag: string;
   tagline: string;
   how_it_works: string;
+  /** A MEASUREMENT, read from the harness record — never hardcoded. */
+  validated?: boolean;
+  validation?: IntradayValidation | null;
 }
 
 export interface IntradayDescriptor {
