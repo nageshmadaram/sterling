@@ -103,6 +103,13 @@ class Candidate:
 class FoldResult:
     fold: Fold
     chosen: str
+    #: The symbols this fold's IN-SAMPLE window said were worth trading.
+    #:
+    #: Selecting the universe is a real decision an operator makes, and making
+    #: it in-sample and measuring it out-of-sample is the only honest way to
+    #: test it. Trading every symbol pays a full round trip on the ones whose
+    #: edge is absent, and costs are the binding constraint here.
+    universe: list[str] = field(default_factory=list)
     #: Every candidate's in-sample score, kept so a run can be audited for a
     #: selector that was choosing on noise.
     in_sample: dict[str, float] = field(default_factory=dict)
@@ -132,6 +139,7 @@ class WalkForwardReport:
             "strategy": self.strategy,
             "symbols": self.symbols,
             "folds": [{"fold": f.fold.index, "chosen": f.chosen,
+                       "universe": f.universe,
                        "purge_bars": f.fold.purge,
                        "in_sample_scores": f.in_sample,
                        "oos": f.oos.as_dict() if f.oos else None}
@@ -236,6 +244,7 @@ def run(
     qty: int = 1,
     lot_sizes: Optional[dict[str, int]] = None,
     prior_sharpes: Sequence[float] = (),
+    select_universe: bool = False,
     selector: Callable[[Summary], float] = score_in_sample,
 ) -> WalkForwardReport:
     """Walk one strategy forward across every symbol's tape.
@@ -293,7 +302,25 @@ def run(
         result = FoldResult(fold=fold, chosen=best_label, in_sample=scores)
         if best_label:
             chosen_cfg = dict(grid)[best_label]
-            for sym in symbols:
+            # Which symbols the IN-SAMPLE window says are worth the costs. Read
+            # from the chosen config's own in-sample book, never from the
+            # out-of-sample one — that would be selecting on the answer.
+            if select_universe:
+                in_sample_by_symbol: dict[str, float] = {}
+                for sym in symbols:
+                    window = list(tapes[sym])[fold.is_start:fold.is_end]
+                    got = replay(window, chosen_cfg, sym, strategy, costs=costs,
+                                 qty=(lot_sizes or {}).get(sym, qty),
+                                 capital=capital).trades
+                    in_sample_by_symbol[sym] = sum(t.net for t in got)
+                tradable = [s for s in symbols if in_sample_by_symbol[s] > 0]
+                # Never narrow to nothing: a fold where no symbol worked
+                # in-sample is a fold with no opinion, not a fold that says
+                # "trade none of them and call it flat".
+                result.universe = tradable or list(symbols)
+            else:
+                result.universe = list(symbols)
+            for sym in result.universe:
                 # The out-of-sample window ONLY. Nothing before `oos_start` is
                 # replayed here, so a trade cannot straddle the boundary.
                 window = list(tapes[sym])[fold.oos_start:fold.oos_end]

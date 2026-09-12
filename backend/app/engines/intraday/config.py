@@ -163,6 +163,17 @@ class IntradayConfig:
     #: mean instead of the tail. It is not a better guess at the exit; it is the
     #: exit the measurement points at.
     exit_after_bars: int = 24
+    #: Take a profit TARGET at all.
+    #:
+    #: Off, and that is not an oversight. The measured edge is a ~2-hour
+    #: directional move; a 1:2 target cuts it at whatever fraction the first
+    #: two R happen to be, which is a different trade from the one that was
+    #: measured. Every out-of-sample result that worked had no target — holding
+    #: for the horizon and taking the mean, rather than taking the tail.
+    #:
+    #: Turning it on restores the original specification's exits and, measured
+    #: on the same data, turns a PF of 1.24 into 0.81.
+    use_targets: bool = False
     #: Widen the structural stop by this multiple. 1.0 leaves the rule's own.
     #:
     #: A stop several times the size of the edge is not protection, it is a

@@ -84,7 +84,33 @@ no_entry_after         14:55      (was 15:00)
 exit_after_bars        24         (~2 hours, was: no time exit)
 close_at_session_end   False      (was True)
 stop_widen_mult        4.0        (was 1.0)
+use_targets            False      (was: always on)
 ```
+
+`use_targets=False` is the one that is easiest to mistake for an oversight. The
+edge is a two-hour directional move; a 1:2 target cuts it at whatever fraction
+the first two R happen to be, which is a different trade from the one that was
+measured. On the same out-of-sample data:
+
+| | targets off | targets on |
+|---|---|---|
+| `ma_ribbon` | PF 1.25 | 1.235 |
+| `vwap_supertrend` | PF **1.126** | **0.811** |
+| `pivot_break` | PF **1.173** | **0.572** |
+
+## Selecting the universe in-sample does NOT help
+
+An obvious idea, tested and rejected: only 6 of 9 symbols carry `ma_ribbon`'s
+edge, so choose the tradable ones on each fold's in-sample window and trade only
+those out-of-sample.
+
+| | all symbols | IS-selected |
+|---|---|---|
+| `ma_ribbon` | PF 1.25, net +89,628 | PF 1.08, net +16,869 |
+
+It made things worse. Symbol-level profitability in one window does not predict
+the next, which means the instrument-to-instrument variation is noise rather
+than a property of the instrument. Trade the whole eligible universe.
 
 ### Out of sample
 

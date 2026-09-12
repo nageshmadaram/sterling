@@ -319,7 +319,9 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
             else:
                 # The first target BANKS half on a two-stage trade rather than
                 # closing it, which is what the live path does.
-                if should_scale_out(open_pos, hi if bull else lo, long=bull):
+                if cfg.use_targets and should_scale_out(open_pos,
+                                                        hi if bull else lo,
+                                                        long=bull):
                     half = open_pos.qty // 2
                     if half > 0:
                         out.trades.append(_close(
@@ -348,9 +350,10 @@ def replay(candles: Sequence, cfg: IntradayConfig, symbol: str, strategy: str, *
                         open_pos = None
                 if open_pos is None:
                     continue
-                final = open_pos.target2 if (open_pos.target2 > 0
-                                             and open_pos.target1_done) else (
-                    0.0 if open_pos.target2 > 0 else open_pos.target)
+                final = 0.0 if not cfg.use_targets else (
+                    open_pos.target2 if (open_pos.target2 > 0
+                                         and open_pos.target1_done)
+                    else (0.0 if open_pos.target2 > 0 else open_pos.target))
                 if final > 0 and ((hi >= final) if bull else (lo <= final)):
                     reason = "target2" if open_pos.target1_done and \
                         open_pos.target2 > 0 else "target"

@@ -369,3 +369,21 @@ class TestThePortfolioCapIsHonoured:
         kept = apply_portfolio_limits(
             [late, early], IntradayConfig(max_concurrent_positions=1).validate())
         assert [t.symbol for t in kept] == ["EARLY"]
+
+
+def test_a_profit_target_is_off_by_default_and_the_config_says_why():
+    """The measured edge is a ~2-hour directional move. A 1:2 target cuts it at
+    whatever fraction the first two R happen to be, which is a different trade
+    from the one that was measured — and on the same data it turns a profit
+    factor of 1.24 into 0.81."""
+    assert IntradayConfig().use_targets is False
+
+
+def test_turning_targets_on_restores_the_original_exits():
+    from app.engines.intraday.backtest import replay
+    import inspect
+    src = inspect.getsource(replay)
+    # Both the scale-out and the target exit are gated on it, so the flag
+    # cannot half-apply.
+    assert "cfg.use_targets and should_scale_out" in src
+    assert "0.0 if not cfg.use_targets else" in src
