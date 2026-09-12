@@ -19,6 +19,35 @@ carry 148% of the P&L and the median trade loses 15.5%, so the engine refuses
 anything that caps the payoff (no spreads) and lets a trade already worth 1.5x
 its cost run past the horizon. See `AUDIT.md`.
 
+## In the replay dock
+
+Snapback runs in the simulation replay through the same `features`/`fires` the
+live scan and the backtest call. A daily rule inside an intraday replay has
+three states rather than one, and collapsing them is how a replay ends up
+testing a rule nobody wrote:
+
+| state | when | what it means |
+|---|---|---|
+| `WATCHING` | every bar | the rule would fire if the session closed here, and it can stop firing before it does |
+| *confirmed* | the session's last bar | the entry is real; its FILL is the next session's open |
+| `STRONG` | the next session's first bar | the bar the position is actually taken on |
+
+So **a single-day replay shows setups and takes no position** — that is the
+strategy, not a gap. The dock marks the rule `daily` on the strategy picker and
+says so, because "no trades" and "no setups" are different facts. Give the
+replay an end date and it trades.
+
+Three things the replay had to be told, each of which would otherwise have
+replayed a different strategy under this name: the leg is resolved by DELTA at
+Snapback's own tenor and priced with its own skewed Black-Scholes (the shared
+resolver picks at-the-money and guesses ~2% of spot); the position carries its
+own fifteen-SESSION horizon instead of the shared thirty-bar one; and its stop
+does not trail, because the measured rule holds it fixed.
+
+The market gate needs NIFTY. A replay without the index in its instruments
+cannot gate a signal, so the engine emits nothing and puts the reason on
+`status.strategy_notes` rather than going quiet.
+
 ## Why each piece is what it is
 
 **Why buy an option at all.** The loss is capped at the premium, and fading

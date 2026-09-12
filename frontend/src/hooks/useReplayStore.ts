@@ -139,6 +139,13 @@ export interface ReplayCapabilities {
   delta_trades?: boolean;
   multi_day: boolean;
   resolutions: string[];
+  /**
+   * Strategies whose RULE is on daily bars. They can be WATCHED inside a single
+   * session but not entered in one — the signal is a daily close and the
+   * measured fill is the next session's open — so the dock says so rather than
+   * letting an operator read "no trades" as "no setups".
+   */
+  daily_strategies?: string[];
 }
 
 export interface ReplayConfigEcho {
@@ -178,6 +185,12 @@ export interface ReplayStatus {
   status_message: string;
   last_signal: ReplaySignal | null;
   capabilities?: ReplayCapabilities;
+  /**
+   * Why a SELECTED strategy produced nothing, keyed by strategy id. A strategy
+   * silent because a dependency is missing looks identical to one that simply
+   * had no setups, and this dock has already shipped that confusion once.
+   */
+  strategy_notes?: Record<string, string>;
   events_total?: number;
   trades_total?: number;
   /** Identifies which run the ledger belongs to. */
@@ -247,6 +260,7 @@ const DEFAULT_CAPS: ReplayCapabilities = {
   delta_trades: false,
   multi_day: false,
   resolutions: ['5m'],
+  daily_strategies: [],
 };
 
 const EMPTY_EVENTS: ReplaySignal[] = [];

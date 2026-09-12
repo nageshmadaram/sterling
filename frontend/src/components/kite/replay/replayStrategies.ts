@@ -25,6 +25,11 @@ export const REPLAY_STRATEGIES: readonly ReplayStrategy[] = [
   { id: 'adaptive_edge', label: 'Adaptive Edge', tone: 'var(--k-cyan)' },
   { id: 'navigator', label: 'Navigator', tone: 'var(--k-emerald)' },
   { id: 'gamma_move', label: 'Gamma Move', tone: 'var(--k-violet)' },
+  // A DAILY rule. It can be watched inside a session but only entered across
+  // one — the signal is a daily close and the fill is the next session's open —
+  // so a single-day replay shows its setups and no trades. `capabilities
+  // .daily_strategies` is what the dock reads to say so.
+  { id: 'snapback', label: 'Snapback', tone: 'var(--k-red-rose)' },
   // The intraday pack. Three ids, because the replay emits three distinct
   // strategies and merging them here would make the timeline heatmap and the
   // summary breakdown unable to tell which rule produced a session's trades.

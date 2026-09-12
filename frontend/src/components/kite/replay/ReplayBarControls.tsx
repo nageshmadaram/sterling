@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  useReplayCaps,
   useReplaySessionPolicy,
   useReplayState,
   useReplayStore,
@@ -348,6 +349,11 @@ export function ReplayStrategyDropdown() {
   const anchor = useRef<HTMLButtonElement>(null);
   const locked = state !== 'idle';
 
+  const caps = useReplayCaps();
+  const notes = useReplayStore((s) => s.status.strategy_notes);
+  const daily = caps.daily_strategies ?? [];
+  const multiDay = Boolean(draft.endDate && draft.endDate !== draft.date);
+  const note = notes?.snapback;
   const allStrategies = draft.strategies.includes('all') || draft.strategies.length >= REPLAY_STRATEGIES.length;
   const count = allStrategies ? REPLAY_STRATEGIES.length : draft.strategies.length;
   const adaptiveSource = draft.adaptiveSource ?? 'both';
@@ -404,6 +410,13 @@ export function ReplayStrategyDropdown() {
           {REPLAY_STRATEGIES.map((s) => {
             const active = allStrategies || draft.strategies.includes(s.id);
             const isAe = s.id === 'adaptive_edge';
+            // A DAILY rule inside an intraday replay produces watches and no
+            // trades unless the range spans more than one session, because its
+            // fill is the next session's open. Saying so on the control is the
+            // difference between an informed choice and a strategy that looks
+            // broken. The engine declares which ones these are; the dock does
+            // not guess.
+            const isDaily = daily.includes(s.id);
             return (
               <div key={s.id} className="rd-drop-strategy-item">
                 <label className="rd-drop-check-row">
@@ -416,7 +429,26 @@ export function ReplayStrategyDropdown() {
                     <span className="rd-dot-tone" />
                   </span>
                   <span className="rd-drop-check-label">{s.label}</span>
+                  {isDaily && (
+                    <span
+                      className="rd-drop-check-note"
+                      title={'A daily rule. Its signal is a daily close and its fill '
+                        + 'is the NEXT session\u2019s open, so a single-day replay '
+                        + 'shows its setups and takes no position. Give the replay '
+                        + 'an end date to trade it.'}
+                    >
+                      daily
+                    </span>
+                  )}
                 </label>
+                {isDaily && active && !multiDay && (
+                  <p className="rd-drop-check-hint">
+                    Watches only — add an end date to reach the next session\u2019s open.
+                  </p>
+                )}
+                {isDaily && active && note && (
+                  <p className="rd-drop-check-hint" data-tone="warn">{note}</p>
+                )}
                 {isAe && active && (
                   <div
                     style={{

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useReplayStore } from '../../../../hooks/useReplayStore';
 import { getLastMarketWorkingDay } from '../../../../lib/replay/marketSessions';
-import { ReplaySessionDropdown } from '../ReplayBarControls';
+import { ReplaySessionDropdown, ReplayStrategyDropdown } from '../ReplayBarControls';
 import { primeStore } from './testUtils';
 
 beforeEach(() => {
@@ -73,5 +73,68 @@ describe('ReplaySessionDropdown', () => {
       fireEvent.click(reopened!);
     });
     expect(useReplayStore.getState().draft.date).toBe(lastDay);
+  });
+});
+
+describe('ReplayStrategyDropdown — a daily rule inside an intraday replay', () => {
+  /**
+   * Snapback's signal is a daily CLOSE and its measured fill is the NEXT
+   * session's open, so a single-day replay shows setups and takes no position.
+   * An operator reading "no trades" as "no setups" is the whole reason these
+   * assertions exist — and the dock must learn WHICH strategies these are from
+   * the engine's own `capabilities`, never from a hardcoded list here.
+   */
+  function openMenu(caps: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+    const st = useReplayStore.getState();
+    useReplayStore.setState({
+      status: {
+        ...st.status,
+        capabilities: {
+          ...(st.status.capabilities as object),
+          daily_strategies: ['snapback'],
+          ...caps,
+        },
+        ...extra,
+      } as typeof st.status,
+    });
+    render(<ReplayStrategyDropdown />);
+    act(() => { fireEvent.click(screen.getByTestId('replay-strategy-trigger')); });
+  }
+
+  it('marks the strategy the engine calls daily, and only that one', () => {
+    const day = getLastMarketWorkingDay();
+    useReplayStore.getState().setDraft({ date: day, endDate: day, strategies: ['all'] });
+    openMenu();
+    expect(screen.getAllByText('daily')).toHaveLength(1);
+  });
+
+  it('says nothing is daily when the engine declares nothing', () => {
+    const day = getLastMarketWorkingDay();
+    useReplayStore.getState().setDraft({ date: day, endDate: day, strategies: ['all'] });
+    openMenu({ daily_strategies: [] });
+    expect(screen.queryByText('daily')).toBeNull();
+  });
+
+  it('warns that a one-day range can only WATCH it', () => {
+    const day = getLastMarketWorkingDay();
+    useReplayStore.getState().setDraft({ date: day, endDate: day, strategies: ['snapback'] });
+    openMenu();
+    expect(screen.getByText(/Watches only/i)).toBeTruthy();
+  });
+
+  it('drops the warning once the range reaches a second session', () => {
+    const day = getLastMarketWorkingDay();
+    useReplayStore.getState().setDraft({
+      date: '2026-09-01', endDate: day, strategies: ['snapback'],
+    });
+    openMenu();
+    expect(screen.queryByText(/Watches only/i)).toBeNull();
+  });
+
+  it('shows the engine’s own reason when the strategy was silent', () => {
+    const day = getLastMarketWorkingDay();
+    useReplayStore.getState().setDraft({ date: day, endDate: day, strategies: ['snapback'] });
+    openMenu({}, { strategy_notes: { snapback: 'no NIFTY bar for 2026-09-04' } });
+    expect(screen.getByText(/no NIFTY bar/i)).toBeTruthy();
   });
 });

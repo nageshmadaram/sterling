@@ -281,6 +281,15 @@ class SimTradeEvent(BaseModel):
     leg_delta: Optional[float] = None
     #: Why the position closed: TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE.
     exit_reason: Optional[str] = None
+    #: This position's OWN horizon, in bars. `None` falls back to the config's
+    #: `max_hold_bars`, which is an intraday number. A daily strategy holding
+    #: fifteen SESSIONS would otherwise be timed out thirty bars in and reported
+    #: as MAX_HOLD — a different strategy's result under this one's name.
+    max_hold_bars: Optional[int] = None
+    #: Whether the stop ratchets toward price. The replay trailed EVERY
+    #: position, which is right for SuperTrend (its live engine trails) and
+    #: wrong for a rule that states a fixed stop and was measured with one.
+    trails: bool = True
     bars_held: int = 0
     scan_origin: Optional[str] = None
     strategy_version: Optional[str] = None
@@ -353,6 +362,11 @@ class SimCapabilities(BaseModel):
     delta_trades: bool = False
     multi_day: bool = True
     resolutions: List[str] = ["1m", "5m", "15m"]
+    #: Strategies whose RULE is on daily bars. They can be watched inside a
+    #: single session but cannot be entered in one: the signal is a daily close
+    #: and the measured fill is the NEXT session's open. The client says so
+    #: rather than letting an operator read "no trades" as "no setups".
+    daily_strategies: List[str] = ["snapback"]
 
 
 class SimStatus(BaseModel):
@@ -387,6 +401,11 @@ class SimStatus(BaseModel):
     #: conflated by anything that decides whether a surface is showing the live
     #: market or a recording.
     replay_live: bool = False
+    #: Why a selected strategy produced nothing, keyed by strategy id. A
+    #: strategy that is silent because a dependency is missing looks identical
+    #: to one that simply had no setups, and this repo has already shipped that
+    #: confusion once.
+    strategy_notes: Dict[str, str] = {}
 
 
 INDEX_SYMBOLS = {
@@ -748,25 +767,36 @@ def _collapse_to_daily(history: list, asof_ts: Optional[float] = None) -> list:
     return out
 
 
-def _gamma_move_store_daily(symbol: str, asof_ts: Optional[float]) -> list:
-    """Completed daily bars from the OHLCV store, as-of `asof_ts`. Empty on miss."""
+def _store_daily_sessions(symbol: str, asof_ts: Optional[float],
+                          days: int = 400) -> list:
+    """Completed daily bars from the OHLCV store, as-of `asof_ts`. Empty on miss.
+
+    Shared by every DAILY strategy the replay runs. A daily rule inside an
+    intraday replay has the same two needs each time — history that stops at the
+    replay clock, and today's forming bar kept off the tape — and a second copy
+    of this is how the two would drift.
+    """
     if not symbol or asof_ts is None:
         return []
     try:
         from app.services.ohlcv_store import get_candles
     except Exception:
         return []
-    since = int(asof_ts - 400 * 86400)
+    since = int(asof_ts - days * 86400)
     until = int(asof_ts)
     rows: list = []
     for res in ("1d", "day"):
         try:
-            rows = get_candles(symbol, res, limit=400, since=since, until=until) or []
+            rows = get_candles(symbol, res, limit=days, since=since, until=until) or []
         except Exception:
             rows = []
         if rows:
             break
     return _collapse_to_daily(rows, asof_ts)
+
+
+def _gamma_move_store_daily(symbol: str, asof_ts: Optional[float]) -> list:
+    return _store_daily_sessions(symbol, asof_ts)
 
 
 def _gamma_move_watch_from_bars(history: list, close: float, *,
@@ -833,6 +863,279 @@ def _gamma_move_watch_from_bars(history: list, close: float, *,
         "level_touches": int(near[0].touches),
         "regime": regime,
     }
+
+
+# ------------------------------------------------------------------ Snapback
+
+#: Snapback fires on a daily CLOSE and fills at the NEXT session's OPEN. Inside
+#: an intraday replay that makes three states, not one, and collapsing them is
+#: how a replay ends up testing a rule nobody wrote:
+#:
+#:   WATCHING   the session is still forming. The rule would fire if it closed
+#:              here, and it can stop firing before it does.
+#:   CONFIRMED  the session closed on a firing bar. The entry is real and its
+#:              FILL is the next session's open, which a single-day replay never
+#:              reaches.
+#:   STRONG     the next session opened. This is the bar the trade is taken on,
+#:              and it is the only one that opens a position.
+#:
+#: A replay that emitted STRONG on the signal bar would fill at a price the
+#: measured strategy never pays, and one that never emitted it at all would say
+#: this engine has no entries.
+SNAPBACK_STATES = ("WATCHING", "CONFIRMED", "STRONG")
+
+
+def _snapback_config():
+    """The operator's Snapback settings, falling back to the shipped defaults."""
+    from app.engines.snapback import SnapbackConfig
+    try:
+        from app.services.snapback import get_config
+        return get_config()
+    except Exception:                                              # noqa: BLE001
+        return SnapbackConfig()
+
+
+def _forming_session(intraday: list, asof_ts: Optional[float]) -> Optional[dict]:
+    """Today's daily bar, built from the session so far.
+
+    This is the piece a daily strategy cannot work without. `_collapse_to_daily`
+    deliberately drops the forming bar, which is right for a rule that reads
+    completed history — and wrong for the rule being EVALUATED, because then it
+    reads yesterday's close on every bar of today and emits the same signal
+    seventy-five times.
+    """
+    if asof_ts is None or not intraday:
+        return None
+    day = datetime.fromtimestamp(float(asof_ts), _IST).date()
+    rows = []
+    for b in intraday:
+        ts = _bar_epoch_seconds(b)
+        if ts is None or ts > float(asof_ts):
+            continue
+        if datetime.fromtimestamp(ts, _IST).date() != day:
+            continue
+        rows.append(b)
+    if not rows:
+        return None
+    return {
+        "open": float(rows[0].get("open") or 0.0),
+        "high": max(float(b.get("high") or 0.0) for b in rows),
+        "low": min(float(b.get("low") or 0.0) for b in rows if (b.get("low") or 0.0) > 0)
+        if any((b.get("low") or 0.0) > 0 for b in rows) else 0.0,
+        "close": float(rows[-1].get("close") or 0.0),
+        "volume": sum(float(b.get("volume") or 0.0) for b in rows),
+        # Stamped at the session close so it sorts after every completed bar and
+        # carries the calendar day the gate is keyed on.
+        "time": datetime(day.year, day.month, day.day, 15, 30,
+                         tzinfo=_IST).timestamp(),
+    }
+
+
+def _snapback_daily_tape(symbol: str, intraday: list,
+                         asof_ts: Optional[float]) -> list:
+    """Completed sessions from the store, plus today's forming bar."""
+    done = _store_daily_sessions(symbol, asof_ts, days=500)
+    forming = _forming_session(intraday, asof_ts)
+    if forming is None:
+        return done
+    # The store can already carry today if the backfill ran after the close.
+    today = datetime.fromtimestamp(float(asof_ts), _IST).date()
+    done = [b for b in done
+            if datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0, _IST).date() != today]
+    return done + [forming]
+
+
+def _snapback_market_gate(runner: Any, cfg: Any, asof_ts: Optional[float]):
+    """Day -> may a signal be taken, from NIFTY's own daily tape.
+
+    Returns ``(gate, note)``. A gate of ``None`` with a note means the market
+    tape could not be read, and the CALLER MUST EMIT NOTHING — not take every
+    signal. `regime.gate_for` answers ``None`` for "filter off" and for "no
+    index tape" alike, and the permissive reading of the second is the
+    configuration measured at -1.28% per entry day.
+    """
+    from app.engines.snapback.regime import MARKET_SYMBOL, gate_for
+    from app.engines.snapback.models import to_bars
+
+    if cfg.market_filter == "off":
+        return None, ""
+    if asof_ts is None:
+        return None, "no replay clock"
+
+    cache = getattr(runner, "_snapback_gate_cache", None)
+    if cache is None:
+        cache = runner._snapback_gate_cache = {}
+    key = (cfg.market_filter, int(cfg.market_ema), int(asof_ts) // 60)
+    if key in cache:
+        return cache[key]
+
+    intraday = _asof_symbol_bars(getattr(runner, "_candles", None) or [],
+                                 MARKET_SYMBOL, asof_ts)
+    if not intraday:
+        intraday = list((getattr(runner, "_bar_history", None) or {}).get(MARKET_SYMBOL) or [])
+    daily = _snapback_daily_tape(MARKET_SYMBOL, intraday, asof_ts)
+    if len(daily) <= cfg.market_ema:
+        out = (None, f"{MARKET_SYMBOL} daily history is shorter than the "
+                     f"{cfg.market_ema}-session gate — Snapback will not take a "
+                     f"signal it cannot gate")
+        cache[key] = out
+        return out
+    gate = gate_for({MARKET_SYMBOL: to_bars(daily)},
+                    market_filter=cfg.market_filter, ema_period=cfg.market_ema)
+    out = (gate, "" if gate else f"{MARKET_SYMBOL} tape unreadable")
+    cache[key] = out
+    return out
+
+
+def _snapback_leg(symbol: str, spot: float, opt_type: str, vol: float, cfg: Any,
+                  sim_date: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The contract Snapback would buy, priced by Snapback's own model.
+
+    NOT `_option_contract`. That resolver picks an at-the-money strike and
+    approximates the premium at ~2% of spot; this engine buys a 0.70-DELTA
+    contract roughly forty days out, which on an index is three to four times
+    that premium. Replaying the rule against the wrong leg would report a
+    different strategy's P&L under this one's name.
+    """
+    from app.engines.option_contracts import spec_for
+    from app.engines.snapback.pricing import (bs_delta, bs_price, smile_vol,
+                                              strike_for_delta)
+    vol = float(vol or 0.0)
+    if spot <= 0 or vol <= 0:
+        return None
+    spec = spec_for(symbol)
+    if spec is None:
+        return None
+    call = opt_type == "CE"
+    years = max(int(cfg.min_dte), 1) / 365.0
+    strike = float(strike_for_delta(spot, vol, years, cfg.target_delta,
+                                    call=call, step=spec.strike_step))
+    v = float(smile_vol(spot, strike, vol, cfg.smile_slope,
+                        itm_slope=cfg.smile_itm_slope))
+    premium = float(bs_price(spot, strike, years, v, call=call))
+    if premium < max(cfg.min_option_premium, 0.05):
+        return None
+    expiry_tag = "26AUG"
+    if sim_date:
+        try:
+            dt = datetime.strptime(sim_date, "%Y-%m-%d")
+            expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
+        except ValueError:
+            pass
+    return {
+        "contract": f"{_canonical_symbol(symbol)}{expiry_tag}{int(strike)}{opt_type}",
+        "strike": float(strike),
+        "opt_type": opt_type,
+        "lot_size": int(spec.lot_size),
+        "premium": round(premium, 2),
+        "delta": abs(float(bs_delta(spot, strike, years, v, call=call))),
+        "iv": v,
+        "years": years,
+    }
+
+
+def _snapback_spot_stop(leg: Dict[str, Any], spot: float, cfg: Any) -> float:
+    """The SPOT level at which the premium has given back `premium_stop_pct`.
+
+    Snapback's stop is on the PREMIUM — that is the thing that can go to zero
+    while the spot thesis is still technically intact — but the replay settles
+    every position against underlying levels. Translating with a fixed delta
+    would misstate it, because delta itself moves as the trade goes against a
+    bought option, so the level is solved from the same Black-Scholes the entry
+    was priced with.
+    """
+    from app.engines.snapback.pricing import bs_price, smile_vol
+    target = leg["premium"] * (1.0 - float(cfg.premium_stop_pct) / 100.0)
+    call = leg["opt_type"] == "CE"
+    lo, hi = (spot, spot * 2.0) if not call else (spot * 0.5, spot)
+
+    def prem(s_: float) -> float:
+        v = float(smile_vol(s_, leg["strike"], leg["iv"], 0.0))
+        return float(bs_price(s_, leg["strike"], leg["years"], v, call=call))
+
+    # The premium of a bought put falls monotonically as spot rises (and a
+    # call's as spot falls), so a bisection is exact rather than a search.
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if (prem(mid) > target) == (not call):
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0, 2)
+
+
+def _snapback_watch_from_bars(runner: Any, symbol: str, intraday: list,
+                              asof_ts: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Would Snapback fire on this instrument if the session closed right now?
+
+    The SAME `features`/`fires` the live scan and the backtest call — bars in,
+    signal out — so a signal that appears here and not live is a data difference
+    and never a second implementation drifting.
+    """
+    from app.engines.snapback.models import ist_day, to_bars
+    from app.engines.snapback.regime import allowed
+    from app.engines.snapback.strategy import evaluate_at, features, fires
+
+    cfg = _snapback_config()
+    if not cfg.enabled:
+        return None
+    daily = _snapback_daily_tape(symbol, intraday, asof_ts)
+    if len(daily) < cfg.warmup_bars() + 2:
+        return None
+    bars = to_bars(daily)
+    i = len(bars) - 1
+    day = ist_day(float(bars.time[i]))
+
+    gate, note = _snapback_market_gate(runner, cfg, asof_ts)
+    if cfg.market_filter != "off":
+        # A day the gate has no ENTRY for is refused, which is right — but it is
+        # a different fact from "the market is trending up today", and the two
+        # look identical from outside. The first means NIFTY is not in this
+        # replay's instruments, and then this engine is silent for the whole
+        # session with nothing on screen to say so.
+        if not note and gate is not None and day not in gate:
+            note = (f"no NIFTY bar for {day} — add NIFTY to the replay's "
+                    f"instruments or Snapback cannot gate a signal")
+        if note:
+            notes = getattr(runner, "_strategy_notes", None)
+            if notes is None:
+                notes = runner._strategy_notes = {}
+            notes["snapback"] = note
+            return None
+        if not allowed(gate, day):
+            return None
+
+    f = features(bars, cfg)
+    for side in cfg.sides():
+        if not fires(f, i, side, cfg, bars):
+            continue
+        hits = [s for s in evaluate_at(bars, cfg, i, f) if s.side == side]
+        if not hits:
+            continue
+        sig = hits[0]
+        close = float(bars.close[i])
+        leg = _snapback_leg(symbol, close, sig.option_type, sig.assumed_iv,
+                            cfg, day)
+        if leg is None:
+            return None
+        return {
+            "strategy": "snapback",
+            "direction": sig.direction,
+            "strength": "WATCHING",
+            "opt_type": sig.option_type,
+            "stop": _snapback_spot_stop(leg, close, cfg),
+            "target": round(float(sig.mean_target), 2),
+            "leg": leg,
+            # Carried so the FILL can re-price the leg at the next session's
+            # open instead of inheriting a premium quoted a session earlier.
+            "snapback_iv": float(sig.assumed_iv),
+            "snapback_side": side,
+            "snapback_stretch": round(float(sig.stretch), 2),
+            "snapback_level": round(float(sig.level), 2),
+            "snapback_day": day,
+            "no_trail": True,
+        }
+    return None
 
 
 # ------------------------------------------------------------------ Intraday pack
@@ -1353,7 +1656,7 @@ class SimulationRunner:
                         exit_spot = close
                         exit_reason = "STAGNATION_DECAY"
 
-                max_bars = (
+                max_bars = trade.max_hold_bars or (
                     self._config.max_hold_bars
                     if (self._config and getattr(self._config, "max_hold_bars", None))
                     else self.MAX_HOLD_BARS
@@ -1379,7 +1682,8 @@ class SimulationRunner:
                     # operates on completed bars, never on intrabar extremes — and
                     # prevents the same bar's high/low from both creating a new HWM
                     # and triggering the tightened stop (a lookahead artefact).
-                    if (trade.spot_hwm is not None and trade.spot_initial_risk is not None
+                    if (trade.trails
+                            and trade.spot_hwm is not None and trade.spot_initial_risk is not None
                             and trade.spot_initial_risk > 0 and trade.spot_stop is not None):
                         if bullish:
                             trade.spot_hwm = max(trade.spot_hwm, close)
@@ -1417,6 +1721,20 @@ class SimulationRunner:
         from app.services.ohlcv_store import RESOLUTION_SECONDS
         res = self._config.resolution if self._config else "5m"
         return max(1, RESOLUTION_SECONDS.get(res, 300) // 60)
+
+    #: NSE cash session, 09:15 to 15:30.
+    SESSION_MINUTES = 375
+
+    def _bars_per_session(self) -> int:
+        """How many replay bars one trading SESSION is worth.
+
+        A daily strategy states its horizon in sessions and the replay counts
+        bars, so the conversion has to live somewhere. Here, because it depends
+        on the replay's own resolution: fifteen sessions is 1,125 bars at 5m and
+        5,625 at 1m, and hardcoding either would silently re-time the strategy
+        whenever an operator changed the candle.
+        """
+        return max(1, self.SESSION_MINUTES // self._bar_minutes())
 
     def _close_position(
         self,
@@ -1634,6 +1952,7 @@ class SimulationRunner:
             ),
             lot_size_source=_lot_size_source(),
             replay_live=self.is_replay_live,
+            strategy_notes=dict(getattr(self, "_strategy_notes", {}) or {}),
         )
 
     @property
@@ -3825,6 +4144,76 @@ class SimulationRunner:
         except Exception as exc:
             log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
 
+        # 4d. Snapback. A DAILY rule inside an intraday replay, so it runs its
+        # own three-state machine rather than the shared one:
+        #
+        #   every bar   -> WATCHING, if the rule would fire on a close here
+        #   session end -> CONFIRMED, captured as the LAST watch of the session
+        #   next open   -> STRONG, the bar the position is actually taken on
+        #
+        # The fill is the next session's OPEN because that is what was measured.
+        # Filling at the signal bar's close would report a price the strategy
+        # never pays, and the difference is the whole gap between a backtest and
+        # a backtest that works.
+        try:
+            if not hasattr(self, "_snapback_watch"):
+                self._snapback_watch: Dict[str, Tuple[str, Optional[Dict[str, Any]]]] = {}
+                self._snapback_filled: Dict[str, str] = {}
+                self._snapback_days: Dict[str, List[str]] = {}
+
+            sb_cfg = _snapback_config()
+            if sb_cfg.enabled:
+                today = bar_dt.strftime("%Y-%m-%d")
+                seen_days = self._snapback_days.setdefault(sym, [])
+                if not seen_days or seen_days[-1] != today:
+                    seen_days.append(today)
+                    # A new session opened. Whatever the rule said on the LAST
+                    # bar of the previous one is the CLOSE, and this bar is the
+                    # fill.
+                    prev_day, prev = self._snapback_watch.get(sym, ("", None))
+                    cooled = True
+                    last_fill = self._snapback_filled.get(sym)
+                    if last_fill and last_fill in seen_days:
+                        cooled = (len(seen_days) - 1 - seen_days.index(last_fill)
+                                  >= sb_cfg.cooldown_days)
+                    if prev and prev_day and prev_day != today and cooled:
+                        # The session's OPEN, not this bar's close: the same
+                        # fill the backtest books.
+                        fill_spot = float(bar.get("open") or close)
+                        fill_leg = _snapback_leg(
+                            sym, fill_spot, prev["opt_type"],
+                            prev["snapback_iv"], sb_cfg, today)
+                        if fill_leg is not None:
+                            entry = dict(prev)
+                            entry["strength"] = "STRONG"
+                            entry["fill_spot"] = fill_spot
+                            # Re-priced at the fill. Inheriting the premium the
+                            # signal bar quoted would book an entry a whole
+                            # session stale, with the gap counted as edge.
+                            entry["leg"] = fill_leg
+                            entry["stop"] = _snapback_spot_stop(
+                                fill_leg, fill_spot, sb_cfg)
+                            entry["max_hold_bars"] = max(
+                                1, int(sb_cfg.hold_days) * self._bars_per_session())
+                            signals_to_fire.append(entry)
+                            self._snapback_filled[sym] = today
+                    self._snapback_watch.pop(sym, None)
+
+                watch = _snapback_watch_from_bars(
+                    self, sym,
+                    _asof_symbol_bars(getattr(self, "_candles", None) or [],
+                                      sym, bar.get("time")) or history,
+                    bar.get("time"),
+                )
+                # Recorded on EVERY bar, firing or not. Keeping only the firing
+                # ones would let a setup that stopped qualifying at 15:05 still
+                # fill the next morning.
+                self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"), watch)
+                if watch:
+                    signals_to_fire.append(watch)
+        except Exception as exc:
+            log.debug("Snapback bar evaluation error for %s: %s", sym, exc)
+
         # 4c. Intraday pack: pivot_break, ma_ribbon, vwap_supertrend.
         # The SAME functions the live scan calls — bars in, signals out — so a
         # signal that appears here and not live (or the reverse) is a data
@@ -3897,6 +4286,20 @@ class SimulationRunner:
             direction = sdef["direction"]
             strength = sdef["strength"]
 
+            # A WATCH that has not changed is not news. Snapback re-evaluates
+            # its daily rule on every bar of the session, so without this the
+            # feed carries the same row seventy-five times and the one bar where
+            # the setup actually appeared is impossible to find.
+            if strategy == "snapback" and strength != "STRONG":
+                prev_sb = next((e for e in reversed(self._stats.events)
+                                if e.strategy == "snapback" and e.instrument == sym), None)
+                if prev_sb is not None and (
+                    prev_sb.direction == direction
+                    and prev_sb.strength == strength
+                    and prev_sb.strike == (sdef.get("leg") or {}).get("strike")
+                ):
+                    continue
+
             key = (sym, strategy)
             last_dir, last_idx = self._last_fired.get(key, ("", -1))
             # De-duplicate: do not re-emit identical direction within 6 bars of this symbol (30 minutes)
@@ -3967,7 +4370,18 @@ class SimulationRunner:
                 self._publish("signal", event.model_dump())
                 continue
 
-            leg = _option_contract(sym, close, direction, self._config, sim_date=bar_dt.strftime("%Y-%m-%d"))
+            # The price this signal is expressed at. Usually the bar's close;
+            # a strategy whose measured FILL is somewhere else (Snapback fills
+            # at the next session's open) states it, so the leg, the ladder and
+            # the trade all agree on one number.
+            spot_ref = round(float(sdef.get("fill_spot") or close), 2)
+            # A strategy that resolved its OWN leg keeps it. Snapback buys a
+            # 0.70-delta contract about forty days out; `_option_contract` picks
+            # at-the-money and approximates the premium at ~2% of spot, which is
+            # a different trade with the same name on it.
+            leg = sdef.get("leg") or _option_contract(
+                sym, spot_ref, direction, self._config,
+                sim_date=bar_dt.strftime("%Y-%m-%d"))
             # ONE origin for the signal and the trade it opens. They used to be
             # derived by two different rules — the signal keyed on the strategy,
             # the trade also on whether the symbol was an index — so a SuperTrend
@@ -3985,19 +4399,19 @@ class SimulationRunner:
                 instrument=sym,
                 direction=direction,
                 strength=strength,
-                entry=round(close, 2),
+                entry=spot_ref,
                 stop=stop,
                 target=target,
                 contract=leg["contract"],
-                spot=round(close, 2),
+                spot=spot_ref,
                 strike=leg["strike"],
                 opt_type=sdef.get("opt_type") or leg["opt_type"],
                 # The premium ladder, in option terms rather than underlying
                 # terms. Declared on `main` but never populated there; filling
                 # it is the difference between a field and a promise.
                 premium_entry=leg["premium"],
-                premium_sl=_premium_at(leg, close, stop),
-                premium_target=_premium_at(leg, close, target),
+                premium_sl=_premium_at(leg, spot_ref, stop),
+                premium_target=_premium_at(leg, spot_ref, target),
                 scan_origin=scan_origin,
                 strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
             )
@@ -4044,8 +4458,8 @@ class SimulationRunner:
                     # exit price far below the target it displayed. Same
                     # function the signal's ladder uses, so a trade and its
                     # signal cannot disagree.
-                    stop_loss=_premium_at(leg, close, stop),
-                    target_price=_premium_at(leg, close, target),
+                    stop_loss=_premium_at(leg, spot_ref, stop),
+                    target_price=_premium_at(leg, spot_ref, target),
                     status="OPEN",
                     pnl_usd=0.0,
                     pnl_pct=0.0,
@@ -4058,13 +4472,15 @@ class SimulationRunner:
                     # print a drag of zero for trades it had never modelled.
                     slippage=0.0 if friction_mode == "ideal" else max(0.0, entry_slip),
                     leg_delta=leg.get("delta"),
-                    spot_entry=round(close, 2),
+                    spot_entry=spot_ref,
                     spot_stop=stop,
                     spot_target=target,
-                    spot_hwm=round(close, 2),
-                    spot_initial_risk=abs(close - stop) if stop is not None else None,
+                    spot_hwm=spot_ref,
+                    spot_initial_risk=abs(spot_ref - stop) if stop is not None else None,
                     spot_initial_stop=stop,
                     exit_reason=None,
+                    max_hold_bars=sdef.get("max_hold_bars"),
+                    trails=not sdef.get("no_trail"),
                     bars_held=0,
                     scan_origin=scan_origin,
                     strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
@@ -4074,7 +4490,7 @@ class SimulationRunner:
                 self._open_by_symbol.setdefault(sym, []).append(trade)
                 # Suppress a re-entry on this key while the position is live.
                 # `_close_position` clears it on the bar that actually closes.
-                max_bars = (
+                max_bars = trade.max_hold_bars or (
                     self._config.max_hold_bars
                     if (self._config and getattr(self._config, "max_hold_bars", None))
                     else self.MAX_HOLD_BARS

@@ -1982,3 +1982,25 @@ filters {
   font-weight: 500;
   color: var(--k-dim);
 }
+
+/* A daily rule inside an intraday replay. The badge names what it is; the hint
+   says what that means for THIS date range, because "no trades" and "cannot
+   trade in one session" are different facts. */
+.rd-drop-check-note {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--k-dim);
+  border: 1px solid var(--k-line);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
+}
+.rd-drop-check-hint {
+  margin: 0 0 6px 28px;
+  font-size: 9.5px;
+  line-height: 1.35;
+  color: var(--k-dim);
+}
+.rd-drop-check-hint[data-tone="warn"] { color: var(--k-warn); }
