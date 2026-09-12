@@ -83,7 +83,7 @@ class TestTheContract:
 
     def _leg(self, **kw):
         from app.engines.snapback import SnapbackConfig
-        cfg = SnapbackConfig(**kw)
+        cfg = SnapbackConfig(max_rv_pct=100.0, **kw)
         return sim._snapback_leg("RELIANCE", 1400.0, "PE", 0.22, cfg, "2026-09-04")
 
     def test_the_strike_follows_the_configured_delta(self):
@@ -115,7 +115,7 @@ class TestTheStop:
 
     def _leg_and_cfg(self, stop_pct=35.0):
         from app.engines.snapback import SnapbackConfig
-        cfg = SnapbackConfig(premium_stop_pct=stop_pct)
+        cfg = SnapbackConfig(max_rv_pct=100.0, premium_stop_pct=stop_pct)
         leg = sim._snapback_leg("RELIANCE", 1400.0, "PE", 0.22, cfg, "2026-09-04")
         return leg, cfg
 
@@ -222,7 +222,7 @@ class TestTheGateCannotBeSkipped:
         from app.engines.snapback import SnapbackConfig
         r = sim.SimulationRunner()
         gate, note = sim._snapback_market_gate(
-            r, SnapbackConfig(market_filter="off"), 1_757_000_000.0)
+            r, SnapbackConfig(max_rv_pct=100.0, market_filter="off"), 1_757_000_000.0)
         assert gate is None and note == ""
 
 
@@ -279,7 +279,7 @@ class TestEndToEnd:
 
         monkeypatch.setattr(sim, "_store_daily_sessions", _store)
         monkeypatch.setattr(sim, "_snapback_config",
-                            lambda: SnapbackConfig(enabled=True, cooldown_days=0,
+                            lambda: SnapbackConfig(max_rv_pct=100.0, enabled=True, cooldown_days=0,
                                                    hedge_mode="none"))
         r = sim.SimulationRunner()
         r._config = sim.SimConfig(date="2026-09-04", resolution="5m",
@@ -369,3 +369,133 @@ class TestEndToEnd:
                    [1500.0] * 6 + [1000.0] * 6)
         self._play(runner, datetime(2026, 9, 7, tzinfo=IST), [1000.0, 1005.0])
         assert [t for t in runner._stats.trades if t.strategy == "snapback"] == []
+
+
+class TestItPlaysAtSpeed:
+    """A correct adapter that hangs the dock is not a shipped feature.
+
+    Two costs are quadratic in the length of the replay and invisible on one
+    session: re-querying five hundred daily rows per symbol PER BAR, and
+    re-deriving today's bars by scanning the whole candle list each time.
+    """
+
+    def test_the_completed_daily_tape_is_read_once_per_session(self, monkeypatch):
+        calls: list[tuple] = []
+        rows = _daily(200, start=1000.0, drift=1.0015)
+
+        def _store(symbol, asof_ts, days=400):
+            calls.append((symbol, asof_ts))
+            return [dict(b) for b in rows if b["time"] <= float(asof_ts)]
+
+        monkeypatch.setattr(sim, "_store_daily_sessions", _store)
+        r = sim.SimulationRunner()
+        day = datetime(2026, 9, 4, tzinfo=IST)
+        bars = _session_bars(day, [1500.0] * 30, "RELIANCE")
+        for b in bars:
+            sim._snapback_daily_tape("RELIANCE", [b], b["time"], r)
+        assert len(calls) == 1, f"{len(calls)} store reads for one session"
+
+    def test_a_second_session_reads_again(self, monkeypatch):
+        calls: list[tuple] = []
+        monkeypatch.setattr(sim, "_store_daily_sessions",
+                            lambda symbol, asof_ts, days=400: calls.append(symbol) or [])
+        r = sim.SimulationRunner()
+        for d in (datetime(2026, 9, 4, tzinfo=IST), datetime(2026, 9, 7, tzinfo=IST)):
+            for b in _session_bars(d, [1500.0] * 4, "RELIANCE"):
+                sim._snapback_daily_tape("RELIANCE", [b], b["time"], r)
+        assert len(calls) == 2
+
+    def test_the_session_buffer_resets_on_a_new_day(self):
+        """A buffer that never resets turns yesterday's range into today's."""
+        r = sim.SimulationRunner()
+        r._config = sim.SimConfig(date="2026-09-04", strategies=["snapback"])
+        r._stats = sim.SimStats()
+        r._open_by_symbol = {}
+        r._candles = []
+        r._in_session_bars = {}
+        from app.engines.snapback import SnapbackConfig
+        import app.services.simulation as m
+        original = m._snapback_config
+        m._snapback_config = lambda: SnapbackConfig(max_rv_pct=100.0, enabled=True)
+        try:
+            for d, px in ((datetime(2026, 9, 4, tzinfo=IST), 100.0),
+                          (datetime(2026, 9, 7, tzinfo=IST), 200.0)):
+                for b in _session_bars(d, [px] * 3, "RELIANCE"):
+                    r._evaluate_bar(dict(b), datetime.fromtimestamp(b["time"], IST))
+        finally:
+            m._snapback_config = original
+        held = r._session_bars["RELIANCE"]
+        assert len(held) == 3
+        assert all(b["close"] == pytest.approx(200.0) for b in held)
+
+
+class TestTheRunnerReachesTheReplay:
+    """The horizon is not the end of the trade when the position is a winner.
+
+    The backtest runs a runner and the replay did not, so the dock reported a
+    rule's best trades as MAX_HOLD at the bar count — the exact truncation the
+    runner exists to prevent, and worth +0.57pp per entry day out of sample.
+    """
+
+    def _trade(self, **kw):
+        base = dict(
+            trade_id="TRD-1", strategy="snapback", symbol="X26SEP1500PE",
+            underlying="RELIANCE", direction="BUY", opt_type="PE", strike=1500.0,
+            lots=1, quantity=500, entry_price=100.0, stop_loss=65.0,
+            target_price=300.0, status="OPEN", spot_entry=1400.0,
+            spot_stop=1500.0, spot_target=1000.0, spot_hwm=1400.0,
+            spot_initial_risk=100.0, spot_initial_stop=1500.0, raw_entry=100.0,
+            leg_delta=0.7, bars_held=20, max_hold_bars=20, trails=False,
+        )
+        base.update(kw)
+        return sim.SimTradeEvent(**base)
+
+    def _settle(self, trade, close):
+        r = sim.SimulationRunner()
+        r._config = sim.SimConfig(date="2026-09-04", friction_mode="ideal")
+        r._stats = sim.SimStats(trades=[trade])
+        r._open_by_symbol = {"RELIANCE": [trade]}
+        r._settle_open_positions(
+            {"symbol": "RELIANCE", "open": close, "high": close + 1,
+             "low": close - 1, "close": close, "time": 0},
+            datetime(2026, 9, 4, 11, 0, tzinfo=IST))
+        return trade
+
+    def test_without_a_runner_the_horizon_closes_a_winner(self):
+        t = self._settle(self._trade(runner_mult=0.0), 1200.0)
+        assert t.status != "OPEN"
+        assert t.exit_reason == "MAX_HOLD"
+
+    def test_a_position_past_the_multiple_keeps_running(self):
+        # Spot far below a 1500 put: worth several times what it cost.
+        t = self._settle(self._trade(runner_mult=1.5), 1200.0)
+        assert t.status == "OPEN"
+        assert t.exit_reason is None
+        assert t.runner_peak is not None and t.runner_peak > t.entry_price
+
+    def test_a_position_below_the_multiple_still_closes_on_time(self):
+        """The rule must not become 'hold everything longer'."""
+        t = self._settle(self._trade(runner_mult=1.5), 1399.0)
+        assert t.status != "OPEN"
+        assert t.exit_reason == "MAX_HOLD"
+
+    def test_a_runner_that_gives_its_gain_back_is_closed_as_a_runner(self):
+        t = self._trade(runner_mult=1.5, runner_trail_pct=20.0)
+        self._settle(t, 1200.0)
+        assert t.status == "OPEN"
+        peak = t.runner_peak
+        self._settle(t, 1385.0)
+        assert t.status != "OPEN"
+        assert t.exit_reason == "RUNNER"
+        assert peak is not None
+
+    def test_the_replay_and_the_engine_read_the_SAME_runner_settings(self):
+        from app.engines.snapback import SnapbackConfig
+        c = SnapbackConfig()
+        t = sim.SimTradeEvent(
+            trade_id="T", strategy="snapback", symbol="X", underlying="Y",
+            direction="BUY", opt_type="PE", strike=1.0, lots=1, quantity=1,
+            entry_price=1.0, stop_loss=1.0, target_price=1.0,
+            runner_mult=c.runner_mult, runner_trail_pct=c.runner_trail_pct)
+        assert (t.runner_mult, t.runner_trail_pct) == (c.runner_mult,
+                                                       c.runner_trail_pct)

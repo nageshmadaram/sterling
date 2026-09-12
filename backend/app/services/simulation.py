@@ -290,6 +290,15 @@ class SimTradeEvent(BaseModel):
     #: position, which is right for SuperTrend (its live engine trails) and
     #: wrong for a rule that states a fixed stop and was measured with one.
     trails: bool = True
+    #: Hold PAST `max_hold_bars` while the position is worth this multiple of
+    #: what it cost, closing when it gives back `runner_trail_pct` of its best.
+    #: 0 = off. Without it the replay reports a rule's horizon exit as MAX_HOLD
+    #: and never reaches the tail the horizon exists to let develop — measured
+    #: at +0.57pp per entry day out of sample for Snapback.
+    runner_mult: float = 0.0
+    runner_trail_pct: float = 25.0
+    #: Best premium seen since the runner armed. Only meaningful with a runner.
+    runner_peak: Optional[float] = None
     bars_held: int = 0
     scan_origin: Optional[str] = None
     strategy_version: Optional[str] = None
@@ -931,18 +940,50 @@ def _forming_session(intraday: list, asof_ts: Optional[float]) -> Optional[dict]
     }
 
 
+#: How often the forming-session WATCH is recomputed, in bars. The watch is a
+#: preview for the operator; the state that decides a fill is recomputed exactly
+#: once per session from its completed bars, so sampling this costs nothing but
+#: preview resolution. Re-running a 110-bar EMA/ATR/vol stack for every symbol on
+#: every bar is what made a three-month replay unplayable.
+SNAPBACK_WATCH_EVERY = 6
+
+
 def _snapback_daily_tape(symbol: str, intraday: list,
-                         asof_ts: Optional[float]) -> list:
-    """Completed sessions from the store, plus today's forming bar."""
-    done = _store_daily_sessions(symbol, asof_ts, days=500)
+                         asof_ts: Optional[float],
+                         runner: Any = None, keep: int = 0) -> list:
+    """Completed sessions from the store, plus today's forming bar.
+
+    The completed half is CACHED per (symbol, session). It changes once a day
+    and the caller asks once a bar, so without the cache a replay issues one
+    500-row query per symbol per bar — ninety thousand of them across a
+    three-month range, which is the difference between a dock that plays and
+    one that hangs.
+    """
+    day = (datetime.fromtimestamp(float(asof_ts), _IST).date()
+           if asof_ts is not None else None)
+    cache = None
+    if runner is not None and day is not None:
+        cache = getattr(runner, "_daily_tape_cache", None)
+        if cache is None:
+            cache = runner._daily_tape_cache = {}
+    key = (symbol, day)
+    if cache is not None and key in cache:
+        done = cache[key]
+    else:
+        done = _store_daily_sessions(symbol, asof_ts, days=500)
+        # Anything the store already carries for TODAY is a completed bar this
+        # replay has not reached yet.
+        done = [b for b in done
+                if datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0,
+                                          _IST).date() != day]
+        if cache is not None:
+            cache[key] = done
+    if keep and len(done) > keep:
+        # The rule reads a fixed window. Handing it four hundred sessions when
+        # it looks at a hundred and ten costs the difference on every bar.
+        done = done[-keep:]
     forming = _forming_session(intraday, asof_ts)
-    if forming is None:
-        return done
-    # The store can already carry today if the backfill ran after the close.
-    today = datetime.fromtimestamp(float(asof_ts), _IST).date()
-    done = [b for b in done
-            if datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0, _IST).date() != today]
-    return done + [forming]
+    return done if forming is None else done + [forming]
 
 
 def _snapback_market_gate(runner: Any, cfg: Any, asof_ts: Optional[float]):
@@ -965,15 +1006,16 @@ def _snapback_market_gate(runner: Any, cfg: Any, asof_ts: Optional[float]):
     cache = getattr(runner, "_snapback_gate_cache", None)
     if cache is None:
         cache = runner._snapback_gate_cache = {}
-    key = (cfg.market_filter, int(cfg.market_ema), int(asof_ts) // 60)
+    key = (cfg.market_filter, int(cfg.market_ema), int(asof_ts))
     if key in cache:
         return cache[key]
 
-    intraday = _asof_symbol_bars(getattr(runner, "_candles", None) or [],
-                                 MARKET_SYMBOL, asof_ts)
+    intraday = list((getattr(runner, "_session_bars", None) or {}).get(MARKET_SYMBOL) or [])
     if not intraday:
-        intraday = list((getattr(runner, "_bar_history", None) or {}).get(MARKET_SYMBOL) or [])
-    daily = _snapback_daily_tape(MARKET_SYMBOL, intraday, asof_ts)
+        intraday = _asof_symbol_bars(getattr(runner, "_candles", None) or [],
+                                     MARKET_SYMBOL, asof_ts)
+    daily = _snapback_daily_tape(MARKET_SYMBOL, intraday, asof_ts, runner,
+                                 keep=int(cfg.market_ema) * 3 + 60)
     if len(daily) <= cfg.market_ema:
         out = (None, f"{MARKET_SYMBOL} daily history is shorter than the "
                      f"{cfg.market_ema}-session gate — Snapback will not take a "
@@ -1079,7 +1121,8 @@ def _snapback_watch_from_bars(runner: Any, symbol: str, intraday: list,
     cfg = _snapback_config()
     if not cfg.enabled:
         return None
-    daily = _snapback_daily_tape(symbol, intraday, asof_ts)
+    daily = _snapback_daily_tape(symbol, intraday, asof_ts, runner,
+                                 keep=cfg.warmup_bars() + 40)
     if len(daily) < cfg.warmup_bars() + 2:
         return None
     bars = to_bars(daily)
@@ -1662,9 +1705,24 @@ class SimulationRunner:
                     else self.MAX_HOLD_BARS
                 )
                 timed_out = exit_spot is None and trade.bars_held >= max_bars
+                if timed_out and trade.runner_mult > 0:
+                    # The horizon, and the one case that survives it. A book
+                    # whose top 1% of trades carry 148% of the P&L cannot afford
+                    # to close its winners on a bar count.
+                    mark_now = self._premium_for_spot(trade, close)
+                    if mark_now >= trade.entry_price * trade.runner_mult:
+                        trade.runner_peak = max(trade.runner_peak or 0.0, mark_now)
+                        give = trade.runner_peak * (1.0 - trade.runner_trail_pct / 100.0)
+                        if trade.runner_trail_pct <= 0 or mark_now > give:
+                            timed_out = False
+                        else:
+                            exit_reason = "RUNNER"
+                    elif trade.runner_peak is not None:
+                        # It ran and then fell back below the multiple.
+                        exit_reason = "RUNNER"
                 if timed_out:
                     exit_spot = close
-                    exit_reason = "MAX_HOLD"
+                    exit_reason = exit_reason or "MAX_HOLD"
 
                 if exit_spot is None:
                     # Still open — mark it to this bar so unrealised P&L moves.
@@ -3937,6 +3995,20 @@ class SimulationRunner:
             rsi = 100 - (100 / (1 + avg_gain / avg_loss))
 
         signals_to_fire = []
+
+        # Which strategies this replay was asked for. Hoisted here because the
+        # loop used to EVALUATE every strategy and filter at emit time, so
+        # selecting one still paid for all of them — including Gamma Move's
+        # per-bar store query and a scan of the whole candle list, which is
+        # quadratic in the length of a multi-day replay.
+        _sel = [str(x).lower() for x in
+                ((self._config.strategies if self._config and self._config.strategies
+                  else [self._config.strategy if self._config else "all"]) or [])]
+        _all = "all" in _sel or "*" in _sel or not _sel
+
+        def wanted(*names: str) -> bool:
+            return _all or any(n in _sel for n in names)
+
         bar_time_str = bar_dt.strftime("%H:%M:%S")
 
         recorded_list = getattr(self, "_recorded_signals", [])
@@ -4092,7 +4164,13 @@ class SimulationRunner:
         # correctly by `_apply_seek`.
         sym_bar_idx = self._in_session_bars.get(sym, len(history))
         ae_active = sym_bar_idx < self._active_until_bar.get((sym, "adaptive_edge"), -1) if hasattr(self, "_active_until_bar") else False
-        if not ae_active and not skip_ae_model and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout and len(history) >= 20:
+        # `wanted(...)` FIRST, and it is the expensive one: `decide_from_candles`
+        # builds a market-profile structure series per bar, which profiled at
+        # 154 seconds for a single 17-symbol session — the whole cost of a
+        # replay that had asked for one other strategy.
+        if (wanted("adaptive_edge") and not ae_active and not skip_ae_model
+                and not has_recorded_ae and is_ae_symbol and not ae_toxic_lockout
+                and len(history) >= 20):
             from app.services.adaptive_edge_strategy import decide_from_candles
             from app.services.adaptive_edge import get_config as get_ae_config
             c_input = [
@@ -4127,7 +4205,8 @@ class SimulationRunner:
 
         # 4b. Gamma Move: shipped daily level+regime gates on a stock.
         # The 15m OI trigger cannot run on this tape, so strength stays WATCHING.
-        try:
+        if wanted("gamma_move"):
+         try:
             asof = _asof_symbol_bars(getattr(self, "_candles", None) or [],
                                      sym, bar.get("time"))
             tape = asof or history
@@ -4141,7 +4220,7 @@ class SimulationRunner:
                                              prefer_store=True)
             if gm:
                 signals_to_fire.append(gm)
-        except Exception as exc:
+         except Exception as exc:
             log.debug("Gamma Move bar evaluation error for %s: %s", sym, exc)
 
         # 4d. Snapback. A DAILY rule inside an intraday replay, so it runs its
@@ -4155,22 +4234,39 @@ class SimulationRunner:
         # Filling at the signal bar's close would report a price the strategy
         # never pays, and the difference is the whole gap between a backtest and
         # a backtest that works.
-        try:
+        if wanted("snapback"):
+         try:
             if not hasattr(self, "_snapback_watch"):
                 self._snapback_watch: Dict[str, Tuple[str, Optional[Dict[str, Any]]]] = {}
                 self._snapback_filled: Dict[str, str] = {}
                 self._snapback_days: Dict[str, List[str]] = {}
+                self._session_bars: Dict[str, List[Dict[str, Any]]] = {}
 
             sb_cfg = _snapback_config()
             if sb_cfg.enabled:
                 today = bar_dt.strftime("%Y-%m-%d")
                 seen_days = self._snapback_days.setdefault(sym, [])
                 if not seen_days or seen_days[-1] != today:
-                    seen_days.append(today)
-                    # A new session opened. Whatever the rule said on the LAST
-                    # bar of the previous one is the CLOSE, and this bar is the
-                    # fill.
+                    # A new session opened, so the previous one is COMPLETE and
+                    # still in hand. Recompute the rule on it exactly, rather
+                    # than trusting whichever sampled watch happened to be last:
+                    # the state at the close is what decides this fill, and a
+                    # preview taken at 15:05 is not it.
+                    prev_bars = self._session_bars.get(sym) or []
                     prev_day, prev = self._snapback_watch.get(sym, ("", None))
+                    if prev_bars:
+                        prev_day = datetime.fromtimestamp(
+                            _bar_epoch_seconds(prev_bars[-1]) or 0.0,
+                            _IST).strftime("%Y-%m-%d")
+                        prev = _snapback_watch_from_bars(
+                            self, sym, prev_bars,
+                            _bar_epoch_seconds(prev_bars[-1]))
+                    # Today's bars, kept as they arrive. Re-deriving them from
+                    # the full candle list on every bar is quadratic in the
+                    # length of the replay, which is invisible on one session
+                    # and fatal on sixty.
+                    self._session_bars[sym] = []
+                    seen_days.append(today)
                     cooled = True
                     last_fill = self._snapback_filled.get(sym)
                     if last_fill and last_fill in seen_days:
@@ -4195,36 +4291,44 @@ class SimulationRunner:
                                 fill_leg, fill_spot, sb_cfg)
                             entry["max_hold_bars"] = max(
                                 1, int(sb_cfg.hold_days) * self._bars_per_session())
+                            # The horizon is not the end of the trade when the
+                            # position is already a winner — the same rule the
+                            # backtest runs, so the dock and the measurement
+                            # cannot report different exits.
+                            entry["runner_mult"] = sb_cfg.runner_mult
+                            entry["runner_trail_pct"] = sb_cfg.runner_trail_pct
                             signals_to_fire.append(entry)
                             self._snapback_filled[sym] = today
                     self._snapback_watch.pop(sym, None)
 
-                watch = _snapback_watch_from_bars(
-                    self, sym,
-                    _asof_symbol_bars(getattr(self, "_candles", None) or [],
-                                      sym, bar.get("time")) or history,
-                    bar.get("time"),
-                )
-                # Recorded on EVERY bar, firing or not. Keeping only the firing
-                # ones would let a setup that stopped qualifying at 15:05 still
-                # fill the next morning.
-                self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"), watch)
+                # THIS bar joins the session before the rule is asked about
+                # it. The forming daily bar has to include the close being
+                # evaluated, or the rule answers about the previous one.
+                self._session_bars.setdefault(sym, []).append(bar)
+                watch = None
+                if len(self._session_bars[sym]) % SNAPBACK_WATCH_EVERY == 1:
+                    watch = _snapback_watch_from_bars(
+                        self, sym, self._session_bars[sym], bar.get("time"),
+                    )
+                    self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"),
+                                                 watch)
                 if watch:
                     signals_to_fire.append(watch)
-        except Exception as exc:
+         except Exception as exc:
             log.debug("Snapback bar evaluation error for %s: %s", sym, exc)
 
         # 4c. Intraday pack: pivot_break, ma_ribbon, vwap_supertrend.
         # The SAME functions the live scan calls — bars in, signals out — so a
         # signal that appears here and not live (or the reverse) is a data
         # difference, never a second implementation drifting.
-        try:
-            for sdef in _intraday_signals_from_bars(
-                self, sym, bar.get("time"), history, cfg
-            ):
-                signals_to_fire.append(sdef)
-        except Exception as exc:
-            log.debug("Intraday bar evaluation error for %s: %s", sym, exc)
+        if wanted("pivot_break", "ma_ribbon", "vwap_supertrend"):
+            try:
+                for sdef in _intraday_signals_from_bars(
+                    self, sym, bar.get("time"), history, cfg
+                ):
+                    signals_to_fire.append(sdef)
+            except Exception as exc:
+                log.debug("Intraday bar evaluation error for %s: %s", sym, exc)
 
         # 6. Navigator: Canonical Session-Anchored VWAP Cross
         session_bars = [b for b in history if datetime.fromtimestamp(b["time"], tz=ist).date() == bar_dt.date()]
@@ -4481,6 +4585,8 @@ class SimulationRunner:
                     exit_reason=None,
                     max_hold_bars=sdef.get("max_hold_bars"),
                     trails=not sdef.get("no_trail"),
+                    runner_mult=float(sdef.get("runner_mult") or 0.0),
+                    runner_trail_pct=float(sdef.get("runner_trail_pct") or 25.0),
                     bars_held=0,
                     scan_origin=scan_origin,
                     strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
