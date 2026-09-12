@@ -5,6 +5,7 @@ import { rowsFromSnapshot } from './AdaptiveEdgePanel';
 import { AdaptiveEdgeBoard } from './board/AdaptiveEdgeBoard';
 import { GammaMoveBoard } from './board/GammaMoveBoard';
 import { IntradayBoard } from './board/IntradayBoard';
+import { SnapbackBoard } from './board/SnapbackBoard';
 import { EngineTabs, type EngineTabState } from './board/EngineToolbar';
 import { adaptiveEdgeToBoard } from './board/adaptiveEdgeAdapter';
 import { gammaMoveToBoard } from './board/gammaMoveAdapter';
@@ -14,11 +15,13 @@ import { useEngineEnabled } from '../../hooks/useEngineToggles';
 import { useAdaptiveEdgeSnapshot } from '../../hooks/useAdaptiveEdge';
 import { useEngineSignals, useEngineConfig } from '../../hooks/useSterlingKiteEngine';
 import { useIntradaySnapshot } from '../../hooks/useIntraday';
+import { useSnapbackSnapshot } from '../../hooks/useSnapback';
 import { intradayToBoard } from './board/intradayAdapter';
+import { snapbackRowsToBoard } from './board/snapbackAdapter';
 import { useGammaMoveSnapshot } from '../../hooks/useGammaMove';
 import { useNavigatorConfig } from '../../hooks/useNavigator';
 import { k, Icons } from '../../styles/kiteUI';
-import { useKiteSettings } from '../../store/useKiteSettings';
+import { orderEngines, useKiteSettings } from '../../store/useKiteSettings';
 import { PaneHeaderActions } from './PaneHeaderActions';
 import { ToolbarButton } from './board/EngineToolbar';
 import { ScanProgressRing } from './board/ScanProgressRing';
@@ -53,10 +56,17 @@ const NAV_TARGET: Record<string, EngineId> = {
   adaptiveEdge: 'adaptive_edge',
   gammaMove: 'gamma_move',
   intraday: 'intraday',
+  snapback: 'snapback',
 };
 
 export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBoardDetail }: Props) {
-  const [engine, setEngine] = useState<EngineId>('supertrend');
+  // The operator's choice, not a hardcoded 'supertrend'. Corrected below once
+  // the tab list is known: an engine that is switched off renders no tab, and
+  // selecting one would land on an empty pane that reads as a fault.
+  const preferredEngine = useKiteSettings((st) => st.defaultSignalEngine);
+  const engineOrder = useKiteSettings((st) => st.engineOrder);
+  const [engine, setEngine] = useState<EngineId>(
+    (preferredEngine as EngineId) || 'supertrend');
   const engineOn = useEngineEnabled();
   const openChartFor = React.useCallback(
     (quoteKey: string) => onOpenChart?.(quoteKey, 'chart'),
@@ -81,6 +91,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
   const navigatorEnabled = useNavigatorConfig().data?.record.config.enabled ?? false;
   const gmSnapshot = useGammaMoveSnapshot();
   const idSnapshot = useIntradaySnapshot();
+  const sbSnapshot = useSnapbackSnapshot();
 
   /**
    * The countdown to the next automatic scan, 0..1.
@@ -173,6 +184,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
     const ae = snapshot.data ? adaptiveEdgeToBoard(rowsFromSnapshot(snapshot.data)) : [];
     const gm = gammaMoveToBoard(gmSnapshot.data);
     const id = intradayToBoard(idSnapshot.data);
+    const sb = snapbackRowsToBoard(sbSnapshot.data?.rows ?? []);
     const live = (list: typeof st) => list.filter((s) => ACTIONABLE.includes(s.status)).length;
     const all: EngineTabState[] = [
       { id: 'supertrend', running: engineConfig.data?.engine_enabled !== false, live: live(st), scanned: st.length },
@@ -183,12 +195,47 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
       { id: 'intraday',
         running: idSnapshot.data?.config?.enabled === true,
         live: live(id), scanned: id.length },
+      { id: 'snapback',
+        running: sbSnapshot.data?.config?.enabled === true,
+        live: live(sb), scanned: sb.length },
     ];
-    return all.filter((tab) => {
+    const shown = all.filter((tab) => {
       if (tab.id === 'supertrend') return engineOn.supertrend || engineOn.navigator;
       return engineOn[tab.id as keyof typeof engineOn] !== false;
     });
-  }, [engineSignals.data, engineConfig.data, snapshot.data, gmSnapshot.data, idSnapshot.data, engineOn]);
+    return orderEngines(shown, engineOrder);
+  }, [engineSignals.data, engineConfig.data, snapshot.data, gmSnapshot.data, idSnapshot.data, sbSnapshot.data, engineOn, engineOrder]);
+
+  /**
+   * Land on the operator's chosen board, and stop as soon as they pick one.
+   *
+   * Two things make this an effect rather than just the `useState` initialiser.
+   * The preference is PERSISTED, so on the first render zustand has not
+   * rehydrated it yet and the initialiser reads the fallback — which is how the
+   * board kept opening on SuperTrend with 'snapback' sitting in localStorage.
+   * And an engine that is switched off renders no tab, so a preference naming
+   * one has to fall through to the first tab that exists; selecting a tab that
+   * is not rendered leaves the pane blank, which reads as a fault.
+   *
+   * `touched` is what keeps this from fighting the user: once they click a tab,
+   * the preference has had its say for this session.
+   */
+  const touched = React.useRef(false);
+  useEffect(() => {
+    if (!tabs.length) return;
+    const present = (id: string) => tabs.some((t) => t.id === id);
+    if (!touched.current && preferredEngine && present(preferredEngine)
+        && engine !== preferredEngine) {
+      setEngine(preferredEngine as EngineId);
+      return;
+    }
+    if (!present(engine)) setEngine(tabs[0].id);
+  }, [tabs, engine, preferredEngine]);
+
+  const selectEngine = React.useCallback((id: EngineId) => {
+    touched.current = true;
+    setEngine(id);
+  }, []);
 
   useEffect(() => {
     if (!tabs.length) return;
@@ -207,7 +254,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
   return (
     <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: k.bg }}>
       <div style={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${k.border}`, background: k.bg }}>
-        <EngineTabs tabs={tabs} active={engine} onSelect={setEngine} />
+        <EngineTabs tabs={tabs} active={engine} onSelect={selectEngine} />
 
         <PaneHeaderActions pane="signals">
           {scanning ? (
@@ -250,6 +297,9 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
         )}
         {engine === 'intraday' && (
           <IntradayBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
+        )}
+        {engine === 'snapback' && (
+          <SnapbackBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
         )}
       </div>
     </div>

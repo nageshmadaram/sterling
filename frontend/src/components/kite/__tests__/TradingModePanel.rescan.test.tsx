@@ -54,6 +54,12 @@ vi.mock('../../../hooks/useAdaptiveEdge', () => ({
   useAdaptiveEdgeEngineConfig: () => ({ data: { config: { enabled: true } } }),
   useSetAdaptiveEdgeEngineConfig: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+vi.mock('../../../hooks/useSnapback', () => ({
+  useSnapbackConfig: () => ({ data: { config: { enabled: true } } }),
+  useUpdateSnapback: () => ({ mutate: vi.fn(), isPending: false }),
+  useSnapbackSnapshot: () => ({ data: undefined }),
+}));
+
 
 import { TradingModePanel } from '../TradingModePanel';
 import { useKiteSettings } from '../../../store/useKiteSettings';

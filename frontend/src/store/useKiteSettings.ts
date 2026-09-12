@@ -3,6 +3,38 @@ import { persist } from 'zustand/middleware';
 import type { KiteBrandIcon, KiteBrandIconSize } from '../utils/kiteBrandIcon';
 import type { NavItem } from '../components/kite/KiteLayout';
 
+/**
+ * The built-in tab order, and the fallback whenever the stored one is empty or
+ * does not mention an engine.
+ *
+ * Not imported from `boardTypes` on purpose: that module pulls in the board's
+ * render types, and the store is loaded by everything.
+ */
+export const ENGINE_ORDER: string[] = [
+  'supertrend', 'adaptive_edge', 'gamma_move', 'intraday', 'snapback',
+];
+
+/**
+ * Sort a list of engine ids by the operator's order.
+ *
+ * An engine absent from the preference sorts AFTER every one present, keeping
+ * its built-in position among the others — so a preference saved before an
+ * engine existed still works and the new engine appears at the end rather than
+ * disappearing.
+ */
+export function orderEngines<T extends { id: string }>(
+  tabs: readonly T[], order: readonly string[],
+): T[] {
+  const pref = order.length ? order : ENGINE_ORDER;
+  const rank = (id: string) => {
+    const i = pref.indexOf(id);
+    if (i >= 0) return i;
+    const j = ENGINE_ORDER.indexOf(id);
+    return pref.length + (j >= 0 ? j : ENGINE_ORDER.length);
+  };
+  return [...tabs].sort((a, b) => rank(a.id) - rank(b.id));
+}
+
 export type LoaderStyle = 'ubuntu' | 'mac' | 'material' | 'windows' | 'gnome' | 'kde' | 'minimal' | 'classic' | 'off';
 
 export type MotionStyle = Exclude<LoaderStyle, 'classic' | 'off'>;
@@ -122,6 +154,25 @@ export interface KiteSettingsState {
    */
   rescanStrategies: Record<string, boolean>;
   toggleRescanStrategy: (engine: string) => void;
+  /**
+   * Which signal board opens first, and the order the engine tabs sit in.
+   *
+   * Both are one preference about the same list, so they live together. The
+   * board used to hardcode `useState<EngineId>('supertrend')` and render the
+   * tabs in the order the array happened to be written in — so an operator who
+   * only trades one engine paid a click on every visit and read four tabs they
+   * do not use before reaching it.
+   *
+   * `engineOrder` is a partial list on purpose: an engine missing from it sorts
+   * after the ones present, in the built-in order. That way a preference saved
+   * before a new engine existed keeps working and the new engine simply appears
+   * at the end, rather than vanishing because it was not in the saved array.
+   */
+  defaultSignalEngine: string;
+  setDefaultSignalEngine: (engine: string) => void;
+  engineOrder: string[];
+  setEngineOrder: (order: string[]) => void;
+  moveEngine: (engine: string, delta: number) => void;
   toggleBoardCapability: (key: BoardCapabilityKey) => void;
   resetSignalTableSettings: () => void;
 }
@@ -133,6 +184,20 @@ export const useKiteSettings = create<KiteSettingsState>()(
     (set) => ({
       defaultSection: 'dashboard',
       setDefaultSection: (section) => set({ defaultSection: section }),
+      defaultSignalEngine: 'supertrend',
+      setDefaultSignalEngine: (engine) => set({ defaultSignalEngine: engine }),
+      engineOrder: [],
+      setEngineOrder: (order) => set({ engineOrder: [...order] }),
+      moveEngine: (engine, delta) => set((st) => {
+        const base = st.engineOrder.length ? [...st.engineOrder] : [...ENGINE_ORDER];
+        const from = base.indexOf(engine);
+        if (from < 0) return {};
+        const to = from + delta;
+        if (to < 0 || to >= base.length) return {};
+        const [item] = base.splice(from, 1);
+        base.splice(to, 0, item);
+        return { engineOrder: base };
+      }),
       loaderStyle: 'ubuntu',
       brandIcon: 'phoenix',
       brandIconSize: 'medium',

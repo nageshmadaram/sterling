@@ -620,3 +620,128 @@ async def intraday_history(sessions: int = 5,
     from app.services.intraday import recent_signals
     rows = recent_signals(uid, sessions=max(1, min(int(sessions), 30)))
     return {"sessions": sessions, "signals": rows, "count": len(rows)}
+
+
+# ------------------------------------------------------------------- Snapback
+
+def _snapback_uid(user: UserContext) -> str:
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="authenticated user is required")
+    return str(uid)
+
+
+@router.get("/snapback")
+async def get_snapback_config(user: UserContext = Depends(get_current_user)) -> dict:
+    """Current config, the engine's own defaults, and its vocabularies.
+
+    Published rather than mirrored in the client, for the same reason as every
+    other engine here: the recurring bug in this codebase is a UI that claims
+    backend behaviour the backend does not honour.
+
+    ``calibrated_fields`` is NOT empty for this engine, unlike the intraday
+    pack's. Six of its defaults came out of a measurement and the rest are
+    judgement calls, and the settings page needs to be able to tell a reader
+    which is which rather than rendering every number with the same authority.
+    """
+    from app.engines.snapback import (EXIT_MODES, SIZING_MODES, SnapbackConfig,
+                                      STOP_MODES, VRP_BAND, descriptor)
+    from app.engines.option_contracts import EXPIRY_SERIES, INDEX_NAMES, STOCK_NAMES
+    from app.services.snapback import get_config
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
+    cfg = get_config(uid)
+    return {
+        "strategy": {**descriptor(), "enabled": cfg.enabled},
+        "config": cfg.as_dict(),
+        "defaults": SnapbackConfig().as_dict(),
+        "vocabularies": {
+            "exit_mode": sorted(EXIT_MODES),
+            "sizing_mode": sorted(SIZING_MODES),
+            "stop_mode": sorted(STOP_MODES),
+            "expiry_series_indices": sorted(EXPIRY_SERIES),
+            "expiry_series_stocks": sorted(EXPIRY_SERIES),
+            "scan_indices": sorted(INDEX_NAMES),
+            "scan_stocks": sorted(STOCK_NAMES),
+        },
+        "vrp_band": list(VRP_BAND),
+        "warnings": cfg.warnings(),
+    }
+
+
+@router.put("/snapback")
+async def update_snapback_config(body: dict = Body(...),
+                                 user: UserContext = Depends(get_current_user)) -> dict:
+    """Apply a partial config change.
+
+    Unknown keys are refused rather than ignored: a silently dropped setting is
+    worse than a 422, because the UI has no way to tell that it did not take.
+    """
+    from app.services.snapback import set_config
+    uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
+    values = {k: v for k, v in dict(body).items() if v is not None}
+    if not values:
+        raise HTTPException(status_code=422, detail="no settings to change")
+    try:
+        cfg = set_config(values, uid)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"config": cfg.as_dict(), "warnings": cfg.warnings()}
+
+
+@router.get("/snapback/snapshot")
+async def snapback_snapshot(user: UserContext = Depends(get_current_user)) -> dict:
+    """Config, what the last scan found, and every reason nothing is armed."""
+    from app.services.snapback import snapshot
+    return snapshot(_snapback_uid(user))
+
+
+@router.post("/snapback/scan")
+async def snapback_scan(user: UserContext = Depends(get_current_user)) -> dict:
+    """Run one universe -> daily candles -> signals pass.
+
+    Worth running after the close and before the open, not every few minutes:
+    every rule in this engine is stated on a daily CLOSE, so nothing it watches
+    can change intraday.
+    """
+    from app.services.snapback import scan_once
+    try:
+        return await scan_once(_snapback_uid(user))
+    except Exception as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"Snapback scan failed: {exc}") from exc
+
+
+@router.get("/snapback/validation")
+async def snapback_validation(user: UserContext = Depends(get_current_user)) -> dict:
+    """What the walk-forward harness found, and what it therefore permits.
+
+    The record carries the checks that PASSED as well as the verdict. This
+    engine clears six of nine — including the entry-timing permutation that
+    every other strategy in this repo has failed, and the priced-edge check at a
+    break-even vol multiple of 2.01 against a market charging 1.15-1.30 — and
+    misses on two sample-size facts and a year-consistency bar. A bare "not
+    promoted" would read identically to a strategy whose entries lose money, and
+    those are not the same thing to an operator deciding whether to arm one by
+    hand.
+    """
+    from app.services.snapback_validation import auto_execution_blocker, load
+    return {"record": load(), "auto_execution_blocker": auto_execution_blocker(),
+            "how_to_measure": "python -m study.snapback_research --part gate --record"}
+
+
+@router.get("/snapback/history")
+async def snapback_history(sessions: int = 30,
+                           user: UserContext = Depends(get_current_user)) -> dict:
+    """What this engine fired over the last few weeks, from stored daily bars.
+
+    Works with the market closed, with no broker session, and before any live
+    scan has ever run. Every rule in this engine fires on ONE session and the
+    live scan only evaluates the last three — so without this the board is blank
+    almost always, and an operator cannot tell a quiet strategy from a broken
+    one. That is a bug this repo has already had to fix once, in the intraday
+    pack.
+    """
+    from app.services.snapback import recent_signals
+    rows = recent_signals(_snapback_uid(user),
+                          sessions=max(1, min(int(sessions), 180)))
+    return {"sessions": sessions, "signals": rows, "count": len(rows)}

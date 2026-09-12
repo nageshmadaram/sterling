@@ -38,13 +38,18 @@ vi.mock('../../../hooks/useIntraday', () => ({
   useIntradayConfig: () => ({ data: { config: { enabled: true } } }),
   useUpdateIntraday: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+vi.mock('../../../hooks/useSnapback', () => ({
+  useSnapbackConfig: () => ({ data: { config: { enabled: true } } }),
+  useUpdateSnapback: () => ({ mutate: vi.fn(), isPending: false }),
+  useSnapbackSnapshot: () => ({ data: undefined }),
+}));
 vi.mock('../TradingModeControls', () => ({ TradingModeControls: () => <div>mode controls</div> }));
 
 import { TradingModePanel } from '../TradingModePanel';
 
 const ENGINES = [
   'SuperTrend engine', 'Value-Flow Navigator',
-  'Gamma Move', 'Adaptive Edge', 'Intraday pack',
+  'Gamma Move', 'Adaptive Edge', 'Intraday pack', 'Snapback',
 ];
 
 /**

@@ -61,6 +61,15 @@ vi.mock('../KiteTelegramPanel', () => ({
   BrandIconPicker: () => <div>Icon picker</div>,
 }));
 vi.mock('../MotionStyleSettings', () => ({ MotionStyleSettings: () => <div>Motion style choices</div> }));
+// Experience now carries the signal-board order card, which asks every engine
+// whether it is running. This test is about the RAIL, not about engine state.
+vi.mock('../../../hooks/useEngineToggles', () => ({
+  useEngineEnabled: () => ({
+    supertrend: true, navigator: true, gamma_move: true,
+    adaptive_edge: true, intraday: true, snapback: true,
+  }),
+  useEngineToggles: () => [],
+}));
 vi.mock('../KiteExchangeSettingsCard', () => ({ KiteExchangeSettingsCard: () => <div>Exchange choices</div> }));
 vi.mock('../DailyLossLimitPanel', () => ({ DailyLossLimitPanel: () => <div>Daily loss limit</div> }));
 vi.mock('../AdaptiveEdgeSettingsPanel', () => ({ AdaptiveEdgeSettingsPanel: () => <div>Adaptive Edge settings panel</div> }));

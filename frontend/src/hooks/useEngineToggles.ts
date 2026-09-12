@@ -3,9 +3,11 @@ import { useNavigatorConfig, useSetNavigatorConfig } from './useNavigator';
 import { useGammaMoveConfig, useUpdateGammaMove } from './useGammaMove';
 import { useAdaptiveEdgeEngineConfig, useSetAdaptiveEdgeEngineConfig } from './useAdaptiveEdge';
 import { useIntradayConfig, useUpdateIntraday } from './useIntraday';
+import { useSnapbackConfig, useUpdateSnapback } from './useSnapback';
 
 export type EngineToggleId =
-  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge' | 'intraday';
+  | 'supertrend' | 'navigator' | 'gamma_move' | 'adaptive_edge' | 'intraday'
+  | 'snapback';
 
 export interface EngineToggle {
   id: EngineToggleId;
@@ -22,6 +24,7 @@ export function useEngineEnabled(): Record<EngineToggleId, boolean> {
   const gm = useGammaMoveConfig();
   const ae = useAdaptiveEdgeEngineConfig();
   const id = useIntradayConfig();
+  const sb = useSnapbackConfig();
 
   return {
     supertrend: st.data?.engine_enabled !== false,
@@ -29,6 +32,10 @@ export function useEngineEnabled(): Record<EngineToggleId, boolean> {
     gamma_move: (gm.data?.config as { enabled?: boolean } | undefined)?.enabled !== false,
     adaptive_edge: (ae.data?.config as { enabled?: boolean } | undefined)?.enabled !== false,
     intraday: id.data?.config?.enabled !== false,
+    // Defaults OFF, unlike every other engine here. Snapback has not cleared
+    // the walk-forward gate, so an operator turns it on deliberately rather
+    // than finding it already scanning.
+    snapback: sb.data?.config?.enabled === true,
   };
 }
 
@@ -49,12 +56,16 @@ export function useEngineToggles(): EngineToggle[] {
   const idCfg = useIntradayConfig();
   const idSet = useUpdateIntraday();
 
+  const sbCfg = useSnapbackConfig();
+  const sbSet = useUpdateSnapback();
+
   const stOn = on.supertrend;
   const navRecord = nav.data?.record;
   const navOn = on.navigator;
   const gmOn = on.gamma_move;
   const aeOn = on.adaptive_edge;
   const idOn = on.intraday;
+  const sbOn = on.snapback;
 
   return [
     {
@@ -111,6 +122,17 @@ export function useEngineToggles(): EngineToggle[] {
       description: idOn
         ? 'Pivot Break, MA Ribbon and VWAP SuperTrend on 5-minute candles. Signals only.'
         : 'Off — none of the three intraday strategies scans or signals.',
+    },
+    {
+      id: 'snapback',
+      label: 'Snapback',
+      enabled: sbOn,
+      pending: sbSet.isPending,
+      toggle: sbCfg.data ? () => sbSet.mutate({ enabled: !sbOn }) : null,
+      description: sbOn
+        ? 'Buys puts into a stretched 20-session breakout, on daily bars. '
+          + 'Signals only — it has not cleared the walk-forward gate.'
+        : 'Off — no daily scan and no Snapback signals.',
     },
   ];
 }

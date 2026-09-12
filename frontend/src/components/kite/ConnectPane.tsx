@@ -22,6 +22,8 @@ import { NavigatorSettingsPanel } from './NavigatorSettingsPanel';
 import { NavigatorCalibrationPanel } from './NavigatorCalibrationPanel';
 import { DataLakeSettingsPanel } from '../datalake/DataLakeSettingsPanel';
 import { GammaMoveSettingsPanel } from './GammaMoveSettingsPanel';
+import { SnapbackSettings } from '../SnapbackSettings';
+import { SignalEngineOrderSettings } from './SignalEngineOrderSettings';
 import { IntradaySettings } from '../IntradaySettings';
 import { AdaptiveEdgeSettingsPanel } from './AdaptiveEdgeSettingsPanel';
 import { AutomaticRulesPanel, ManualRulesPanel } from './TradeRulesPanels';
@@ -851,6 +853,7 @@ const SECTION_ICONS: Record<ConnectSection, React.ReactNode> = {
   adaptiveEdge: <Icons.Chart />,
   gammaMove: <Icons.Pulse />,
   intraday: <Icons.Chart />,
+  snapback: <Icons.Chart />,
   markets: <Icons.Basket />,
   notifications: <Icons.Bell />,
   experience: <Icons.Settings />,
@@ -880,6 +883,8 @@ const SECTION_DEFS: (SectionDef & { pageDescription: string })[] = [
     pageDescription: 'Buys the option that writers are covering: an F&O stock at a support or resistance level, the highest open-interest strike there, entered when open interest falls while volume and premium rise on the same 15-minute bar. Held one to two sessions. Calibrated against real market data, which found the entry trigger alone has no edge — the level filter is where it is — so it stays paper-only until the readiness gate passes.' },
   { id: 'intraday', label: 'Intraday Pack', eyebrow: 'Pivot break, MA ribbon, VWAP SuperTrend', group: 'Signal engines',
     pageDescription: 'Three 5-minute option strategies on one tape. A strong candle closing through EMA9 and a Fibonacci pivot; the 55 EMA crossing the whole 8/13/21 ribbon (never one line of it); and a SuperTrend(18, 1.46) flip confirmed by which side of session VWAP the candle closed. None has been through the walk-forward harness, so every threshold is a judgement call and auto-execution is off.' },
+  { id: 'snapback', label: 'Snapback', eyebrow: 'Fade a stretched breakout, on daily bars', group: 'Signal engines',
+    pageDescription: 'Buys the put when an instrument closes through its 20-session high while sitting at least 1.5 ATR above its own mean, hedges the market out of it with an index future, and holds it fifteen sessions — longer while the trade is already worth 1.5x what it cost, because the edge is a right tail and a session count closes the trades that pay for the rest. It is the opposite of a breakout trade, and that is the measurement rather than a preference: buying CALLS on the same breakout returns about -13% a trade, which is worse than a free option can account for. Out of sample it clears six of the nine gate checks — including the entry-timing permutation every other strategy here has failed — and misses on two facts about sample size and a year-consistency bar, so automatic execution stays off.' },
   { id: 'markets', label: 'Markets & Tools', eyebrow: 'Funds & live data', group: 'Platform',
     pageDescription: 'Exchanges, funds, charges and live ticker tools.' },
   { id: 'notifications', label: 'Notifications', eyebrow: 'Kite Telegram alerts', group: 'Platform',
@@ -1149,6 +1154,12 @@ export function ConnectPane() {
               </>
             )}
 
+            {section === 'snapback' && (
+              <>
+                <SnapbackSettings />
+              </>
+            )}
+
             {section === 'markets' && (
               <>
                 {liveTools ? (
@@ -1177,6 +1188,7 @@ export function ConnectPane() {
             {section === 'experience' && (
               <>
                 <DefaultSectionSettings />
+                <SignalEngineOrderSettings />
                 <DisplayScaleSettings />
                 <MotionStyleSettings />
                 <TickerStripSettings />

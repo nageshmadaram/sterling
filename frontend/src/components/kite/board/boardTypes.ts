@@ -18,7 +18,8 @@
 import type { Stat } from './StatCard';
 
 export type EngineId =
-  | 'supertrend' | 'navigator' | 'adaptive_edge' | 'gamma_move' | 'intraday';
+  | 'supertrend' | 'navigator' | 'adaptive_edge' | 'gamma_move' | 'intraday'
+  | 'snapback';
 
 export const ENGINE_LABEL: Record<EngineId, string> = {
   supertrend: 'SuperTrend',
@@ -29,6 +30,10 @@ export const ENGINE_LABEL: Record<EngineId, string> = {
   // contract picker and differ only in what makes them fire, so three tabs
   // would be three copies of the same board — the row says which fired.
   intraday: 'Intraday',
+  // The only engine here that reads DAILY bars. Its rows change once a session
+  // and not once a tick, which is why its board leads with the measurement
+  // rather than with a live premium.
+  snapback: 'Snapback',
 };
 
 /** Short form for a badge, where the full name will not fit. */
@@ -38,6 +43,7 @@ export const ENGINE_TAG: Record<EngineId, string> = {
   adaptive_edge: 'AE',
   gamma_move: 'GM',
   intraday: 'ID',
+  snapback: 'SB',
 };
 
 /**
