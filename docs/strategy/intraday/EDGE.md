@@ -164,6 +164,28 @@ Until then auto-execution stays gated and the board says why.
 says: 3 of 9 symbols profitable and a 63R drawdown mean one or two instruments
 carried it.
 
+## Nine ideas, three years, nine instruments
+
+| idea | mechanism | result |
+|---|---|---|
+| Remove the rule exits | they averaged −0.6R | **worse** — they cut trades that lost more |
+| 15m, 30m timeframes | fewer, larger trades | worse at every step |
+| Fixed-time exits (60/120 min) | match the measured horizon | no better |
+| Widen the stop 2×/4×/8× | stop was 2–4× the edge | no better |
+| Remove the stop entirely | — | positive gross, negative net |
+| Hold past the session close | the edge is a 2-hour move | best in-sample, **overfitting** |
+| Afternoon-only entries | +21.7 bp vs +5.6 elsewhere | best in-sample, **overfitting** |
+| Select the universe in-sample | only 6/9 symbols work | worse (PF 1.25 → 1.08) |
+| Volatility floor on ATR | cost is fixed bp, edge scales | **rejected by 5 of 5 folds** |
+
+Three-year walk-forward, nine symbols, 55,413 bars each:
+
+```
+pivot_break       OOS 1477 trades  PF 0.66  net   -725,514  Sharpe -2.27
+ma_ribbon         OOS  203 trades  PF 0.86  net    -31,959  Sharpe -0.26
+vwap_supertrend   OOS  638 trades  PF 0.93  net   -385,548  Sharpe -2.10
+```
+
 ## The honest state
 
 The signal is real and too small. The gap is not a threshold that needs tuning;

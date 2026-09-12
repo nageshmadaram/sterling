@@ -495,3 +495,39 @@ class TestContractNaming:
                              scan_stocks=("NIFTY 50", "RELIANCE")).canonical().validate()
         assert cfg.scan_indices == ("NIFTY",)
         assert cfg.scan_stocks == ("RELIANCE",)
+
+
+def test_the_volatility_floor_exists_and_is_off():
+    """Tested and REJECTED. The mechanism is sound — a round trip costs a fixed
+    ~2.3 bp whatever the instrument is doing, so a signal on something moving
+    8 bp a bar is being asked to find its edge inside the spread — but a
+    walk-forward over 2023-09..2025-12 chose `off` in 5 of 5 folds for all
+    three strategies. It does not help even in-sample.
+
+    Kept as a knob because a negative result is worth being able to reproduce,
+    and defaulted off because that is what the measurement says.
+    """
+    from app.engines.intraday import IntradayConfig
+    assert IntradayConfig().min_atr_bp == 0.0
+
+
+def test_a_quiet_instrument_is_refused_when_the_floor_is_on():
+    from app.engines.intraday import IntradayConfig
+    from app.engines.intraday.strategies import too_quiet
+    calm = to_bars(session("2026-09-10", [100.0 + (i % 3) * 0.01
+                                          for i in range(200)], spread=0.005))
+    why = too_quiet(calm, IntradayConfig(min_atr_bp=30.0).validate())
+    assert why and "too quiet to pay for the round trip" in why
+    # And off means off.
+    assert too_quiet(calm, IntradayConfig(min_atr_bp=0.0).validate()) is None
+
+
+def test_the_floor_blocks_every_strategy_at_once_not_one_of_them():
+    """It is a property of the INSTRUMENT, not of a rule."""
+    from app.engines.intraday import IntradayConfig, evaluate_all
+    calm = to_bars(session("2026-09-10", [100.0 + (i % 3) * 0.01
+                                          for i in range(200)], spread=0.005))
+    evs = evaluate_all(calm, IntradayConfig(min_atr_bp=30.0, warmup_bars=70).validate(),
+                       "X")
+    assert evs and all(e.signal is None for e in evs)
+    assert all("too quiet" in " ".join(e.blockers) for e in evs)

@@ -74,6 +74,13 @@ class IntradayConfig:
     scan_indices: tuple[str, ...] = _INDEX_DEFAULTS
     scan_stocks: tuple[str, ...] = _STOCK_DEFAULTS
     scan_all_stocks: bool = False
+    #: Refuse a signal whose instrument is too quiet to pay for the trade.
+    #:
+    #: ATR at signal time, in basis points of price. The mechanism is
+    #: arithmetic rather than a pattern: a round trip costs about 2.3 bp
+    #: whatever the instrument is doing, so a signal on something moving 8 bp a
+    #: bar is being asked to find its edge inside the spread. 0 = off.
+    min_atr_bp: float = 0.0
     #: Bars of history before any strategy may fire. The slowest input is the
     #: 55 EMA, which is not merely undefined before bar 55 — it is *wrong*, and
     #: a seeded EMA reads plausible while it is still wrong. 80 gives it room.
@@ -412,6 +419,8 @@ class IntradayConfig:
             raise ValueError("vs_max_stop_points must exceed vs_min_stop_points, both > 0")
         if not (0.0 <= self.pb_min_body_pct <= 100.0):
             raise ValueError("pb_min_body_pct must be a percentage in [0, 100]")
+        if self.min_atr_bp < 0:
+            raise ValueError("min_atr_bp must be >= 0 (0 = off)")
         for name in ("pb_min_body_atr", "pb_break_buffer_atr", "pb_trail_atr_mult",
                      "rb_min_spread_pct", "rb_stop_atr_mult", "vs_trail_after_points",
                      "min_option_premium", "max_spread_pct", "min_option_oi",

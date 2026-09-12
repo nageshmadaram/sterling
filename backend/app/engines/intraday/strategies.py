@@ -550,6 +550,28 @@ EVALUATORS: dict[str, Callable[[Bars, IntradayConfig, str], Evaluation]] = {
 }
 
 
+def too_quiet(bars: Bars, cfg: IntradayConfig) -> Optional[str]:
+    """Whether this instrument is moving enough for a trade to pay for itself.
+
+    A round trip costs roughly a fixed number of basis points whatever the
+    instrument is doing, so a signal on something moving 8 bp a bar is being
+    asked to find its edge inside the spread. This is arithmetic, not a
+    pattern — which is the only reason it is worth applying across instruments
+    that have nothing else in common.
+    """
+    if cfg.min_atr_bp <= 0 or len(bars) < cfg.pb_atr_length + 2:
+        return None
+    atr = compute_atr(bars.high, bars.low, bars.close, cfg.pb_atr_length)
+    px = float(bars.close[-1])
+    if px <= 0 or not np.isfinite(atr[-1]):
+        return None
+    bp = float(atr[-1]) / px * 10_000.0
+    if bp < cfg.min_atr_bp:
+        return (f"ATR {bp:.1f} bp < {cfg.min_atr_bp:.0f} — too quiet to pay "
+                "for the round trip")
+    return None
+
+
 def evaluate_all(bars: Bars, cfg: IntradayConfig, symbol: str,
                  strategies: Optional[tuple[str, ...]] = None) -> list[Evaluation]:
     """Run every enabled strategy over one symbol's tape.
@@ -559,8 +581,12 @@ def evaluate_all(bars: Bars, cfg: IntradayConfig, symbol: str,
     than taking the whole scan down with it.
     """
     wanted = strategies if strategies is not None else cfg.enabled_strategies()
+    quiet = too_quiet(bars, cfg)
     out: list[Evaluation] = []
     for key in wanted:
+        if quiet:
+            out.append(Evaluation(key, symbol, None, (quiet,), {}))
+            continue
         fn = EVALUATORS.get(key)
         if fn is None:
             continue
