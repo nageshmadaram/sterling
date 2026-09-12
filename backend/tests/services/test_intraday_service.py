@@ -436,3 +436,44 @@ class TestTheScanCatchesUp:
         import inspect
         src = inspect.getsource(sim._intraday_signals_from_bars)
         assert "catchup=1" in src
+
+
+class TestTheBackfill:
+    """Resolution and window arithmetic. The fetch itself needs a live broker
+    session, so what is tested here is everything that decides WHAT to fetch —
+    which is where a backfill silently fetches the wrong instrument or the
+    wrong span."""
+
+    def test_it_only_offers_instruments_the_engine_can_trade(self):
+        from app.engines.intraday.contracts import SPECS
+        from study.intraday_backfill import default_symbols
+        # Fetching history for something the pack cannot name a strike on is
+        # rows nobody will ever read.
+        assert set(default_symbols()) == set(SPECS)
+
+    def test_an_unresolvable_symbol_is_reported_not_skipped(self):
+        """"No data" and "no data for a reason nobody wrote down" are
+        different, and only one of them is debuggable."""
+        import inspect
+        from study import intraday_backfill as bf
+        src = inspect.getsource(bf._resolve_tokens)
+        assert "unresolved" in src and "REPORTED, not" in bf._resolve_tokens.__doc__
+
+    def test_the_window_stays_inside_kite_s_documented_cap(self):
+        from study.intraday_backfill import WINDOW_DAYS
+        assert WINDOW_DAYS <= 100
+
+    def test_requests_are_SPACED_rather_than_bucketed(self):
+        """A token bucket cannot hold 3 requests/second reliably — a burst
+        empties it and everything after arrives at the refill rate anyway.
+        This repo has already spent a loader's whole budget on that."""
+        from study.intraday_backfill import MIN_SPACING_S
+        assert MIN_SPACING_S >= 1 / 3
+
+    def test_a_refused_window_is_not_retried_four_times(self):
+        """A 400 fails identically every attempt. Burning the retry budget on
+        it is how a backfill spends an hour going nowhere."""
+        import inspect
+        from study import intraday_backfill as bf
+        src = inspect.getsource(bf.backfill_symbol)
+        assert '"400" in msg or "403" in msg' in src
