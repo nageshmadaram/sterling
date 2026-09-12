@@ -155,6 +155,62 @@ class WalkForwardReport:
 
 
 @dataclass
+class Holdout:
+    """One test of a finished configuration on data the search never touched.
+
+    Not a fold and not a window — a single shot, run once, after everything
+    else is decided. The walk-forward's out-of-sample windows are still part of
+    the SEARCH: a configuration chosen because it looked good across folds has
+    been fitted to those folds, and the deflated Sharpe exists precisely
+    because that fitting is invisible from inside.
+
+    This is the only measurement here that cannot be gamed by trying again,
+    which is also the reason to run it last and exactly once. Running it twice
+    makes it a second search.
+    """
+
+    label: str
+    summary: Summary
+    permutation_p: Optional[float]
+    symbols_positive: int
+    symbols: int
+
+    def as_dict(self) -> dict:
+        return {"label": self.label, "summary": self.summary.as_dict(),
+                "permutation_p": self.permutation_p,
+                "symbols_positive": self.symbols_positive,
+                "symbols": self.symbols}
+
+
+def holdout_test(tapes: dict, strategy: str, cfg: IntradayConfig, *,
+                 label: str, costs: Optional[CostModel] = None,
+                 lot_sizes: Optional[dict[str, int]] = None,
+                 capital: float = 100_000.0, qty: int = 1) -> Optional[Holdout]:
+    """Replay one finished configuration over a period, once.
+
+    ``None`` when the period holds nothing to trade, which is an answer rather
+    than a zero.
+    """
+    costs = costs or CostModel()
+    trades: list[BacktestTrade] = []
+    per_symbol: dict[str, float] = {}
+    for sym, rows in tapes.items():
+        got = replay(list(rows), cfg, sym, strategy, costs=costs,
+                     qty=(lot_sizes or {}).get(sym, qty), capital=capital).trades
+        trades.extend(got)
+    book = apply_portfolio_limits(trades, cfg)
+    if not book:
+        return None
+    for t in book:
+        per_symbol[t.symbol] = per_symbol.get(t.symbol, 0.0) + t.net
+    bars = {s: to_bars(list(r)) for s, r in tapes.items()}
+    return Holdout(label=label, summary=summarise(book, capital),
+                   permutation_p=permutation_p_value(book, bars, costs=costs),
+                   symbols_positive=sum(1 for v in per_symbol.values() if v > 0),
+                   symbols=len(per_symbol))
+
+
+@dataclass
 class Verdict:
     """Whether this strategy has earned live execution, and what is missing."""
     promoted: bool

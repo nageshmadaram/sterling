@@ -123,6 +123,32 @@ than a property of the instrument. Trade the whole eligible universe.
 All three are profitable out of sample. `ma_ribbon` passes six of the seven
 gates.
 
+### And then three years of data arrived, and it was overfitting
+
+The afternoon window was derived from 2026 data. Backfilling 2023-09 to 2025-12
+gave 2.3 years the search had never touched. The same configuration, unchanged:
+
+| | out-of-period (never searched) | 2026 (searched) |
+|---|---|---|
+| `ma_ribbon` | PF **0.862**, −233,503 | PF 1.444, +251,072 |
+| `vwap_supertrend` | PF 0.965, −54,567 | PF 1.236, +153,719 |
+| `pivot_break` | PF **0.694**, **−1,508,108** | PF 1.241, +395,267 |
+
+A complete reversal. That gap **is** the overfitting, and the deflated Sharpe
+called it before the data existed: 0.350 against a 0.5 bar, saying a search this
+size could produce this result by luck. It was right.
+
+The afternoon configuration is still what ships, because on the same
+out-of-period data it is strictly better than the original specification —
+
+| | afternoon spec | as originally specified |
+|---|---|---|
+| `ma_ribbon` | PF 0.862, −33R drawdown | PF 0.775, −270R |
+| `vwap_supertrend` | PF 0.965, −14R | PF 0.734, −385R |
+| `pivot_break` | PF 0.694, −298R | PF 0.524, −182R |
+
+— but better is not the same as good. Every one of these loses money.
+
 ### Why none is PROMOTED
 
 The deflated Sharpe. `ma_ribbon` scores 0.350 against a 0.5 bar, and that is

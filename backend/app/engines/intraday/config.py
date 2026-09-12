@@ -91,6 +91,22 @@ class IntradayConfig:
     #: 13:30 runs into and past the close, so the return being captured
     #: includes the overnight gap. That is real money and a different RISK from
     #: the intraday one these rules were written for.
+    #:
+    #: AND IT DOES NOT MAKE MONEY. Tested on 2023-09 to 2025-12 — 2.3 years
+    #: this window was never fitted to — all three strategies LOSE:
+    #:
+    #:   ma_ribbon        PF 0.862   net   -233,503
+    #:   vwap_supertrend  PF 0.965   net    -54,567
+    #:   pivot_break      PF 0.694   net -1,508,108
+    #:
+    #: On the 2026 data the window was chosen from, the same configuration
+    #: returns PF 1.44 / 1.24 / 1.24. That gap IS the overfitting, and the
+    #: deflated Sharpe called it before the data arrived: it scored 0.350
+    #: against a 0.5 bar and said a search this size could produce this by luck.
+    #:
+    #: It is still the shipped default because it is strictly better than the
+    #: original specification on the same out-of-period data — PF 0.862 vs
+    #: 0.775, and a 33R drawdown against 270R. Better is not the same as good.
     session_start: str = "13:30"
     #: No NEW entry after this. Exits are never gated by it.
     no_entry_after: str = "14:55"

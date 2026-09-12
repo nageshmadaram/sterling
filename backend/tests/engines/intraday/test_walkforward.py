@@ -387,3 +387,56 @@ def test_turning_targets_on_restores_the_original_exits():
     # cannot half-apply.
     assert "cfg.use_targets and should_scale_out" in src
     assert "0.0 if not cfg.use_targets else" in src
+
+
+class TestTheHoldout:
+    """The only measurement in this harness that cannot be gamed by trying again.
+
+    The walk-forward's out-of-sample windows are still part of the SEARCH: a
+    configuration chosen because it looked good across folds has been fitted to
+    those folds, and the fitting is invisible from inside. A period the search
+    never touched is the only thing that settles it — which is why it runs last
+    and exactly once, and why running it twice makes it a second search.
+
+    It earned its place: the afternoon configuration returned PF 1.44 on the
+    data it was derived from and PF 0.86 on 2.3 years it had never seen.
+    """
+
+    def _tape(self, seed, n=1400):
+        rng = np.random.default_rng(seed)
+        px = 23000 * np.exp(np.cumsum(rng.normal(0, 0.0011, n)))
+        base = tape([100.0] * n)
+        return [{"time": b["time"], "open": px[i - 1] if i else px[0],
+                 "close": px[i], "high": max(px[i - 1] if i else px[0], px[i]) + 2,
+                 "low": min(px[i - 1] if i else px[0], px[i]) - 2, "volume": 1000.0}
+                for i, b in enumerate(base)]
+
+    def test_it_reports_a_book_the_search_never_saw(self):
+        from app.engines.intraday.walkforward import holdout_test
+        tapes = {"A": self._tape(1), "B": self._tape(2)}
+        got = holdout_test(tapes, "ma_ribbon", cfg(), label="2023-2025",
+                           costs=CostModel(slippage_pct=0.0),
+                           lot_sizes={"A": 75, "B": 75})
+        if got is None:
+            pytest.skip("this tape produced no trades")
+        assert got.label == "2023-2025"
+        assert got.summary.trades > 0
+        assert got.symbols == 2
+
+    def test_a_period_with_nothing_to_trade_says_so_rather_than_scoring_zero(self):
+        from app.engines.intraday.walkforward import holdout_test
+        assert holdout_test({"A": tape([100.0] * 300)}, "ma_ribbon", cfg(),
+                            label="empty") is None
+
+    def test_it_honours_the_portfolio_cap_like_every_other_measurement(self):
+        from app.engines.intraday.walkforward import holdout_test
+        tapes = {f"S{i}": self._tape(i) for i in range(4)}
+        one = holdout_test(tapes, "ma_ribbon",
+                           cfg(max_concurrent_positions=1), label="capped",
+                           costs=CostModel(slippage_pct=0.0))
+        many = holdout_test(tapes, "ma_ribbon",
+                            cfg(max_concurrent_positions=4), label="open",
+                            costs=CostModel(slippage_pct=0.0))
+        if one is None or many is None:
+            pytest.skip("this tape produced no trades")
+        assert one.summary.trades <= many.summary.trades
