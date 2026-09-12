@@ -1,0 +1,1002 @@
+{
+  "folds": [
+    {
+      "fold": 0,
+      "in_sample": [
+        "2023-09-13",
+        "2024-07-10"
+      ],
+      "out_of_sample": [
+        "2024-08-01",
+        "2024-10-25~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h10_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.08634,
+        "s1.0_h5_d0.7": 0.0602,
+        "s1.0_h10_d0.55": 0.01637,
+        "s1.0_h10_d0.7": 0.09927,
+        "s1.5_h5_d0.55": 0.04268,
+        "s1.5_h5_d0.7": 0.03844,
+        "s1.5_h10_d0.55": 0.02369,
+        "s1.5_h10_d0.7": 0.09774,
+        "s2.0_h5_d0.55": 0.05713,
+        "s2.0_h5_d0.7": 0.03974,
+        "s2.0_h10_d0.55": -0.04511,
+        "s2.0_h10_d0.7": -0.03079
+      },
+      "oos_selected": {
+        "trades": 29,
+        "n_days": 15,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 10.732,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 31.03,
+        "net": 134737.4,
+        "gross": 139287.13,
+        "costs": 4549.73,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -11.02,
+        "total_return_pct": 5.21,
+        "per_year_pct": {
+          "2024": 9.49
+        },
+        "per_symbol_net": {
+          "NIFTY": -11570.92,
+          "ADANIENT": 3111.0,
+          "ADANIPORTS": 58400.01,
+          "TCS": -5579.31,
+          "BAJAJFINSV": -72276.5,
+          "INFY": 2885.4,
+          "BHARTIARTL": -24053.24,
+          "SENSEX": -20387.29,
+          "BAJFINANCE": -15318.93,
+          "FINNIFTY": 60150.97,
+          "BANKNIFTY": 73885.89,
+          "ICICIBANK": -11076.11,
+          "AXISBANK": 35607.04,
+          "KOTAKBANK": -1977.83,
+          "HDFCBANK": -3862.67,
+          "LT": 41829.6,
+          "SBIN": 24970.29
+        }
+      },
+      "oos_fixed": {
+        "trades": 27,
+        "n_days": 16,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 10.342,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 29.63,
+        "net": 115965.91,
+        "gross": 120227.05,
+        "costs": 4261.14,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -10.38,
+        "total_return_pct": 4.2,
+        "per_year_pct": {
+          "2024": 8.19
+        },
+        "per_symbol_net": {
+          "NIFTY": -11570.92,
+          "ADANIENT": 18590.86,
+          "ADANIPORTS": 58400.01,
+          "TCS": -5579.31,
+          "BAJAJFINSV": -72276.5,
+          "INFY": 2885.4,
+          "BHARTIARTL": -24053.24,
+          "SENSEX": -20387.29,
+          "BAJFINANCE": -15318.93,
+          "FINNIFTY": 60150.97,
+          "ICICIBANK": -11076.11,
+          "AXISBANK": 34373.27,
+          "BANKNIFTY": 66137.47,
+          "HDFCBANK": -3862.67,
+          "KOTAKBANK": -2276.7,
+          "LT": 41829.6
+        }
+      }
+    },
+    {
+      "fold": 1,
+      "in_sample": [
+        "2023-12-13",
+        "2024-10-07"
+      ],
+      "out_of_sample": [
+        "2024-10-28",
+        "2025-01-23~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.12948,
+        "s1.0_h5_d0.7": 0.08848,
+        "s1.0_h10_d0.55": 0.07056,
+        "s1.0_h10_d0.7": 0.09955,
+        "s1.5_h5_d0.55": 0.11156,
+        "s1.5_h5_d0.7": 0.0766,
+        "s1.5_h10_d0.55": 0.11752,
+        "s1.5_h10_d0.7": 0.11489,
+        "s2.0_h5_d0.55": 0.08015,
+        "s2.0_h5_d0.7": 0.04974,
+        "s2.0_h10_d0.55": -0.0208,
+        "s2.0_h10_d0.7": -0.03381
+      },
+      "oos_selected": {
+        "trades": 26,
+        "n_days": 13,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 16.761,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 53.85,
+        "net": 89283.53,
+        "gross": 92696.41,
+        "costs": 3412.88,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -2.46,
+        "total_return_pct": 6.38,
+        "per_year_pct": {
+          "2024": 9.13,
+          "2025": 22.51
+        },
+        "per_symbol_net": {
+          "ICICIBANK": -5079.47,
+          "SBIN": -8237.77,
+          "LT": -12219.2,
+          "TCS": -223.09,
+          "INFY": 4801.82,
+          "SENSEX": -7997.05,
+          "BANKNIFTY": -3076.33,
+          "FINNIFTY": 51560.65,
+          "HDFCBANK": -1460.08,
+          "NIFTY": 5532.86,
+          "BAJFINANCE": 3476.18,
+          "BHARTIARTL": 26866.72,
+          "ADANIENT": 15877.05,
+          "KOTAKBANK": 3904.04,
+          "BAJAJFINSV": -2277.62,
+          "RELIANCE": 17834.82
+        }
+      },
+      "oos_fixed": {
+        "trades": 20,
+        "n_days": 9,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 22.636,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 75.0,
+        "net": 239780.61,
+        "gross": 243501.18,
+        "costs": 3720.57,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.42,
+        "total_return_pct": 9.53,
+        "per_year_pct": {
+          "2024": 26.81,
+          "2025": 14.46
+        },
+        "per_symbol_net": {
+          "ICICIBANK": 63498.39,
+          "SBIN": -401.06,
+          "TCS": -21735.77,
+          "LT": -20666.27,
+          "BANKNIFTY": 24212.15,
+          "FINNIFTY": 15733.94,
+          "HDFCBANK": 8587.88,
+          "NIFTY": 43994.06,
+          "SENSEX": 40520.32,
+          "INFY": 17634.4,
+          "BAJFINANCE": 21645.68,
+          "BHARTIARTL": 31573.18,
+          "KOTAKBANK": 3722.96,
+          "BAJAJFINSV": -5840.97,
+          "RELIANCE": 17301.72
+        }
+      }
+    },
+    {
+      "fold": 2,
+      "in_sample": [
+        "2024-03-11",
+        "2025-01-03"
+      ],
+      "out_of_sample": [
+        "2025-01-24",
+        "2025-04-24~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.17459,
+        "s1.0_h5_d0.7": 0.12645,
+        "s1.0_h10_d0.55": 0.07995,
+        "s1.0_h10_d0.7": 0.10707,
+        "s1.5_h5_d0.55": 0.14948,
+        "s1.5_h5_d0.7": 0.09703,
+        "s1.5_h10_d0.55": 0.11546,
+        "s1.5_h10_d0.7": 0.11651,
+        "s2.0_h5_d0.55": 0.13185,
+        "s2.0_h5_d0.7": 0.09018,
+        "s2.0_h10_d0.55": 0.078,
+        "s2.0_h10_d0.7": 0.02568
+      },
+      "oos_selected": {
+        "trades": 42,
+        "n_days": 19,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.87,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 35.71,
+        "net": -69406.12,
+        "gross": -64022.29,
+        "costs": 5383.83,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -9.15,
+        "total_return_pct": -5.68,
+        "per_year_pct": {
+          "2025": -6.68
+        },
+        "per_symbol_net": {
+          "BAJFINANCE": -4158.34,
+          "BAJAJFINSV": 18922.61,
+          "FINNIFTY": 15942.58,
+          "SENSEX": 15744.19,
+          "BANKNIFTY": -18409.89,
+          "HDFCBANK": -10030.96,
+          "BHARTIARTL": -18310.79,
+          "KOTAKBANK": -2078.01,
+          "ICICIBANK": 18115.18,
+          "ADANIENT": 9817.66,
+          "SBIN": -18477.93,
+          "ADANIPORTS": -20533.98,
+          "NIFTY": -18242.85,
+          "RELIANCE": -8739.81,
+          "LT": -6481.68,
+          "AXISBANK": -22484.1
+        }
+      },
+      "oos_fixed": {
+        "trades": 37,
+        "n_days": 18,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -0.54,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 37.84,
+        "net": 67877.0,
+        "gross": 74530.59,
+        "costs": 6653.59,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -6.29,
+        "total_return_pct": 4.31,
+        "per_year_pct": {
+          "2025": 6.89
+        },
+        "per_symbol_net": {
+          "BAJFINANCE": 3962.24,
+          "BAJAJFINSV": -1834.43,
+          "HDFCBANK": -7921.87,
+          "KOTAKBANK": -4056.04,
+          "BHARTIARTL": 13682.8,
+          "TATASTEEL": -27395.11,
+          "ICICIBANK": 30964.9,
+          "FINNIFTY": -54783.2,
+          "BANKNIFTY": -50000.28,
+          "NIFTY": -26582.88,
+          "SENSEX": 68033.63,
+          "RELIANCE": 51638.76,
+          "SBIN": -17062.91,
+          "AXISBANK": -34287.61,
+          "LT": 47604.25,
+          "ADANIENT": 33788.11,
+          "ADANIPORTS": 42126.64
+        }
+      }
+    },
+    {
+      "fold": 3,
+      "in_sample": [
+        "2024-06-11",
+        "2025-04-01"
+      ],
+      "out_of_sample": [
+        "2025-04-25",
+        "2025-07-18~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.13436,
+        "s1.0_h5_d0.7": 0.09493,
+        "s1.0_h10_d0.55": 0.12028,
+        "s1.0_h10_d0.7": 0.07436,
+        "s1.5_h5_d0.55": 0.13216,
+        "s1.5_h5_d0.7": 0.08088,
+        "s1.5_h10_d0.55": 0.12984,
+        "s1.5_h10_d0.7": 0.05984,
+        "s2.0_h5_d0.55": 0.07771,
+        "s2.0_h5_d0.7": 0.04997,
+        "s2.0_h10_d0.55": 0.03918,
+        "s2.0_h10_d0.7": -0.02149
+      },
+      "oos_selected": {
+        "trades": 33,
+        "n_days": 17,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 6.246,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 60.61,
+        "net": 134443.8,
+        "gross": 138893.23,
+        "costs": 4449.43,
+        "sharpe": 4.924,
+        "max_drawdown_pct": -0.95,
+        "total_return_pct": 10.4,
+        "per_year_pct": {
+          "2025": 15.27
+        },
+        "per_symbol_net": {
+          "RELIANCE": 4490.09,
+          "ADANIPORTS": -7514.94,
+          "LT": -9862.03,
+          "NIFTY": -218.86,
+          "SENSEX": 3986.53,
+          "ICICIBANK": -6160.44,
+          "INFY": 3538.59,
+          "TCS": 9750.18,
+          "ADANIENT": 29627.54,
+          "SBIN": 5452.27,
+          "BANKNIFTY": 33783.4,
+          "FINNIFTY": 46397.89,
+          "HDFCBANK": 16598.65,
+          "BAJFINANCE": 7558.52,
+          "AXISBANK": 5160.17,
+          "KOTAKBANK": 2338.9,
+          "BHARTIARTL": -10482.66
+        }
+      },
+      "oos_fixed": {
+        "trades": 30,
+        "n_days": 16,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 10.879,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 56.67,
+        "net": 62798.78,
+        "gross": 68134.15,
+        "costs": 5335.37,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.91,
+        "total_return_pct": 5.21,
+        "per_year_pct": {
+          "2025": 8.61
+        },
+        "per_symbol_net": {
+          "RELIANCE": 437.75,
+          "ADANIPORTS": -41491.14,
+          "LT": -11771.39,
+          "NIFTY": -1263.59,
+          "SENSEX": 4415.02,
+          "ICICIBANK": -14715.02,
+          "INFY": 4261.92,
+          "TCS": 8892.27,
+          "TATASTEEL": -28822.3,
+          "ADANIENT": 18636.24,
+          "BANKNIFTY": 21151.03,
+          "FINNIFTY": 30235.32,
+          "HDFCBANK": 6780.21,
+          "BAJFINANCE": 33316.52,
+          "AXISBANK": 2815.99,
+          "BHARTIARTL": 21946.43,
+          "KOTAKBANK": -495.07,
+          "SBIN": 8468.59
+        }
+      }
+    },
+    {
+      "fold": 4,
+      "in_sample": [
+        "2024-09-06",
+        "2025-06-30"
+      ],
+      "out_of_sample": [
+        "2025-07-21",
+        "2025-10-15~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.08344,
+        "s1.0_h5_d0.7": 0.05136,
+        "s1.0_h10_d0.55": 0.12676,
+        "s1.0_h10_d0.7": 0.09838,
+        "s1.5_h5_d0.55": 0.10359,
+        "s1.5_h5_d0.7": 0.05139,
+        "s1.5_h10_d0.55": 0.16228,
+        "s1.5_h10_d0.7": 0.10452,
+        "s2.0_h5_d0.55": 0.05688,
+        "s2.0_h5_d0.7": 0.01662,
+        "s2.0_h10_d0.55": 0.11928,
+        "s2.0_h10_d0.7": 0.06567
+      },
+      "oos_selected": {
+        "trades": 21,
+        "n_days": 15,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 11.109,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 38.1,
+        "net": 95847.73,
+        "gross": 98191.67,
+        "costs": 2343.94,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.53,
+        "total_return_pct": 5.75,
+        "per_year_pct": {
+          "2025": 13.91
+        },
+        "per_symbol_net": {
+          "ICICIBANK": 14717.6,
+          "BAJFINANCE": 26509.3,
+          "ADANIENT": -9931.16,
+          "AXISBANK": -22385.01,
+          "BAJAJFINSV": 21268.68,
+          "NIFTY": 34495.68,
+          "SENSEX": 31339.42,
+          "SBIN": -9883.57,
+          "LT": -4955.21,
+          "KOTAKBANK": -1328.19,
+          "FINNIFTY": -4127.49,
+          "BHARTIARTL": 15809.98,
+          "ADANIPORTS": 13322.47,
+          "BANKNIFTY": -9004.77
+        }
+      },
+      "oos_fixed": {
+        "trades": 24,
+        "n_days": 17,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 7.752,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 41.67,
+        "net": 107694.92,
+        "gross": 111335.01,
+        "costs": 3640.09,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.83,
+        "total_return_pct": 4.18,
+        "per_year_pct": {
+          "2025": 8.88
+        },
+        "per_symbol_net": {
+          "ICICIBANK": 20208.62,
+          "BAJFINANCE": 24224.27,
+          "TATASTEEL": -2555.49,
+          "ADANIENT": -15550.28,
+          "AXISBANK": -16635.1,
+          "BAJAJFINSV": 26924.06,
+          "NIFTY": 40840.36,
+          "SENSEX": 37056.49,
+          "SBIN": -14237.06,
+          "LT": -7673.97,
+          "KOTAKBANK": -1425.19,
+          "FINNIFTY": -6286.51,
+          "BHARTIARTL": 19149.81,
+          "ADANIPORTS": 18090.62,
+          "BANKNIFTY": -14435.71
+        }
+      }
+    },
+    {
+      "fold": 5,
+      "in_sample": [
+        "2024-12-05",
+        "2025-09-24"
+      ],
+      "out_of_sample": [
+        "2025-10-16",
+        "2026-01-13~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.10455,
+        "s1.0_h5_d0.7": 0.07241,
+        "s1.0_h10_d0.55": 0.17416,
+        "s1.0_h10_d0.7": 0.12865,
+        "s1.5_h5_d0.55": 0.11676,
+        "s1.5_h5_d0.7": 0.07661,
+        "s1.5_h10_d0.55": 0.17335,
+        "s1.5_h10_d0.7": 0.12374,
+        "s2.0_h5_d0.55": 0.01625,
+        "s2.0_h5_d0.7": -0.00622,
+        "s2.0_h10_d0.55": 0.10476,
+        "s2.0_h10_d0.7": 0.08059
+      },
+      "oos_selected": {
+        "trades": 44,
+        "n_days": 17,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 13.158,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 38.64,
+        "net": 132151.5,
+        "gross": 136858.96,
+        "costs": 4707.46,
+        "sharpe": 1.666,
+        "max_drawdown_pct": -7.03,
+        "total_return_pct": 11.63,
+        "per_year_pct": {
+          "2025": -8.56,
+          "2026": 94.83
+        },
+        "per_symbol_net": {
+          "NIFTY": 12314.07,
+          "BANKNIFTY": -3674.85,
+          "FINNIFTY": -6956.17,
+          "SENSEX": 11956.48,
+          "HDFCBANK": -4560.51,
+          "LT": 31001.32,
+          "KOTAKBANK": 2261.1,
+          "BAJFINANCE": -13134.99,
+          "ADANIPORTS": 10694.14,
+          "ICICIBANK": 59665.54,
+          "BHARTIARTL": -1008.5,
+          "RELIANCE": 37232.14,
+          "SBIN": -30465.38,
+          "AXISBANK": 6195.94,
+          "BAJAJFINSV": 33893.05,
+          "INFY": -2627.8,
+          "TCS": -10634.08
+        }
+      },
+      "oos_fixed": {
+        "trades": 43,
+        "n_days": 16,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 15.402,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 48.84,
+        "net": 123059.94,
+        "gross": 129082.58,
+        "costs": 6022.64,
+        "sharpe": 1.935,
+        "max_drawdown_pct": -3.53,
+        "total_return_pct": 9.21,
+        "per_year_pct": {
+          "2025": -2.81,
+          "2026": 65.02
+        },
+        "per_symbol_net": {
+          "NIFTY": 27339.82,
+          "BANKNIFTY": -10620.38,
+          "FINNIFTY": -14061.41,
+          "SENSEX": -11074.37,
+          "HDFCBANK": -5804.25,
+          "LT": 33735.33,
+          "KOTAKBANK": 11084.06,
+          "BAJFINANCE": -20152.32,
+          "ADANIPORTS": 18557.07,
+          "ICICIBANK": 51094.58,
+          "BHARTIARTL": -886.19,
+          "RELIANCE": 37664.29,
+          "SBIN": -45533.0,
+          "AXISBANK": 20268.44,
+          "BAJAJFINSV": 41182.19,
+          "TATASTEEL": -5816.56,
+          "INFY": 8930.02,
+          "TCS": -12847.38
+        }
+      }
+    },
+    {
+      "fold": 6,
+      "in_sample": [
+        "2025-02-28",
+        "2025-12-23"
+      ],
+      "out_of_sample": [
+        "2026-01-14",
+        "2026-04-15~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.01041,
+        "s1.0_h5_d0.7": 0.00821,
+        "s1.0_h10_d0.55": 0.04072,
+        "s1.0_h10_d0.7": 0.02584,
+        "s1.5_h5_d0.55": 0.00704,
+        "s1.5_h5_d0.7": 0.00132,
+        "s1.5_h10_d0.55": 0.05266,
+        "s1.5_h10_d0.7": 0.03301,
+        "s2.0_h5_d0.55": -0.00589,
+        "s2.0_h5_d0.7": -0.01712,
+        "s2.0_h10_d0.55": 0.01475,
+        "s2.0_h10_d0.7": 0.02105
+      },
+      "oos_selected": {
+        "trades": 14,
+        "n_days": 10,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.852,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 35.71,
+        "net": 23637.34,
+        "gross": 26361.7,
+        "costs": 2724.36,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.63,
+        "total_return_pct": -0.77,
+        "per_year_pct": {
+          "2026": -2.59
+        },
+        "per_symbol_net": {
+          "SBIN": 17352.77,
+          "ADANIPORTS": -29481.6,
+          "ADANIENT": 9892.23,
+          "LT": -12425.9,
+          "TATASTEEL": 73224.95,
+          "FINNIFTY": -6979.67,
+          "BAJFINANCE": -17992.87,
+          "AXISBANK": -13061.85,
+          "ICICIBANK": 3109.28
+        }
+      },
+      "oos_fixed": {
+        "trades": 14,
+        "n_days": 10,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -4.986,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 35.71,
+        "net": -38163.53,
+        "gross": -34460.03,
+        "costs": 3703.5,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.25,
+        "total_return_pct": -2.4,
+        "per_year_pct": {
+          "2026": -8.59
+        },
+        "per_symbol_net": {
+          "SBIN": -22942.96,
+          "TATASTEEL": 66058.33,
+          "ADANIPORTS": -32288.51,
+          "ADANIENT": 16338.21,
+          "LT": -19507.38,
+          "FINNIFTY": -5936.2,
+          "BAJFINANCE": -27038.86,
+          "AXISBANK": -16736.23,
+          "ICICIBANK": 3890.07
+        }
+      }
+    },
+    {
+      "fold": 7,
+      "in_sample": [
+        "2025-06-02",
+        "2026-03-20"
+      ],
+      "out_of_sample": [
+        "2026-04-16",
+        "2026-07-13~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.07405,
+        "s1.0_h5_d0.7": 0.05855,
+        "s1.0_h10_d0.55": 0.18841,
+        "s1.0_h10_d0.7": 0.11818,
+        "s1.5_h5_d0.55": 0.08239,
+        "s1.5_h5_d0.7": 0.0636,
+        "s1.5_h10_d0.55": 0.18598,
+        "s1.5_h10_d0.7": 0.12771,
+        "s2.0_h5_d0.55": 0.01407,
+        "s2.0_h5_d0.7": -0.00038,
+        "s2.0_h10_d0.55": 0.07882,
+        "s2.0_h10_d0.7": 0.0627
+      },
+      "oos_selected": {
+        "trades": 35,
+        "n_days": 19,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -6.411,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 40.0,
+        "net": -116505.11,
+        "gross": -110881.22,
+        "costs": 5623.89,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -6.02,
+        "total_return_pct": -2.99,
+        "per_year_pct": {
+          "2026": -4.12
+        },
+        "per_symbol_net": {
+          "LT": 5464.09,
+          "ADANIENT": -95972.81,
+          "ADANIPORTS": 162.9,
+          "SBIN": 9251.79,
+          "NIFTY": -19382.91,
+          "BANKNIFTY": -14729.12,
+          "FINNIFTY": -22654.2,
+          "SENSEX": 10927.7,
+          "ICICIBANK": 20312.24,
+          "TCS": 14747.6,
+          "BAJFINANCE": -35612.81,
+          "RELIANCE": -14261.26,
+          "BHARTIARTL": 29497.63,
+          "INFY": 15609.37,
+          "AXISBANK": -12141.76,
+          "KOTAKBANK": 2328.26,
+          "HDFCBANK": 414.44,
+          "BAJAJFINSV": -10466.26
+        }
+      },
+      "oos_fixed": {
+        "trades": 34,
+        "n_days": 19,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -5.354,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 47.06,
+        "net": -93934.47,
+        "gross": -86441.72,
+        "costs": 7492.75,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -4.07,
+        "total_return_pct": -1.53,
+        "per_year_pct": {
+          "2026": -2.11
+        },
+        "per_symbol_net": {
+          "LT": 11203.02,
+          "ADANIENT": -132801.44,
+          "ADANIPORTS": -10241.89,
+          "NIFTY": -6376.71,
+          "BANKNIFTY": 5443.92,
+          "FINNIFTY": -28542.79,
+          "SENSEX": 20340.23,
+          "ICICIBANK": 16713.45,
+          "TATASTEEL": -18091.96,
+          "RELIANCE": -21396.55,
+          "BAJFINANCE": 20302.49,
+          "BHARTIARTL": 38398.98,
+          "INFY": 19736.0,
+          "AXISBANK": -1267.74,
+          "KOTAKBANK": 2902.82,
+          "HDFCBANK": 3045.03,
+          "SBIN": -1165.43,
+          "BAJAJFINSV": -12135.9
+        }
+      }
+    }
+  ],
+  "oos": {
+    "trades": 229,
+    "n_days": 121,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 6.282,
+    "t_stat": 1.281,
+    "ci_pct": [
+      -1.71,
+      17.17
+    ],
+    "win_rate": 46.29,
+    "net": 585079.16,
+    "gross": 625908.81,
+    "costs": 40829.65,
+    "sharpe": 1.595,
+    "max_drawdown_pct": -10.38,
+    "total_return_pct": 36.96,
+    "per_year_pct": {
+      "2024": 14.55,
+      "2025": 5.48,
+      "2026": 6.9
+    },
+    "per_symbol_net": {
+      "NIFTY": 66380.14,
+      "ADANIENT": -60998.3,
+      "ADANIPORTS": 53152.8,
+      "TCS": -31270.19,
+      "BAJAJFINSV": -23981.55,
+      "INFY": 53447.74,
+      "BHARTIARTL": 99811.77,
+      "SENSEX": 138904.03,
+      "BAJFINANCE": 40941.09,
+      "FINNIFTY": -3489.88,
+      "ICICIBANK": 160578.88,
+      "AXISBANK": -11468.98,
+      "BANKNIFTY": 41888.2,
+      "HDFCBANK": 824.33,
+      "KOTAKBANK": 9456.84,
+      "LT": 74753.19,
+      "SBIN": -92873.83,
+      "RELIANCE": 85645.97,
+      "TATASTEEL": -16623.09
+    }
+  },
+  "selected": {
+    "trades": 244,
+    "n_days": 125,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 6.461,
+    "t_stat": 1.446,
+    "ci_pct": [
+      -1.0,
+      16.45
+    ],
+    "win_rate": 41.8,
+    "net": 424190.07,
+    "gross": 457385.59,
+    "costs": 33195.52,
+    "sharpe": 1.212,
+    "max_drawdown_pct": -11.02,
+    "total_return_pct": 32.43,
+    "per_year_pct": {
+      "2024": 9.35,
+      "2025": 2.64,
+      "2026": 13.01
+    },
+    "per_symbol_net": {
+      "NIFTY": 2927.07,
+      "ADANIENT": -37578.49,
+      "ADANIPORTS": 25049.0,
+      "TCS": 8061.3,
+      "BAJAJFINSV": -10936.04,
+      "INFY": 24207.38,
+      "BHARTIARTL": 18319.14,
+      "SENSEX": 45569.98,
+      "BAJFINANCE": -48673.94,
+      "FINNIFTY": 133334.56,
+      "BANKNIFTY": 58774.33,
+      "ICICIBANK": 93603.82,
+      "AXISBANK": -23109.57,
+      "KOTAKBANK": 5448.27,
+      "HDFCBANK": -2901.13,
+      "LT": 32350.99,
+      "SBIN": -10037.53,
+      "RELIANCE": 36555.98,
+      "TATASTEEL": 73224.95
+    }
+  },
+  "full_sample": {
+    "trades": 317,
+    "n_days": 177,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 7.287,
+    "t_stat": 1.656,
+    "ci_pct": [
+      -0.83,
+      16.48
+    ],
+    "win_rate": 45.74,
+    "net": 769238.66,
+    "gross": 826021.86,
+    "costs": 56783.2,
+    "sharpe": 1.979,
+    "max_drawdown_pct": -10.38,
+    "total_return_pct": 69.37,
+    "per_year_pct": {
+      "2024": 11.19,
+      "2025": 7.03,
+      "2026": 7.8
+    },
+    "per_symbol_net": {
+      "RELIANCE": 135077.21,
+      "NIFTY": 44573.07,
+      "SENSEX": 110099.48,
+      "INFY": 48670.57,
+      "BHARTIARTL": 24444.99,
+      "LT": 199770.96,
+      "ADANIPORTS": -34657.86,
+      "TATASTEEL": 60408.86,
+      "TCS": -20408.6,
+      "SBIN": -42632.59,
+      "ADANIENT": -61400.32,
+      "ICICIBANK": 128632.48,
+      "BANKNIFTY": 94375.13,
+      "BAJFINANCE": 108306.67,
+      "BAJAJFINSV": -52272.13,
+      "FINNIFTY": -10913.12,
+      "HDFCBANK": 1400.47,
+      "KOTAKBANK": 30907.31,
+      "AXISBANK": 4856.08
+    }
+  },
+  "n_trials": 96,
+  "trial_sharpe_std": 0.0775,
+  "deflated_sharpe": 0.0443,
+  "permutation_p": 0.0287,
+  "permutation_p_full_sample": 0.0012,
+  "breakeven_vrp": 2.243,
+  "vrp_band": [
+    1.15,
+    1.3
+  ],
+  "verdict": {
+    "promoted": false,
+    "checks": {
+      "enough_trades": true,
+      "enough_days": true,
+      "profitable": true,
+      "beats_random_timing": true,
+      "deflated_sharpe": false,
+      "priced_edge": true,
+      "consistent_across_years": true,
+      "survivable_drawdown": true,
+      "mean_proven": false
+    },
+    "reasons": [
+      "deflated Sharpe 0.044 < 0.5 \u2014 the result does not survive how many variants were tried",
+      "day-clustered 95% interval [-1.71%, +17.17%] includes zero \u2014 the DIRECTION is established, the SIZE is not"
+    ]
+  }
+}
