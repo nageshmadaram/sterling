@@ -64,7 +64,13 @@ def replay(tmp_path, monkeypatch):
     r._stats.signals_fired = 0
     r._stats.events = []
     r._stats.trades = []
-    r._cached_intraday_cfg = None
+    # Mechanics, not the shipped window: this asserts the replay CALLS the
+    # engine and keeps its stop, which is true whatever hours are configured.
+    from app.engines.intraday import IntradayConfig
+    r._cached_intraday_cfg = IntradayConfig(
+        session_start="09:15", no_entry_after="15:10",
+        close_at_session_end=True, exit_after_bars=0,
+        stop_widen_mult=1.0).validate()
     r._config = SimConfig(date="2026-09-10", strategy="all", strategies=["all"])
     yield r
     r._stats.events = []

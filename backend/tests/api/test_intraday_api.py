@@ -150,7 +150,11 @@ def test_sizing_and_protection_defaults_are_published(client):
     assert d["stop_mode"] == "both"
     # Auto-execution stays off until something has been walk-forward tested.
     assert d["auto_execute"] is False
-    assert d["close_at_session_end"] is True
+    # Measured defaults, not the original specification's: the edge is a
+    # ~2-hour afternoon move and cutting it at the close removed most of it.
+    assert d["close_at_session_end"] is False
+    assert d["session_start"] == "13:30"
+    assert d["exit_after_bars"] == 24
     assert d["dynamic_stops"] is True and d["dynamic_targets"] is True
 
 

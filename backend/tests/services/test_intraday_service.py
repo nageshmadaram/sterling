@@ -34,6 +34,15 @@ def _ts(day: str, hh: int, mm: int) -> float:
     return datetime(y, mo, d, hh, mm, tzinfo=IST).timestamp()
 
 
+#: The window these MECHANICS tests need. The shipped default is the measured
+#: afternoon window, which is a finding about the market rather than a property
+#: of the scan — so a test of the scan states its own window instead of
+#: inheriting one that can move when a measurement does.
+ALL_DAY = dict(session_start="09:15", no_entry_after="15:10",
+               close_at_session_end=True, exit_after_bars=0,
+               stop_widen_mult=1.0, warmup_bars=70)
+
+
 def _tape_5m(day: str = "2026-09-10", n: int = 120) -> list[dict]:
     """A tape that RISES then falls, so every rule has something to fire on.
 
@@ -287,6 +296,7 @@ class TestRecentSignals:
     def test_it_replays_stored_bars_with_no_broker_and_no_live_scan(self, monkeypatch):
         rows = _tape_5m(n=900)
         self._store(monkeypatch, rows)
+        svc.set_config(ALL_DAY, "u1")
         svc.clear_history_cache()
         out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
         assert out, "expected the stored tape to have fired something"
@@ -355,6 +365,7 @@ def test_the_history_names_the_contract_each_signal_would_have_bought(monkeypatc
     from app.services import ohlcv_store
     rows = _tape_5m(n=900)
     monkeypatch.setattr(ohlcv_store, "get_candles", lambda sym, res, **kw: rows)
+    svc.set_config(ALL_DAY, "u1")
     svc.clear_history_cache()
     out = svc.recent_signals("u1", sessions=30, symbols=["NIFTY"])
     assert out
@@ -394,17 +405,17 @@ class TestTheScanCatchesUp:
         for end in range(300, len(rows), 3):     # a scan landing every 3rd bar
             tape = rows[:end]
             misses += sum(1 for e in svc.evaluate_symbol(
-                tape, IntradayConfig(warmup_bars=70).validate(), "NIFTY",
+                tape, IntradayConfig(**ALL_DAY).validate(), "NIFTY",
                 catchup=1) if e.signal)
             catches += sum(1 for e in svc.evaluate_symbol(
-                tape, IntradayConfig(warmup_bars=70, catchup_bars=4).validate(),
+                tape, IntradayConfig(**{**ALL_DAY, "catchup_bars": 4}).validate(),
                 "NIFTY", catchup=None) if e.signal)
         assert catches > misses
 
     def test_a_quiet_newest_bar_does_not_erase_a_signal_behind_it(self):
         """Which is the whole point of looking back."""
         rows = _tape_5m(n=900)
-        cfg = IntradayConfig(warmup_bars=70, catchup_bars=6).validate()
+        cfg = IntradayConfig(**{**ALL_DAY, "catchup_bars": 6}).validate()
         for end in range(400, len(rows), 7):
             got = svc.evaluate_symbol(rows[:end], cfg, "NIFTY")
             newest_only = svc.evaluate_symbol(rows[:end], cfg, "NIFTY", catchup=1)
@@ -414,7 +425,7 @@ class TestTheScanCatchesUp:
 
     def test_one_row_per_strategy_however_far_it_looks_back(self):
         rows = _tape_5m(n=900)
-        cfg = IntradayConfig(warmup_bars=70, catchup_bars=8).validate()
+        cfg = IntradayConfig(**{**ALL_DAY, "catchup_bars": 8}).validate()
         got = svc.evaluate_symbol(rows, cfg, "NIFTY")
         assert len(got) == len({e.strategy for e in got})
 

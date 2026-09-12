@@ -29,7 +29,7 @@ candle's low, the slow EMA, VWAP — sit 10 to 20 bp away. That is two to four
 times the entire edge, so noise reaches the stop long before the signal has had
 time to be right, and the strategy books the noise.
 
-## Six things tried, all measured
+## Six things tried before the one that worked
 
 | | result |
 |---|---|
@@ -53,6 +53,64 @@ vwap_supertrend   OOS 476 trades  PF 1.009  Sharpe +0.07  DSR 0.019
 
 The gross edge is still there out-of-sample — `ma_ribbon` made 121,401 gross —
 and **116.9% of it went to costs**.
+
+## What fixed it: trade a quarter as often, in the window that pays
+
+Costs are per TRADE. The edge is per SIGNAL. So the only direction that helps is
+fewer, better signals — and the measurement says which ones.
+
+Forward move by time of day, 1714 non-overlapping signals:
+
+| window | n | forward move | t |
+|---|---|---|---|
+| 09:18–09:48 | 414 | +6.84 bp | 1.99 |
+| 09:48–11:48 | 432 | +5.57 bp | 1.95 |
+| 11:48–13:30 | 435 | +7.44 bp | 1.99 |
+| **13:30–14:54** | **433** | **+21.70 bp** | **2.81** |
+
+Three times the edge, same cost per trade. Restricting entries to the afternoon
+cuts trade count ~75% and keeps the part that pays.
+
+**Why it works matters before you trust it.** A two-hour hold from 13:30 runs
+into and past the close, so the captured return includes the overnight gap.
+That is real money and a DIFFERENT risk from the intraday one these rules were
+written for — a stop cannot protect against a gap.
+
+### Shipped configuration
+
+```
+session_start          13:30      (was 09:20)
+no_entry_after         14:55      (was 15:00)
+exit_after_bars        24         (~2 hours, was: no time exit)
+close_at_session_end   False      (was True)
+stop_widen_mult        4.0        (was 1.0)
+```
+
+### Out of sample
+
+| | trades | PF | net | Sharpe | maxDD | p | symbols + |
+|---|---|---|---|---|---|---|---|
+| `ma_ribbon` | 124 | **1.25** | +89,628 | +0.84 | -7.24R | 0.041 | 6/9 |
+| `vwap_supertrend` | 150 | 1.13 | +51,781 | +0.44 | -5.31R | 0.083 | 5/9 |
+| `pivot_break` | 343 | 1.17 | +198,257 | +0.82 | -63.19R | 0.010 | 3/9 |
+
+All three are profitable out of sample. `ma_ribbon` passes six of the seven
+gates.
+
+### Why none is PROMOTED
+
+The deflated Sharpe. `ma_ribbon` scores 0.350 against a 0.5 bar, and that is
+correct: this window was chosen by looking at a four-way split of the same
+data, after roughly sixty other configurations had been tried. A search that
+size can produce a result this good by luck, and the statistic says so.
+
+That is not a reason to discard the result. It is a reason to want the ONE
+thing that would settle it — out-of-period data this search has never touched.
+Until then auto-execution stays gated and the board says why.
+
+`pivot_break` should be treated as the weakest of the three whatever its net
+says: 3 of 9 symbols profitable and a 63R drawdown mean one or two instruments
+carried it.
 
 ## The honest state
 

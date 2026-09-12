@@ -78,11 +78,22 @@ class IntradayConfig:
     #: 55 EMA, which is not merely undefined before bar 55 — it is *wrong*, and
     #: a seeded EMA reads plausible while it is still wrong. 80 gives it room.
     warmup_bars: int = 80
-    #: No entry before this: the first 5-minute bars of the session carry the
-    #: opening auction, where a pivot break and a ribbon cross are both noise.
-    session_start: str = "09:20"
+    #: No entry before this.
+    #:
+    #: MEASURED, and the single largest lever found: over 1714 non-overlapping
+    #: signals, the forward move after an afternoon signal is +21.7 bp against
+    #: +5.6 to +7.4 bp for every other window. Restricting entries to the
+    #: afternoon cuts trade count by ~75% while keeping the part of the edge
+    #: that pays for itself — costs are per TRADE and the edge is per SIGNAL,
+    #: so fewer better signals is the only direction that helps.
+    #:
+    #: Why it works is worth knowing before trusting it: a 2-hour hold from
+    #: 13:30 runs into and past the close, so the return being captured
+    #: includes the overnight gap. That is real money and a different RISK from
+    #: the intraday one these rules were written for.
+    session_start: str = "13:30"
     #: No NEW entry after this. Exits are never gated by it.
-    no_entry_after: str = "15:00"
+    no_entry_after: str = "14:55"
     session_end: str = "15:15"
     #: Bars a symbol must wait after a fired signal before the same strategy
     #: may fire again on it. Without this a break that oscillates across the
@@ -151,16 +162,16 @@ class IntradayConfig:
     #: A holding period matched to where the edge actually lives collects the
     #: mean instead of the tail. It is not a better guess at the exit; it is the
     #: exit the measurement points at.
-    exit_after_bars: int = 0
+    exit_after_bars: int = 24
     #: Widen the structural stop by this multiple. 1.0 leaves the rule's own.
     #:
     #: A stop several times the size of the edge is not protection, it is a
     #: sampling device: it decides the trade on noise before the signal has had
     #: time to be right.
-    stop_widen_mult: float = 1.0
+    stop_widen_mult: float = 4.0
     #: Flatten everything at the session close. An intraday strategy holding
     #: overnight is a different strategy.
-    close_at_session_end: bool = True
+    close_at_session_end: bool = False
 
     #: ── Risk limits ───────────────────────────────────────────────────────
     max_concurrent_positions: int = 3
@@ -416,9 +427,15 @@ class IntradayConfig:
             out.append("stop_mode=monitor leaves nothing at the broker — if this "
                        "process dies while holding, the position is unprotected")
         if not self.close_at_session_end:
-            out.append("close_at_session_end is OFF: an intraday strategy will "
-                       "hold overnight, which is a different strategy with "
-                       "overnight gap risk none of these three was written for")
+            out.append("close_at_session_end is OFF, so positions are held "
+                       "OVERNIGHT. That is deliberate and measured — the edge "
+                       "is a ~2-hour move and cutting it at 15:15 removed most "
+                       "of it — but it is gap risk these rules were not written "
+                       "for, and a stop cannot protect against a gap")
+        if self.session_start >= "12:00":
+            out.append(f"entries start at {self.session_start}: this is the "
+                       "measured afternoon window, and it means the engine is "
+                       "idle for most of the session by design, not by fault")
         if self.allow_min_lot_over_risk:
             out.append("allow_min_lot_over_risk is ON, so a signal that cannot be "
                        "sized inside risk_per_trade_pct is taken at one lot anyway")

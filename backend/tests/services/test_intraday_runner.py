@@ -586,6 +586,7 @@ class TestTheSpotStopIsActuallyEnforced:
         """With no tick for the contract, pricing at the stop would send a limit
         nowhere near the market."""
         monkeypatch.setattr(runner, "_is_market_open", lambda cfg: False)
+        svc.set_config({"close_at_session_end": True}, "u1")
         live.premium = 143.0
         held()
         await runner.on_ticks("u1", [])
