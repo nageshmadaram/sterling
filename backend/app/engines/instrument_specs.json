@@ -1,0 +1,1102 @@
+{
+ "360ONE": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 20.0
+ },
+ "ABB": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 100.0
+ },
+ "ABCAPITAL": {
+  "exchange": "NFO",
+  "lot_size": 3100,
+  "strike_step": 5.0
+ },
+ "ADANIENSOL": {
+  "exchange": "NFO",
+  "lot_size": 675,
+  "strike_step": 20.0
+ },
+ "ADANIENT": {
+  "exchange": "NFO",
+  "lot_size": 309,
+  "strike_step": 50.0
+ },
+ "ADANIGREEN": {
+  "exchange": "NFO",
+  "lot_size": 600,
+  "strike_step": 20.0
+ },
+ "ADANIPORTS": {
+  "exchange": "NFO",
+  "lot_size": 475,
+  "strike_step": 20.0
+ },
+ "ADANIPOWER": {
+  "exchange": "NFO",
+  "lot_size": 3550,
+  "strike_step": 5.0
+ },
+ "ALKEM": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 50.0
+ },
+ "AMBER": {
+  "exchange": "NFO",
+  "lot_size": 100,
+  "strike_step": 100.0
+ },
+ "AMBUJACEM": {
+  "exchange": "NFO",
+  "lot_size": 1200,
+  "strike_step": 5.0
+ },
+ "ANGELONE": {
+  "exchange": "NFO",
+  "lot_size": 2500,
+  "strike_step": 5.0
+ },
+ "APLAPOLLO": {
+  "exchange": "NFO",
+  "lot_size": 350,
+  "strike_step": 20.0
+ },
+ "APOLLOHOSP": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 100.0
+ },
+ "ASHOKLEY": {
+  "exchange": "NFO",
+  "lot_size": 5000,
+  "strike_step": 2.5
+ },
+ "ASIANPAINT": {
+  "exchange": "NFO",
+  "lot_size": 250,
+  "strike_step": 20.0
+ },
+ "ASTRAL": {
+  "exchange": "NFO",
+  "lot_size": 425,
+  "strike_step": 20.0
+ },
+ "ATHERENERG": {
+  "exchange": "NFO",
+  "lot_size": 375,
+  "strike_step": 20.0
+ },
+ "AUBANK": {
+  "exchange": "NFO",
+  "lot_size": 1000,
+  "strike_step": 20.0
+ },
+ "AUROPHARMA": {
+  "exchange": "NFO",
+  "lot_size": 550,
+  "strike_step": 20.0
+ },
+ "AXISBANK": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 20.0
+ },
+ "BAJAJ-AUTO": {
+  "exchange": "NFO",
+  "lot_size": 75,
+  "strike_step": 100.0
+ },
+ "BAJAJFINSV": {
+  "exchange": "NFO",
+  "lot_size": 300,
+  "strike_step": 20.0
+ },
+ "BAJAJHLDNG": {
+  "exchange": "NFO",
+  "lot_size": 75,
+  "strike_step": 100.0
+ },
+ "BAJFINANCE": {
+  "exchange": "NFO",
+  "lot_size": 750,
+  "strike_step": 10.0
+ },
+ "BANDHANBNK": {
+  "exchange": "NFO",
+  "lot_size": 3600,
+  "strike_step": 5.0
+ },
+ "BANKBARODA": {
+  "exchange": "NFO",
+  "lot_size": 2925,
+  "strike_step": 5.0
+ },
+ "BANKEX": {
+  "exchange": "BFO",
+  "lot_size": 30,
+  "strike_step": 100.0
+ },
+ "BANKINDIA": {
+  "exchange": "NFO",
+  "lot_size": 5200,
+  "strike_step": 2.5
+ },
+ "BANKNIFTY": {
+  "exchange": "NFO",
+  "lot_size": 30,
+  "strike_step": 100.0
+ },
+ "BDL": {
+  "exchange": "NFO",
+  "lot_size": 425,
+  "strike_step": 20.0
+ },
+ "BEL": {
+  "exchange": "NFO",
+  "lot_size": 1425,
+  "strike_step": 5.0
+ },
+ "BHARATFORG": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 20.0
+ },
+ "BHARTIARTL": {
+  "exchange": "NFO",
+  "lot_size": 475,
+  "strike_step": 20.0
+ },
+ "BHEL": {
+  "exchange": "NFO",
+  "lot_size": 2625,
+  "strike_step": 5.0
+ },
+ "BIOCON": {
+  "exchange": "NFO",
+  "lot_size": 2500,
+  "strike_step": 5.0
+ },
+ "BLUESTARCO": {
+  "exchange": "NFO",
+  "lot_size": 325,
+  "strike_step": 20.0
+ },
+ "BOSCHLTD": {
+  "exchange": "NFO",
+  "lot_size": 25,
+  "strike_step": 500.0
+ },
+ "BPCL": {
+  "exchange": "NFO",
+  "lot_size": 1975,
+  "strike_step": 5.0
+ },
+ "BRITANNIA": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 50.0
+ },
+ "BSE": {
+  "exchange": "NFO",
+  "lot_size": 200,
+  "strike_step": 100.0
+ },
+ "CAMS": {
+  "exchange": "NFO",
+  "lot_size": 825,
+  "strike_step": 10.0
+ },
+ "CANBK": {
+  "exchange": "NFO",
+  "lot_size": 6750,
+  "strike_step": 2.5
+ },
+ "CDSL": {
+  "exchange": "NFO",
+  "lot_size": 475,
+  "strike_step": 20.0
+ },
+ "CGPOWER": {
+  "exchange": "NFO",
+  "lot_size": 850,
+  "strike_step": 20.0
+ },
+ "CHOLAFIN": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 20.0
+ },
+ "CIPLA": {
+  "exchange": "NFO",
+  "lot_size": 425,
+  "strike_step": 10.0
+ },
+ "COALINDIA": {
+  "exchange": "NFO",
+  "lot_size": 1350,
+  "strike_step": 5.0
+ },
+ "COCHINSHIP": {
+  "exchange": "NFO",
+  "lot_size": 400,
+  "strike_step": 20.0
+ },
+ "COFORGE": {
+  "exchange": "NFO",
+  "lot_size": 475,
+  "strike_step": 20.0
+ },
+ "COLPAL": {
+  "exchange": "NFO",
+  "lot_size": 275,
+  "strike_step": 20.0
+ },
+ "CONCOR": {
+  "exchange": "NFO",
+  "lot_size": 1250,
+  "strike_step": 5.0
+ },
+ "CROMPTON": {
+  "exchange": "NFO",
+  "lot_size": 2150,
+  "strike_step": 5.0
+ },
+ "CUMMINSIND": {
+  "exchange": "NFO",
+  "lot_size": 200,
+  "strike_step": 100.0
+ },
+ "DABUR": {
+  "exchange": "NFO",
+  "lot_size": 1250,
+  "strike_step": 5.0
+ },
+ "DELHIVERY": {
+  "exchange": "NFO",
+  "lot_size": 2075,
+  "strike_step": 5.0
+ },
+ "DIVISLAB": {
+  "exchange": "NFO",
+  "lot_size": 100,
+  "strike_step": 100.0
+ },
+ "DIXON": {
+  "exchange": "NFO",
+  "lot_size": 50,
+  "strike_step": 250.0
+ },
+ "DLF": {
+  "exchange": "NFO",
+  "lot_size": 950,
+  "strike_step": 10.0
+ },
+ "DMART": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 50.0
+ },
+ "DRREDDY": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 10.0
+ },
+ "EICHERMOT": {
+  "exchange": "NFO",
+  "lot_size": 100,
+  "strike_step": 100.0
+ },
+ "ETERNAL": {
+  "exchange": "NFO",
+  "lot_size": 2425,
+  "strike_step": 5.0
+ },
+ "FEDERALBNK": {
+  "exchange": "NFO",
+  "lot_size": 2500,
+  "strike_step": 5.0
+ },
+ "FINNIFTY": {
+  "exchange": "NFO",
+  "lot_size": 60,
+  "strike_step": 100.0
+ },
+ "FOCIT": {
+  "exchange": "BFO",
+  "lot_size": 45,
+  "strike_step": 100.0
+ },
+ "FORCEMOT": {
+  "exchange": "NFO",
+  "lot_size": 25,
+  "strike_step": 500.0
+ },
+ "FORTIS": {
+  "exchange": "NFO",
+  "lot_size": 775,
+  "strike_step": 10.0
+ },
+ "GAIL": {
+  "exchange": "NFO",
+  "lot_size": 3550,
+  "strike_step": 2.5
+ },
+ "GLENMARK": {
+  "exchange": "NFO",
+  "lot_size": 375,
+  "strike_step": 20.0
+ },
+ "GMRAIRPORT": {
+  "exchange": "NFO",
+  "lot_size": 6975,
+  "strike_step": 1.0
+ },
+ "GODFRYPHLP": {
+  "exchange": "NFO",
+  "lot_size": 275,
+  "strike_step": 50.0
+ },
+ "GODREJCP": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 10.0
+ },
+ "GODREJPROP": {
+  "exchange": "NFO",
+  "lot_size": 325,
+  "strike_step": 20.0
+ },
+ "GRASIM": {
+  "exchange": "NFO",
+  "lot_size": 250,
+  "strike_step": 20.0
+ },
+ "GVT&D": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 100.0
+ },
+ "HAL": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 50.0
+ },
+ "HAVELLS": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 20.0
+ },
+ "HCLTECH": {
+  "exchange": "NFO",
+  "lot_size": 400,
+  "strike_step": 10.0
+ },
+ "HDFCAMC": {
+  "exchange": "NFO",
+  "lot_size": 300,
+  "strike_step": 50.0
+ },
+ "HDFCBANK": {
+  "exchange": "NFO",
+  "lot_size": 650,
+  "strike_step": 10.0
+ },
+ "HDFCLIFE": {
+  "exchange": "NFO",
+  "lot_size": 1100,
+  "strike_step": 5.0
+ },
+ "HEROMOTOCO": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 100.0
+ },
+ "HINDALCO": {
+  "exchange": "NFO",
+  "lot_size": 700,
+  "strike_step": 20.0
+ },
+ "HINDPETRO": {
+  "exchange": "NFO",
+  "lot_size": 2025,
+  "strike_step": 0.75
+ },
+ "HINDUNILVR": {
+  "exchange": "NFO",
+  "lot_size": 300,
+  "strike_step": 20.0
+ },
+ "HINDZINC": {
+  "exchange": "NFO",
+  "lot_size": 1225,
+  "strike_step": 10.0
+ },
+ "HYUNDAI": {
+  "exchange": "NFO",
+  "lot_size": 275,
+  "strike_step": 20.0
+ },
+ "ICICIBANK": {
+  "exchange": "NFO",
+  "lot_size": 700,
+  "strike_step": 10.0
+ },
+ "ICICIGI": {
+  "exchange": "NFO",
+  "lot_size": 325,
+  "strike_step": 20.0
+ },
+ "ICICIPRULI": {
+  "exchange": "NFO",
+  "lot_size": 925,
+  "strike_step": 5.0
+ },
+ "IDEA": {
+  "exchange": "NFO",
+  "lot_size": 71475,
+  "strike_step": 1.0
+ },
+ "IDFCFIRSTB": {
+  "exchange": "NFO",
+  "lot_size": 9275,
+  "strike_step": 1.0
+ },
+ "IEX": {
+  "exchange": "NFO",
+  "lot_size": 4350,
+  "strike_step": 2.5
+ },
+ "INDHOTEL": {
+  "exchange": "NFO",
+  "lot_size": 1000,
+  "strike_step": 10.0
+ },
+ "INDIANB": {
+  "exchange": "NFO",
+  "lot_size": 1000,
+  "strike_step": 10.0
+ },
+ "INDIGO": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 100.0
+ },
+ "INDUSINDBK": {
+  "exchange": "NFO",
+  "lot_size": 700,
+  "strike_step": 10.0
+ },
+ "INDUSTOWER": {
+  "exchange": "NFO",
+  "lot_size": 1700,
+  "strike_step": 5.0
+ },
+ "INFY": {
+  "exchange": "NFO",
+  "lot_size": 400,
+  "strike_step": 20.0
+ },
+ "INOXWIND": {
+  "exchange": "NFO",
+  "lot_size": 6400,
+  "strike_step": 2.5
+ },
+ "IOC": {
+  "exchange": "NFO",
+  "lot_size": 4875,
+  "strike_step": 2.5
+ },
+ "IREDA": {
+  "exchange": "NFO",
+  "lot_size": 4525,
+  "strike_step": 2.5
+ },
+ "IRFC": {
+  "exchange": "NFO",
+  "lot_size": 5425,
+  "strike_step": 1.0
+ },
+ "ITC": {
+  "exchange": "NFO",
+  "lot_size": 1725,
+  "strike_step": 2.5
+ },
+ "JINDALSTEL": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 20.0
+ },
+ "JIOFIN": {
+  "exchange": "NFO",
+  "lot_size": 2350,
+  "strike_step": 2.5
+ },
+ "JSWENERGY": {
+  "exchange": "NFO",
+  "lot_size": 1075,
+  "strike_step": 10.0
+ },
+ "JSWSTEEL": {
+  "exchange": "NFO",
+  "lot_size": 675,
+  "strike_step": 20.0
+ },
+ "JUBLFOOD": {
+  "exchange": "NFO",
+  "lot_size": 1250,
+  "strike_step": 5.0
+ },
+ "KALYANKJIL": {
+  "exchange": "NFO",
+  "lot_size": 1350,
+  "strike_step": 5.0
+ },
+ "KAYNES": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 50.0
+ },
+ "KEI": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 100.0
+ },
+ "KFINTECH": {
+  "exchange": "NFO",
+  "lot_size": 575,
+  "strike_step": 20.0
+ },
+ "KOTAKBANK": {
+  "exchange": "NFO",
+  "lot_size": 2000,
+  "strike_step": 5.0
+ },
+ "KPITTECH": {
+  "exchange": "NFO",
+  "lot_size": 775,
+  "strike_step": 10.0
+ },
+ "LAURUSLABS": {
+  "exchange": "NFO",
+  "lot_size": 850,
+  "strike_step": 20.0
+ },
+ "LICHSGFIN": {
+  "exchange": "NFO",
+  "lot_size": 1000,
+  "strike_step": 10.0
+ },
+ "LICI": {
+  "exchange": "NFO",
+  "lot_size": 1400,
+  "strike_step": 5.0
+ },
+ "LODHA": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 20.0
+ },
+ "LT": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "LTF": {
+  "exchange": "NFO",
+  "lot_size": 2250,
+  "strike_step": 5.0
+ },
+ "LTM": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 50.0
+ },
+ "LUPIN": {
+  "exchange": "NFO",
+  "lot_size": 425,
+  "strike_step": 20.0
+ },
+ "M&M": {
+  "exchange": "NFO",
+  "lot_size": 200,
+  "strike_step": 50.0
+ },
+ "MAHABANK": {
+  "exchange": "NFO",
+  "lot_size": 6500,
+  "strike_step": 1.0
+ },
+ "MANAPPURAM": {
+  "exchange": "NFO",
+  "lot_size": 3000,
+  "strike_step": 5.0
+ },
+ "MANKIND": {
+  "exchange": "NFO",
+  "lot_size": 250,
+  "strike_step": 20.0
+ },
+ "MARICO": {
+  "exchange": "NFO",
+  "lot_size": 1200,
+  "strike_step": 10.0
+ },
+ "MARUTI": {
+  "exchange": "NFO",
+  "lot_size": 50,
+  "strike_step": 100.0
+ },
+ "MAXHEALTH": {
+  "exchange": "NFO",
+  "lot_size": 525,
+  "strike_step": 10.0
+ },
+ "MAZDOCK": {
+  "exchange": "NFO",
+  "lot_size": 225,
+  "strike_step": 50.0
+ },
+ "MCX": {
+  "exchange": "NFO",
+  "lot_size": 225,
+  "strike_step": 50.0
+ },
+ "MFSL": {
+  "exchange": "NFO",
+  "lot_size": 400,
+  "strike_step": 20.0
+ },
+ "MIDCPNIFTY": {
+  "exchange": "NFO",
+  "lot_size": 120,
+  "strike_step": 25.0
+ },
+ "MOTHERSON": {
+  "exchange": "NFO",
+  "lot_size": 6150,
+  "strike_step": 2.5
+ },
+ "MOTILALOFS": {
+  "exchange": "NFO",
+  "lot_size": 775,
+  "strike_step": 20.0
+ },
+ "MPHASIS": {
+  "exchange": "NFO",
+  "lot_size": 275,
+  "strike_step": 50.0
+ },
+ "MUTHOOTFIN": {
+  "exchange": "NFO",
+  "lot_size": 275,
+  "strike_step": 50.0
+ },
+ "NAM-INDIA": {
+  "exchange": "NFO",
+  "lot_size": 625,
+  "strike_step": 20.0
+ },
+ "NATIONALUM": {
+  "exchange": "NFO",
+  "lot_size": 1875,
+  "strike_step": 10.0
+ },
+ "NAUKRI": {
+  "exchange": "NFO",
+  "lot_size": 550,
+  "strike_step": 20.0
+ },
+ "NBCC": {
+  "exchange": "NFO",
+  "lot_size": 6500,
+  "strike_step": 2.5
+ },
+ "NESTLEIND": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 10.0
+ },
+ "NHPC": {
+  "exchange": "NFO",
+  "lot_size": 6950,
+  "strike_step": 1.0
+ },
+ "NIFTY": {
+  "exchange": "NFO",
+  "lot_size": 65,
+  "strike_step": 50.0
+ },
+ "NIFTYFPI": {
+  "exchange": "NFO",
+  "lot_size": 1100,
+  "strike_step": 5.0
+ },
+ "NIFTYNXT50": {
+  "exchange": "NFO",
+  "lot_size": 25,
+  "strike_step": 100.0
+ },
+ "NMDC": {
+  "exchange": "NFO",
+  "lot_size": 6750,
+  "strike_step": 1.0
+ },
+ "NTPC": {
+  "exchange": "NFO",
+  "lot_size": 1500,
+  "strike_step": 5.0
+ },
+ "NYKAA": {
+  "exchange": "NFO",
+  "lot_size": 3125,
+  "strike_step": 5.0
+ },
+ "OBEROIRLTY": {
+  "exchange": "NFO",
+  "lot_size": 350,
+  "strike_step": 20.0
+ },
+ "OFSS": {
+  "exchange": "NFO",
+  "lot_size": 100,
+  "strike_step": 100.0
+ },
+ "OIL": {
+  "exchange": "NFO",
+  "lot_size": 1400,
+  "strike_step": 5.0
+ },
+ "ONGC": {
+  "exchange": "NFO",
+  "lot_size": 2250,
+  "strike_step": 2.5
+ },
+ "PAGEIND": {
+  "exchange": "NFO",
+  "lot_size": 20,
+  "strike_step": 500.0
+ },
+ "PATANJALI": {
+  "exchange": "NFO",
+  "lot_size": 1075,
+  "strike_step": 5.0
+ },
+ "PAYTM": {
+  "exchange": "NFO",
+  "lot_size": 725,
+  "strike_step": 20.0
+ },
+ "PERSISTENT": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 100.0
+ },
+ "PETRONET": {
+  "exchange": "NFO",
+  "lot_size": 1900,
+  "strike_step": 5.0
+ },
+ "PFC": {
+  "exchange": "NFO",
+  "lot_size": 1300,
+  "strike_step": 5.0
+ },
+ "PGEL": {
+  "exchange": "NFO",
+  "lot_size": 950,
+  "strike_step": 10.0
+ },
+ "PHOENIXLTD": {
+  "exchange": "NFO",
+  "lot_size": 350,
+  "strike_step": 20.0
+ },
+ "PIDILITIND": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 20.0
+ },
+ "PIIND": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "PNB": {
+  "exchange": "NFO",
+  "lot_size": 8000,
+  "strike_step": 1.0
+ },
+ "PNBHOUSING": {
+  "exchange": "NFO",
+  "lot_size": 650,
+  "strike_step": 20.0
+ },
+ "POLICYBZR": {
+  "exchange": "NFO",
+  "lot_size": 350,
+  "strike_step": 20.0
+ },
+ "POLYCAB": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 100.0
+ },
+ "POWERGRID": {
+  "exchange": "NFO",
+  "lot_size": 1900,
+  "strike_step": 2.5
+ },
+ "POWERINDIA": {
+  "exchange": "NFO",
+  "lot_size": 25,
+  "strike_step": 500.0
+ },
+ "PREMIERENE": {
+  "exchange": "NFO",
+  "lot_size": 650,
+  "strike_step": 20.0
+ },
+ "PRESTIGE": {
+  "exchange": "NFO",
+  "lot_size": 450,
+  "strike_step": 20.0
+ },
+ "RADICO": {
+  "exchange": "NFO",
+  "lot_size": 150,
+  "strike_step": 50.0
+ },
+ "RBLBANK": {
+  "exchange": "NFO",
+  "lot_size": 3175,
+  "strike_step": 5.0
+ },
+ "RECLTD": {
+  "exchange": "NFO",
+  "lot_size": 1575,
+  "strike_step": 5.0
+ },
+ "RELIANCE": {
+  "exchange": "NFO",
+  "lot_size": 500,
+  "strike_step": 10.0
+ },
+ "RVNL": {
+  "exchange": "NFO",
+  "lot_size": 1925,
+  "strike_step": 5.0
+ },
+ "SAGILITY": {
+  "exchange": "NFO",
+  "lot_size": 12000,
+  "strike_step": 1.0
+ },
+ "SAIL": {
+  "exchange": "NFO",
+  "lot_size": 4700,
+  "strike_step": 2.5
+ },
+ "SBICARD": {
+  "exchange": "NFO",
+  "lot_size": 800,
+  "strike_step": 10.0
+ },
+ "SBILIFE": {
+  "exchange": "NFO",
+  "lot_size": 375,
+  "strike_step": 20.0
+ },
+ "SBIN": {
+  "exchange": "NFO",
+  "lot_size": 750,
+  "strike_step": 10.0
+ },
+ "SENSEX": {
+  "exchange": "BFO",
+  "lot_size": 20,
+  "strike_step": 100.0
+ },
+ "SENSEX50": {
+  "exchange": "BFO",
+  "lot_size": 75,
+  "strike_step": 50.0
+ },
+ "SHREECEM": {
+  "exchange": "NFO",
+  "lot_size": 25,
+  "strike_step": 250.0
+ },
+ "SHRIRAMFIN": {
+  "exchange": "NFO",
+  "lot_size": 825,
+  "strike_step": 20.0
+ },
+ "SIEMENS": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "SOLARINDS": {
+  "exchange": "NFO",
+  "lot_size": 50,
+  "strike_step": 250.0
+ },
+ "SONACOMS": {
+  "exchange": "NFO",
+  "lot_size": 1225,
+  "strike_step": 10.0
+ },
+ "SRF": {
+  "exchange": "NFO",
+  "lot_size": 200,
+  "strike_step": 50.0
+ },
+ "SUNPHARMA": {
+  "exchange": "NFO",
+  "lot_size": 350,
+  "strike_step": 20.0
+ },
+ "SUPREMEIND": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "SUZLON": {
+  "exchange": "NFO",
+  "lot_size": 12700,
+  "strike_step": 1.0
+ },
+ "SWIGGY": {
+  "exchange": "NFO",
+  "lot_size": 1825,
+  "strike_step": 5.0
+ },
+ "TATACONSUM": {
+  "exchange": "NFO",
+  "lot_size": 550,
+  "strike_step": 10.0
+ },
+ "TATAELXSI": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 50.0
+ },
+ "TATAPOWER": {
+  "exchange": "NFO",
+  "lot_size": 1450,
+  "strike_step": 5.0
+ },
+ "TATASTEEL": {
+  "exchange": "NFO",
+  "lot_size": 2750,
+  "strike_step": 2.5
+ },
+ "TCS": {
+  "exchange": "NFO",
+  "lot_size": 225,
+  "strike_step": 20.0
+ },
+ "TECHM": {
+  "exchange": "NFO",
+  "lot_size": 600,
+  "strike_step": 20.0
+ },
+ "TIINDIA": {
+  "exchange": "NFO",
+  "lot_size": 200,
+  "strike_step": 50.0
+ },
+ "TITAN": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "TMPV": {
+  "exchange": "NFO",
+  "lot_size": 1600,
+  "strike_step": 5.0
+ },
+ "TORNTPHARM": {
+  "exchange": "NFO",
+  "lot_size": 125,
+  "strike_step": 50.0
+ },
+ "TRENT": {
+  "exchange": "NFO",
+  "lot_size": 225,
+  "strike_step": 50.0
+ },
+ "TVSMOTOR": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "ULTRACEMCO": {
+  "exchange": "NFO",
+  "lot_size": 50,
+  "strike_step": 100.0
+ },
+ "UNIONBANK": {
+  "exchange": "NFO",
+  "lot_size": 4425,
+  "strike_step": 2.5
+ },
+ "UNITDSPR": {
+  "exchange": "NFO",
+  "lot_size": 400,
+  "strike_step": 20.0
+ },
+ "UNOMINDA": {
+  "exchange": "NFO",
+  "lot_size": 550,
+  "strike_step": 20.0
+ },
+ "UPL": {
+  "exchange": "NFO",
+  "lot_size": 1355,
+  "strike_step": 10.0
+ },
+ "VBL": {
+  "exchange": "NFO",
+  "lot_size": 1275,
+  "strike_step": 10.0
+ },
+ "VEDL": {
+  "exchange": "NFO",
+  "lot_size": 1150,
+  "strike_step": 5.0
+ },
+ "VMM": {
+  "exchange": "NFO",
+  "lot_size": 4850,
+  "strike_step": 2.5
+ },
+ "VOLTAS": {
+  "exchange": "NFO",
+  "lot_size": 375,
+  "strike_step": 20.0
+ },
+ "WAAREEENER": {
+  "exchange": "NFO",
+  "lot_size": 175,
+  "strike_step": 50.0
+ },
+ "WIPRO": {
+  "exchange": "NFO",
+  "lot_size": 3000,
+  "strike_step": 2.5
+ },
+ "YESBANK": {
+  "exchange": "NFO",
+  "lot_size": 31100,
+  "strike_step": 1.0
+ },
+ "ZYDUSLIFE": {
+  "exchange": "NFO",
+  "lot_size": 900,
+  "strike_step": 10.0
+ }
+}
