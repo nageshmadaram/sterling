@@ -37,10 +37,11 @@ from app.engines.option_contracts import spec_for
 from .config import SnapbackConfig
 from .models import Bars, ist_day
 from .pricing import bs_delta, bs_price, implied_vol_proxy, realized_vol, strike_for_delta
+from .regime import allowed
 from .strategy import Features, entry_indices, features
 
 ExitReason = Literal["horizon", "premium_stop", "premium_trail", "mean_touch",
-                     "runner", "tape_ended"]
+                     "runner", "regime_flip", "tape_ended"]
 
 
 @dataclass(frozen=True)
@@ -297,7 +298,7 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
             continue
         t = _run_one(symbol, bars, f, iv_series, cfg, cost, i, side, spec, note,
                      beta_by_day=betas.get(symbol), market_at=market_at,
-                     fut_cost=fut_cost)
+                     fut_cost=fut_cost, gate=gate)
         if t is None:
             res.untraded.setdefault(key, "the replay could not price this signal")
             continue
@@ -313,7 +314,8 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
              spec, note: Callable[[str], None], *,
              beta_by_day: Optional[Mapping[str, float]] = None,
              market_at: Optional[Mapping[str, float]] = None,
-             fut_cost=None) -> Optional[Trade]:
+             fut_cost=None,
+             gate: Optional[Mapping[str, bool]] = None) -> Optional[Trade]:
     n = len(bars)
     call = side == "fade_down"
     entry_bar = i + 1                       # fill at the NEXT session's open
@@ -366,6 +368,7 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
     best_run = 0.0
     exit_bar = min(horizon_bar, n - 1)
     prem_out = 0.0
+    shut = 0
 
     for d in range(entry_bar, min(last_bar + 1, n)):
         years = max(dte - (d - i), 1) / 365.0
@@ -397,6 +400,16 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
             if touched:
                 exit_bar, prem_out, reason = d, close_prem, "mean_touch"
                 break
+        # The regime the entry was gated on, checked while the position is
+        # live. A trade taken because the market was falling is a trade whose
+        # premise has expired when the market stops falling; `exit_on_regime_flip`
+        # is how many sessions of that are tolerated before giving it up.
+        if cfg.exit_on_regime_flip and gate is not None and d > entry_bar:
+            shut = 0 if allowed(gate, bars.day(d)) else shut + 1
+            if shut >= cfg.exit_on_regime_flip:
+                exit_bar, prem_out, reason = d, close_prem, "regime_flip"
+                break
+
         # The horizon, and the one case that survives it. The edge here is a
         # right TAIL, and a fixed horizon closes a winner mid-move as readily as
         # it closes a loser. A trade already at ``runner_mult`` times its cost

@@ -272,6 +272,7 @@ class TestConfigValidation:
         c = SnapbackConfig()
         assert (c.target_delta, c.min_dte, c.hold_days, c.lookback_days) == (
             0.70, 40, 15, 20)
+        assert c.max_rv_pct == 70.0
         assert c.allow_fade_down is False
         assert c.enabled is False and c.auto_execute is False
         assert c.sides() == ("fade_up",)

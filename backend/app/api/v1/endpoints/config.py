@@ -716,10 +716,11 @@ async def snapback_validation(user: UserContext = Depends(get_current_user)) -> 
     """What the walk-forward harness found, and what it therefore permits.
 
     The record carries the checks that PASSED as well as the verdict. This
-    engine clears six of nine — including the entry-timing permutation that
-    every other strategy in this repo has failed, and the priced-edge check at a
-    break-even vol multiple of 2.01 against a market charging 1.15-1.30 — and
-    misses on two sample-size facts and a year-consistency bar. A bare "not
+    engine clears seven of nine — including the entry-timing permutation that
+    every other strategy in this repo has failed, the priced-edge check at a
+    break-even vol multiple of 2.22 against a market charging 1.15-1.30, and the
+    day-clustered interval that nothing here has ever cleared — and misses on
+    the deflated Sharpe and a year-consistency bar. A bare "not
     promoted" would read identically to a strategy whose entries lose money, and
     those are not the same thing to an operator deciding whether to arm one by
     hand.

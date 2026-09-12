@@ -5,8 +5,8 @@ a broker object, so the replay that produced the numbers and the live scan run
 the same code.
 
 Nothing in this module places an order. Snapback has not cleared the
-walk-forward gate — it passes six of nine checks and misses on two sample-size
-facts — so ``auto_execute`` defaults off and there is no execution path here.
+walk-forward gate — it passes seven of nine checks and misses on the deflated
+Sharpe and a year-consistency bar — so ``auto_execute`` defaults off and there is no execution path here.
 Arming is the operator's, through the shared order route every engine uses.
 
 **This engine scans DAILY bars.** That is the single biggest difference from

@@ -62,6 +62,11 @@ class Features:
     prior_low: NDArray[np.float64]
     rv: NDArray[np.float64]
     iv: NDArray[np.float64]
+    #: Where ``rv[i]`` sits in its OWN trailing year, 0-100. The option this
+    #: engine buys is priced off realised vol, so this is how dear the contract
+    #: is by its own instrument's standards — the one cheapness measure
+    #: available without an option tape.
+    rv_pct: NDArray[np.float64]
 
 
 def features(bars: Bars, cfg: SnapbackConfig) -> Features:
@@ -96,7 +101,53 @@ def features(bars: Bars, cfg: SnapbackConfig) -> Features:
     rv = realized_vol(bars.close, cfg.rv_window)
     return Features(ema=e, atr=a, stretch=stretch, prior_high=prior_high,
                     prior_low=prior_low, rv=rv,
+                    # LAZY. The walk-forward calls `features` once per variant
+                    # per fold per instrument — eighty thousand times — and a
+                    # windowed rank nobody reads is eighty thousand windows of
+                    # wall clock for a filter that is switched off.
+                    rv_pct=(_rolling_pct(rv, RV_PCT_WINDOW)
+                            if cfg.max_rv_pct < 100.0 else _EMPTY_PCT),
                     iv=implied_vol_proxy(rv, cfg.assumed_vrp))
+
+
+#: Sessions the realised-vol rank is measured against — one trading year. It is
+#: a module constant rather than a literal because ``warmup_bars()`` has to know
+#: it: a window the warm-up does not cover is all-NaN inside a walk-forward
+#: fold, and this engine has now been bitten by that twice. The first time
+#: (``market_ema``) it failed OPEN and doubled the trade count of a stricter
+#: gate; this one failed CLOSED, at zero out-of-sample trades.
+RV_PCT_WINDOW = 250
+
+#: Stands in for the rank when the filter is off. Indexing it is a refusal, not
+#: a value, and ``fires`` only reaches it behind ``max_rv_pct < 100``.
+_EMPTY_PCT: NDArray[np.float64] = np.array([], dtype=np.float64)
+
+
+def _rolling_pct(x: NDArray[np.float64], window: int) -> NDArray[np.float64]:
+    """Percentile rank of each value within its own trailing ``window``.
+
+    Causal by construction — index ``i`` ranks against ``[i-window, i]`` — and
+    NaN until the window fills, so a rank computed from four observations never
+    reads as a rank at all.
+    """
+    n = len(x)
+    out = np.full(n, np.nan)
+    if n < window:
+        return out
+    # One strided view rather than a Python loop. The loop form is 250 windowed
+    # comparisons per bar per instrument — 112 million of them across this
+    # engine's nine-year, 202-name sample, which is minutes of wall clock on a
+    # feature nothing else in the file costs more than milliseconds.
+    win = np.lib.stride_tricks.sliding_window_view(x, window)
+    ok = np.isfinite(win)
+    counts = ok.sum(axis=1)
+    last = x[window - 1:]
+    below = np.where(ok & (win <= last[:, None]), 1.0, 0.0).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ranks = 100.0 * below / counts
+    ranks[(counts < window // 2) | ~np.isfinite(last)] = np.nan
+    out[window - 1:] = ranks
+    return out
 
 
 def fires(f: Features, i: int, side: str, cfg: SnapbackConfig,
@@ -106,6 +157,15 @@ def fires(f: Features, i: int, side: str, cfg: SnapbackConfig,
         return False
     if not np.isfinite(f.rv[i]) or f.rv[i] <= 0:
         return False
+    # Refuse a contract that is dear by its own instrument's standards. This is
+    # the only cheapness test available without an option tape: the premium here
+    # is modelled off realised vol, so a realised vol sitting at the top of its
+    # own year IS an expensive option, whatever the setup looks like.
+    if cfg.max_rv_pct < 100.0:
+        if i >= len(f.rv_pct) or not np.isfinite(f.rv_pct[i]):
+            return False
+        if f.rv_pct[i] > cfg.max_rv_pct:
+            return False
     if cfg.min_atr_bp > 0:
         px = float(bars.close[i])
         if px <= 0 or (f.atr[i] / px) * 10_000.0 < cfg.min_atr_bp:

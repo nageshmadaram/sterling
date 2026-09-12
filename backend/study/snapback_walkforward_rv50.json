@@ -1,0 +1,3583 @@
+{
+  "folds": [
+    {
+      "fold": 0,
+      "in_sample": [
+        "2017-09-12",
+        "2018-07-02"
+      ],
+      "out_of_sample": [
+        "2018-07-23",
+        "2018-10-22~"
+      ],
+      "purge_days": 15,
+      "chosen": null,
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -Infinity,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": null,
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 1,
+      "in_sample": [
+        "2017-12-07",
+        "2018-09-28"
+      ],
+      "out_of_sample": [
+        "2018-10-23",
+        "2019-01-17~"
+      ],
+      "purge_days": 15,
+      "chosen": null,
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -Infinity,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": null,
+      "oos_fixed": {
+        "trades": 2,
+        "n_days": 2,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 2.78,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 50.0,
+        "net": 15930.53,
+        "gross": 15021.9,
+        "costs": 278.57,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.11,
+        "per_year_pct": {
+          "2019": 2.78
+        },
+        "per_symbol_net": {
+          "BANKINDIA": 18670.51,
+          "APOLLOHOSP": -2739.98
+        }
+      }
+    },
+    {
+      "fold": 2,
+      "in_sample": [
+        "2018-03-07",
+        "2018-12-28"
+      ],
+      "out_of_sample": [
+        "2019-01-18",
+        "2019-04-15~"
+      ],
+      "purge_days": 15,
+      "chosen": null,
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -Infinity,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": null,
+      "oos_fixed": {
+        "trades": 6,
+        "n_days": 4,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -2.947,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 33.33,
+        "net": 2102.43,
+        "gross": -28747.34,
+        "costs": 561.05,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.59,
+        "total_return_pct": -0.56,
+        "per_year_pct": {
+          "2019": -4.6
+        },
+        "per_symbol_net": {
+          "TCS": -5937.68,
+          "HCLTECH": -4120.14,
+          "MPHASIS": 13962.94,
+          "HINDZINC": -50.3,
+          "UPL": 2575.85,
+          "VOLTAS": -4328.24
+        }
+      }
+    },
+    {
+      "fold": 3,
+      "in_sample": [
+        "2018-06-04",
+        "2019-03-26"
+      ],
+      "out_of_sample": [
+        "2019-04-16",
+        "2019-07-15~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -0.14467,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -0.19315,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 4,
+        "n_days": 4,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -0.495,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 25.0,
+        "net": -3474.84,
+        "gross": -4502.58,
+        "costs": 253.12,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.45,
+        "total_return_pct": -0.05,
+        "per_year_pct": {
+          "2019": -0.5
+        },
+        "per_symbol_net": {
+          "LTM": -4879.69,
+          "SOLARINDS": -1314.18,
+          "NAM-INDIA": -36.39,
+          "AMBER": 2755.42
+        }
+      },
+      "oos_fixed": {
+        "trades": 2,
+        "n_days": 2,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -18.155,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": -4916.08,
+        "gross": -5147.25,
+        "costs": 133.67,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.01,
+        "total_return_pct": -0.73,
+        "per_year_pct": {
+          "2019": -18.15
+        },
+        "per_symbol_net": {
+          "LTM": -4879.69,
+          "NAM-INDIA": -36.39
+        }
+      }
+    },
+    {
+      "fold": 4,
+      "in_sample": [
+        "2018-08-29",
+        "2019-06-25"
+      ],
+      "out_of_sample": [
+        "2019-07-16",
+        "2019-10-15~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.18534,
+        "s1.0_h5_d0.7": -0.17386,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -0.21264,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 54,
+        "n_days": 27,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 5.628,
+        "t_stat": 0.986,
+        "ci_pct": [
+          -8.87,
+          13.55
+        ],
+        "win_rate": 46.3,
+        "net": 98311.42,
+        "gross": 101163.42,
+        "costs": 5334.99,
+        "sharpe": 2.362,
+        "max_drawdown_pct": -6.23,
+        "total_return_pct": 14.31,
+        "per_year_pct": {
+          "2019": 13.54
+        },
+        "per_symbol_net": {
+          "DABUR": 6767.63,
+          "DIVISLAB": 2889.69,
+          "TORNTPHARM": 3483.25,
+          "UNITDSPR": 1565.73,
+          "BIOCON": 15910.04,
+          "KOTAKBANK": -991.32,
+          "TIINDIA": 12201.38,
+          "ASIANPAINT": -10183.62,
+          "DRREDDY": 2412.4,
+          "ICICIGI": -13538.92,
+          "NAM-INDIA": -5360.29,
+          "TCS": 4366.81,
+          "MARICO": 7844.56,
+          "VOLTAS": 9668.07,
+          "RADICO": 933.76,
+          "HINDUNILVR": -872.04,
+          "MUTHOOTFIN": 6721.71,
+          "MPHASIS": -2509.16,
+          "NESTLEIND": 4195.11,
+          "INDIGO": -1133.78,
+          "ADANIENSOL": -1866.35,
+          "ASTRAL": -11431.34,
+          "PETRONET": -12203.04,
+          "COLPAL": 310.17,
+          "ICICIPRULI": 10443.66,
+          "INFY": 5276.41,
+          "PIIND": -5489.93,
+          "AUROPHARMA": 102121.56,
+          "BAJAJ-AUTO": -4342.2,
+          "LTM": 5019.83,
+          "ZYDUSLIFE": -8425.42,
+          "ABCAPITAL": 2856.81,
+          "ADANIENT": -3064.79,
+          "GODREJPROP": 1036.0,
+          "HEROMOTOCO": 1747.62,
+          "HINDALCO": -2049.48,
+          "CROMPTON": -12879.39,
+          "DMART": -6615.56,
+          "PAGEIND": -3192.68,
+          "GODREJCP": -3311.47
+        }
+      },
+      "oos_fixed": {
+        "trades": 35,
+        "n_days": 23,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 17.65,
+        "t_stat": 2.404,
+        "ci_pct": [
+          -2.69,
+          23.98
+        ],
+        "win_rate": 45.71,
+        "net": 163452.87,
+        "gross": 53865.68,
+        "costs": 3501.57,
+        "sharpe": 2.417,
+        "max_drawdown_pct": -5.89,
+        "total_return_pct": 11.98,
+        "per_year_pct": {
+          "2019": 17.59
+        },
+        "per_symbol_net": {
+          "DABUR": -18461.11,
+          "TIINDIA": 12201.38,
+          "ASIANPAINT": -10183.62,
+          "TCS": -2599.47,
+          "HINDUNILVR": -2576.21,
+          "RADICO": -1858.47,
+          "MARICO": 7913.43,
+          "MUTHOOTFIN": 13374.73,
+          "NAM-INDIA": -3056.71,
+          "NESTLEIND": 575.36,
+          "INDIGO": -4790.78,
+          "ADANIENSOL": 11020.23,
+          "PETRONET": -12447.51,
+          "ASTRAL": -11057.75,
+          "COLPAL": -6627.26,
+          "UNITDSPR": 6544.49,
+          "ICICIPRULI": 2539.48,
+          "DRREDDY": -7079.82,
+          "INFY": 14585.06,
+          "PIIND": -5489.93,
+          "LTM": 32308.67,
+          "ABCAPITAL": 61841.56,
+          "AUROPHARMA": 96638.94,
+          "BAJAJ-AUTO": 458.92,
+          "GODREJPROP": 3984.12,
+          "HEROMOTOCO": 1747.62,
+          "HINDALCO": -2932.77,
+          "DMART": -6615.56,
+          "PAGEIND": -3192.68,
+          "GODREJCP": -3311.47
+        }
+      }
+    },
+    {
+      "fold": 5,
+      "in_sample": [
+        "2018-11-29",
+        "2019-09-23"
+      ],
+      "out_of_sample": [
+        "2019-10-16",
+        "2020-01-10~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.01202,
+        "s1.0_h5_d0.7": -0.03524,
+        "s1.0_h10_d0.55": -0.07014,
+        "s1.0_h10_d0.7": -0.097,
+        "s1.5_h5_d0.55": 0.04399,
+        "s1.5_h5_d0.7": 0.04173,
+        "s1.5_h10_d0.55": 0.07234,
+        "s1.5_h10_d0.7": 0.03989,
+        "s2.0_h5_d0.55": -0.00744,
+        "s2.0_h5_d0.7": 0.02293,
+        "s2.0_h10_d0.55": -0.05646,
+        "s2.0_h10_d0.7": -0.07
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 6,
+      "in_sample": [
+        "2019-02-22",
+        "2019-12-20"
+      ],
+      "out_of_sample": [
+        "2020-01-13",
+        "2020-04-08~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.05436,
+        "s1.0_h5_d0.7": 0.03622,
+        "s1.0_h10_d0.55": -0.03094,
+        "s1.0_h10_d0.7": -0.06008,
+        "s1.5_h5_d0.55": 0.09493,
+        "s1.5_h5_d0.7": 0.07077,
+        "s1.5_h10_d0.55": 0.16375,
+        "s1.5_h10_d0.7": 0.09172,
+        "s2.0_h5_d0.55": 0.01699,
+        "s2.0_h5_d0.7": 0.02255,
+        "s2.0_h10_d0.55": 0.03473,
+        "s2.0_h10_d0.7": -0.0497
+      },
+      "oos_selected": {
+        "trades": 22,
+        "n_days": 8,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 96.632,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 18.18,
+        "net": 131488.89,
+        "gross": 225488.09,
+        "costs": 1958.67,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -10.74,
+        "total_return_pct": 14.95,
+        "per_year_pct": {
+          "2020": 36.17
+        },
+        "per_symbol_net": {
+          "AMBER": -2462.79,
+          "DIVISLAB": -4913.97,
+          "DIXON": -2162.81,
+          "KEI": 7702.1,
+          "NAUKRI": -4609.45,
+          "PIIND": -3770.33,
+          "SOLARINDS": -653.21,
+          "SRF": -1308.61,
+          "CROMPTON": -7940.32,
+          "DMART": -5325.04,
+          "JUBLFOOD": -8098.12,
+          "PIDILITIND": -12109.09,
+          "SUPREMEIND": -1990.68,
+          "BAJAJHLDNG": -3322.89,
+          "BAJAJ-AUTO": 66610.82,
+          "BAJFINANCE": -5131.14,
+          "ADANIENT": -1833.88,
+          "ADANIGREEN": 27327.97,
+          "NAM-INDIA": -4865.26,
+          "APOLLOHOSP": -1710.27,
+          "TECHM": 102055.86
+        }
+      },
+      "oos_fixed": {
+        "trades": 22,
+        "n_days": 8,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 70.666,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 22.73,
+        "net": 122699.92,
+        "gross": 243463.78,
+        "costs": 2314.63,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -11.62,
+        "total_return_pct": 10.0,
+        "per_year_pct": {
+          "2020": 23.73
+        },
+        "per_symbol_net": {
+          "AMBER": -4645.02,
+          "DIVISLAB": -4913.97,
+          "DIXON": -2162.81,
+          "KEI": 7702.1,
+          "NAUKRI": -9723.46,
+          "PIIND": -5995.99,
+          "SOLARINDS": -653.21,
+          "SRF": -3743.51,
+          "CROMPTON": -12739.47,
+          "DMART": -15466.53,
+          "JUBLFOOD": -12261.51,
+          "PIDILITIND": -16990.14,
+          "SUPREMEIND": -5112.29,
+          "BAJAJHLDNG": -4733.59,
+          "BAJAJ-AUTO": 68851.07,
+          "BAJFINANCE": -10198.55,
+          "ADANIENT": -1833.88,
+          "ADANIGREEN": 29768.71,
+          "NAM-INDIA": -11716.58,
+          "APOLLOHOSP": 34748.14,
+          "TECHM": 104520.41
+        }
+      }
+    },
+    {
+      "fold": 7,
+      "in_sample": [
+        "2019-05-27",
+        "2020-03-17"
+      ],
+      "out_of_sample": [
+        "2020-04-09",
+        "2020-07-07~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.03093,
+        "s1.0_h5_d0.7": 0.00162,
+        "s1.0_h10_d0.55": 0.12222,
+        "s1.0_h10_d0.7": 0.03209,
+        "s1.5_h5_d0.55": 0.06502,
+        "s1.5_h5_d0.7": 0.02604,
+        "s1.5_h10_d0.55": 0.32883,
+        "s1.5_h10_d0.7": 0.18525,
+        "s2.0_h5_d0.55": -0.0109,
+        "s2.0_h5_d0.7": -0.02311,
+        "s2.0_h10_d0.55": 0.14424,
+        "s2.0_h10_d0.7": 0.03306
+      },
+      "oos_selected": {
+        "trades": 5,
+        "n_days": 5,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -44.751,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": -30311.18,
+        "gross": -22478.44,
+        "costs": 341.61,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.83,
+        "total_return_pct": -4.4,
+        "per_year_pct": {
+          "2020": -44.75
+        },
+        "per_symbol_net": {
+          "ADANIGREEN": -14815.21,
+          "BHARTIARTL": -13996.45,
+          "MCX": -1499.52
+        }
+      },
+      "oos_fixed": {
+        "trades": 4,
+        "n_days": 4,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -46.034,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": -39298.37,
+        "gross": -27964.92,
+        "costs": 320.19,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.04,
+        "total_return_pct": -3.63,
+        "per_year_pct": {
+          "2020": -46.03
+        },
+        "per_symbol_net": {
+          "ADANIGREEN": -17558.57,
+          "BHARTIARTL": -20240.28,
+          "MCX": -1499.52
+        }
+      }
+    },
+    {
+      "fold": 8,
+      "in_sample": [
+        "2019-08-22",
+        "2020-06-17"
+      ],
+      "out_of_sample": [
+        "2020-07-08",
+        "2020-09-29~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.0909,
+        "s1.0_h5_d0.7": -0.08537,
+        "s1.0_h10_d0.55": 0.14744,
+        "s1.0_h10_d0.7": 0.0555,
+        "s1.5_h5_d0.55": -0.01242,
+        "s1.5_h5_d0.7": -0.05971,
+        "s1.5_h10_d0.55": 0.33744,
+        "s1.5_h10_d0.7": 0.20647,
+        "s2.0_h5_d0.55": -0.07051,
+        "s2.0_h5_d0.7": -0.0859,
+        "s2.0_h10_d0.55": 0.28845,
+        "s2.0_h10_d0.7": 0.14746
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 9,
+      "in_sample": [
+        "2019-11-22",
+        "2020-09-09"
+      ],
+      "out_of_sample": [
+        "2020-09-30",
+        "2020-12-24~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.19455,
+        "s1.0_h5_d0.7": -0.21847,
+        "s1.0_h10_d0.55": 0.28938,
+        "s1.0_h10_d0.7": 0.17184,
+        "s1.5_h5_d0.55": -0.21307,
+        "s1.5_h5_d0.7": -0.24441,
+        "s1.5_h10_d0.55": 0.40702,
+        "s1.5_h10_d0.7": 0.25265,
+        "s2.0_h5_d0.55": -0.18872,
+        "s2.0_h5_d0.7": -0.20801,
+        "s2.0_h10_d0.55": 0.31061,
+        "s2.0_h10_d0.7": 0.1895
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 10,
+      "in_sample": [
+        "2020-02-14",
+        "2020-12-04"
+      ],
+      "out_of_sample": [
+        "2020-12-28",
+        "2021-03-23~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.22462,
+        "s1.0_h5_d0.7": -0.24096,
+        "s1.0_h10_d0.55": -0.134,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 11,
+      "in_sample": [
+        "2020-05-19",
+        "2021-03-02"
+      ],
+      "out_of_sample": [
+        "2021-03-24",
+        "2021-06-22~"
+      ],
+      "purge_days": 15,
+      "chosen": null,
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -Infinity,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": null,
+      "oos_fixed": {
+        "trades": 7,
+        "n_days": 6,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 9.236,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 28.57,
+        "net": 5044.03,
+        "gross": -28540.02,
+        "costs": 938.03,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.29,
+        "total_return_pct": 0.41,
+        "per_year_pct": {
+          "2021": 3.38
+        },
+        "per_symbol_net": {
+          "CIPLA": -12722.81,
+          "LAURUSLABS": -28975.79,
+          "DABUR": 62642.1,
+          "AUROPHARMA": -19421.97,
+          "SUNPHARMA": -5416.17,
+          "APOLLOHOSP": 8938.67
+        }
+      }
+    },
+    {
+      "fold": 12,
+      "in_sample": [
+        "2020-08-12",
+        "2021-06-02"
+      ],
+      "out_of_sample": [
+        "2021-06-23",
+        "2021-09-17~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.17089,
+        "s1.0_h5_d0.7": 0.13598,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 13,
+      "in_sample": [
+        "2020-11-05",
+        "2021-08-27"
+      ],
+      "out_of_sample": [
+        "2021-09-20",
+        "2021-12-15~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.17089,
+        "s1.0_h5_d0.7": 0.11283,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 11,
+        "n_days": 9,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.525,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 54.55,
+        "net": 42158.6,
+        "gross": 19039.84,
+        "costs": 1349.74,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -2.23,
+        "total_return_pct": -0.72,
+        "per_year_pct": {
+          "2021": -3.19
+        },
+        "per_symbol_net": {
+          "ASIANPAINT": 8888.48,
+          "ADANIGREEN": 22532.81,
+          "ADANIENSOL": 35305.49,
+          "TCS": -6298.49,
+          "APLAPOLLO": -2873.54,
+          "ABCAPITAL": -7568.29,
+          "HINDZINC": 447.21,
+          "CUMMINSIND": -4256.29,
+          "CGPOWER": -4909.86,
+          "DIXON": 891.08
+        }
+      },
+      "oos_fixed": {
+        "trades": 11,
+        "n_days": 6,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.143,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 45.45,
+        "net": 17964.36,
+        "gross": 1683.44,
+        "costs": 1660.82,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -2.38,
+        "total_return_pct": -0.68,
+        "per_year_pct": {
+          "2021": -2.88
+        },
+        "per_symbol_net": {
+          "ADANIGREEN": -15757.8,
+          "POWERGRID": -6275.6,
+          "ADANIENSOL": 45837.36,
+          "TCS": 14683.62,
+          "ABCAPITAL": -10455.69,
+          "HINDZINC": -540.23,
+          "APLAPOLLO": -13407.03,
+          "CGPOWER": -4909.86,
+          "CUMMINSIND": 7594.58,
+          "DIXON": 1195.01
+        }
+      }
+    },
+    {
+      "fold": 14,
+      "in_sample": [
+        "2021-02-02",
+        "2021-11-25"
+      ],
+      "out_of_sample": [
+        "2021-12-16",
+        "2022-03-11~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.18707,
+        "s1.0_h5_d0.7": 0.12262,
+        "s1.0_h10_d0.55": 0.12998,
+        "s1.0_h10_d0.7": 0.07879,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": 0.13262,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": {
+        "trades": 33,
+        "n_days": 15,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 0.758,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 48.48,
+        "net": 76689.5,
+        "gross": -94913.79,
+        "costs": 3621.87,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -4.55,
+        "total_return_pct": 3.51,
+        "per_year_pct": {
+          "2021": 3.04,
+          "2022": 9.07
+        },
+        "per_symbol_net": {
+          "PERSISTENT": 20739.03,
+          "WIPRO": -12877.83,
+          "TECHM": -14656.5,
+          "COFORGE": -9217.03,
+          "TCS": -6642.67,
+          "MAXHEALTH": -4823.31,
+          "ASIANPAINT": -7899.68,
+          "LTM": -12129.82,
+          "PIDILITIND": -1478.17,
+          "SUNPHARMA": -3880.46,
+          "UPL": 9674.7,
+          "DRREDDY": 6524.18,
+          "EICHERMOT": -473.79,
+          "LAURUSLABS": 23036.29,
+          "ALKEM": -3557.34,
+          "CIPLA": 17328.69,
+          "HCLTECH": 12148.69,
+          "TITAN": -7149.76,
+          "ADANIENSOL": 44689.23,
+          "CHOLAFIN": 14863.13,
+          "BANDHANBNK": 27434.45,
+          "SBIN": 3469.66,
+          "INDIANB": -3749.68,
+          "HINDALCO": -14483.17,
+          "VEDL": -4263.21,
+          "COALINDIA": 1520.73,
+          "NATIONALUM": 1269.06,
+          "JSWENERGY": 1274.08
+        }
+      },
+      "oos_fixed": {
+        "trades": 30,
+        "n_days": 15,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 9.369,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 43.33,
+        "net": 439450.35,
+        "gross": 360596.0,
+        "costs": 5211.53,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -4.37,
+        "total_return_pct": 11.91,
+        "per_year_pct": {
+          "2021": 40.79,
+          "2022": -1.73
+        },
+        "per_symbol_net": {
+          "PERSISTENT": -2617.97,
+          "WIPRO": 164201.73,
+          "TECHM": -20284.27,
+          "MAXHEALTH": -8214.47,
+          "ASIANPAINT": -12085.17,
+          "LTM": 78594.55,
+          "PIDILITIND": -4053.81,
+          "SUNPHARMA": -3995.88,
+          "DRREDDY": 20072.05,
+          "LAURUSLABS": 29741.6,
+          "CIPLA": 22473.39,
+          "COFORGE": 83732.04,
+          "HCLTECH": 62062.07,
+          "TCS": -6388.85,
+          "ADANIENSOL": 60049.02,
+          "ANGELONE": 41365.87,
+          "CHOLAFIN": -4948.55,
+          "BANDHANBNK": -661.69,
+          "BANKBARODA": -12506.86,
+          "SBIN": 16168.28,
+          "INDIANB": -5825.77,
+          "HINDALCO": -35581.65,
+          "VEDL": -6598.78,
+          "COALINDIA": -17636.98,
+          "NATIONALUM": -11476.81,
+          "JSWENERGY": 13867.26
+        }
+      }
+    },
+    {
+      "fold": 15,
+      "in_sample": [
+        "2021-05-04",
+        "2022-02-18"
+      ],
+      "out_of_sample": [
+        "2022-03-14",
+        "2022-06-09~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.02918,
+        "s1.0_h5_d0.7": 0.00011,
+        "s1.0_h10_d0.55": -0.01544,
+        "s1.0_h10_d0.7": -0.02545,
+        "s1.5_h5_d0.55": 0.10749,
+        "s1.5_h5_d0.7": 0.0604,
+        "s1.5_h10_d0.55": 0.07289,
+        "s1.5_h10_d0.7": 0.05042,
+        "s2.0_h5_d0.55": 0.08386,
+        "s2.0_h5_d0.7": 0.02829,
+        "s2.0_h10_d0.55": 0.04382,
+        "s2.0_h10_d0.7": 0.05005
+      },
+      "oos_selected": {
+        "trades": 16,
+        "n_days": 9,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 22.127,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 62.5,
+        "net": 100031.57,
+        "gross": 232238.3,
+        "costs": 2067.31,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.45,
+        "total_return_pct": 8.64,
+        "per_year_pct": {
+          "2022": 26.2
+        },
+        "per_symbol_net": {
+          "ANGELONE": -12867.18,
+          "ADANIENT": 6362.68,
+          "PGEL": 2920.37,
+          "360ONE": 8164.47,
+          "M&M": -1463.57,
+          "PAGEIND": -3001.53,
+          "SHREECEM": 2714.31,
+          "TVSMOTOR": -1045.94,
+          "ASIANPAINT": -7999.85,
+          "EICHERMOT": 635.64,
+          "AMBER": 30940.33,
+          "INDHOTEL": 15371.99,
+          "INDUSINDBK": 32585.72,
+          "KOTAKBANK": 23653.98,
+          "SBILIFE": 3060.15
+        }
+      },
+      "oos_fixed": {
+        "trades": 18,
+        "n_days": 10,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 36.947,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 50.0,
+        "net": 270235.98,
+        "gross": 435164.78,
+        "costs": 3173.9,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.3,
+        "total_return_pct": 15.6,
+        "per_year_pct": {
+          "2022": 42.22
+        },
+        "per_symbol_net": {
+          "ANGELONE": -21539.22,
+          "ADANIENT": -16725.64,
+          "PGEL": 7436.14,
+          "VBL": -6782.78,
+          "360ONE": 25425.5,
+          "M&M": -1463.57,
+          "PAGEIND": 20280.35,
+          "SHREECEM": 26498.25,
+          "TVSMOTOR": -5548.99,
+          "ABCAPITAL": 36167.12,
+          "ASIANPAINT": -6365.76,
+          "EICHERMOT": -13489.8,
+          "AMBER": 150226.08,
+          "INDHOTEL": 20151.56,
+          "INDUSINDBK": 38625.44,
+          "KOTAKBANK": 20153.89,
+          "SBILIFE": -2812.59
+        }
+      }
+    },
+    {
+      "fold": 16,
+      "in_sample": [
+        "2021-07-29",
+        "2022-05-20"
+      ],
+      "out_of_sample": [
+        "2022-06-10",
+        "2022-09-06~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.05713,
+        "s1.0_h5_d0.7": 0.07206,
+        "s1.0_h10_d0.55": 0.15553,
+        "s1.0_h10_d0.7": 0.14363,
+        "s1.5_h5_d0.55": 0.10917,
+        "s1.5_h5_d0.7": 0.09691,
+        "s1.5_h10_d0.55": 0.18839,
+        "s1.5_h10_d0.7": 0.16088,
+        "s2.0_h5_d0.55": 0.11088,
+        "s2.0_h5_d0.7": 0.03888,
+        "s2.0_h10_d0.55": 0.33733,
+        "s2.0_h10_d0.7": 0.20688
+      },
+      "oos_selected": {
+        "trades": 14,
+        "n_days": 9,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -12.419,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 21.43,
+        "net": -33338.19,
+        "gross": -63930.45,
+        "costs": 1133.79,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -6.22,
+        "total_return_pct": -3.59,
+        "per_year_pct": {
+          "2022": -12.72
+        },
+        "per_symbol_net": {
+          "TVSMOTOR": -4757.97,
+          "SHRIRAMFIN": -1421.4,
+          "CUMMINSIND": -3298.49,
+          "HAVELLS": 2620.34,
+          "ICICIGI": -6824.8,
+          "NESTLEIND": -5397.01,
+          "INDHOTEL": -4921.74,
+          "PIIND": -13799.96,
+          "SBIN": -2542.21,
+          "INDIANB": 2320.45,
+          "CROMPTON": -11978.34,
+          "INDUSTOWER": 16662.94
+        }
+      },
+      "oos_fixed": {
+        "trades": 35,
+        "n_days": 12,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -4.445,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 31.43,
+        "net": 42080.52,
+        "gross": -238048.48,
+        "costs": 3553.66,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -10.61,
+        "total_return_pct": -0.04,
+        "per_year_pct": {
+          "2022": 0.29
+        },
+        "per_symbol_net": {
+          "TVSMOTOR": -8001.2,
+          "SHRIRAMFIN": -3484.14,
+          "CGPOWER": -10492.4,
+          "RADICO": -2446.28,
+          "ITC": -6601.37,
+          "NESTLEIND": -5806.73,
+          "CUMMINSIND": -2800.31,
+          "FEDERALBNK": -6017.37,
+          "COLPAL": -4205.65,
+          "HAVELLS": -8193.81,
+          "ICICIGI": 22478.17,
+          "VBL": -7429.34,
+          "HDFCBANK": 11383.06,
+          "INDHOTEL": -6823.14,
+          "JUBLFOOD": 36055.06,
+          "PIIND": -20816.65,
+          "SBIN": -4728.16,
+          "UNITDSPR": -4383.65,
+          "UNOMINDA": -8639.82,
+          "CONCOR": -1288.42,
+          "DIXON": 21017.9,
+          "INDIANB": 4833.66,
+          "INDUSTOWER": 17824.99,
+          "LICHSGFIN": 2160.86,
+          "OBEROIRLTY": -4379.33,
+          "CROMPTON": -18259.18,
+          "DRREDDY": 69586.2,
+          "SUNPHARMA": 4127.69,
+          "ADANIENT": 116.81,
+          "INDIGO": -699.96,
+          "KOTAKBANK": -12006.97
+        }
+      }
+    },
+    {
+      "fold": 17,
+      "in_sample": [
+        "2021-10-26",
+        "2022-08-16"
+      ],
+      "out_of_sample": [
+        "2022-09-07",
+        "2022-12-02~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.01759,
+        "s1.0_h5_d0.7": 0.02798,
+        "s1.0_h10_d0.55": 0.05143,
+        "s1.0_h10_d0.7": 0.05973,
+        "s1.5_h5_d0.55": 0.0579,
+        "s1.5_h5_d0.7": 0.06019,
+        "s1.5_h10_d0.55": 0.10012,
+        "s1.5_h10_d0.7": 0.09876,
+        "s2.0_h5_d0.55": 0.05701,
+        "s2.0_h5_d0.7": 0.0133,
+        "s2.0_h10_d0.55": 0.24115,
+        "s2.0_h10_d0.7": 0.14481
+      },
+      "oos_selected": {
+        "trades": 2,
+        "n_days": 1,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -16.936,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": -5576.53,
+        "gross": -11813.65,
+        "costs": 149.9,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.39,
+        "total_return_pct": -0.68,
+        "per_year_pct": {
+          "2022": -16.94
+        },
+        "per_symbol_net": {
+          "HCLTECH": -2707.14,
+          "SUNPHARMA": -2869.39
+        }
+      },
+      "oos_fixed": {
+        "trades": 8,
+        "n_days": 5,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 51.087,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 37.5,
+        "net": 127842.68,
+        "gross": 60954.62,
+        "costs": 1070.43,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.24,
+        "total_return_pct": 3.83,
+        "per_year_pct": {
+          "2022": 24.28
+        },
+        "per_symbol_net": {
+          "ASIANPAINT": 144442.12,
+          "DRREDDY": 5693.41,
+          "BHARTIARTL": 7917.19,
+          "HCLTECH": -3252.69,
+          "SUNPHARMA": -4469.09,
+          "COALINDIA": -7150.23,
+          "COFORGE": -10060.82,
+          "PERSISTENT": -5277.21
+        }
+      }
+    },
+    {
+      "fold": 18,
+      "in_sample": [
+        "2022-01-20",
+        "2022-11-14"
+      ],
+      "out_of_sample": [
+        "2022-12-05",
+        "2023-02-27~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.08934,
+        "s1.0_h5_d0.7": 0.11152,
+        "s1.0_h10_d0.55": 0.15756,
+        "s1.0_h10_d0.7": 0.17275,
+        "s1.5_h5_d0.55": 0.12471,
+        "s1.5_h5_d0.7": 0.13858,
+        "s1.5_h10_d0.55": 0.18623,
+        "s1.5_h10_d0.7": 0.19133,
+        "s2.0_h5_d0.55": 0.05376,
+        "s2.0_h5_d0.7": 0.02786,
+        "s2.0_h10_d0.55": 0.30999,
+        "s2.0_h10_d0.7": 0.1909
+      },
+      "oos_selected": {
+        "trades": 27,
+        "n_days": 14,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -8.575,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 37.04,
+        "net": -70935.07,
+        "gross": -40798.83,
+        "costs": 2468.87,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -8.05,
+        "total_return_pct": -6.3,
+        "per_year_pct": {
+          "2023": -11.92
+        },
+        "per_symbol_net": {
+          "RBLBANK": -5544.03,
+          "SOLARINDS": 1775.23,
+          "CGPOWER": -5009.01,
+          "ZYDUSLIFE": -4290.47,
+          "HINDZINC": -4535.36,
+          "MFSL": -6596.86,
+          "MOTILALOFS": 6219.68,
+          "HCLTECH": -6172.55,
+          "LT": -6005.16,
+          "ULTRACEMCO": -4070.93,
+          "MARUTI": -4905.16,
+          "KPITTECH": -14577.86,
+          "M&M": 4239.87,
+          "POLYCAB": -5319.31,
+          "KEI": -5633.21,
+          "BLUESTARCO": -3668.38,
+          "BRITANNIA": 208.4,
+          "CHOLAFIN": -1897.0,
+          "INFY": 7072.36,
+          "ABB": -9634.7,
+          "ALKEM": -4493.46,
+          "LTM": -9699.78,
+          "PERSISTENT": 3387.71,
+          "BOSCHLTD": 4273.07,
+          "SIEMENS": 3941.84
+        }
+      },
+      "oos_fixed": {
+        "trades": 46,
+        "n_days": 24,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -0.081,
+        "t_stat": -0.018,
+        "ci_pct": [
+          -9.36,
+          8.26
+        ],
+        "win_rate": 34.78,
+        "net": -619.35,
+        "gross": 102026.46,
+        "costs": 5150.7,
+        "sharpe": 0.696,
+        "max_drawdown_pct": -13.74,
+        "total_return_pct": 3.27,
+        "per_year_pct": {
+          "2022": -22.21,
+          "2023": 6.76
+        },
+        "per_symbol_net": {
+          "JSWSTEEL": -2964.97,
+          "RBLBANK": -29564.32,
+          "SOLARINDS": 5162.04,
+          "HINDZINC": -17084.64,
+          "MFSL": -6843.2,
+          "ZYDUSLIFE": -4442.64,
+          "CGPOWER": -5209.69,
+          "M&M": -4479.55,
+          "HINDPETRO": 48985.6,
+          "OIL": -4148.7,
+          "MOTILALOFS": 21947.94,
+          "ULTRACEMCO": 402.63,
+          "CAMS": 797.7,
+          "HCLTECH": 5915.39,
+          "ICICIPRULI": 58154.55,
+          "LT": -11085.76,
+          "HDFCBANK": -7589.82,
+          "BAJAJ-AUTO": -4420.94,
+          "MARUTI": -7068.38,
+          "ITC": -7474.15,
+          "KEI": -7102.74,
+          "KPITTECH": -7214.02,
+          "POLYCAB": -8154.36,
+          "BLUESTARCO": -6558.78,
+          "BRITANNIA": 8229.46,
+          "INFY": -619.65,
+          "LTM": -12867.77,
+          "CHOLAFIN": -2546.32,
+          "RADICO": -798.35,
+          "ABB": -12906.72,
+          "SIEMENS": -4227.13,
+          "ALKEM": -7142.99,
+          "DRREDDY": -10579.47,
+          "LUPIN": 41440.28,
+          "SRF": -7675.96,
+          "ONGC": -2433.39,
+          "OFSS": 3723.7,
+          "PERSISTENT": 4420.75,
+          "BOSCHLTD": 5820.34,
+          "POWERINDIA": -2415.32
+        }
+      }
+    },
+    {
+      "fold": 19,
+      "in_sample": [
+        "2022-04-21",
+        "2023-02-07"
+      ],
+      "out_of_sample": [
+        "2023-02-28",
+        "2023-05-30~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.00297,
+        "s1.0_h5_d0.7": 0.01776,
+        "s1.0_h10_d0.55": 0.034,
+        "s1.0_h10_d0.7": 0.04933,
+        "s1.5_h5_d0.55": 0.01669,
+        "s1.5_h5_d0.7": 0.03032,
+        "s1.5_h10_d0.55": 0.09019,
+        "s1.5_h10_d0.7": 0.08645,
+        "s2.0_h5_d0.55": -0.02472,
+        "s2.0_h5_d0.7": -0.03532,
+        "s2.0_h10_d0.55": 0.22346,
+        "s2.0_h10_d0.7": 0.10929
+      },
+      "oos_selected": {
+        "trades": 12,
+        "n_days": 7,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 16.754,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 50.0,
+        "net": 50379.76,
+        "gross": 24773.99,
+        "costs": 1123.52,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.62,
+        "total_return_pct": 3.48,
+        "per_year_pct": {
+          "2023": 14.58
+        },
+        "per_symbol_net": {
+          "ABB": -4786.09,
+          "BLUESTARCO": -6525.74,
+          "POWERINDIA": 3778.9,
+          "MAXHEALTH": 1066.0,
+          "ADANIGREEN": 45296.71,
+          "AUROPHARMA": -5406.96,
+          "BOSCHLTD": 11489.79,
+          "DRREDDY": -3212.07,
+          "POLICYBZR": 9827.47,
+          "ULTRACEMCO": -3154.72,
+          "BAJAJ-AUTO": -4258.91,
+          "DMART": 6265.38
+        }
+      },
+      "oos_fixed": {
+        "trades": 33,
+        "n_days": 16,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 22.43,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 42.42,
+        "net": 142646.64,
+        "gross": 79157.85,
+        "costs": 3982.66,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -7.74,
+        "total_return_pct": 6.74,
+        "per_year_pct": {
+          "2023": 10.33
+        },
+        "per_symbol_net": {
+          "TIINDIA": 25195.52,
+          "ABB": -11313.39,
+          "ABCAPITAL": -5940.21,
+          "IEX": -29100.85,
+          "AMBER": 13293.21,
+          "COLPAL": -6353.72,
+          "BLUESTARCO": -8350.7,
+          "BOSCHLTD": -20626.22,
+          "INDUSINDBK": 54156.57,
+          "PETRONET": -13151.44,
+          "PNBHOUSING": 34593.46,
+          "RADICO": 2626.1,
+          "MAXHEALTH": -6507.98,
+          "POWERINDIA": 6068.73,
+          "CUMMINSIND": 33231.71,
+          "HINDPETRO": 12206.39,
+          "GODREJCP": 2150.02,
+          "TITAN": -3364.98,
+          "MANAPPURAM": -7597.31,
+          "SRF": -1774.41,
+          "ADANIGREEN": 71714.35,
+          "AUROPHARMA": -7282.19,
+          "HINDZINC": 15869.73,
+          "DRREDDY": -6987.16,
+          "POLICYBZR": 12430.93,
+          "ULTRACEMCO": -5133.01,
+          "BDL": -5982.23,
+          "HINDUNILVR": 18445.33,
+          "BAJAJ-AUTO": -5824.67,
+          "CHOLAFIN": -13958.53,
+          "DMART": 8301.91,
+          "VBL": -8388.32
+        }
+      }
+    },
+    {
+      "fold": 20,
+      "in_sample": [
+        "2022-07-15",
+        "2023-05-10"
+      ],
+      "out_of_sample": [
+        "2023-05-31",
+        "2023-08-24~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.04915,
+        "s1.0_h5_d0.7": 0.05996,
+        "s1.0_h10_d0.55": 0.06614,
+        "s1.0_h10_d0.7": 0.06365,
+        "s1.5_h5_d0.55": 0.05031,
+        "s1.5_h5_d0.7": 0.05473,
+        "s1.5_h10_d0.55": 0.13322,
+        "s1.5_h10_d0.7": 0.09678,
+        "s2.0_h5_d0.55": -0.01178,
+        "s2.0_h5_d0.7": 0.00441,
+        "s2.0_h10_d0.55": 0.01141,
+        "s2.0_h10_d0.7": 0.03975
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 21,
+      "in_sample": [
+        "2022-10-13",
+        "2023-08-03"
+      ],
+      "out_of_sample": [
+        "2023-08-25",
+        "2023-11-21~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.01425,
+        "s1.0_h5_d0.7": 0.01046,
+        "s1.0_h10_d0.55": -0.01191,
+        "s1.0_h10_d0.7": -0.00253,
+        "s1.5_h5_d0.55": -0.02992,
+        "s1.5_h5_d0.7": -0.00802,
+        "s1.5_h10_d0.55": 0.04729,
+        "s1.5_h10_d0.7": 0.02344,
+        "s2.0_h5_d0.55": -0.04066,
+        "s2.0_h5_d0.7": -0.01736,
+        "s2.0_h10_d0.55": -0.01939,
+        "s2.0_h10_d0.7": 0.01948
+      },
+      "oos_selected": {
+        "trades": 26,
+        "n_days": 12,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -4.366,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 34.62,
+        "net": 34027.88,
+        "gross": -49179.62,
+        "costs": 2390.53,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -2.93,
+        "total_return_pct": -0.99,
+        "per_year_pct": {
+          "2023": -1.7
+        },
+        "per_symbol_net": {
+          "SOLARINDS": -3906.18,
+          "DELHIVERY": -16237.33,
+          "HAVELLS": -2914.64,
+          "MARUTI": -5266.77,
+          "MCX": -1384.96,
+          "PERSISTENT": -12616.25,
+          "SIEMENS": 13413.11,
+          "BAJFINANCE": -964.03,
+          "LICHSGFIN": 5870.38,
+          "DMART": 6134.68,
+          "PAYTM": 50068.12,
+          "PGEL": 7235.06,
+          "SBILIFE": 8219.27,
+          "KALYANKJIL": -11737.77,
+          "TORNTPHARM": -3102.68,
+          "AUROPHARMA": -8699.02,
+          "BRITANNIA": 175.47,
+          "CUMMINSIND": -2797.75,
+          "EICHERMOT": -4449.89,
+          "PIIND": -1506.57,
+          "TVSMOTOR": -2006.68,
+          "INDUSINDBK": 5909.94,
+          "BDL": -4283.45,
+          "INDIANB": 18875.82
+        }
+      },
+      "oos_fixed": {
+        "trades": 27,
+        "n_days": 11,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 8.404,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 44.44,
+        "net": 174820.46,
+        "gross": 100367.81,
+        "costs": 3363.14,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -2.97,
+        "total_return_pct": 4.68,
+        "per_year_pct": {
+          "2023": 9.22
+        },
+        "per_symbol_net": {
+          "PGEL": 952.52,
+          "SOLARINDS": -6903.06,
+          "DELHIVERY": 8328.51,
+          "HAVELLS": -5746.67,
+          "MARUTI": -7435.0,
+          "MCX": -1384.96,
+          "PERSISTENT": -10276.77,
+          "SIEMENS": 58611.1,
+          "BAJFINANCE": 70839.9,
+          "LICHSGFIN": 2850.8,
+          "DMART": 14376.14,
+          "PAYTM": 71702.79,
+          "SBILIFE": 4811.54,
+          "KALYANKJIL": -19113.16,
+          "TORNTPHARM": -4420.52,
+          "AUROPHARMA": -13324.01,
+          "BRITANNIA": 911.03,
+          "CUMMINSIND": -5444.69,
+          "EICHERMOT": -6362.54,
+          "PIIND": -3545.66,
+          "TVSMOTOR": -3526.07,
+          "INDUSINDBK": 9872.96,
+          "BDL": -6089.09,
+          "BEL": 2498.71,
+          "INDIANB": 22636.66
+        }
+      }
+    },
+    {
+      "fold": 22,
+      "in_sample": [
+        "2023-01-09",
+        "2023-11-01"
+      ],
+      "out_of_sample": [
+        "2023-11-22",
+        "2024-02-16~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.00792,
+        "s1.0_h5_d0.7": 0.0157,
+        "s1.0_h10_d0.55": 0.00798,
+        "s1.0_h10_d0.7": 0.00278,
+        "s1.5_h5_d0.55": -0.00107,
+        "s1.5_h5_d0.7": 0.0087,
+        "s1.5_h10_d0.55": 0.07257,
+        "s1.5_h10_d0.7": 0.03975,
+        "s2.0_h5_d0.55": -0.02395,
+        "s2.0_h5_d0.7": -0.012,
+        "s2.0_h10_d0.55": -0.00687,
+        "s2.0_h10_d0.7": 0.02266
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 23,
+      "in_sample": [
+        "2023-04-10",
+        "2024-01-29"
+      ],
+      "out_of_sample": [
+        "2024-02-19",
+        "2024-05-17~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.06199,
+        "s1.0_h5_d0.7": 0.01821,
+        "s1.0_h10_d0.55": -0.02284,
+        "s1.0_h10_d0.7": 0.06966,
+        "s1.5_h5_d0.55": -0.03658,
+        "s1.5_h5_d0.7": 0.06555,
+        "s1.5_h10_d0.55": -0.0047,
+        "s1.5_h10_d0.7": 0.13803,
+        "s2.0_h5_d0.55": -0.02849,
+        "s2.0_h5_d0.7": 0.17937,
+        "s2.0_h10_d0.55": -0.0406,
+        "s2.0_h10_d0.7": 0.18513
+      },
+      "oos_selected": {
+        "trades": 2,
+        "n_days": 1,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -10.387,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": -10144.35,
+        "gross": -12486.16,
+        "costs": 307.3,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": -0.42,
+        "per_year_pct": {
+          "2024": -10.39
+        },
+        "per_symbol_net": {
+          "HEROMOTOCO": -2742.77,
+          "JINDALSTEL": -7401.58
+        }
+      },
+      "oos_fixed": {
+        "trades": 3,
+        "n_days": 3,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -12.056,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 33.33,
+        "net": -19837.09,
+        "gross": -32347.49,
+        "costs": 421.45,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.12,
+        "total_return_pct": -0.72,
+        "per_year_pct": {
+          "2024": -12.06
+        },
+        "per_symbol_net": {
+          "HEROMOTOCO": -16326.6,
+          "JINDALSTEL": -8344.25,
+          "ADANIPOWER": 4833.76
+        }
+      }
+    },
+    {
+      "fold": 24,
+      "in_sample": [
+        "2023-07-06",
+        "2024-04-26"
+      ],
+      "out_of_sample": [
+        "2024-05-18",
+        "2024-08-13~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.08469,
+        "s1.0_h5_d0.7": -0.00856,
+        "s1.0_h10_d0.55": -0.04855,
+        "s1.0_h10_d0.7": 0.03922,
+        "s1.5_h5_d0.55": -0.03658,
+        "s1.5_h5_d0.7": 0.06555,
+        "s1.5_h10_d0.55": -0.0047,
+        "s1.5_h10_d0.7": 0.13803,
+        "s2.0_h5_d0.55": -0.02849,
+        "s2.0_h5_d0.7": 0.17937,
+        "s2.0_h10_d0.55": -0.0406,
+        "s2.0_h10_d0.7": 0.18513
+      },
+      "oos_selected": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      },
+      "oos_fixed": {
+        "trades": 0,
+        "n_days": 0,
+        "allocation_pct": 0.0,
+        "mean_day_return_pct": 0.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 0.0,
+        "net": 0.0,
+        "gross": 0.0,
+        "costs": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown_pct": 0.0,
+        "total_return_pct": 0.0,
+        "per_year_pct": {},
+        "per_symbol_net": {}
+      }
+    },
+    {
+      "fold": 25,
+      "in_sample": [
+        "2023-10-03",
+        "2024-07-24"
+      ],
+      "out_of_sample": [
+        "2024-08-14",
+        "2024-11-07~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.07418,
+        "s1.0_h5_d0.7": -0.02523,
+        "s1.0_h10_d0.55": -0.04022,
+        "s1.0_h10_d0.7": 0.0158,
+        "s1.5_h5_d0.55": -0.02841,
+        "s1.5_h5_d0.7": 0.03713,
+        "s1.5_h10_d0.55": 0.00032,
+        "s1.5_h10_d0.7": 0.09527,
+        "s2.0_h5_d0.55": 0.02411,
+        "s2.0_h5_d0.7": 0.25444,
+        "s2.0_h10_d0.55": 0.00434,
+        "s2.0_h10_d0.7": 0.25927
+      },
+      "oos_selected": {
+        "trades": 7,
+        "n_days": 5,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -6.967,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 57.14,
+        "net": -24193.43,
+        "gross": -10613.48,
+        "costs": 954.12,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.21,
+        "total_return_pct": -1.52,
+        "per_year_pct": {
+          "2024": -10.85
+        },
+        "per_symbol_net": {
+          "COFORGE": -22116.56,
+          "MCX": -6592.04,
+          "GVT&D": 9484.44,
+          "MAXHEALTH": -14597.92,
+          "BANKINDIA": 1250.62,
+          "NATIONALUM": 8378.03
+        }
+      },
+      "oos_fixed": {
+        "trades": 11,
+        "n_days": 7,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -3.326,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 63.64,
+        "net": 32478.43,
+        "gross": 67611.94,
+        "costs": 2057.49,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.36,
+        "total_return_pct": 0.29,
+        "per_year_pct": {
+          "2024": 1.51
+        },
+        "per_symbol_net": {
+          "COFORGE": -26697.56,
+          "GLENMARK": 12355.4,
+          "MCX": -3482.24,
+          "GVT&D": 17179.86,
+          "MAZDOCK": 29152.06,
+          "MAXHEALTH": -17243.15,
+          "BANKINDIA": -8354.49,
+          "ADANIENSOL": 20781.83,
+          "NATIONALUM": 8378.03,
+          "PGEL": 408.69
+        }
+      }
+    },
+    {
+      "fold": 26,
+      "in_sample": [
+        "2023-12-29",
+        "2024-10-18"
+      ],
+      "out_of_sample": [
+        "2024-11-08",
+        "2025-02-03~"
+      ],
+      "purge_days": 15,
+      "chosen": null,
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -Infinity,
+        "s1.0_h5_d0.7": -Infinity,
+        "s1.0_h10_d0.55": -Infinity,
+        "s1.0_h10_d0.7": -Infinity,
+        "s1.5_h5_d0.55": -Infinity,
+        "s1.5_h5_d0.7": -Infinity,
+        "s1.5_h10_d0.55": -Infinity,
+        "s1.5_h10_d0.7": -Infinity,
+        "s2.0_h5_d0.55": -Infinity,
+        "s2.0_h5_d0.7": -Infinity,
+        "s2.0_h10_d0.55": -Infinity,
+        "s2.0_h10_d0.7": -Infinity
+      },
+      "oos_selected": null,
+      "oos_fixed": {
+        "trades": 53,
+        "n_days": 24,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 6.455,
+        "t_stat": 0.795,
+        "ci_pct": [
+          -4.2,
+          28.45
+        ],
+        "win_rate": 37.74,
+        "net": 617128.53,
+        "gross": 972076.89,
+        "costs": 10495.14,
+        "sharpe": 2.86,
+        "max_drawdown_pct": -14.63,
+        "total_return_pct": 15.29,
+        "per_year_pct": {
+          "2024": 7.32,
+          "2025": 33.65
+        },
+        "per_symbol_net": {
+          "PAYTM": 17669.53,
+          "PGEL": -32876.4,
+          "COFORGE": 44965.43,
+          "KFINTECH": -60839.76,
+          "POLICYBZR": -29637.29,
+          "WIPRO": -13790.94,
+          "360ONE": -33497.96,
+          "MAZDOCK": 40202.59,
+          "UNIONBANK": -6584.51,
+          "INDIGO": 22842.82,
+          "LAURUSLABS": -9269.56,
+          "LICI": 47349.19,
+          "CAMS": -27018.97,
+          "DIVISLAB": 10913.03,
+          "DIXON": 36483.82,
+          "GVT&D": -12401.38,
+          "INDHOTEL": 44584.34,
+          "LODHA": 137793.18,
+          "MAXHEALTH": -18074.03,
+          "OBEROIRLTY": -9696.35,
+          "PERSISTENT": -18428.63,
+          "PRESTIGE": 154586.97,
+          "MANKIND": -20479.52,
+          "RADICO": -10765.05,
+          "SUPREMEIND": 145356.96,
+          "UNITDSPR": -24469.15,
+          "MUTHOOTFIN": -24468.12,
+          "TORNTPHARM": 13426.56,
+          "POWERINDIA": 60357.17,
+          "LUPIN": -21860.4,
+          "SUNPHARMA": -7850.41,
+          "AUROPHARMA": 35238.88,
+          "FORCEMOT": 13700.2,
+          "GLENMARK": 63876.97,
+          "OIL": 109498.92,
+          "GODREJCP": -12676.64,
+          "SBILIFE": -11355.86,
+          "BSE": 31248.82,
+          "BRITANNIA": -8668.46,
+          "HEROMOTOCO": -15757.74,
+          "BAJAJ-AUTO": 11566.3,
+          "EICHERMOT": 5933.98
+        }
+      }
+    },
+    {
+      "fold": 27,
+      "in_sample": [
+        "2024-03-26",
+        "2025-01-15"
+      ],
+      "out_of_sample": [
+        "2025-02-04",
+        "2025-05-07~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h5_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.10642,
+        "s1.0_h5_d0.7": 0.06313,
+        "s1.0_h10_d0.55": 0.15597,
+        "s1.0_h10_d0.7": 0.06284,
+        "s1.5_h5_d0.55": 0.04818,
+        "s1.5_h5_d0.7": 0.00357,
+        "s1.5_h10_d0.55": 0.0733,
+        "s1.5_h10_d0.7": 0.03187,
+        "s2.0_h5_d0.55": 0.16006,
+        "s2.0_h5_d0.7": 0.0853,
+        "s2.0_h10_d0.55": 0.11999,
+        "s2.0_h10_d0.7": 0.13065
+      },
+      "oos_selected": {
+        "trades": 18,
+        "n_days": 9,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 5.649,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 55.56,
+        "net": 31560.41,
+        "gross": -50712.1,
+        "costs": 2066.92,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.56,
+        "total_return_pct": 1.04,
+        "per_year_pct": {
+          "2025": 2.98
+        },
+        "per_symbol_net": {
+          "HINDALCO": -15559.47,
+          "INDIGO": 8175.76,
+          "SHRIRAMFIN": 6766.42,
+          "FORCEMOT": 5463.16,
+          "SOLARINDS": -17066.3,
+          "FINNIFTY": -755.85,
+          "JSWENERGY": 10512.68,
+          "KOTAKBANK": 79.14,
+          "UNOMINDA": -8532.03,
+          "ADANIENSOL": 11165.56,
+          "COCHINSHIP": 9399.49,
+          "HDFCLIFE": -3437.48,
+          "MARICO": -9874.38,
+          "GODREJCP": 25409.23,
+          "UNITDSPR": 9814.48
+        }
+      },
+      "oos_fixed": {
+        "trades": 35,
+        "n_days": 14,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -16.952,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 34.29,
+        "net": 5329.14,
+        "gross": -151334.06,
+        "costs": 5309.44,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -7.27,
+        "total_return_pct": -2.84,
+        "per_year_pct": {
+          "2025": -3.9
+        },
+        "per_symbol_net": {
+          "JSWSTEEL": -24890.19,
+          "HINDALCO": -33869.74,
+          "INDIGO": -52419.41,
+          "JINDALSTEL": 11329.1,
+          "SHRIRAMFIN": -9647.59,
+          "FORCEMOT": -1613.08,
+          "SOLARINDS": -7788.95,
+          "DMART": -2177.29,
+          "ICICIBANK": -13530.51,
+          "SRF": 24990.18,
+          "CHOLAFIN": 8808.51,
+          "CIPLA": 13059.89,
+          "FINNIFTY": 2276.6,
+          "JSWENERGY": 37483.31,
+          "KOTAKBANK": -1754.67,
+          "UNOMINDA": 54771.68,
+          "ABCAPITAL": -11613.95,
+          "ADANIENSOL": -14268.45,
+          "BANKNIFTY": 115.46,
+          "BEL": -1443.66,
+          "CGPOWER": 62555.09,
+          "COALINDIA": -4178.53,
+          "COCHINSHIP": 3928.92,
+          "HDFCLIFE": -6111.65,
+          "HINDZINC": 27194.72,
+          "MARICO": -14748.23,
+          "GODREJCP": -14335.5,
+          "PIDILITIND": -2586.48,
+          "APOLLOHOSP": -8199.1,
+          "HINDPETRO": 13703.56,
+          "HINDUNILVR": -280.48,
+          "UNITDSPR": -6203.67,
+          "NBCC": -23226.75
+        }
+      }
+    },
+    {
+      "fold": 28,
+      "in_sample": [
+        "2024-06-25",
+        "2025-04-15"
+      ],
+      "out_of_sample": [
+        "2025-05-08",
+        "2025-07-30~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.06104,
+        "s1.0_h5_d0.7": 0.04192,
+        "s1.0_h10_d0.55": 0.14455,
+        "s1.0_h10_d0.7": 0.03215,
+        "s1.5_h5_d0.55": 0.00415,
+        "s1.5_h5_d0.7": -0.00121,
+        "s1.5_h10_d0.55": 0.07216,
+        "s1.5_h10_d0.7": 0.03013,
+        "s2.0_h5_d0.55": 0.10489,
+        "s2.0_h5_d0.7": 0.05766,
+        "s2.0_h10_d0.55": 0.15344,
+        "s2.0_h10_d0.7": 0.13449
+      },
+      "oos_selected": {
+        "trades": 4,
+        "n_days": 3,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -21.325,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 25.0,
+        "net": -26106.62,
+        "gross": -26506.81,
+        "costs": 410.84,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.98,
+        "total_return_pct": -1.61,
+        "per_year_pct": {
+          "2025": -20.21
+        },
+        "per_symbol_net": {
+          "TORNTPHARM": -5432.16,
+          "CIPLA": 383.0,
+          "LAURUSLABS": -15482.28,
+          "VBL": -5575.18
+        }
+      },
+      "oos_fixed": {
+        "trades": 4,
+        "n_days": 3,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -13.234,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 25.0,
+        "net": -20690.7,
+        "gross": -22282.84,
+        "costs": 536.3,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -0.16,
+        "total_return_pct": -1.43,
+        "per_year_pct": {
+          "2025": -17.9
+        },
+        "per_symbol_net": {
+          "CIPLA": -9523.03,
+          "TORNTPHARM": -7924.0,
+          "LAURUSLABS": 3755.5,
+          "VBL": -6999.17
+        }
+      }
+    },
+    {
+      "fold": 29,
+      "in_sample": [
+        "2024-09-19",
+        "2025-07-10"
+      ],
+      "out_of_sample": [
+        "2025-07-31",
+        "2025-10-28~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.06392,
+        "s1.0_h5_d0.7": 0.04302,
+        "s1.0_h10_d0.55": 0.14235,
+        "s1.0_h10_d0.7": 0.03938,
+        "s1.5_h5_d0.55": 0.00576,
+        "s1.5_h5_d0.7": -0.00743,
+        "s1.5_h10_d0.55": 0.07062,
+        "s1.5_h10_d0.7": 0.02004,
+        "s2.0_h5_d0.55": 0.11895,
+        "s2.0_h5_d0.7": 0.07403,
+        "s2.0_h10_d0.55": 0.1541,
+        "s2.0_h10_d0.7": 0.13172
+      },
+      "oos_selected": {
+        "trades": 30,
+        "n_days": 19,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -1.405,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 36.67,
+        "net": 3112.65,
+        "gross": -194285.59,
+        "costs": 3710.63,
+        "sharpe": 0.648,
+        "max_drawdown_pct": -3.94,
+        "total_return_pct": 1.13,
+        "per_year_pct": {
+          "2025": 2.12
+        },
+        "per_symbol_net": {
+          "GVT&D": -1189.71,
+          "KAYNES": -42456.51,
+          "BOSCHLTD": 21313.57,
+          "TVSMOTOR": 999.13,
+          "FORTIS": -9031.76,
+          "CUMMINSIND": -6757.78,
+          "INDIANB": 401.11,
+          "PAYTM": -13100.2,
+          "EICHERMOT": -14084.14,
+          "UNOMINDA": 11046.31,
+          "CGPOWER": -9488.4,
+          "DIXON": -6435.12,
+          "NATIONALUM": -8263.84,
+          "BAJAJ-AUTO": 23288.2,
+          "LTF": -12251.29,
+          "MANAPPURAM": 3844.94,
+          "DMART": 18327.77,
+          "KEI": 4283.76,
+          "AMBER": 19017.81,
+          "PNBHOUSING": 49832.07,
+          "HINDPETRO": -2799.34,
+          "HINDZINC": -8685.13,
+          "MUTHOOTFIN": -9688.33,
+          "SHRIRAMFIN": -5010.47
+        }
+      },
+      "oos_fixed": {
+        "trades": 47,
+        "n_days": 22,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": -5.514,
+        "t_stat": -2.11,
+        "ci_pct": [
+          -12.65,
+          -3.54
+        ],
+        "win_rate": 29.79,
+        "net": -10995.51,
+        "gross": -309919.48,
+        "costs": 7323.37,
+        "sharpe": 0.13,
+        "max_drawdown_pct": -8.45,
+        "total_return_pct": 0.12,
+        "per_year_pct": {
+          "2025": 0.42
+        },
+        "per_symbol_net": {
+          "FORTIS": -45236.53,
+          "GVT&D": 8970.23,
+          "KAYNES": -72191.3,
+          "RADICO": -5890.68,
+          "BOSCHLTD": 30709.28,
+          "TVSMOTOR": -1631.47,
+          "CUMMINSIND": -28545.75,
+          "INDIANB": -12077.88,
+          "MFSL": -11744.82,
+          "PAYTM": -23792.55,
+          "ASIANPAINT": -12805.45,
+          "EICHERMOT": -25689.64,
+          "HDFCLIFE": 31125.62,
+          "UNOMINDA": -3738.06,
+          "CGPOWER": -16473.13,
+          "DIXON": -8436.42,
+          "NATIONALUM": -12748.13,
+          "BAJAJ-AUTO": 35800.85,
+          "LTF": -16026.62,
+          "MANAPPURAM": 10085.51,
+          "SAIL": -4177.09,
+          "TITAN": 40970.48,
+          "DMART": 111884.68,
+          "KEI": -3112.18,
+          "RBLBANK": 735.37,
+          "AMBER": 43563.7,
+          "PNBHOUSING": 58085.42,
+          "LT": -254.92,
+          "BPCL": -6289.63,
+          "HINDPETRO": -6416.17,
+          "NAM-INDIA": -4542.16,
+          "BANKBARODA": -9242.52,
+          "HINDZINC": -15207.84,
+          "KOTAKBANK": -10587.29,
+          "MUTHOOTFIN": -18540.9,
+          "SHRIRAMFIN": -7527.52
+        }
+      }
+    },
+    {
+      "fold": 30,
+      "in_sample": [
+        "2024-12-17",
+        "2025-10-07"
+      ],
+      "out_of_sample": [
+        "2025-10-29",
+        "2026-01-23~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.00156,
+        "s1.0_h5_d0.7": 0.00155,
+        "s1.0_h10_d0.55": 0.10457,
+        "s1.0_h10_d0.7": 0.03303,
+        "s1.5_h5_d0.55": -0.03,
+        "s1.5_h5_d0.7": -0.01702,
+        "s1.5_h10_d0.55": 0.0463,
+        "s1.5_h10_d0.7": 0.0197,
+        "s2.0_h5_d0.55": 0.09637,
+        "s2.0_h5_d0.7": 0.06751,
+        "s2.0_h10_d0.55": 0.14867,
+        "s2.0_h10_d0.7": 0.10977
+      },
+      "oos_selected": {
+        "trades": 6,
+        "n_days": 4,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 39.064,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 66.67,
+        "net": 54682.51,
+        "gross": 111655.96,
+        "costs": 865.88,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -1.22,
+        "total_return_pct": 2.44,
+        "per_year_pct": {
+          "2026": 20.96
+        },
+        "per_symbol_net": {
+          "ICICIBANK": 31935.42,
+          "SBIN": -12755.84,
+          "VEDL": -6063.23,
+          "INDUSINDBK": 6600.56,
+          "MCX": 6250.73,
+          "LTM": 28714.87
+        }
+      },
+      "oos_fixed": {
+        "trades": 15,
+        "n_days": 6,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 19.784,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 46.67,
+        "net": 74687.42,
+        "gross": 231146.18,
+        "costs": 2560.56,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.87,
+        "total_return_pct": 1.53,
+        "per_year_pct": {
+          "2026": 5.8
+        },
+        "per_symbol_net": {
+          "ICICIBANK": 37989.19,
+          "ALKEM": 6266.17,
+          "ASIANPAINT": 32046.67,
+          "BSE": -2223.2,
+          "SBIN": -17478.31,
+          "VEDL": -9726.63,
+          "ETERNAL": -27141.01,
+          "INDUSINDBK": 8781.85,
+          "MCX": 8738.98,
+          "ULTRACEMCO": -7928.74,
+          "BANKINDIA": -19915.9,
+          "RBLBANK": 32209.51,
+          "COLPAL": -1155.65,
+          "HCLTECH": -1626.7,
+          "LTM": 35851.19
+        }
+      }
+    },
+    {
+      "fold": 31,
+      "in_sample": [
+        "2025-03-12",
+        "2026-01-02"
+      ],
+      "out_of_sample": [
+        "2026-01-27",
+        "2026-04-24~"
+      ],
+      "purge_days": 15,
+      "chosen": "s2.0_h5_d0.7",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": -0.04533,
+        "s1.0_h5_d0.7": -0.02305,
+        "s1.0_h10_d0.55": -0.04417,
+        "s1.0_h10_d0.7": -0.01128,
+        "s1.5_h5_d0.55": -0.04556,
+        "s1.5_h5_d0.7": -0.02485,
+        "s1.5_h10_d0.55": -0.06416,
+        "s1.5_h10_d0.7": -0.04205,
+        "s2.0_h5_d0.55": 0.04045,
+        "s2.0_h5_d0.7": 0.05656,
+        "s2.0_h10_d0.55": 0.01889,
+        "s2.0_h10_d0.7": 0.01469
+      },
+      "oos_selected": {
+        "trades": 15,
+        "n_days": 7,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.936,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 40.0,
+        "net": -25460.78,
+        "gross": 143169.61,
+        "costs": 2861.78,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -3.67,
+        "total_return_pct": 0.96,
+        "per_year_pct": {
+          "2026": 3.59
+        },
+        "per_symbol_net": {
+          "RBLBANK": 3087.07,
+          "APOLLOHOSP": -10179.98,
+          "ASTRAL": -17459.67,
+          "BANDHANBNK": -21271.09,
+          "AMBER": 3507.65,
+          "COLPAL": 72094.45,
+          "JINDALSTEL": -22233.29,
+          "SUPREMEIND": -3505.23,
+          "LUPIN": -17706.5,
+          "SUNPHARMA": -1245.35,
+          "POWERINDIA": -26592.15,
+          "AUROPHARMA": 9261.55,
+          "MANKIND": 6781.76
+        }
+      },
+      "oos_fixed": {
+        "trades": 28,
+        "n_days": 12,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 20.0,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 46.43,
+        "net": 136795.14,
+        "gross": 766566.04,
+        "costs": 5786.15,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -12.06,
+        "total_return_pct": 8.46,
+        "per_year_pct": {
+          "2026": 15.99
+        },
+        "per_symbol_net": {
+          "ULTRACEMCO": -1786.68,
+          "BANDHANBNK": -31433.98,
+          "HCLTECH": -3158.27,
+          "MUTHOOTFIN": 79550.61,
+          "RBLBANK": -39139.67,
+          "APOLLOHOSP": -15260.64,
+          "ASTRAL": -51616.24,
+          "JINDALSTEL": -52681.75,
+          "AMBER": 74358.19,
+          "BAJAJ-AUTO": 33543.88,
+          "BIOCON": -38323.73,
+          "COLPAL": 72094.45,
+          "JSWSTEEL": -37614.61,
+          "LUPIN": -28555.82,
+          "SUNPHARMA": -30353.3,
+          "SUPREMEIND": -23821.68,
+          "ICICIPRULI": 89284.28,
+          "INDUSINDBK": 67839.3,
+          "MAXHEALTH": 40938.06,
+          "BEL": 17781.41,
+          "MCX": 14533.3,
+          "BSE": 13611.95,
+          "POWERINDIA": -31930.16,
+          "AUROPHARMA": 9261.55,
+          "DIVISLAB": 2892.93,
+          "MANKIND": 6781.76
+        }
+      }
+    },
+    {
+      "fold": 32,
+      "in_sample": [
+        "2025-06-12",
+        "2026-04-02"
+      ],
+      "out_of_sample": [
+        "2026-04-27",
+        "2026-07-22~"
+      ],
+      "purge_days": 15,
+      "chosen": "s1.5_h10_d0.55",
+      "in_sample_scores": {
+        "s1.0_h5_d0.55": 0.05176,
+        "s1.0_h5_d0.7": 0.05634,
+        "s1.0_h10_d0.55": 0.08426,
+        "s1.0_h10_d0.7": 0.06733,
+        "s1.5_h5_d0.55": 0.08294,
+        "s1.5_h5_d0.7": 0.08204,
+        "s1.5_h10_d0.55": 0.09634,
+        "s1.5_h10_d0.7": 0.06728,
+        "s2.0_h5_d0.55": -0.00761,
+        "s2.0_h5_d0.7": 0.02647,
+        "s2.0_h10_d0.55": -0.01555,
+        "s2.0_h10_d0.7": -0.04797
+      },
+      "oos_selected": {
+        "trades": 36,
+        "n_days": 18,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 1.474,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 36.11,
+        "net": 210362.13,
+        "gross": 164760.53,
+        "costs": 5170.5,
+        "sharpe": 0.0,
+        "max_drawdown_pct": -10.06,
+        "total_return_pct": 11.72,
+        "per_year_pct": {
+          "2026": 16.37
+        },
+        "per_symbol_net": {
+          "ADANIPOWER": -15178.55,
+          "DIVISLAB": -20452.83,
+          "HINDALCO": -7885.78,
+          "SAIL": -12528.76,
+          "POWERINDIA": -46599.17,
+          "GODFRYPHLP": -519.38,
+          "MCX": -43602.8,
+          "BSE": 26766.26,
+          "CONCOR": 78935.08,
+          "KAYNES": 179137.81,
+          "MANKIND": -8272.51,
+          "PRESTIGE": 21455.82,
+          "SOLARINDS": -16165.12,
+          "UNOMINDA": 19325.38,
+          "ADANIGREEN": -8314.02,
+          "FORTIS": 10850.51,
+          "GRASIM": -1845.64,
+          "TORNTPHARM": -5800.66,
+          "POLICYBZR": -10890.27,
+          "MAXHEALTH": -7566.48,
+          "RADICO": 5914.54,
+          "AUROPHARMA": 13910.81,
+          "LAURUSLABS": -12905.6,
+          "OFSS": 50708.32,
+          "BHARATFORG": -20234.19,
+          "DMART": 42119.36
+        }
+      },
+      "oos_fixed": {
+        "trades": 36,
+        "n_days": 18,
+        "allocation_pct": 2.0,
+        "mean_day_return_pct": 8.19,
+        "t_stat": 0.0,
+        "ci_pct": [
+          0.0,
+          0.0
+        ],
+        "win_rate": 36.11,
+        "net": 193436.48,
+        "gross": 225461.31,
+        "costs": 6970.9,
+        "sharpe": 1.982,
+        "max_drawdown_pct": -12.51,
+        "total_return_pct": 7.05,
+        "per_year_pct": {
+          "2026": 10.14
+        },
+        "per_symbol_net": {
+          "ADANIPOWER": -26342.97,
+          "DIVISLAB": -28284.44,
+          "HINDALCO": -26137.24,
+          "SAIL": -41210.29,
+          "POWERINDIA": -72208.12,
+          "GODFRYPHLP": -3032.92,
+          "MCX": 38779.12,
+          "BSE": 102640.14,
+          "CONCOR": 79420.97,
+          "KAYNES": 193723.49,
+          "MANKIND": -11498.12,
+          "PRESTIGE": 14152.5,
+          "SOLARINDS": -25548.06,
+          "UNOMINDA": 25536.24,
+          "ADANIGREEN": -14486.01,
+          "FORTIS": 21521.87,
+          "GRASIM": -4607.3,
+          "TORNTPHARM": -9417.1,
+          "POLICYBZR": -16924.63,
+          "MAXHEALTH": -12157.57,
+          "RADICO": 4852.25,
+          "AUROPHARMA": 17369.1,
+          "LAURUSLABS": -75618.28,
+          "OFSS": 41983.06,
+          "BHARATFORG": -29559.97,
+          "DMART": 50490.76
+        }
+      }
+    }
+  ],
+  "oos": {
+    "trades": 518,
+    "n_days": 257,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 8.45,
+    "t_stat": 2.314,
+    "ci_pct": [
+      1.5,
+      15.95
+    ],
+    "win_rate": 38.03,
+    "net": 2487768.81,
+    "gross": 2870832.8,
+    "costs": 76675.35,
+    "sharpe": 1.612,
+    "max_drawdown_pct": -16.21,
+    "total_return_pct": 135.15,
+    "per_year_pct": {
+      "2019": 12.38,
+      "2020": 13.0,
+      "2021": 18.3,
+      "2022": 11.46,
+      "2023": 8.53,
+      "2024": 5.02,
+      "2025": 2.83,
+      "2026": 11.39
+    },
+    "per_symbol_net": {
+      "BANKINDIA": -9599.88,
+      "APOLLOHOSP": 17487.09,
+      "TCS": -242.38,
+      "HCLTECH": 55819.66,
+      "MPHASIS": 13962.94,
+      "HINDZINC": 10181.44,
+      "UPL": 2575.85,
+      "VOLTAS": -4328.24,
+      "LTM": 129006.95,
+      "NAM-INDIA": -19351.84,
+      "DABUR": 44180.99,
+      "TIINDIA": 37396.9,
+      "ASIANPAINT": 135048.79,
+      "HINDUNILVR": 15588.64,
+      "RADICO": -14280.48,
+      "MARICO": -6834.8,
+      "MUTHOOTFIN": 49916.32,
+      "NESTLEIND": -5231.37,
+      "INDIGO": -35067.33,
+      "ADANIENSOL": 123419.99,
+      "PETRONET": -25598.95,
+      "ASTRAL": -62673.99,
+      "COLPAL": 53752.17,
+      "UNITDSPR": -28511.98,
+      "ICICIPRULI": 149978.31,
+      "DRREDDY": 70705.21,
+      "INFY": 13965.41,
+      "PIIND": -35848.23,
+      "ABCAPITAL": 69998.83,
+      "AUROPHARMA": 118480.3,
+      "BAJAJ-AUTO": 139975.41,
+      "GODREJPROP": 3984.12,
+      "HEROMOTOCO": -30336.72,
+      "HINDALCO": -98521.4,
+      "DMART": 160794.11,
+      "PAGEIND": 17087.67,
+      "GODREJCP": -28173.59,
+      "AMBER": 276796.16,
+      "DIVISLAB": -19392.45,
+      "DIXON": 48097.5,
+      "KEI": -2512.82,
+      "NAUKRI": -9723.46,
+      "SOLARINDS": -35731.24,
+      "SRF": 11796.3,
+      "CROMPTON": -30998.65,
+      "JUBLFOOD": 23793.55,
+      "PIDILITIND": -23630.43,
+      "SUPREMEIND": 116422.99,
+      "BAJAJHLDNG": -4733.59,
+      "BAJFINANCE": 60641.35,
+      "ADANIENT": -18442.71,
+      "ADANIGREEN": 53680.68,
+      "TECHM": 84236.14,
+      "BHARTIARTL": -12323.09,
+      "MCX": 55684.68,
+      "CIPLA": 13287.44,
+      "LAURUSLABS": -80366.53,
+      "SUNPHARMA": -47957.16,
+      "POWERGRID": -6275.6,
+      "APLAPOLLO": -13407.03,
+      "CGPOWER": 25470.01,
+      "CUMMINSIND": 4035.54,
+      "PERSISTENT": -32179.83,
+      "WIPRO": 150410.79,
+      "MAXHEALTH": -21259.14,
+      "COFORGE": 91939.09,
+      "ANGELONE": 19826.65,
+      "CHOLAFIN": -12644.89,
+      "BANDHANBNK": -32095.67,
+      "BANKBARODA": -21749.38,
+      "SBIN": -6038.19,
+      "INDIANB": 9566.67,
+      "VEDL": -16325.41,
+      "COALINDIA": -28965.74,
+      "NATIONALUM": -15846.91,
+      "JSWENERGY": 51350.57,
+      "PGEL": -24079.05,
+      "VBL": -29599.61,
+      "360ONE": -8072.46,
+      "M&M": -5943.12,
+      "SHREECEM": 26498.25,
+      "TVSMOTOR": -18707.73,
+      "EICHERMOT": -39608.0,
+      "INDHOTEL": 57912.76,
+      "INDUSINDBK": 179276.12,
+      "KOTAKBANK": -4195.04,
+      "SBILIFE": -9356.91,
+      "SHRIRAMFIN": -20659.25,
+      "ITC": -14075.52,
+      "FEDERALBNK": -6017.37,
+      "HAVELLS": -13940.48,
+      "ICICIGI": 22478.17,
+      "HDFCBANK": 3793.24,
+      "UNOMINDA": 67930.04,
+      "CONCOR": 78132.55,
+      "INDUSTOWER": 17824.99,
+      "LICHSGFIN": 5011.66,
+      "OBEROIRLTY": -14075.68,
+      "JSWSTEEL": -65469.77,
+      "RBLBANK": -35759.11,
+      "MFSL": -18588.02,
+      "ZYDUSLIFE": -4442.64,
+      "HINDPETRO": 68479.38,
+      "OIL": 105350.22,
+      "MOTILALOFS": 21947.94,
+      "ULTRACEMCO": -14445.8,
+      "CAMS": -26221.27,
+      "LT": -11340.68,
+      "MARUTI": -14503.38,
+      "KPITTECH": -7214.02,
+      "POLYCAB": -8154.36,
+      "BLUESTARCO": -14909.48,
+      "BRITANNIA": 472.03,
+      "ABB": -24220.11,
+      "SIEMENS": 54383.97,
+      "ALKEM": -876.82,
+      "LUPIN": -8975.94,
+      "ONGC": -2433.39,
+      "OFSS": 45706.76,
+      "BOSCHLTD": 15903.4,
+      "POWERINDIA": -40127.7,
+      "IEX": -29100.85,
+      "PNBHOUSING": 92678.88,
+      "TITAN": 37605.5,
+      "MANAPPURAM": 2488.2,
+      "POLICYBZR": -34130.99,
+      "BDL": -12071.32,
+      "DELHIVERY": 8328.51,
+      "PAYTM": 65579.77,
+      "KALYANKJIL": -19113.16,
+      "TORNTPHARM": -8335.06,
+      "BEL": 18836.46,
+      "JINDALSTEL": -49696.9,
+      "ADANIPOWER": -21509.21,
+      "GLENMARK": 76232.37,
+      "GVT&D": 13748.71,
+      "MAZDOCK": 69354.65,
+      "KFINTECH": -60839.76,
+      "UNIONBANK": -6584.51,
+      "LICI": 47349.19,
+      "LODHA": 137793.18,
+      "PRESTIGE": 168739.47,
+      "MANKIND": -25195.88,
+      "FORCEMOT": 12087.12,
+      "BSE": 145277.71,
+      "ICICIBANK": 24458.68,
+      "FINNIFTY": 2276.6,
+      "BANKNIFTY": 115.46,
+      "COCHINSHIP": 3928.92,
+      "HDFCLIFE": 25013.97,
+      "NBCC": -23226.75,
+      "FORTIS": -23714.66,
+      "KAYNES": 121532.19,
+      "LTF": -16026.62,
+      "SAIL": -45387.38,
+      "BPCL": -6289.63,
+      "ETERNAL": -27141.01,
+      "BIOCON": -38323.73,
+      "GODFRYPHLP": -3032.92,
+      "GRASIM": -4607.3,
+      "BHARATFORG": -29559.97
+    }
+  },
+  "selected": {
+    "trades": 344,
+    "n_days": 186,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 4.575,
+    "t_stat": 1.101,
+    "ci_pct": [
+      -3.27,
+      12.88
+    ],
+    "win_rate": 40.41,
+    "net": 603264.33,
+    "gross": 440068.24,
+    "costs": 38541.89,
+    "sharpe": 1.168,
+    "max_drawdown_pct": -16.79,
+    "total_return_pct": 46.79,
+    "per_year_pct": {
+      "2019": 12.57,
+      "2020": 21.19,
+      "2021": 0.83,
+      "2022": 7.23,
+      "2023": -2.94,
+      "2024": -10.75,
+      "2025": 0.7,
+      "2026": 13.49
+    },
+    "per_symbol_net": {
+      "LTM": 7025.41,
+      "SOLARINDS": -37329.76,
+      "NAM-INDIA": -10261.94,
+      "AMBER": 53758.42,
+      "DABUR": 6767.63,
+      "DIVISLAB": -22477.11,
+      "TORNTPHARM": -10852.25,
+      "UNITDSPR": 11380.21,
+      "BIOCON": 15910.04,
+      "KOTAKBANK": 22741.8,
+      "TIINDIA": 12201.38,
+      "ASIANPAINT": -17194.67,
+      "DRREDDY": 5724.51,
+      "ICICIGI": -20363.72,
+      "TCS": -8574.35,
+      "MARICO": -2029.82,
+      "VOLTAS": 9668.07,
+      "RADICO": 6848.3,
+      "HINDUNILVR": -872.04,
+      "MUTHOOTFIN": -2966.62,
+      "MPHASIS": -2509.16,
+      "NESTLEIND": -1201.9,
+      "INDIGO": 7041.98,
+      "ADANIENSOL": 89293.93,
+      "ASTRAL": -28891.01,
+      "PETRONET": -12203.04,
+      "COLPAL": 72404.62,
+      "ICICIPRULI": 10443.66,
+      "INFY": 12348.77,
+      "PIIND": -24566.79,
+      "AUROPHARMA": 111187.94,
+      "BAJAJ-AUTO": 81297.91,
+      "ZYDUSLIFE": -12715.89,
+      "ABCAPITAL": -4711.48,
+      "ADANIENT": 1464.01,
+      "GODREJPROP": 1036.0,
+      "HEROMOTOCO": -995.15,
+      "HINDALCO": -39977.9,
+      "CROMPTON": -32798.05,
+      "DMART": 60906.59,
+      "PAGEIND": -6194.21,
+      "GODREJCP": 22097.76,
+      "DIXON": -7706.85,
+      "KEI": 6352.65,
+      "NAUKRI": -4609.45,
+      "SRF": -1308.61,
+      "JUBLFOOD": -8098.12,
+      "PIDILITIND": -13587.26,
+      "SUPREMEIND": -5495.91,
+      "BAJAJHLDNG": -3322.89,
+      "BAJFINANCE": -6095.17,
+      "ADANIGREEN": 72028.26,
+      "APOLLOHOSP": -11890.25,
+      "TECHM": 87399.36,
+      "BHARTIARTL": -13996.45,
+      "MCX": -46828.59,
+      "APLAPOLLO": -2873.54,
+      "HINDZINC": -12773.28,
+      "CUMMINSIND": -17110.31,
+      "CGPOWER": -19407.27,
+      "PERSISTENT": 11510.49,
+      "WIPRO": -12877.83,
+      "COFORGE": -31333.59,
+      "MAXHEALTH": -25921.71,
+      "SUNPHARMA": -7995.2,
+      "UPL": 9674.7,
+      "EICHERMOT": -18372.18,
+      "LAURUSLABS": -5351.59,
+      "ALKEM": -8050.8,
+      "CIPLA": 17711.69,
+      "HCLTECH": 3269.0,
+      "TITAN": -7149.76,
+      "CHOLAFIN": 12966.13,
+      "BANDHANBNK": 6163.36,
+      "SBIN": -11828.39,
+      "INDIANB": 17847.7,
+      "VEDL": -10326.44,
+      "COALINDIA": 1520.73,
+      "NATIONALUM": 1383.25,
+      "JSWENERGY": 11786.76,
+      "ANGELONE": -12867.18,
+      "PGEL": 10155.43,
+      "360ONE": 8164.47,
+      "M&M": 2776.3,
+      "SHREECEM": 2714.31,
+      "TVSMOTOR": -6811.46,
+      "INDHOTEL": 10450.25,
+      "INDUSINDBK": 45096.22,
+      "SBILIFE": 11279.42,
+      "SHRIRAMFIN": 334.55,
+      "HAVELLS": -294.3,
+      "INDUSTOWER": 16662.94,
+      "RBLBANK": -2456.96,
+      "MFSL": -6596.86,
+      "MOTILALOFS": 6219.68,
+      "LT": -6005.16,
+      "ULTRACEMCO": -7225.65,
+      "MARUTI": -10171.93,
+      "KPITTECH": -14577.86,
+      "POLYCAB": -5319.31,
+      "BLUESTARCO": -10194.12,
+      "BRITANNIA": 383.87,
+      "ABB": -14420.79,
+      "BOSCHLTD": 37076.43,
+      "SIEMENS": 17354.95,
+      "POWERINDIA": -69412.42,
+      "POLICYBZR": -1062.8,
+      "DELHIVERY": -16237.33,
+      "LICHSGFIN": 5870.38,
+      "PAYTM": 36967.92,
+      "KALYANKJIL": -11737.77,
+      "BDL": -4283.45,
+      "JINDALSTEL": -29634.87,
+      "GVT&D": 8294.73,
+      "BANKINDIA": 1250.62,
+      "FORCEMOT": 5463.16,
+      "FINNIFTY": -755.85,
+      "UNOMINDA": 21839.66,
+      "COCHINSHIP": 9399.49,
+      "HDFCLIFE": -3437.48,
+      "VBL": -5575.18,
+      "KAYNES": 136681.3,
+      "FORTIS": 1818.75,
+      "LTF": -12251.29,
+      "MANAPPURAM": 3844.94,
+      "PNBHOUSING": 49832.07,
+      "HINDPETRO": -2799.34,
+      "ICICIBANK": 31935.42,
+      "LUPIN": -17706.5,
+      "MANKIND": -1490.75,
+      "ADANIPOWER": -15178.55,
+      "SAIL": -12528.76,
+      "GODFRYPHLP": -519.38,
+      "BSE": 26766.26,
+      "CONCOR": 78935.08,
+      "PRESTIGE": 21455.82,
+      "GRASIM": -1845.64,
+      "OFSS": 50708.32,
+      "BHARATFORG": -20234.19
+    }
+  },
+  "full_sample": {
+    "trades": 541,
+    "n_days": 269,
+    "allocation_pct": 2.0,
+    "mean_day_return_pct": 9.649,
+    "t_stat": 2.652,
+    "ci_pct": [
+      3.69,
+      18.0
+    ],
+    "win_rate": 37.52,
+    "net": 3126065.79,
+    "gross": 3689495.05,
+    "costs": 82503.79,
+    "sharpe": 2.093,
+    "max_drawdown_pct": -16.6,
+    "total_return_pct": 197.22,
+    "per_year_pct": {
+      "2019": 10.13,
+      "2020": 15.07,
+      "2021": 17.35,
+      "2022": 13.25,
+      "2023": 12.12,
+      "2024": 4.75,
+      "2025": 5.55,
+      "2026": 13.09
+    },
+    "per_symbol_net": {
+      "BANKINDIA": 33495.11,
+      "APOLLOHOSP": 16319.18,
+      "TCS": -21232.46,
+      "HCLTECH": 48006.77,
+      "MPHASIS": 13962.94,
+      "HINDZINC": 10181.44,
+      "UPL": 2575.85,
+      "VOLTAS": -4328.24,
+      "LTM": 335524.2,
+      "NAM-INDIA": -22282.71,
+      "DABUR": 44180.99,
+      "TIINDIA": 37396.9,
+      "ASIANPAINT": 233360.3,
+      "HINDUNILVR": 15588.64,
+      "RADICO": 21542.2,
+      "MARICO": -6834.8,
+      "MUTHOOTFIN": 49916.32,
+      "NESTLEIND": -5231.37,
+      "INDIGO": 3548.48,
+      "ADANIENSOL": 200283.38,
+      "PETRONET": -25654.2,
+      "ASTRAL": -62673.99,
+      "COLPAL": 65630.15,
+      "UNITDSPR": -15924.04,
+      "ICICIPRULI": 160134.11,
+      "DRREDDY": 70705.21,
+      "INFY": 13965.41,
+      "PIIND": -35848.23,
+      "ABCAPITAL": 59313.82,
+      "AUROPHARMA": 93449.98,
+      "BAJAJ-AUTO": 230524.02,
+      "GODREJPROP": 3984.12,
+      "HEROMOTOCO": -36218.9,
+      "HINDALCO": -98521.4,
+      "DMART": 143218.89,
+      "PAGEIND": 17087.67,
+      "GODREJCP": -28173.59,
+      "AMBER": 333020.95,
+      "DIVISLAB": -11894.62,
+      "DIXON": 56563.4,
+      "KEI": -2512.82,
+      "NAUKRI": -9723.46,
+      "SOLARINDS": -35731.24,
+      "SRF": 11796.3,
+      "CROMPTON": -30998.65,
+      "JUBLFOOD": 23793.55,
+      "PIDILITIND": -23630.43,
+      "SUPREMEIND": 116422.99,
+      "BAJAJHLDNG": -4733.59,
+      "BAJFINANCE": 58930.6,
+      "ADANIENT": -24854.31,
+      "ADANIGREEN": 53680.68,
+      "TECHM": 98877.23,
+      "BHARTIARTL": -12323.09,
+      "MCX": 13399.57,
+      "CIPLA": 13287.44,
+      "LAURUSLABS": -161842.46,
+      "SUNPHARMA": -14923.32,
+      "POWERGRID": -5974.74,
+      "APLAPOLLO": -13407.03,
+      "CGPOWER": 35715.97,
+      "CUMMINSIND": 4424.06,
+      "PERSISTENT": -9412.4,
+      "WIPRO": 150410.79,
+      "MAXHEALTH": -21259.14,
+      "COFORGE": 131029.43,
+      "ANGELONE": 19826.65,
+      "CHOLAFIN": -12644.89,
+      "BANDHANBNK": -32095.67,
+      "BANKBARODA": -21749.38,
+      "SBIN": -6038.19,
+      "INDIANB": 32291.88,
+      "VEDL": -16325.41,
+      "COALINDIA": -28965.74,
+      "NATIONALUM": -46003.23,
+      "JSWENERGY": 51350.57,
+      "PGEL": -57069.65,
+      "VBL": -25285.65,
+      "360ONE": -8072.46,
+      "M&M": 37104.41,
+      "SHREECEM": 26498.25,
+      "TVSMOTOR": -19998.61,
+      "EICHERMOT": -23187.86,
+      "INDHOTEL": 57912.76,
+      "INDUSINDBK": 228930.7,
+      "KOTAKBANK": 18251.63,
+      "SBILIFE": -3236.29,
+      "SHRIRAMFIN": -20659.25,
+      "ITC": -14075.52,
+      "FEDERALBNK": -6017.37,
+      "HAVELLS": -13940.48,
+      "ICICIGI": 22478.17,
+      "HDFCBANK": 3793.24,
+      "UNOMINDA": 67930.04,
+      "CONCOR": 78132.55,
+      "INDUSTOWER": 17824.99,
+      "LICHSGFIN": 5011.66,
+      "OBEROIRLTY": -14075.68,
+      "JSWSTEEL": -65469.77,
+      "RBLBANK": -81357.81,
+      "MFSL": -18588.02,
+      "ZYDUSLIFE": -4442.64,
+      "HINDPETRO": 63912.62,
+      "OIL": 44504.5,
+      "MOTILALOFS": 32862.66,
+      "ULTRACEMCO": -14445.8,
+      "CAMS": -26221.27,
+      "LT": -11340.68,
+      "MARUTI": -14503.38,
+      "KPITTECH": -17084.73,
+      "POLYCAB": -8154.36,
+      "BLUESTARCO": -14909.48,
+      "BRITANNIA": -689.82,
+      "ABB": -24220.11,
+      "SIEMENS": 38322.9,
+      "ALKEM": -7677.11,
+      "LUPIN": -5450.06,
+      "ONGC": -6248.79,
+      "OFSS": 57976.01,
+      "BOSCHLTD": 5152.32,
+      "POWERINDIA": -66613.66,
+      "IEX": -29100.85,
+      "PNBHOUSING": 92678.88,
+      "TITAN": 37605.5,
+      "MANAPPURAM": 2488.2,
+      "POLICYBZR": -77257.28,
+      "BDL": -12071.32,
+      "DELHIVERY": 8328.51,
+      "PAYTM": 340444.19,
+      "KALYANKJIL": -19113.16,
+      "TORNTPHARM": -8335.06,
+      "BEL": 17524.08,
+      "JINDALSTEL": -49696.9,
+      "ADANIPOWER": -40909.59,
+      "GLENMARK": 58930.71,
+      "GVT&D": -2119.55,
+      "MAZDOCK": 69167.15,
+      "KFINTECH": -60839.76,
+      "UNIONBANK": -6584.51,
+      "LICI": 47349.19,
+      "LODHA": 137793.18,
+      "PRESTIGE": 168739.47,
+      "MANKIND": -43773.4,
+      "FORCEMOT": 5061.84,
+      "BSE": 120595.2,
+      "ICICIBANK": 20984.05,
+      "FINNIFTY": 2276.6,
+      "BANKNIFTY": 115.46,
+      "COCHINSHIP": 3928.92,
+      "HDFCLIFE": 25013.97,
+      "NBCC": -23226.75,
+      "FORTIS": -23714.66,
+      "KAYNES": 121532.19,
+      "LTF": -16026.62,
+      "SAIL": -45387.38,
+      "BPCL": -6289.63,
+      "ETERNAL": -27141.01,
+      "BIOCON": -38323.73,
+      "GODFRYPHLP": -3032.92,
+      "GRASIM": -4607.3,
+      "BHARATFORG": -29559.97,
+      "AXISBANK": -4882.76,
+      "BHEL": 1599.78,
+      "NYKAA": -16410.67
+    }
+  },
+  "n_trials": 396,
+  "trial_sharpe_std": 0.0845,
+  "deflated_sharpe": 0.0,
+  "permutation_p": 0.0164,
+  "permutation_p_full_sample": 0.0164,
+  "breakeven_vrp": 2.272,
+  "vrp_band": [
+    1.15,
+    1.3
+  ],
+  "verdict": {
+    "promoted": false,
+    "checks": {
+      "enough_trades": true,
+      "enough_days": true,
+      "profitable": true,
+      "beats_random_timing": true,
+      "deflated_sharpe": false,
+      "priced_edge": true,
+      "consistent_across_years": true,
+      "survivable_drawdown": true,
+      "mean_proven": true
+    },
+    "reasons": [
+      "deflated Sharpe 0.000 < 0.5 \u2014 the result does not survive how many variants were tried"
+    ]
+  }
+}

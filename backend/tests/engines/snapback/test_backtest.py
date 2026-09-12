@@ -36,8 +36,12 @@ def spike_tape(n: int = 240, spike: float = 1.10, after: float = 1.0) -> Bars:
     return tape(np.concatenate([close, tail]))
 
 
-CFG = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_stocks=("RELIANCE",),
-                     scan_indices=())
+#: ``max_rv_pct`` needs a YEAR of realised-vol history before it can rank
+#: anything, so the shipped default demands a 310-bar warm-up that no synthetic
+#: tape here reaches. These tests are about the fills, the exits and the hedge;
+#: the cheapness filter has its own.
+CFG = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1,
+                     scan_stocks=("RELIANCE",), scan_indices=())
 
 
 class TestFills:
@@ -60,7 +64,7 @@ class TestFills:
     def test_a_session_that_trades_through_the_stop_is_stopped(self):
         """Nothing in a daily bar says what came first, so assume the worse."""
         b = spike_tape(after=1.02)          # runs hard against a bought put
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, premium_stop_pct=20.0,
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, premium_stop_pct=20.0,
                              scan_stocks=("RELIANCE",), scan_indices=())
         res = replay({"RELIANCE": b}, cfg)
         assert res.trades
@@ -71,7 +75,7 @@ class TestFills:
 
     def test_holding_period_is_honoured_when_nothing_stops_it(self):
         b = spike_tape(after=0.999)
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, hold_days=6,
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, hold_days=6,
                              premium_stop_pct=99.0,
                              scan_stocks=("RELIANCE",), scan_indices=())
         res = replay({"RELIANCE": b}, cfg)
@@ -87,7 +91,7 @@ class TestVegaIsZero:
         and this harness refuses to credit it.
         """
         b = spike_tape(after=1.0)           # spot pinned after entry
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, premium_stop_pct=99.0,
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, premium_stop_pct=99.0,
                              scan_stocks=("RELIANCE",), scan_indices=())
         res = replay({"RELIANCE": b}, cfg)
         t = res.trades[-1]
@@ -131,7 +135,7 @@ class TestNothingIsSilentlyDropped:
         different bug with a different fix.
         """
         b = spike_tape(after=0.99)
-        broke = SnapbackConfig(sizing_mode="PREMIUM_PCT",
+        broke = SnapbackConfig(max_rv_pct=100.0, sizing_mode="PREMIUM_PCT",
                                premium_pct_of_capital=0.01, capital_inr=1000.0,
                                scan_stocks=("RELIANCE",), scan_indices=())
         res = replay({"RELIANCE": b}, broke)
@@ -176,7 +180,7 @@ class TestOverride:
         null contained a diluted copy of the signal and could not be beaten.
         """
         b = spike_tape()
-        res = replay({"RELIANCE": b}, SnapbackConfig(
+        res = replay({"RELIANCE": b}, SnapbackConfig(max_rv_pct=100.0, 
             sizing_mode="LOTS", lots=1, allow_fade_down=True,
             scan_stocks=("RELIANCE",), scan_indices=()),
             entry_override={"RELIANCE": [(150, "fade_down"), (170, "fade_up")]})
@@ -228,7 +232,7 @@ class TestHedgeInTheReplay:
 
     def test_hedging_changes_the_book(self):
         tapes = self._tapes()
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_indices=("NIFTY",),
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_indices=("NIFTY",),
                              scan_stocks=("RELIANCE",), max_open_positions=99)
         plain = replay(tapes, replace(cfg, hedge_mode="none"))
         hedged = replay(tapes, cfg)
@@ -247,7 +251,7 @@ class TestHedgeInTheReplay:
         nothing on screen to say so, would turn the shipped configuration into
         the one measured at -1.08%."""
         b = spike_tape(after=0.99)
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_indices=(),
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_indices=(),
                              scan_stocks=("RELIANCE",))
         res = replay({"RELIANCE": b}, cfg)
         assert "NIFTY" in res.skipped
@@ -255,7 +259,7 @@ class TestHedgeInTheReplay:
 
     def test_the_hedge_is_never_free(self):
         tapes = self._tapes()
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_indices=("NIFTY",),
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_indices=("NIFTY",),
                              scan_stocks=("RELIANCE",), max_open_positions=99)
         hedged = [t for t in replay(tapes, cfg).trades if t.beta]
         assert hedged and all(t.hedge_cost > 0 for t in hedged)
@@ -267,7 +271,7 @@ class TestPositionCap:
         curve compounded a book nobody could hold."""
         b = spike_tape(after=0.99)
         tapes = {s: b for s in ("RELIANCE", "INFY", "TCS", "SBIN")}
-        cfg = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_indices=(),
+        cfg = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_indices=(),
                              scan_stocks=tuple(tapes), hedge_mode="none",
                              max_open_positions=1)
         res = replay(tapes, cfg)
@@ -286,7 +290,7 @@ class TestDayClustering:
         """
         b = spike_tape()
         tapes = {"RELIANCE": b, "INFY": b, "TCS": b}
-        res = replay(tapes, SnapbackConfig(
+        res = replay(tapes, SnapbackConfig(max_rv_pct=100.0, 
             sizing_mode="LOTS", lots=1, scan_indices=(),
             scan_stocks=("RELIANCE", "INFY", "TCS")))
         days, daily = res.by_day()

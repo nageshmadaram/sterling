@@ -11,9 +11,10 @@ the engine descriptor, the board and the settings page, so none of them holds a
 second copy of the verdict.
 
 **The record also carries the checks that PASSED.** Snapback's situation is
-unusual for this repo: it clears six of nine, including the entry-timing
-permutation that every other strategy here has failed, and misses on two
-sample-size facts and a year-consistency bar. A boolean ``promoted`` alone would
+unusual for this repo: it clears seven of nine, including the entry-timing
+permutation that every other strategy here has failed and the day-clustered
+interval nothing here has ever cleared, and misses on the deflated Sharpe and a
+year-consistency bar. A boolean ``promoted`` alone would
 flatten that into the same "no" as a strategy whose entries lose money, and
 those are not the same thing to an operator deciding whether to arm one by
 hand.

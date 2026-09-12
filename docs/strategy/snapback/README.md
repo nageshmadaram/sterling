@@ -14,10 +14,16 @@ against a day-matched baseline. The trade is a bought put, roughly 40 days out,
 at a 0.70 delta, with the put's own market delta hedged away by an index future.
 Without that hedge the book is short a nine-year bull market and loses.
 
-The return distribution is the other half of the design: the top 1% of trades
+The return distribution is the second half of the design: the top 1% of trades
 carry 148% of the P&L and the median trade loses 15.5%, so the engine refuses
 anything that caps the payoff (no spreads) and lets a trade already worth 1.5x
-its cost run past the horizon. See `AUDIT.md`.
+its cost run past the horizon.
+
+The third half is the PRICE. Every premium here is modelled as realised vol
+times a VRP, so a setup whose realised vol sits in the top 30% of its own year is
+the same setup bought much dearer — and this engine is a buyer. Refusing those
+took the out-of-sample mean from +4.03% to +8.38% per entry day and made the
+day-clustered interval exclude zero for the first time. See `AUDIT.md`.
 
 ## In the replay dock
 

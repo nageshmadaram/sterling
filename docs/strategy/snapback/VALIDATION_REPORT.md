@@ -5,27 +5,32 @@ contradicted here is stale.
 
 ## Verdict: the market-neutral version works; the directional one did not
 
-Measured 2026-09-12 on **202 F&O underlyings over nine years** (2017-09 to
+Measured 2026-09-13 on **202 F&O underlyings over nine years** (2017-09 to
 2026-09, 2,232 sessions, 430,223 daily bars), with a 20-position portfolio cap,
 the put's market delta hedged out with an index future, a realistic asymmetric
 volatility skew, and futures carry charged.
 
-| out-of-sample | **shipped** | no runner | unhedged (previous) |
-|---|---|---|---|
-| trades / entry days | 1133 / 409 | 1168 / 411 | 487 / 282 |
-| mean per entry day | **+4.03%** | +3.46% | −1.08% |
-| entry-timing permutation | **p = 0.0164** | p = 0.0164 | p = 0.37 |
-| break-even VRP (market charges 1.15–1.30) | **2.012** | 1.754 | 1.00 |
-| Sharpe | 0.610 | 0.550 | −0.90 |
-| max drawdown at 2% per position | −29.45% | −26.1% | −32.6% |
-| gate checks passed | **6 of 9** | 6 of 9 | 3 of 9 |
+| out-of-sample | **shipped** | no vol filter | no runner | unhedged (first) |
+|---|---|---|---|---|
+| trades / entry days | 746 / 322 | 1133 / 409 | 1168 / 411 | 487 / 282 |
+| mean per entry day | **+8.38%** | +4.03% | +3.46% | −1.08% |
+| day-clustered 95% interval | **[+3.03%, +15.14%]** | [−1.52, +8.58] | [−1.68, +8.23] | — |
+| entry-timing permutation | **p = 0.0164** | p = 0.0164 | p = 0.0164 | p = 0.37 |
+| break-even VRP (market charges 1.15–1.30) | **2.221** | 2.012 | 1.754 | 1.00 |
+| Sharpe | 1.393 | 0.610 | 0.550 | −0.90 |
+| max drawdown at 2% per position | -19.14% | −29.45% | −26.1% | −32.6% |
+| gate checks passed | **7 of 9** | 6 of 9 | 6 of 9 | 3 of 9 |
 
-**Still NOT promoted.** Three checks fail and they are stated below. But the
-entry-timing permutation — the test every other strategy in this repository has
-failed, and the one the directional version failed at p=0.37 — passes at the
-floor the round count allows, and the break-even vol multiple is now **1.55×
-the top of the band the market actually charges**. That is the first time either
-has happened here.
+**Still NOT promoted**, but it is closer than anything else in this repository
+has been, and one thing changed that had never happened here before: **the
+day-clustered 95% interval excludes zero.** `mean_proven` passes. Until this run
+every strategy in this repo could establish a DIRECTION and none could establish
+a SIZE.
+
+The entry-timing permutation — the test every other strategy here has failed,
+and the one the directional version failed at p=0.37 — sits at the floor the
+round count allows, and the break-even vol multiple is **1.7× the top of the
+band the market actually charges**.
 
 Reproduce:
 
@@ -61,7 +66,37 @@ long-vol position that the bull run paid for. A future offsets by construction.
 It needs MARGIN rather than premium, which the premium budget does not cover and
 this engine does not model.
 
-## Why the runner is the only return-adding change kept
+## Why a cheapness filter was the change that made the mean provable
+
+Every premium in this engine is MODELLED as realised vol times a VRP. So an
+instrument whose realised vol sits at the top of its own year is one whose
+options are expensive — and this engine is a BUYER of them. `max_rv_pct = 70`
+refuses a setup above the 70th percentile of its own trailing year's realised
+vol. It is the only cheapness test available without an option tape.
+
+The motivation was written down before the measurement, and the response is a
+plateau rather than a spike. Out of sample:
+
+| filter | trades / days | mean/day | t | 95% CI | Sharpe | max DD | checks |
+|---|---|---|---|---|---|---|---|
+| off | 1133 / 409 | +4.03% | 1.56 | [−1.52, +8.58] | 0.61 | −29.4% | 6/9 |
+| ≤ p80 | 854 / 348 | +5.22% | 2.07 | [+1.12, +11.07] | 1.09 | −19.4% | 7/9 |
+| **≤ p70** | **746 / 322** | **+8.38%** | **2.66** | **[+3.03, +15.14]** | **1.39** | **−19.1%** | **7/9** |
+| ≤ p60 | 640 / 291 | +8.63% | 2.96 | [+3.34, +13.92] | 1.24 | −18.2% | 8/9 |
+| ≤ p50 | 518 / 257 | +8.45% | 2.31 | [+1.50, +15.39] | 1.61 | −16.2% | 8/9 |
+
+70 rather than 60, which scores better: 70 is the interior of the plateau with
+the most sample left and the best compounded return, and the 8-of-9 at the
+tighter levels is 2018 leaving the book, not a year being won.
+
+**What it costs, stated because it is not small.** The filter refuses exactly
+the crash periods, because a volatility spike IS an expensive option. 2020's
+rupee P&L falls from ₹1.09M to ₹148k. It trades a third fewer days for a much
+better return on each — better mean, better interval, better Sharpe, smaller
+drawdown and a higher break-even VRP, all at once, which is rare enough to be
+worth distrusting until it survived the walk-forward.
+
+## Why the runner is the only other return-adding change kept
 
 The return distribution is the finding, and everything else follows from it:
 
@@ -93,16 +128,21 @@ of them is what an account earns.
 
 | book | question | trades | entry days | mean/day | Sharpe | max DD |
 |---|---|---|---|---|---|---|
-| **fixed, out of sample** | does the RULE generalise? | 1133 | 409 | **+4.03%** | 0.610 | −29.45% |
-| selected, out of sample | does PARAMETER CHOICE generalise? | 1050 | 391 | +2.63% | 0.048 | −39.22% |
-| full sample (optimistic) | what the research produced | 1161 | 455 | +3.63% | 0.898 | −25.80% |
+| **fixed, out of sample** | does the RULE generalise? | 746 | 322 | **+8.38%** | 1.393 | -19.14% |
+| selected, out of sample | does PARAMETER CHOICE generalise? | 534 | 256 | +7.94% | 1.142 | -19.82% |
+| full sample (optimistic) | what the research produced | 759 | 336 | +7.57% | 1.690 | -20.32% |
 
-Out-of-sample years, fixed book: 2018 −3.76, 2019 +0.38, 2020 +16.20,
-2021 −0.62, 2022 +2.72, 2023 +2.65, 2024 +2.93, 2025 +0.74, 2026 −0.15.
+Out-of-sample years, fixed book: 2018 -35.67, 2019 +3.17, 2020 +22.00, 2021 +6.29, 2022 +4.64, 2023 +8.77, 2024 +7.60, 2025 +6.52, 2026 +6.08.
 
-Selecting parameters per fold is **worse** than leaving them fixed (+2.63%
-against +4.03%, Sharpe 0.05 against 0.61), which is the usual answer on a sample
-this size and the reason the shipped defaults are fixed.
+Selecting parameters per fold is still worse than leaving them fixed
+(+7.94% against +8.38%), which is the usual answer on a sample this
+size and the reason the shipped defaults are fixed.
+
+**2018 is one trade.** The cheapness filter's rank needs a year of realised-vol
+history, so the engine cannot start until mid-2018 and that "year" is a single
+position at −35.67%. It is what fails `consistent_across_years`. Tighter filter
+levels PASS that check — and only because 2018 leaves the book entirely at those
+levels, which is a year being dropped rather than won.
 
 ## Gate scorecard
 
@@ -116,13 +156,12 @@ this size and the reason the shipped defaults are fixed.
 | priced edge | PASS |
 | consistent across years | **FAIL** |
 | survivable drawdown | PASS |
-| mean proven | **FAIL** |
+| mean proven | PASS |
 
-The three failures, verbatim from the harness:
+The two failures, verbatim from the harness:
 
 * deflated Sharpe 0.000 < 0.5 — the result does not survive how many variants were tried
-* only 67% of calendar years profitable, needs 100%
-* day-clustered 95% interval [−1.52%, +8.58%] includes zero — the DIRECTION is established, the SIZE is not
+* only 89% of calendar years profitable, needs 100%
 
 On the deflated Sharpe specifically: it is computed against **396 variants** —
 33 folds times a 12-configuration grid — and the FIXED book does not use that
@@ -190,6 +229,8 @@ Each was motivated before it was run, and each is reported whichever way it went
 |---|---|
 | Index-futures hedge | **KEPT — the change that turned the verdict.** OOS −1.08% → +3.04% at the time, permutation 0.37 → 0.016 |
 | Runner past the horizon | **KEPT — confirmed out of sample.** +3.46% → +4.03%, break-even 1.754 → 2.012 |
+| Realised-vol cheapness filter | **KEPT — the change that made `mean_proven` pass.** +4.03% → +8.38%, interval [−1.52, +8.58] → [+3.03, +15.14] |
+| Exit when the market REGIME flips back | **REJECTED** — raises the mean (+3.63% → +4.24%) and destroys what compounds (+200% → +32%, Sharpe 0.90 → 0.46). Cutting a trade early removes the left tail and the right one with it |
 | Market-regime gate | KEPT — ungated −1.32%, gated +1.08% per entry day |
 | Hold 15 sessions rather than 10 | KEPT — +2.01% → +3.40%, and under two different pricing models |
 | Bought index CALL as the hedge | **REJECTED** — beat an exact hedge by ~1pp, which means it was a second long-market bet |

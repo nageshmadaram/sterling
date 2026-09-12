@@ -25,9 +25,9 @@ import { EnginePowerHeader } from './kite/config/EnginePowerHeader';
  * one product.
  *
  * What this panel does that no other one does: it shows the **gate's scorecard**
- * rather than a "not validated" sentence. This engine clears six of nine
- * checks including the entry-timing permutation, and misses two facts about
- * sample size. Flattening that to a single "no" would read identically to a
+ * rather than a "not validated" sentence. This engine clears seven of nine
+ * checks including the entry-timing permutation and the day-clustered interval
+ * nothing else here has ever cleared. Flattening that to a single "no" would read identically to a
  * strategy whose entries lose money, and an operator deciding whether to arm a
  * setup by hand is deciding between exactly those two situations.
  *

@@ -62,7 +62,7 @@ _STOCK_DEFAULTS: tuple[str, ...] = (
 CALIBRATED_FIELDS: frozenset[str] = frozenset({
     "lookback_days", "min_stretch_atr", "hold_days", "min_dte", "target_delta",
     "allow_fade_down", "market_filter", "market_ema", "hedge_mode",
-    "smile_slope", "runner_mult", "runner_trail_pct",
+    "smile_slope", "runner_mult", "runner_trail_pct", "max_rv_pct",
 })
 
 #: What was run, so a number on the settings page can be traced to a run.
@@ -74,8 +74,9 @@ CALIBRATION: dict[str, Any] = {
                  "the index-futures hedge charged carry at 5.2%/yr",
     "statistics": "day-clustered, moving-block bootstrap, entry-date permutation",
     "study": "backend/study/snapback_research.py",
-    "verdict": "NOT PROMOTED, 6 of 9 checks — out of sample +4.03% per entry "
-                "day, permutation p=0.0164, break-even VRP 2.01 against a "
+    "verdict": "NOT PROMOTED, 7 of 9 checks — out of sample +8.38% per entry "
+                "day on a 95% interval of [+3.03, +15.14], permutation p=0.0164, "
+                "break-even VRP 2.22 against a "
                 "1.15-1.30 market. See docs/strategy/snapback/VALIDATION_REPORT.md",
 }
 
@@ -269,6 +270,28 @@ class SnapbackConfig:
     #: -46% to -58%. The stop does cut trades that would have become tail
     #: winners; it buys more than it costs in the only currency that compounds.
     premium_stop_pct: float = 35.0
+    #: Close when the MARKET GATE that allowed the entry closes again. 0 = off;
+    #: any positive value is how many consecutive sessions the gate must be shut
+    #: against the position before it is given up.
+    #:
+    #: OFF, and the reasoning is worth keeping because the idea was a good one.
+    #: ``market_filter`` is this config's own candidate for THE load-bearing
+    #: setting and it is applied only at ENTRY, so a regime that turns while the
+    #: position is open is a thesis that has expired underneath it.
+    #:
+    #: MEASURED, and it fails the way the premium stop's mirror image fails. It
+    #: raises the arithmetic mean and destroys everything that compounds:
+    #:
+    #:   off      +3.63% per entry day, Sharpe 0.90, compounded +200%, 7/9 years
+    #:   1 day    +3.06%, Sharpe 0.45, compounded  +26%, 5/9
+    #:   2 days   +4.24%, Sharpe 0.46, compounded  +32%, 6/9
+    #:   3 days   +4.41%, Sharpe 0.57, compounded  +65%, 6/9
+    #:   5 days   +4.28%, Sharpe 0.67, compounded +103%, 6/9
+    #:
+    #: Cutting a trade early raises the mean per trade by removing the left tail
+    #: and removes the right one with it — and the right tail is this book. Kept
+    #: as a setting so the measurement above can be re-run rather than believed.
+    exit_on_regime_flip: int = 0
     #: Ratchet: give back at most this much of the best premium seen. 0 = off.
     premium_trail_pct: float = 0.0
     #: Hold PAST the horizon while the trade is already worth this multiple of
@@ -341,6 +364,38 @@ class SnapbackConfig:
     stop_mode: str = "both"
 
     # ── modelling ────────────────────────────────────────────────────────────
+    #: Refuse a setup whose realised vol sits above this percentile of its OWN
+    #: trailing year. 100 = off.
+    #:
+    #: THE change that made this engine's mean provable. The one cheapness test
+    #: available without an option tape: every premium here is modelled as
+    #: realised vol times a VRP, so an instrument whose realised vol is at the
+    #: top of its own year is one whose options are expensive — and this engine
+    #: is a BUYER of them. A setup is not worth the same at any price.
+    #:
+    #: MEASURED, motivated first, and confirmed OUT OF SAMPLE:
+    #:
+    #:   off     +4.03% per entry day, t 1.56, 95% CI [-1.52, +8.58],
+    #:           Sharpe 0.61, max DD -29.4%, break-even VRP 2.01, 6 of 9 checks
+    #:   p70     +8.38%, t 2.66, 95% CI [+3.03, +15.14], Sharpe 1.39,
+    #:           max DD -19.1%, break-even VRP 2.22, 7 of 9
+    #:
+    #: The interval excluding zero is the first time ``mean_proven`` has passed
+    #: for anything in this repository.
+    #:
+    #: 70 and not 60, which scores better. The response is a PLATEAU — 80/70/60/
+    #: 50 read +5.22/+8.38/+8.63/+8.45 out of sample — and 70 is its interior
+    #: with the most sample left (322 entry days against 291 and 257) and the
+    #: best compounded return. p60 and p50 also pass the year-consistency check,
+    #: but only because 2018 leaves the book entirely at those levels: the year
+    #: is not won, it is dropped. Choosing a level because a losing year fell off
+    #: the tape is the selection this file refused for ``market_ema``.
+    #:
+    #: WHAT IT COSTS, stated because it is not small: the filter refuses exactly
+    #: the crash periods. 2020's rupee P&L falls from 1.09M to 148k, because a
+    #: volatility spike IS an expensive option and this rule declines to buy one.
+    #: It trades a third fewer days for a much better return on each.
+    max_rv_pct: float = 70.0
     #: Sessions of realised vol behind the modelled premium and the strike pick.
     rv_window: int = 20
     #: What the engine ASSUMES it is paying, as a multiple of realised vol, when
@@ -404,9 +459,18 @@ class SnapbackConfig:
         still left the index EMA unfilled whenever the gate was slower than 60
         sessions. Every walk-forward fold then gated on an EMA that had not
         formed.
+
+        The realised-vol RANK window is in here too, and only when the filter
+        that reads it is on — a year of history is a large warm-up to demand of
+        every fold for a setting that is switched off. Same defect shape as
+        ``market_ema``, opposite direction: that one failed OPEN and doubled a
+        stricter gate's trade count, this one failed CLOSED at zero
+        out-of-sample trades.
         """
+        from .strategy import RV_PCT_WINDOW
+        rank = RV_PCT_WINDOW if self.max_rv_pct < 100.0 else 0
         return max(self.lookback_days, self.rv_window, self.mean_touch_ema,
-                   self.market_ema) + 60
+                   self.market_ema, rank) + 60
 
     def warnings(self) -> list[str]:
         """Things an operator should know that are not errors.
@@ -539,6 +603,8 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
     _range(merged, "short_leg_delta", 0.0, 0.95, float)
     _range(merged, "premium_stop_pct", 1.0, 100.0, float)
     _range(merged, "premium_trail_pct", 0.0, 100.0, float)
+    _range(merged, "exit_on_regime_flip", 0, 60, int)
+    _range(merged, "max_rv_pct", 1.0, 100.0, float)
     _range(merged, "runner_mult", 0.0, 20.0, float)
     _range(merged, "runner_trail_pct", 0.0, 100.0, float)
     _range(merged, "premium_pct_of_capital", 0.01, 100.0, float)

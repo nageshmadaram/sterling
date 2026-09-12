@@ -165,6 +165,48 @@ sample. The give-back matters as much as the trigger — at 1.5×, a 15% ratchet
 gives +4.09% and 25% gives +3.48%, but 40% collapses to +1.86% and *no* ratchet
 to +2.35%. The tail is given back faster than it accrues.
 
+## 9. The rule was bought at any price — THE CHANGE THAT MADE THE MEAN PROVABLE
+
+Every premium here is modelled as realised vol times a VRP, and nothing in the
+engine asked whether that number was high. A setup at the top of its own year's
+realised vol is the same setup bought at a much worse price, and this engine is
+a buyer.
+
+`max_rv_pct = 70` refuses it. Out of sample the mean goes +4.03% → **+8.38%**
+per entry day, the day-clustered 95% interval goes [−1.52, +8.58] to
+**[+3.03, +15.14]** — the first time `mean_proven` has passed for anything in
+this repository — the Sharpe 0.61 → 1.39, the drawdown −29.4% → −19.1% and the
+break-even VRP 2.01 → 2.22. Improving every one of those at once is rare enough
+that it was gated at four levels before being believed.
+
+It costs the crash periods: 2020's rupee P&L falls from ₹1.09M to ₹148k, because
+a volatility spike IS an expensive option and this rule declines to buy one.
+
+## 10. A THIRD warm-up window the warm-up did not cover
+
+`_rolling_pct` needs 250 sessions and `warmup_bars()` did not know it, so every
+walk-forward fold's rank was all-NaN and the filter refused everything:
+**zero out-of-sample trades** against 779 on the full sample.
+
+That is the same defect as finding 4, in the opposite direction — that one
+failed OPEN and doubled a stricter gate's trade count; this failed CLOSED and
+was obvious. The shape to remember: **a window that reads more history than the
+warm-up guarantees is silently all-NaN inside a fold**, and whether you notice
+depends only on which way the NaN happens to fail.
+
+## 11. The replay evaluated every strategy and filtered afterwards
+
+Selecting one strategy still paid for all of them. Adaptive Edge's
+`decide_from_candles` builds a market-profile structure series per bar and
+profiled at **154 seconds for a single 17-symbol session**; Gamma Move
+re-queried 500 daily rows per symbol per bar and rescanned the whole candle list,
+which is quadratic in the length of a multi-day replay. A three-month Snapback
+replay could not finish.
+
+Evaluation is now gated on the selection, the daily tape is cached per session,
+and each symbol keeps its own session buffer. Same numbers, about sixty times
+faster.
+
 ---
 
 ## What the audit did NOT find

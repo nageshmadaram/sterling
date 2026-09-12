@@ -7,9 +7,11 @@ and hold fifteen sessions — or longer, while the trade is already worth 1.5x
 what it cost.
 
 **`docs/strategy/snapback/VALIDATION_REPORT.md` is the authority.** Measured on
-202 F&O underlyings over nine years, out of sample: **+4.03% per entry day**,
-entry-timing permutation **p = 0.016**, break-even vol multiple **2.01** against
-a market that charges 1.15-1.30. Six of nine gate checks. NOT promoted — the
+202 F&O underlyings over nine years, out of sample: **+8.38% per entry day**,
+day-clustered 95% interval **[+3.03%, +15.14%]** — the first time anything in
+this repository has established a SIZE and not merely a direction — entry-timing
+permutation **p = 0.016**, break-even vol multiple **2.22** against a market that
+charges 1.15-1.30. SEVEN of nine gate checks. NOT promoted — the
 deflated Sharpe, the year-consistency bar and the day-clustered interval all
 fail — so ``auto_execute`` stays blocked by the validation record.
 
@@ -74,10 +76,11 @@ DESCRIPTORS: dict[str, dict] = {
             "completes when the instrument returns to that mean."
         ),
         "evidence": "Measured on 202 underlyings over nine years, out of "
-                    "sample and MARKET-NEUTRAL: +4.03% per entry day, "
-                    "entry-timing p=0.016, break-even vol multiple 2.01 against "
-                    "a market charging 1.15-1.30, Sharpe 0.61, worst drawdown "
-                    "-29% at 2% of capital per position. Six of nine gate "
+                    "sample and MARKET-NEUTRAL: +8.38% per entry day on a "
+                    "95% interval of [+3.03%, +15.14%], entry-timing p=0.016, "
+                    "break-even vol multiple 2.22 against "
+                    "a market charging 1.15-1.30, Sharpe 1.39, worst drawdown "
+                    "-19% at 2% of capital per position. SEVEN of nine gate "
                     "checks. UNHEDGED the same windows return -1.08% at p=0.37 "
                     "— the edge is relative, and a bought put is a large short "
                     "position in a market that rose for nine years.",

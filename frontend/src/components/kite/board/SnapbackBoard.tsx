@@ -4,10 +4,10 @@
  * Two things this board does that no other one needs to.
  *
  * **It leads with the measurement, not with a disclaimer.** Snapback clears
- * six of the nine walk-forward checks — including the entry-timing permutation
- * that every other strategy in this repo has failed, and the priced-edge check
- * at a break-even vol multiple of 2.01 against a market charging 1.15-1.30 —
- * and misses on two facts about sample size and a year-consistency bar. A flat
+ * seven of the nine walk-forward checks — including the entry-timing
+ * permutation that every other strategy in this repo has failed, and the
+ * day-clustered interval that nothing here has ever cleared — and misses on the
+ * deflated Sharpe and a year-consistency bar. A flat
  * "NOT VALIDATED" banner would read
  * identically to a strategy whose entries lose money, and those are not the
  * same thing to someone deciding whether to click Buy. So the strip says what

@@ -35,7 +35,11 @@ def falling_tape(n: int = 240, spike: float = 1.12, after: float = 0.985,
                 volume=np.full(len(close), 1000.0))
 
 
-CFG = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_stocks=("RELIANCE",),
+#: ``max_rv_pct`` needs a YEAR of realised-vol history before it can rank
+#: anything, so the shipped default demands a 310-bar warm-up that no synthetic
+#: tape here reaches. These tests are about the fills, the exits and the hedge;
+#: the cheapness filter has its own.
+CFG = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_stocks=("RELIANCE",),
                      scan_indices=(), hedge_mode="none", premium_stop_pct=100.0)
 
 
