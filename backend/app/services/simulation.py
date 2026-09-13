@@ -2787,15 +2787,9 @@ class SimulationRunner:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
                     instruments.append(rec["underlying"])
 
-        # When the selected strategy includes Snapback, merge in the
-        # snapback config's own universe so the replay scans the SAME
-        # instruments the live scanner evaluates.  Without this, the
-        # default universe above is a static list that rarely includes
-        # the mid-cap stocks the snapback rule fires on, so the
-        # simulation produces no signals while the live panel shows them.
         _sim_strats = [s.lower() for s in (cfg.strategies or [cfg.strategy] if cfg else ["all"])]
         _sim_wants_snapback = "snapback" in _sim_strats or "all" in _sim_strats or "*" in _sim_strats
-        if _sim_wants_snapback:
+        if not cfg.instruments and _sim_wants_snapback:
             try:
                 sb_cfg = _snapback_config()
                 sb_universe = list(sb_cfg.universe())
@@ -2819,6 +2813,13 @@ class SimulationRunner:
             instruments, res, warmup_start, end_epoch,
             session_start=start_epoch, on_progress=_report_hydrate
         )
+        try:
+            await _hydrate_missing_candles(
+                instruments, "1d", start_epoch - 90 * 86400, end_epoch,
+                session_start=start_epoch - 90 * 86400, on_progress=_report_hydrate
+            )
+        except Exception as exc:
+            log.warning("Daily candle hydration notice: %s", exc)
 
         # Pre-seed indicator history with pre-session bars so indicators are ready at 09:15 AM
         self._bar_history = {}
@@ -2844,12 +2845,28 @@ class SimulationRunner:
         # (e.g. mid-cap stocks in daily strategies like Snapback), so every universe stock is evaluated.
         symbols_with_5m = set(b["symbol"] for b in all_bars)
         missing_symbols = [s for s in instruments if s not in symbols_with_5m]
-        if missing_symbols and all_bars:
+        if missing_symbols:
             session_times_by_date: Dict[str, List[int]] = {}
             for b in all_bars:
                 b_dt = datetime.fromtimestamp(b["time"], tz=ist)
                 d_str = b_dt.strftime("%Y-%m-%d")
                 session_times_by_date.setdefault(d_str, []).append(b["time"])
+
+            if not session_times_by_date:
+                curr_dt = day
+                while curr_dt <= end_day:
+                    if curr_dt.weekday() < 5:  # Mon..Fri
+                        d_str = curr_dt.strftime("%Y-%m-%d")
+                        s_dt = datetime(curr_dt.year, curr_dt.month, curr_dt.day, 9, 15, 0, tzinfo=ist)
+                        e_dt = datetime(curr_dt.year, curr_dt.month, curr_dt.day, 15, 30, 0, tzinfo=ist)
+                        cur_t = int(s_dt.timestamp())
+                        end_t = int(e_dt.timestamp())
+                        ts_list = []
+                        while cur_t <= end_t:
+                            ts_list.append(cur_t)
+                            cur_t += 300
+                        session_times_by_date[d_str] = ts_list
+                    curr_dt += timedelta(days=1)
 
             for msym in missing_symbols:
                 daily_candles = ohlcv_get(msym, "1d", limit=1000, since=start_epoch - 30 * 86400)
@@ -4767,10 +4784,12 @@ async def _hydrate_missing_candles(
         "30m": "30minute",
         "60m": "60minute",
         "1h": "60minute",
+        "1d": "day",
+        "day": "day",
     }
     k_res = k_res_map.get(resolution, "5minute")
-    # Kite enforces max 60-100 days per intraday request. Chunk into 60-day slices.
-    CHUNK_SEC = 60 * 86400
+    # Kite enforces max 60-100 days per intraday request. Chunk into 365-day slices for daily, 60-day for intraday.
+    CHUNK_SEC = (365 * 86400) if k_res == "day" else (60 * 86400)
 
     kc = KiteClient(api_key=getattr(zerodha_acct, "api_key", "") or "", access_token=zerodha_acct.access_token)
     try:
@@ -4785,15 +4804,26 @@ async def _hydrate_missing_candles(
             if not token and canon_sym.upper() in INDEX_ALIASES:
                 token = KITE_TOKENS.get(INDEX_ALIASES[canon_sym.upper()])
             if not token:
+                for exch in ("NSE", "INDICES", "NFO", "BSE"):
+                    try:
+                        t = await kc._instruments.resolve_token(canon_sym.upper(), exch)
+                        if t:
+                            token = t
+                            break
+                    except Exception:
+                        pass
+            if not token:
+                log.warning("Could not resolve Kite token for %s; skipping remote candle hydration", canon_sym)
                 continue
 
-            cov = ohlcv_store.get_symbol_coverage(canon_sym, resolution)
+            range_cov = ohlcv_store.get_range_coverage(canon_sym, resolution, check_start, effective_target_end)
+            range_count = range_cov.get("count") or 0
             fetch_ranges: List[Tuple[int, int]] = []
-            if not cov or (cov.get("count") or 0) == 0:
+            if range_count == 0:
                 fetch_ranges.append((check_start, effective_target_end))
             else:
-                cov_earliest = cov.get("earliest") or 0
-                cov_latest = cov.get("latest") or 0
+                cov_earliest = range_cov.get("earliest") or check_start
+                cov_latest = range_cov.get("latest") or effective_target_end
                 if check_start < (cov_earliest - res_sec):
                     fetch_ranges.append((check_start, cov_earliest))
                 if is_today_in_range:
@@ -4802,6 +4832,12 @@ async def _hydrate_missing_candles(
                 else:
                     if cov_latest < (effective_target_end - 900):
                         fetch_ranges.append((cov_latest, effective_target_end))
+
+                # Internal gap detection: if count is significantly lower than expected
+                days_span = max(1, (effective_target_end - check_start) // 86400)
+                expected_min = max(1, int(days_span * (70 if resolution in ("5m", "5min") else 1) * 0.5))
+                if range_count < expected_min and (check_start, effective_target_end) not in fetch_ranges:
+                    fetch_ranges.append((check_start, effective_target_end))
 
             if not fetch_ranges:
                 continue

@@ -193,15 +193,9 @@ def spec_for(underlying: str):
     """
     key = canonical(underlying)
     res = _generated().get(key) or SPECS.get(key)
-    if res is not None:
-        return res
     if not key:
         return None
-    is_idx = key in INDEX_NAMES or "NIFTY" in key or "SENSEX" in key or "BANK" in key
-    step = 50.0 if is_idx else 10.0
-    lot = 75 if is_idx else 500
-    exch = "BFO" if "SENSEX" in key or "BANKEX" in key else "NFO"
-    return ContractSpec(key, step, lot, exch, is_idx)
+    return _generated().get(key) or SPECS.get(key)
 
 
 def known_underlyings() -> tuple[str, ...]:

@@ -284,6 +284,35 @@ def get_symbol_coverage(symbol: str, resolution: str) -> Optional[Dict]:
             conn.close()
 
 
+def get_range_coverage(symbol: str, resolution: str, since: int, until: int) -> Dict:
+    """Coverage statistics (count, earliest, latest) for a symbol/resolution strictly within [since, until]."""
+    sym_u = symbol.upper()
+    conn = None
+    try:
+        conn = _get_connection()
+        row = conn.execute(
+            "SELECT COUNT(*), MIN(time), MAX(time) FROM ohlcv "
+            "WHERE symbol = ? AND resolution = ? AND time >= ? AND time <= ?",
+            (sym_u, resolution, since, until),
+        ).fetchone()
+        if (not row or not row[0]) and sym_u in INDEX_ALIASES:
+            row = conn.execute(
+                "SELECT COUNT(*), MIN(time), MAX(time) FROM ohlcv "
+                "WHERE symbol = ? AND resolution = ? AND time >= ? AND time <= ?",
+                (INDEX_ALIASES[sym_u], resolution, since, until),
+            ).fetchone()
+        return {
+            "count": row[0] if row and row[0] is not None else 0,
+            "earliest": row[1] if row and row[1] is not None else None,
+            "latest": row[2] if row and row[2] is not None else None,
+        }
+    except Exception:
+        return {"count": 0, "earliest": None, "latest": None}
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_status() -> List[Dict]:
     """Coverage summary — count, earliest and latest per symbol/resolution."""
     conn = None

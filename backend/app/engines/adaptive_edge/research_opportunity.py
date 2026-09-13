@@ -109,6 +109,20 @@ def evaluate_research_opportunity(
             capital_quantity > 0,
             "quantity>0" if capital_quantity > 0 else "quantity<=0",
         )
+    if session_valid is None and snapshot and getattr(snapshot, "decision_time", None):
+        try:
+            dt = snapshot.decision_time
+            if isinstance(dt, str):
+                from datetime import datetime
+                dt = datetime.fromisoformat(dt)
+            if hasattr(dt, "weekday"):
+                is_weekday = dt.weekday() < 5
+                time_mins = dt.hour * 60 + dt.minute
+                in_hours = (9 * 60 + 15) <= time_mins <= (15 * 60 + 30)
+                session_valid = is_weekday and in_hours
+        except Exception:
+            pass
+
     if session_valid is not None:
         gates["SessionValid"] = _gate(
             "SessionValid",
