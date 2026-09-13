@@ -1942,7 +1942,7 @@ class SimulationRunner:
     @property
     def has_session_view(self) -> bool:
         """True if a simulation is running/paused, or if a finished session is being reviewed."""
-        return self._state != SimState.IDLE or bool(self._session_complete and (self._stats.events or self._stats.trades))
+        return self._state != SimState.IDLE or bool(self._session_complete)
 
     @property
     def status(self) -> SimStatus:
@@ -2774,6 +2774,24 @@ class SimulationRunner:
             for rec in self._recorded_signals:
                 if rec.get("underlying") and rec["underlying"] not in instruments:
                     instruments.append(rec["underlying"])
+
+        # When the selected strategy includes Snapback, merge in the
+        # snapback config's own universe so the replay scans the SAME
+        # instruments the live scanner evaluates.  Without this, the
+        # default universe above is a static list that rarely includes
+        # the mid-cap stocks the snapback rule fires on, so the
+        # simulation produces no signals while the live panel shows them.
+        _sim_strats = [s.lower() for s in (cfg.strategies or [cfg.strategy] if cfg else ["all"])]
+        _sim_wants_snapback = "snapback" in _sim_strats or "all" in _sim_strats or "*" in _sim_strats
+        if _sim_wants_snapback:
+            try:
+                sb_cfg = _snapback_config()
+                sb_universe = list(sb_cfg.universe())
+                for sb_sym in sb_universe:
+                    if sb_sym not in instruments:
+                        instruments.append(sb_sym)
+            except Exception:
+                pass
 
         # Deduplicate and canonicalize symbols
         instruments = list(dict.fromkeys([_canonical_symbol(s) for s in instruments if s]))
@@ -4320,7 +4338,7 @@ class SimulationRunner:
             if watch:
                 signals_to_fire.append(watch)
          except Exception as exc:
-            log.debug("Snapback bar evaluation error for %s: %s", sym, exc)
+            log.warning("Snapback bar evaluation error for %s: %s", sym, exc, exc_info=True)
 
         # 4c. Intraday pack: pivot_break, ma_ribbon, vwap_supertrend.
         # The SAME functions the live scan calls — bars in, signals out — so a
@@ -4377,10 +4395,20 @@ class SimulationRunner:
 
         sym_bar_idx = self._in_session_bars.get(sym, len(history))
 
-        # Intraday entry cutoff: Do not enter new trades after 15:15:00 (F&O cash stops at 15:15)
+        # Intraday entry cutoff: Do not enter new trades after 15:15:00 (F&O cash stops at 15:15).
+        # Exception: Snapback WATCHING signals are allowed because the FILL happens at
+        # the next session's open (the session-boundary code handles this). Blocking
+        # them here would make the strategy invisible to the UI after 15:15.
         time_hhmmss = bar_dt.strftime("%H:%M:%S")
-        if time_hhmmss >= "15:15:00":
-            return
+        after_cutoff = time_hhmmss >= "15:15:00"
+        if after_cutoff:
+            # Only allow snapback WATCHING signals through; everything else returns.
+            signals_to_fire = [
+                s for s in signals_to_fire
+                if s.get("strategy") == "snapback" and s.get("strength") != "STRONG"
+            ]
+            if not signals_to_fire:
+                return
 
         # Emit all generated strategy signals for this bar (or filter by selected strategies)
         cfg_strats = [s.lower() for s in (self._config.strategies if self._config and self._config.strategies else [self._config.strategy if self._config else "all"])]
