@@ -1119,8 +1119,9 @@ def _snapback_watch_from_bars(runner: Any, symbol: str, intraday: list,
     from app.engines.snapback.strategy import evaluate_at, features, fires
 
     cfg = _snapback_config()
-    if not cfg.enabled:
-        return None
+    # Note: callers that run inside simulation force-enable the config before
+    # calling here; `enabled` is not re-checked so the helper works correctly
+    # for both live and simulation contexts.
     daily = _snapback_daily_tape(symbol, intraday, asof_ts, runner,
                                  keep=cfg.warmup_bars() + 40)
     if len(daily) < cfg.warmup_bars() + 2:
@@ -4243,77 +4244,81 @@ class SimulationRunner:
                 self._session_bars: Dict[str, List[Dict[str, Any]]] = {}
 
             sb_cfg = _snapback_config()
-            if sb_cfg.enabled:
-                today = bar_dt.strftime("%Y-%m-%d")
-                seen_days = self._snapback_days.setdefault(sym, [])
-                if not seen_days or seen_days[-1] != today:
-                    # A new session opened, so the previous one is COMPLETE and
-                    # still in hand. Recompute the rule on it exactly, rather
-                    # than trusting whichever sampled watch happened to be last:
-                    # the state at the close is what decides this fill, and a
-                    # preview taken at 15:05 is not it.
-                    prev_bars = self._session_bars.get(sym) or []
-                    prev_day, prev = self._snapback_watch.get(sym, ("", None))
-                    if prev_bars:
-                        prev_day = datetime.fromtimestamp(
-                            _bar_epoch_seconds(prev_bars[-1]) or 0.0,
-                            _IST).strftime("%Y-%m-%d")
-                        prev = _snapback_watch_from_bars(
-                            self, sym, prev_bars,
-                            _bar_epoch_seconds(prev_bars[-1]))
-                    # Today's bars, kept as they arrive. Re-deriving them from
-                    # the full candle list on every bar is quadratic in the
-                    # length of the replay, which is invisible on one session
-                    # and fatal on sixty.
-                    self._session_bars[sym] = []
-                    seen_days.append(today)
-                    cooled = True
-                    last_fill = self._snapback_filled.get(sym)
-                    if last_fill and last_fill in seen_days:
-                        cooled = (len(seen_days) - 1 - seen_days.index(last_fill)
-                                  >= sb_cfg.cooldown_days)
-                    if prev and prev_day and prev_day != today and cooled:
-                        # The session's OPEN, not this bar's close: the same
-                        # fill the backtest books.
-                        fill_spot = float(bar.get("open") or close)
-                        fill_leg = _snapback_leg(
-                            sym, fill_spot, prev["opt_type"],
-                            prev["snapback_iv"], sb_cfg, today)
-                        if fill_leg is not None:
-                            entry = dict(prev)
-                            entry["strength"] = "STRONG"
-                            entry["fill_spot"] = fill_spot
-                            # Re-priced at the fill. Inheriting the premium the
-                            # signal bar quoted would book an entry a whole
-                            # session stale, with the gap counted as edge.
-                            entry["leg"] = fill_leg
-                            entry["stop"] = _snapback_spot_stop(
-                                fill_leg, fill_spot, sb_cfg)
-                            entry["max_hold_bars"] = max(
-                                1, int(sb_cfg.hold_days) * self._bars_per_session())
-                            # The horizon is not the end of the trade when the
-                            # position is already a winner — the same rule the
-                            # backtest runs, so the dock and the measurement
-                            # cannot report different exits.
-                            entry["runner_mult"] = sb_cfg.runner_mult
-                            entry["runner_trail_pct"] = sb_cfg.runner_trail_pct
-                            signals_to_fire.append(entry)
-                            self._snapback_filled[sym] = today
-                    self._snapback_watch.pop(sym, None)
+            # `enabled` governs live auto-execution, not simulation. When the
+            # user explicitly selects Snapback in the replay dock the engine
+            # must run regardless of whether live trading is on.
+            import dataclasses as _dc
+            sb_cfg = _dc.replace(sb_cfg, enabled=True)
+            today = bar_dt.strftime("%Y-%m-%d")
+            seen_days = self._snapback_days.setdefault(sym, [])
+            if not seen_days or seen_days[-1] != today:
+                # A new session opened, so the previous one is COMPLETE and
+                # still in hand. Recompute the rule on it exactly, rather
+                # than trusting whichever sampled watch happened to be last:
+                # the state at the close is what decides this fill, and a
+                # preview taken at 15:05 is not it.
+                prev_bars = self._session_bars.get(sym) or []
+                prev_day, prev = self._snapback_watch.get(sym, ("", None))
+                if prev_bars:
+                    prev_day = datetime.fromtimestamp(
+                        _bar_epoch_seconds(prev_bars[-1]) or 0.0,
+                        _IST).strftime("%Y-%m-%d")
+                    prev = _snapback_watch_from_bars(
+                        self, sym, prev_bars,
+                        _bar_epoch_seconds(prev_bars[-1]))
+                # Today's bars, kept as they arrive. Re-deriving them from
+                # the full candle list on every bar is quadratic in the
+                # length of the replay, which is invisible on one session
+                # and fatal on sixty.
+                self._session_bars[sym] = []
+                seen_days.append(today)
+                cooled = True
+                last_fill = self._snapback_filled.get(sym)
+                if last_fill and last_fill in seen_days:
+                    cooled = (len(seen_days) - 1 - seen_days.index(last_fill)
+                              >= sb_cfg.cooldown_days)
+                if prev and prev_day and prev_day != today and cooled:
+                    # The session's OPEN, not this bar's close: the same
+                    # fill the backtest books.
+                    fill_spot = float(bar.get("open") or close)
+                    fill_leg = _snapback_leg(
+                        sym, fill_spot, prev["opt_type"],
+                        prev["snapback_iv"], sb_cfg, today)
+                    if fill_leg is not None:
+                        entry = dict(prev)
+                        entry["strength"] = "STRONG"
+                        entry["fill_spot"] = fill_spot
+                        # Re-priced at the fill. Inheriting the premium the
+                        # signal bar quoted would book an entry a whole
+                        # session stale, with the gap counted as edge.
+                        entry["leg"] = fill_leg
+                        entry["stop"] = _snapback_spot_stop(
+                            fill_leg, fill_spot, sb_cfg)
+                        entry["max_hold_bars"] = max(
+                            1, int(sb_cfg.hold_days) * self._bars_per_session())
+                        # The horizon is not the end of the trade when the
+                        # position is already a winner — the same rule the
+                        # backtest runs, so the dock and the measurement
+                        # cannot report different exits.
+                        entry["runner_mult"] = sb_cfg.runner_mult
+                        entry["runner_trail_pct"] = sb_cfg.runner_trail_pct
+                        signals_to_fire.append(entry)
+                        self._snapback_filled[sym] = today
+                self._snapback_watch.pop(sym, None)
 
-                # THIS bar joins the session before the rule is asked about
-                # it. The forming daily bar has to include the close being
-                # evaluated, or the rule answers about the previous one.
-                self._session_bars.setdefault(sym, []).append(bar)
-                watch = None
-                if len(self._session_bars[sym]) % SNAPBACK_WATCH_EVERY == 1:
-                    watch = _snapback_watch_from_bars(
-                        self, sym, self._session_bars[sym], bar.get("time"),
-                    )
-                    self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"),
-                                                 watch)
-                if watch:
-                    signals_to_fire.append(watch)
+            # THIS bar joins the session before the rule is asked about
+            # it. The forming daily bar has to include the close being
+            # evaluated, or the rule answers about the previous one.
+            self._session_bars.setdefault(sym, []).append(bar)
+            watch = None
+            if len(self._session_bars[sym]) % SNAPBACK_WATCH_EVERY == 1:
+                watch = _snapback_watch_from_bars(
+                    self, sym, self._session_bars[sym], bar.get("time"),
+                )
+                self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"),
+                                             watch)
+            if watch:
+                signals_to_fire.append(watch)
          except Exception as exc:
             log.debug("Snapback bar evaluation error for %s: %s", sym, exc)
 
