@@ -27,7 +27,7 @@ export const REPLAY_STRATEGIES: readonly ReplayStrategy[] = [
   { id: 'gamma_move', label: 'Gamma Move', tone: 'var(--k-violet)' },
   // A DAILY rule. It can be watched inside a session but only entered across
   // one — the signal is a daily close and the fill is the next session's open —
-  // so a single-day replay shows its setups and no trades. `capabilities
+  // so a single-day replay can fill a prior close setup. `capabilities
   // .daily_strategies` is what the dock reads to say so.
   { id: 'snapback', label: 'Snapback', tone: 'var(--k-red-rose)' },
   // The intraday pack. Three ids, because the replay emits three distinct

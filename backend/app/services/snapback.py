@@ -149,7 +149,7 @@ class UnreadableCandles(RuntimeError):
     """
 
 
-def evaluate_symbol(candles, cfg: SnapbackConfig, symbol: str) -> list:
+def evaluate_symbol(candles, cfg: SnapbackConfig, symbol: str, *, market_gate=None) -> list:
     """Signals on the last few CLOSED sessions of one instrument."""
     bars = to_bars(candles)
     if len(bars) == 0:
@@ -158,28 +158,22 @@ def evaluate_symbol(candles, cfg: SnapbackConfig, symbol: str) -> list:
                 f"{len(candles)} candles arrived and none parsed "
                 f"(first is {type(candles[0]).__name__})")
         return []
-    return evaluate(bars, cfg, canonical(symbol), catchup_bars=CATCHUP_SESSIONS)
+    from app.engines.snapback import entry_indices, features
+    f = features(bars, cfg)
+    out = []
+    for side in cfg.sides():
+        for i in entry_indices(bars, cfg, side, market_gate):
+            if int(i) < len(bars) - CATCHUP_SESSIONS:
+                continue
+            out.extend(_named(sig, symbol) for sig in evaluate_at(bars, cfg, int(i), f)
+                       if sig.side == side)
+    return out
 
 
 def _drop_forming(candles: list) -> list:
-    """Drop today's session while it is still trading.
-
-    Every rule here is stated on a CLOSE. A forming daily bar makes a signal
-    appear and disappear through the session, which is the live-repaint bug this
-    repo has already fixed once elsewhere.
-    """
-    if not candles:
-        return candles
-    from app.engines.snapback.models import _epoch_seconds
-    last = _epoch_seconds(candles[-1])
-    if last is None:
-        return list(candles)
-    if datetime.fromtimestamp(last, tz=_IST).date() >= ist_today():
-        # 15:30 IST is the close. Before it, today's bar is still forming.
-        now = datetime.now(_IST)
-        if (now.hour, now.minute) < (15, 30):
-            return list(candles[:-1])
-    return list(candles)
+    """Keep one closed, valid exchange session per day for every candle shape."""
+    from app.services.daily_sessions import closed_daily_candles
+    return closed_daily_candles(candles, datetime.now(_IST))
 
 
 def resolve_universe(cfg: SnapbackConfig, *, nfo, bfo, equities) -> list:
@@ -496,6 +490,18 @@ async def scan_once(uid: str) -> dict:
             client.search_instruments("", "BSE", limit=1_000_000),
         )
         universe = resolve_universe(cfg, nfo=nfo, bfo=bfo, equities=nse + bse)
+        from app.engines.snapback.regime import MARKET_SYMBOL, gate_for
+        market_gate = None
+        if cfg.market_filter != "off":
+            index = next((i for i in universe if canonical(i.name) == MARKET_SYMBOL), None)
+            if index is None:
+                raise UnreadableCandles("NIFTY daily tape is required for the market filter")
+            market_bars = to_bars(_drop_forming(await _candles(
+                client, st, index.token, index.tradingsymbol)))
+            market_gate = gate_for({MARKET_SYMBOL: market_bars},
+                                   market_filter=cfg.market_filter, ema_period=cfg.market_ema)
+            if not market_gate:
+                raise UnreadableCandles("NIFTY daily tape cannot establish the market filter")
         chain_cache: dict[str, list] = {"NFO": nfo, "BFO": bfo}
         # Kite's historical endpoint is 3 requests/second. Four concurrent
         # fetchers over a 200-name universe spent their budget on 429
@@ -511,7 +517,7 @@ async def scan_once(uid: str) -> dict:
                     if not raw:
                         st.failures.append(f"{item.name}: no daily candles")
                         return
-                    for sig in evaluate_symbol(raw, cfg, item.name):
+                    for sig in evaluate_symbol(raw, cfg, item.name, market_gate=market_gate):
                         blocked = None
                         contract = await _contract_for(
                             client, item.name, item.option_exchange, sig.entry,
@@ -590,7 +596,7 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
     signal for a live one.
     """
     cfg = get_config(uid)
-    key = f"{uid}:{sessions}:{cfg.market_filter}:{cfg.min_stretch_atr}"
+    key = f"{uid}:{sessions}:{ist_today()}:{json.dumps(cfg.as_dict(), sort_keys=True)}"
     hit = _history_cache.get(key)
     if hit and (time.monotonic() - hit[0]) < _HISTORY_TTL_S:
         return hit[1]
@@ -601,14 +607,15 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
     import numpy as np
 
     def tape(symbol: str) -> Optional[Bars]:
-        rows = ohlcv_store.get_candles(symbol, "1d", limit=900)
+        rows = _drop_forming(ohlcv_store.get_candles(symbol, "1d", limit=900))
         if not rows or len(rows) < cfg.warmup_bars() + cfg.hold_days + 2:
             return None
         a = np.array([[r["time"], r["open"], r["high"], r["low"], r["close"],
                        r.get("volume", 0.0)] for r in rows], dtype=float)
         return Bars(a[:, 0], a[:, 1], a[:, 2], a[:, 3], a[:, 4], a[:, 5])
 
-    names = [canonical(n) for n in _history_universe(cfg)]
+    selected_names = {canonical(n) for n in _history_universe(cfg)}
+    names = sorted(selected_names | {MARKET_SYMBOL})
     tapes: dict[str, Bars] = {}
     for n in names:
         b = tape(n)
@@ -621,6 +628,8 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
     gate = gate_for(tapes, market_filter=cfg.market_filter,
                     ema_period=cfg.market_ema)
     market = tapes.get(MARKET_SYMBOL)
+    if cfg.market_filter != "off" and not gate:
+        raise UnreadableCandles("NIFTY daily tape cannot establish the history market filter")
     cutoff = ""
     if market is not None and len(market) > sessions:
         cutoff = ist_day(float(market.time[-int(sessions)]))
@@ -649,6 +658,8 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
 
     out: list[dict] = []
     for sym, bars in tapes.items():
+        if sym not in selected_names:
+            continue
         f = features(bars, cfg)
         for side in cfg.sides():
             for i in entry_indices(bars, cfg, side, gate):
@@ -656,6 +667,8 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
                 if cutoff and day < cutoff:
                     continue
                 for sig in evaluate_at(bars, cfg, int(i), f):
+                    if sig.side != side:
+                        continue
                     named = _named(sig, sym)
                     row = _row(named, cfg, contract=_estimated(sig, sym, cfg),
                                quote=None, blocked=None, underlying_token=0)

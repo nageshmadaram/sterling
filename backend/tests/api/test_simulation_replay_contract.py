@@ -329,7 +329,7 @@ async def test_multi_day_range_replays_across_sessions(monkeypatch):
         {"time": 1788493500, "open": 24100.0, "high": 24150.0, "low": 24090.0, "close": 24120.0, "volume": 100},
         {"time": 1788493800, "open": 24120.0, "high": 24180.0, "low": 24110.0, "close": 24160.0, "volume": 100},
     ]
-    monkeypatch.setattr(ohlcv_store, "get_candles", lambda *a, **kw: fake_bars)
+    monkeypatch.setattr(ohlcv_store, "get_candles", lambda symbol, resolution, **kw: fake_bars if resolution == "5m" else [])
     monkeypatch.setattr(sim_mod, "_hydrate_missing_candles", AsyncMock())
 
     runner = SimulationRunner()

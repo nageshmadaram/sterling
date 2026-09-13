@@ -210,6 +210,7 @@ export function ReplayDock() {
   const draft = useReplayStore((s) => s.draft);
   const historical = useReplayIsHistorical();
   const statusMessage = useReplayStore((s) => s.status.status_message);
+  const snapbackNote = useReplayStore((s) => s.status.strategy_notes?.snapback);
   const clearSession = useReplayStore((s) => s.clearSession);
   const setSummaryOpen = useReplayStore((s) => s.setSummaryOpen);
 
@@ -413,8 +414,8 @@ export function ReplayDock() {
             <Icons.Signal size={12} />
             <span>
               {state === 'idle'
-                ? 'Signal panes are showing this finished replay, not the live market.'
-                : 'Signal panes are showing this replay, not the live market.'}
+                ? 'Replay-enabled panes show this finished session. Snapback history keeps its original session dates.'
+                : 'Replay-enabled panes show this session. Snapback history keeps its original session dates.'}
             </span>
             {state === 'idle' && (
               <span data-detail style={{ marginLeft: 'auto' }}>
@@ -441,6 +442,13 @@ export function ReplayDock() {
             <span className="rd-error-strip-actions">
               <button type="button" className="rd-btn rd-btn-sm" aria-label="Clear results" onClick={() => { void clearSession(); setUserInteractedHeight(false); }}>Clear results</button>
             </span>
+          </div>
+        )}
+
+        {snapbackNote && (
+          <div className="rd-session-note" data-testid="replay-snapback-note">
+            <Icons.Alert size={13} />
+            <span>Snapback: {snapbackNote}</span>
           </div>
         )}
 

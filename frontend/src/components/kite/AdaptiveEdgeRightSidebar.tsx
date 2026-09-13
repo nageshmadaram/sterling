@@ -299,7 +299,7 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
           <IntradayBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
         )}
         {engine === 'snapback' && (
-          <SnapbackBoard onOpenChart={openChartFor} nowMs={nowMs} onOpenDetail={onOpenBoardDetail} />
+          <SnapbackBoard onOpenChart={openChartFor} onOpenDetail={onOpenBoardDetail} />
         )}
       </div>
     </div>

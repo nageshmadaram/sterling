@@ -12,9 +12,10 @@
  * reads as broken.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import React from 'react';
 import { SnapbackBoard } from '../SnapbackBoard';
+import { useReplayStore } from '../../../../hooks/useReplayStore';
 
 let snap: any = { data: undefined, isLoading: false, error: null };
 let scanState: any = { mutate: vi.fn(), isPending: false, error: null };
@@ -182,4 +183,27 @@ describe('Snapback board', () => {
     screen.getByRole('button', { name: /Scan now/ }).click();
     expect(scanState.mutate).toHaveBeenCalled();
   });
+});
+
+
+it('keeps live history dates and today filtering independent of the replay clock', () => {
+  const wall = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-14T12:00:00+05:30'));
+  const original = useReplayStore.getState().status;
+  snap.data = snapshot({ rows: [row({ state: 'running', timestamp_ms: Date.parse('2026-09-11T15:30:00+05:30') })] });
+  const { container, rerender } = render(<SnapbackBoard />);
+  const headings = () => Array.from(container.querySelectorAll('.sb-day')).map(n => n.textContent);
+  const before = headings();
+  try {
+    act(() => useReplayStore.setState({ status: {
+      ...original, state: 'running', current_date: '2026-09-11', current_time_iso: '12:00:00',
+      config: { ...original.config, date: '2026-09-11' } as any,
+    } }));
+    rerender(<SnapbackBoard />);
+    expect(headings()).toEqual(before);
+    expect(screen.queryByText('Today')).toBeNull();
+    expect(screen.queryByText('Yesterday')).toBeNull();
+  } finally {
+    act(() => useReplayStore.setState({ status: original }));
+    wall.mockRestore();
+  }
 });

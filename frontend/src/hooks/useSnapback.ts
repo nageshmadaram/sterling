@@ -303,6 +303,7 @@ export function useUpdateSnapback() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEY });
       qc.invalidateQueries({ queryKey: SNAPSHOT_KEY });
+      qc.invalidateQueries({ queryKey: HISTORY_KEY });
     },
   });
 }

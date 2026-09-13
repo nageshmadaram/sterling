@@ -565,7 +565,8 @@ def test_gamma_move_store_daily_caps_at_the_asof_clock(monkeypatch):
     from app.services.simulation import _gamma_move_store_daily
     asof = 1_700_000_000
     assert _gamma_move_store_daily("RELIANCE", asof) == []
-    assert seen["until"] == asof
+    # OHLCV uses an exclusive upper bound; include the bar AT the replay clock.
+    assert seen["until"] == asof + 1
     assert seen["since"] < asof
 
 

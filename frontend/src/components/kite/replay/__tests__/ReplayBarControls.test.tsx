@@ -79,7 +79,7 @@ describe('ReplaySessionDropdown', () => {
 describe('ReplayStrategyDropdown — a daily rule inside an intraday replay', () => {
   /**
    * Snapback's signal is a daily CLOSE and its measured fill is the NEXT
-   * session's open, so a single-day replay shows setups and takes no position.
+   * session's open; a single-day replay can fill a prior session's setup.
    * An operator reading "no trades" as "no setups" is the whole reason these
    * assertions exist — and the dock must learn WHICH strategies these are from
    * the engine's own `capabilities`, never from a hardcoded list here.
@@ -115,11 +115,11 @@ describe('ReplayStrategyDropdown — a daily rule inside an intraday replay', ()
     expect(screen.queryByText('daily')).toBeNull();
   });
 
-  it('warns that a one-day range can only WATCH it', () => {
+  it('explains that a single session can fill a prior-close setup', () => {
     const day = getLastMarketWorkingDay();
     useReplayStore.getState().setDraft({ date: day, endDate: day, strategies: ['snapback'] });
     openMenu();
-    expect(screen.getByText(/Watches only/i)).toBeTruthy();
+    expect(screen.getByText(/Prior-close setups can trade/i)).toBeTruthy();
   });
 
   it('drops the warning once the range reaches a second session', () => {
@@ -128,7 +128,7 @@ describe('ReplayStrategyDropdown — a daily rule inside an intraday replay', ()
       date: '2026-09-01', endDate: day, strategies: ['snapback'],
     });
     openMenu();
-    expect(screen.queryByText(/Watches only/i)).toBeNull();
+    expect(screen.queryByText(/Prior-close setups can trade/i)).toBeNull();
   });
 
   it('shows the engine’s own reason when the strategy was silent', () => {

@@ -433,9 +433,8 @@ export function ReplayStrategyDropdown() {
                     <span
                       className="rd-drop-check-note"
                       title={'A daily rule. Its signal is a daily close and its fill '
-                        + 'is the NEXT session\u2019s open, so a single-day replay '
-                        + 'shows its setups and takes no position. Give the replay '
-                        + 'an end date to trade it.'}
+                        + 'is the NEXT session\u2019s open. A single session can fill '
+                        + 'a prior close setup; add an end date to follow new setups.'}
                     >
                       daily
                     </span>
@@ -443,7 +442,7 @@ export function ReplayStrategyDropdown() {
                 </label>
                 {isDaily && active && !multiDay && (
                   <p className="rd-drop-check-hint">
-                    Watches only — add an end date to reach the next session\u2019s open.
+                    Prior-close setups can trade at the open. Add an end date to follow today’s setups.
                   </p>
                 )}
                 {isDaily && active && note && (

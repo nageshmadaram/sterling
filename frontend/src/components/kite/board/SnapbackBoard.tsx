@@ -119,7 +119,7 @@ function Evidence({ v }: { v: SnapbackValidation }) {
   );
 }
 
-export function SnapbackBoard({ nowMs, onOpenDetail, onOpenChart }: {
+export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }: {
   onOpenChart?: (quoteKey: string) => void;
   nowMs?: number;
   onOpenDetail?: (signal: BoardSignal) => void;
