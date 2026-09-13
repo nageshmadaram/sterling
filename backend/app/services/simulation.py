@@ -1010,10 +1010,20 @@ def _snapback_market_gate(runner: Any, cfg: Any, asof_ts: Optional[float]):
     if key in cache:
         return cache[key]
 
-    intraday = list((getattr(runner, "_session_bars", None) or {}).get(MARKET_SYMBOL) or [])
+    session_bars_map = getattr(runner, "_session_bars", None) or {}
+    intraday = []
+    for s_key, s_bars in session_bars_map.items():
+        if _canonical_symbol(s_key) == MARKET_SYMBOL:
+            intraday = list(s_bars)
+            break
     if not intraday:
-        intraday = _asof_symbol_bars(getattr(runner, "_candles", None) or [],
-                                     MARKET_SYMBOL, asof_ts)
+        intraday = list(session_bars_map.get(MARKET_SYMBOL) or [])
+    if not intraday:
+        runner_candles = getattr(runner, "_candles", None) or []
+        for c_sym in (MARKET_SYMBOL, "NSE:NIFTY 50", "NIFTY 50", "NIFTY-I"):
+            intraday = _asof_symbol_bars(runner_candles, c_sym, asof_ts)
+            if intraday:
+                break
     daily = _snapback_daily_tape(MARKET_SYMBOL, intraday, asof_ts, runner,
                                  keep=int(cfg.market_ema) * 3 + 60)
     if len(daily) <= cfg.market_ema:
@@ -1119,6 +1129,8 @@ def _snapback_watch_from_bars(runner: Any, symbol: str, intraday: list,
     from app.engines.snapback.strategy import evaluate_at, features, fires
 
     cfg = _snapback_config()
+    import dataclasses as _dc
+    cfg = _dc.replace(cfg, enabled=True)
     # Note: callers that run inside simulation force-enable the config before
     # calling here; `enabled` is not re-checked so the helper works correctly
     # for both live and simulation contexts.
@@ -2828,6 +2840,58 @@ class SimulationRunner:
                     if cfg.start_time <= c_time_str <= cfg.end_time:
                         all_bars.append({**c, "symbol": sym, "resolution": res})
 
+        # Synthesize intraday bars for instruments that lack 5m candles but have 1D daily candles
+        # (e.g. mid-cap stocks in daily strategies like Snapback), so every universe stock is evaluated.
+        symbols_with_5m = set(b["symbol"] for b in all_bars)
+        missing_symbols = [s for s in instruments if s not in symbols_with_5m]
+        if missing_symbols and all_bars:
+            session_times_by_date: Dict[str, List[int]] = {}
+            for b in all_bars:
+                b_dt = datetime.fromtimestamp(b["time"], tz=ist)
+                d_str = b_dt.strftime("%Y-%m-%d")
+                session_times_by_date.setdefault(d_str, []).append(b["time"])
+
+            for msym in missing_symbols:
+                daily_candles = ohlcv_get(msym, "1d", limit=1000, since=start_epoch - 30 * 86400)
+                if not daily_candles:
+                    continue
+                daily_by_date = {}
+                for dc in daily_candles:
+                    dc_dt = datetime.fromtimestamp(dc["time"], tz=ist)
+                    daily_by_date[dc_dt.strftime("%Y-%m-%d")] = dc
+
+                for d_str, timestamps in session_times_by_date.items():
+                    if d_str in daily_by_date:
+                        dc = daily_by_date[d_str]
+                        o_val = float(dc.get("open") or 0.0)
+                        h_val = float(dc.get("high") or o_val)
+                        l_val = float(dc.get("low") or o_val)
+                        c_val = float(dc.get("close") or o_val)
+                        v_val = float(dc.get("volume") or 0.0) / max(1, len(timestamps))
+
+                        sorted_ts = sorted(set(timestamps))
+                        n_ts = len(sorted_ts)
+                        for idx, ts_val in enumerate(sorted_ts):
+                            if idx == 0:
+                                bar_o, bar_h, bar_l, bar_c = o_val, o_val, o_val, o_val
+                            elif idx == n_ts - 1:
+                                bar_o, bar_h, bar_l, bar_c = o_val, h_val, l_val, c_val
+                            else:
+                                frac = idx / max(1, n_ts - 1)
+                                curr_p = round(o_val + (c_val - o_val) * frac, 2)
+                                bar_o, bar_h, bar_l, bar_c = curr_p, curr_p, curr_p, curr_p
+
+                            all_bars.append({
+                                "time": ts_val,
+                                "open": bar_o,
+                                "high": bar_h,
+                                "low": bar_l,
+                                "close": bar_c,
+                                "volume": v_val,
+                                "symbol": msym,
+                                "resolution": res,
+                            })
+
         # Sort by time
         all_bars.sort(key=lambda b: b["time"])
 
@@ -2848,6 +2912,25 @@ class SimulationRunner:
 
         self._start_epoch = start_epoch
         self._end_epoch = end_epoch
+
+        if _sim_wants_snapback:
+            try:
+                self._snapback_watch = {}
+                self._snapback_filled = {}
+                self._snapback_days = {}
+                self._session_bars = {}
+                pre_asof = start_epoch - 60
+                for sym in instruments:
+                    w_sig = _snapback_watch_from_bars(self, sym, [], pre_asof)
+                    if w_sig:
+                        d_tape = _snapback_daily_tape(sym, [], pre_asof, self)
+                        if d_tape:
+                            prev_d_str = datetime.fromtimestamp(
+                                _bar_epoch_seconds(d_tape[-1]) or 0.0, ist
+                            ).strftime("%Y-%m-%d")
+                            self._snapback_watch[sym] = (prev_d_str, w_sig)
+            except Exception as exc:
+                log.warning("Snapback watch pre-seed error: %s", exc)
 
         # Start ON the first bar, not at the configured session start.
         #
