@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { SimpleSettingsDrawer } from '../components/SimpleSettings';
 import { KiteTab } from '../components/kite/KiteTab';
 import { ThemeToggle } from '../components/kite/ThemeToggle';

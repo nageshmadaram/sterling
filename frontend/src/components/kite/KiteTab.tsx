@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { KiteLayout, NavItem, MoreTab } from './KiteLayout';
 import { DataLakePane } from './DataLakePane';
 import { KiteDashboard } from './KiteDashboard';

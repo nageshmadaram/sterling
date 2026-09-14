@@ -265,6 +265,19 @@ export function KiteSearchBar({
    */
   showSettings?: boolean;
   height?: number;
+  /**
+   * Match the shared board's filter bar instead of the watchlist's.
+   *
+   * The watchlist owns a tall 50px search bar with a large borderless field,
+   * which is right for a panel whose whole job is search. Dropped into a signal
+   * table's toolbar it made that row half again as tall as the same row on every
+   * other board, and the field read as a different control: 13px borderless
+   * against the shared board's bordered 10px box.
+   *
+   * This switches the metrics rather than adding a second component, because the
+   * behaviour — query, settings panel, icon — is identical and worth keeping in
+   * one place.
+   */
   compact?: boolean;
   onSyncPositions?: () => void;
   syncingPositions?: boolean;
