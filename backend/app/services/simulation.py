@@ -279,6 +279,10 @@ class SimTradeEvent(BaseModel):
     #: |delta| used to translate an underlying move into a premium move, for
     #: THIS leg's moneyness. `None` falls back to 0.50.
     leg_delta: Optional[float] = None
+    # Snapback positions retain the model inputs used at entry.
+    premium_model: Optional[Dict[str, Any]] = None
+    fees: Optional[float] = None
+    hedge_pnl: Optional[float] = None
     #: Why the position closed: TARGET, STOP_LOSS, TRAILING_STOP, MAX_HOLD, SESSION_CLOSE.
     exit_reason: Optional[str] = None
     #: This position's OWN horizon, in bars. `None` falls back to the config's
@@ -672,6 +676,11 @@ def _premium_at(leg: Dict[str, Any], spot_entry: float, spot_level: float) -> fl
     Same delta approximation the settlement path uses, so the ladder a signal
     advertises and the fill a trade reports cannot disagree.
     """
+    if "base_iv" in leg:
+        from app.engines.snapback.backtest import _value
+        return round(_value(spot_level, leg["strike"], leg.get("short_strike", 0),
+                            leg["years"], leg["base_iv"], leg["opt_type"] == "CE",
+                            leg["smile_slope"], spot_entry, leg["smile_itm_slope"]), 2)
     move = (spot_level - spot_entry) if leg["opt_type"] == "CE" else (spot_entry - spot_level)
     delta = float(leg.get("delta") or 0.50)
     return round(max(0.05, leg["premium"] + move * delta), 2)
@@ -982,6 +991,17 @@ def _snapback_daily_tape(symbol: str, intraday: list,
         done = [b for b in done
                 if datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0,
                                           _IST).date() != day]
+        # Closed observations reconstructed from complete intraday tapes are
+        # equally valid history when the broker has no stored daily candle.
+        if runner is not None:
+            by_day = {datetime.fromtimestamp(b["time"], _IST).date(): b for b in done}
+            for b in getattr(runner, "_snapback_daily_observations", {}).get(symbol, []):
+                if b["time"] > asof_ts:
+                    continue
+                observed_day = datetime.fromtimestamp(b["time"], _IST).date()
+                if observed_day < day:
+                    by_day[observed_day] = b["daily_candle"]
+            done = [by_day[d] for d in sorted(by_day)][-900:]
         if cache is not None:
             for old_key in list(cache):
                 if old_key[0] == symbol and old_key != key:
@@ -1080,22 +1100,27 @@ def _snapback_leg(symbol: str, spot: float, opt_type: str, vol: float, cfg: Any,
     premium = float(bs_price(spot, strike, years, v, call=call))
     if premium < max(cfg.min_option_premium, 0.05):
         return None
-    expiry_tag = "26AUG"
-    if sim_date:
-        try:
-            dt = datetime.strptime(sim_date, "%Y-%m-%d")
-            expiry_tag = f"{dt.strftime('%y')}{dt.strftime('%b').upper()}"
-        except ValueError:
-            pass
+    from app.engines.snapback.backtest import _value
+    short_strike = 0.0
+    if cfg.short_leg_delta > 0:
+        short_strike = float(strike_for_delta(spot, vol, years, cfg.short_leg_delta,
+                                              call=call, step=spec.strike_step))
+        if (call and short_strike <= strike) or (not call and short_strike >= strike):
+            short_strike = 0.0
+    premium = _value(spot, strike, short_strike, years, vol, call,
+                     cfg.smile_slope, spot, cfg.smile_itm_slope)
+    if premium < max(cfg.min_option_premium, 0.05):
+        return None
+    label = f"{_canonical_symbol(symbol)} {strike:g} {opt_type}"
+    if short_strike:
+        label += f" / short {short_strike:g} {opt_type}"
     return {
-        "contract": f"{_canonical_symbol(symbol)}{expiry_tag}{int(strike)}{opt_type}",
-        "strike": float(strike),
-        "opt_type": opt_type,
-        "lot_size": int(spec.lot_size),
-        "premium": round(premium, 2),
-        "delta": abs(float(bs_delta(spot, strike, years, v, call=call))),
-        "iv": v,
-        "years": years,
+        "contract": label + " (modelled)",
+        "strike": strike, "short_strike": short_strike,
+        "opt_type": opt_type, "lot_size": int(spec.lot_size),
+        "premium": premium, "delta": abs(float(bs_delta(spot, strike, years, v, call=call))),
+        "iv": v, "base_iv": vol, "years": years,
+        "smile_slope": cfg.smile_slope, "smile_itm_slope": cfg.smile_itm_slope,
     }
 
 
@@ -1103,8 +1128,8 @@ def _snapback_spot_stop(leg: Dict[str, Any], spot: float, cfg: Any) -> float:
     """The SPOT level at which the premium has given back `premium_stop_pct`.
 
     Snapback's stop is on the PREMIUM — that is the thing that can go to zero
-    while the spot thesis is still technically intact — but the replay settles
-    every position against underlying levels. Translating with a fixed delta
+    while the spot thesis is still technically intact. This spot level is an
+    indicative entry-time guide; daily settlement uses the premium rule. A fixed delta
     would misstate it, because delta itself moves as the trade goes against a
     bought option, so the level is solved from the same Black-Scholes the entry
     was priced with.
@@ -1115,6 +1140,11 @@ def _snapback_spot_stop(leg: Dict[str, Any], spot: float, cfg: Any) -> float:
     lo, hi = (spot, spot * 2.0) if not call else (spot * 0.5, spot)
 
     def prem(s_: float) -> float:
+        if "base_iv" in leg:
+            from app.engines.snapback.backtest import _value
+            return float(_value(s_, leg["strike"], leg.get("short_strike", 0),
+                                leg["years"], leg["base_iv"], call,
+                                leg["smile_slope"], spot, leg["smile_itm_slope"]))
         v = float(smile_vol(s_, leg["strike"], leg["iv"], 0.0))
         return float(bs_price(s_, leg["strike"], leg["years"], v, call=call))
 
@@ -1207,6 +1237,7 @@ def _snapback_watch_from_bars(runner: Any, symbol: str, intraday: list,
             "snapback_stretch": round(float(sig.stretch), 2),
             "snapback_level": round(float(sig.level), 2),
             "snapback_day": day,
+            "snapback_signal_candle": dict(daily[-1]),
             "no_trail": True,
         }
     return None
@@ -1617,6 +1648,9 @@ class SimulationRunner:
         into the premium, floored just above zero — an option can expire
         worthless but cannot go negative.
         """
+        if trade.premium_model is not None:
+            from app.services.snapback_replay import value
+            return round(max(0, value(trade, spot)), 2)
         entry_spot = trade.spot_entry if trade.spot_entry is not None else spot
         move = (spot - entry_spot) if trade.opt_type == "CE" else (entry_spot - spot)
         base = trade.raw_entry if trade.raw_entry is not None else trade.entry_price
@@ -1648,8 +1682,6 @@ class SimulationRunner:
         when it has been held too long — never from a bar the replay clock has
         not reached yet.
         """
-        if bar.get("intraday_covered"):
-            return
         sym = bar.get("symbol", "")
         sym_u = sym.upper()
         canon = _canonical_symbol(sym)
@@ -1677,6 +1709,16 @@ class SimulationRunner:
             still_open: List[SimTradeEvent] = []
 
             for trade in book:
+                if trade.premium_model is not None:
+                    if bar.get("daily_candle") is not None:
+                        from app.services.snapback_replay import settle
+                        settle(self, trade, bar["daily_candle"], bar_dt)
+                    if trade.status == "OPEN":
+                        still_open.append(trade)
+                    continue
+                if bar.get("intraday_covered"):
+                    still_open.append(trade)
+                    continue
                 if bar.get("daily_observation"):
                     trade.bars_held += self._bars_per_session() if bar["daily_observation"] == "close" else 0
                 else:
@@ -2137,6 +2179,8 @@ class SimulationRunner:
         self._bar_history = {}
         self._in_session_bars = {}
         self._last_fired = {}
+        self._snapback_positions = {}
+        self._snapback_daily_observations = {}
         self._strategy_notes = {}
         self._daily_tape_cache = {}
         self._snapback_gate_cache = {}
@@ -2320,6 +2364,32 @@ class SimulationRunner:
                 if watch:
                     self._snapback_watch[sym] = (watch["snapback_day"], watch)
 
+        # Revalue daily positions from the retained closed prefix. Both open
+        # and closed trades can otherwise retain future marks after a rewind.
+        for tr in self._stats.trades:
+            if tr.premium_model is None:
+                continue
+            p = getattr(self, "_snapback_positions", {}).get(tr.trade_id)
+            if p is None:
+                continue
+            p["rows"] = [r for r in p["rows"] if r["time"] <= target]
+            tr.status = "OPEN"
+            tr.exit_price = tr.raw_exit = tr.exit_timestamp_ms = tr.exit_reason = None
+            tr.exit_time_iso = "OPEN"
+            tr.bars_held = tr.duration_mins = 0
+            tr.pnl_usd = tr.pnl_pct = 0.0
+            tr.fees = tr.hedge_pnl = None
+            tr.slippage = round((tr.entry_price - tr.raw_entry) * tr.quantity, 2)
+            tr.premium_model["sessions"] = 0
+            if len(p["rows"]) > p["index"] + 1:
+                from app.services.snapback_replay import settle
+                last = dict(p["rows"][-1])
+                settle(self, tr, last, datetime.fromtimestamp(last["time"], _IST))
+        self._open_by_symbol = {}
+        for tr in self._stats.trades:
+            if tr.status == "OPEN":
+                self._open_by_symbol.setdefault(tr.underlying, []).append(tr)
+        self._recompute_totals()
         self._last_fired = {}
         self._active_until_bar = {}
 
@@ -2868,7 +2938,7 @@ class SimulationRunner:
                 else:
                     instruments = list(dict.fromkeys(instruments + sb_universe))
             # The market tape is a dependency even for an explicit stock selection.
-            if sb_cfg.market_filter != "off" and "NIFTY" not in instruments:
+            if (sb_cfg.market_filter != "off" or sb_cfg.hedge_mode != "none") and "NIFTY" not in instruments:
                 instruments.append("NIFTY")
 
         # Deduplicate and canonicalize symbols
@@ -2922,19 +2992,35 @@ class SimulationRunner:
             covered = {(b["symbol"], datetime.fromtimestamp(b["time"], ist).date())
                        for b in all_bars}
             for sym in instruments:
+                # A daily candle can supply its OPEN to a shorter replay.
+                # Its full range is revealed only by the separate close event.
+                final_close = datetime.fromtimestamp(end_epoch, ist).replace(hour=15, minute=30, second=0)
                 daily = closed_daily_candles(
                     ohlcv_get(sym, "1d", limit=10000, since=start_epoch - 86400,
-                              until=end_epoch + 1), datetime.fromtimestamp(end_epoch, ist))
+                              until=max(end_epoch, final_close.timestamp()) + 1), final_close)
+                from app.services.daily_sessions import completed_intraday_candle
+                daily_days = {datetime.fromtimestamp(dc["time"], ist).date() for dc in daily}
+                intraday_days = {}
+                for b in all_bars:
+                    if b["symbol"] == sym and not b.get("daily_observation"):
+                        intraday_days.setdefault(datetime.fromtimestamp(b["time"], ist).date(), []).append(b)
+                for day, rows in intraday_days.items():
+                    if day not in daily_days:
+                        dc = completed_intraday_candle(rows, res, datetime.fromtimestamp(end_epoch, ist))
+                        if dc:
+                            daily.append(dc)
                 for dc in daily:
                     close_dt = datetime.fromtimestamp(dc["time"], ist)
                     has_intraday = (sym, close_dt.date()) in covered
                     if not is_session_day(close_dt.date()):
                         continue
                     open_dt = close_dt.replace(hour=9, minute=15)
-                    if not (start_epoch <= open_dt.timestamp() <= end_epoch):
-                        continue
-                    observations = ((close_dt, False),) if has_intraday else ((open_dt, True), (close_dt, False))
+                    has_open = any(b["time"] == open_dt.timestamp()
+                                   for b in intraday_days.get(close_dt.date(), []))
+                    observations = ((close_dt, False),) if has_open else ((open_dt, True), (close_dt, False))
                     for at, opening in observations:
+                        if not start_epoch <= at.timestamp() <= end_epoch:
+                            continue
                         if not cfg.start_time <= at.strftime("%H:%M:%S") <= cfg.end_time:
                             continue
                         px = dc["open"] if opening else dc["close"]
@@ -2945,13 +3031,13 @@ class SimulationRunner:
                                          "intraday_covered": has_intraday,
                                          "daily_candle": None if opening else dc})
             self._strategy_notes["snapback"] = (
-                "Daily-close setups fill at the next session open. Daily-only "
-                "tapes use open/close observations; intraday stop paths are unavailable.")
+                "Daily-close setups fill at the next session open. Premiums, fees, "
+                "hedges and daily exits use the Snapback model; actual intraday option fills are unavailable.")
 
         from app.services.daily_sessions import is_session_day
         all_bars = [b for b in all_bars if is_session_day(datetime.fromtimestamp(b["time"], ist).date())]
         # Sort by time
-        all_bars.sort(key=lambda b: b["time"])
+        all_bars.sort(key=lambda b: (b["time"], b.get("symbol", "")))
 
         if not all_bars:
             log.warning("No candles available for simulation date %s", range_label)
@@ -2962,6 +3048,10 @@ class SimulationRunner:
             return
 
         self._candles = all_bars
+        self._snapback_daily_observations = {}
+        for b in all_bars:
+            if b.get("daily_candle"):
+                self._snapback_daily_observations.setdefault(b["symbol"], []).append(b)
         self._snapback_market_bars = [b for b in all_bars if _canonical_symbol(b.get("symbol", "")) == "NIFTY"]
         self._bars_total = len(all_bars)
         self._state = SimState.RUNNING
@@ -4425,12 +4515,14 @@ class SimulationRunner:
                 prev_bars = self._session_bars.get(sym) or []
                 prev_day, prev = self._snapback_watch.get(sym, ("", None))
                 if prev_bars:
-                    prev_day = datetime.fromtimestamp(
-                        _bar_epoch_seconds(prev_bars[-1]) or 0.0,
-                        _IST).strftime("%Y-%m-%d")
-                    prev = _snapback_watch_from_bars(
-                        self, sym, prev_bars,
-                        _bar_epoch_seconds(prev_bars[-1]))
+                    if prev_bars[-1].get("daily_candle") is not None:
+                        prev_day = datetime.fromtimestamp(prev_bars[-1]["time"], _IST).strftime("%Y-%m-%d")
+                        prev = _snapback_watch_from_bars(self, sym, prev_bars, prev_bars[-1]["time"])
+                    else:
+                        # The store may have the full previous daily bar even
+                        # when this replay's intraday range stopped early.
+                        prev = _snapback_watch_from_bars(self, sym, [], bar["time"])
+                        prev_day = prev["snapback_day"] if prev else ""
                 # Today's bars, kept as they arrive. Re-deriving them from
                 # the full candle list on every bar is quadratic in the
                 # length of the replay, which is invisible on one session
@@ -4447,13 +4539,22 @@ class SimulationRunner:
                     next_day += timedelta(days=1)
                 if (prev and next_day == bar_dt.date() and cooled
                     and (bar_dt.hour, bar_dt.minute) == (9, 15)):
+                    open_snapback = [t for t in self._stats.trades if t.strategy == "snapback" and t.status == "OPEN"]
+                    if (len(open_snapback) >= sb_cfg.max_open_positions
+                        or sb_cfg.one_position_per_underlying and any(t.underlying == sym for t in open_snapback)):
+                        self._strategy_notes["snapback"] = f"{sym}: confirmed setup skipped because the position limit is reached"
+                        prev = None
+                if (prev and next_day == bar_dt.date() and cooled
+                    and (bar_dt.hour, bar_dt.minute) == (9, 15)):
                     # The session's OPEN, not this bar's close: the same
                     # fill the backtest books.
                     fill_spot = float(bar.get("open") or close)
+                    from app.services.snapback_replay import entry_ready
+                    can_fill = entry_ready(self, sym, bar, sb_cfg)
                     fill_leg = _snapback_leg(
                         sym, fill_spot, prev["opt_type"],
                         prev["snapback_iv"], sb_cfg, today)
-                    if fill_leg is not None:
+                    if fill_leg is not None and can_fill:
                         entry = dict(prev)
                         entry["strength"] = "STRONG"
                         entry["fill_spot"] = fill_spot
@@ -4489,7 +4590,7 @@ class SimulationRunner:
                 self._snapback_watch[sym] = (bar_dt.strftime("%Y-%m-%d"),
                                              watch)
             if watch:
-                if bar_dt.hour == 15 and bar_dt.minute >= 30:
+                if bar.get("daily_candle") is not None and bar_dt.hour == 15 and bar_dt.minute >= 30:
                     watch["strength"] = "CONFIRMED"
                 signals_to_fire.append(watch)
          except Exception as exc:
@@ -4603,7 +4704,7 @@ class SimulationRunner:
 
             # Check if an active position is already open on this symbol for this strategy
             active_until = self._active_until_bar.get(key, -1)
-            if sym_bar_idx < active_until:
+            if strategy != "snapback" and sym_bar_idx < active_until:
                 continue
 
             self._last_fired[key] = (direction, sym_bar_idx)
@@ -4669,7 +4770,9 @@ class SimulationRunner:
             # a strategy whose measured FILL is somewhere else (Snapback fills
             # at the next session's open) states it, so the leg, the ladder and
             # the trade all agree on one number.
-            spot_ref = round(float(sdef.get("fill_spot") or close), 2)
+            spot_ref = float(sdef.get("fill_spot") or close)
+            if strategy != "snapback":
+                spot_ref = round(spot_ref, 2)
             # A strategy that resolved its OWN leg keeps it. Snapback buys a
             # 0.70-delta contract about forty days out; `_option_contract` picks
             # at-the-money and approximates the premium at ~2% of spot, which is
@@ -4782,6 +4885,9 @@ class SimulationRunner:
                     scan_origin=scan_origin,
                     strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
                 )
+                if strategy == "snapback":
+                    from app.services.snapback_replay import attach
+                    attach(self, trade, sdef, sb_cfg, leg, bar_dt)
                 self._stats.trades_entered += 1
                 self._stats.trades.append(trade)
                 self._open_by_symbol.setdefault(sym, []).append(trade)

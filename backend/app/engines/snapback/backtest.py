@@ -223,25 +223,23 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
     fut_cost = FuturesCost()
     betas: dict[str, dict[str, float]] = {}
     market_at: dict[str, float] = {}
-    if cfg.hedge_mode != "none":
-        if market is None:
-            res.skipped.setdefault(MARKET_SYMBOL, "")
-            res.skipped[MARKET_SYMBOL] = (
-                f"hedge_mode is '{cfg.hedge_mode}' but there is no "
-                f"{MARKET_SYMBOL} tape in this book — every trade ran UNHEDGED")
-        else:
-            market_at = {ist_day(float(market.time[i])): float(market.close[i])
-                         for i in range(len(market))}
-    if gate is None and cfg.market_filter != "off":
+    if ((cfg.market_filter != "off" or cfg.hedge_mode != "none")
+            and (market is None or not len(market))):
         res.skipped[MARKET_SYMBOL] = (
-            f"market gate is '{cfg.market_filter}' but there is no "
-            f"{MARKET_SYMBOL} tape in this book — every signal was taken ungated")
+            "Required NIFTY daily tape is missing — replay blocked; "
+            "market filtering and hedging cannot be bypassed")
+        return res
+    if cfg.market_filter != "off" and not gate:
+        res.skipped[MARKET_SYMBOL] = "NIFTY has insufficient sessions for the market filter — replay blocked"
+        return res
+    if market is not None:
+        market_at = {market.day(i): float(market.close[i]) for i in range(len(market))}
 
     prepared: dict[str, tuple] = {}
     candidates: list[tuple[float, str, int, str]] = []
     for symbol, bars in tapes.items():
         n = len(bars)
-        if n < cfg.warmup_bars() + cfg.hold_days + 2:
+        if n < cfg.warmup_bars() + 2:
             res.skipped[symbol] = f"only {n} sessions"
             continue
         spec = spec_for(symbol)
@@ -276,12 +274,11 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
     # full book drops the same names on every run rather than whichever the
     # dictionary happened to yield first.
     candidates.sort(key=lambda c: (c[0], c[1]))
-    open_until: dict[str, int] = {}          # symbol -> exit bar timestamp
+    open_until: list[tuple[str, int]] = []   # one slot per position, including repeated symbols
     cap = max(int(cfg.max_open_positions), 1)
 
     for ts, symbol, i, side in candidates:
-        for sym in [s for s, until in open_until.items() if until <= ts]:
-            open_until.pop(sym, None)
+        open_until = [(sym, until) for sym, until in open_until if until > ts]
         bars, f, iv_series, spec = prepared[symbol]
         fill_day = ist_day(float(bars.time[i + 1]))
         key = (symbol, fill_day)
@@ -290,7 +287,7 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
             res.note(reason)
             res.untraded.setdefault(_k, reason)
 
-        if cfg.one_position_per_underlying and symbol in open_until:
+        if cfg.one_position_per_underlying and any(sym == symbol for sym, _ in open_until):
             note("already holding this underlying")
             continue
         if len(open_until) >= cap:
@@ -304,7 +301,7 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
             continue
         res.untraded.pop(key, None)
         res.trades.append(t)
-        open_until[symbol] = t.exit_ms // 1000
+        open_until.append((symbol, t.exit_ms // 1000))
     res.trades.sort(key=lambda t: t.entry_ms)
     return res
 
@@ -451,9 +448,8 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
     gross_unhedged = net
 
     # The hedge, applied where the trade is priced so nothing downstream has to
-    # reconstruct it. A trade whose beta or market marks are missing runs
-    # UNHEDGED rather than being dropped — but it is counted, because a book
-    # that silently mixes hedged and unhedged trades is measuring neither.
+    # reconstruct it. Missing required hedge data blocks valuation instead of
+    # silently changing the configured strategy into an unhedged position.
     beta = market_pnl_v = hedge_charge = 0.0
     if cfg.hedge_mode != "none":
         from .hedge import rebalanced as _rebalanced
@@ -481,9 +477,10 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
             deltas.append(d_net)
             spots.append(sp)
             marks.append(float(m))
-        if b is None or len(marks) < 2:
-            note("no beta or market marks — this trade ran unhedged")
-        else:
+        if b is None or len(marks) != exit_bar - entry_bar + 1:
+            note("required hedge beta or daily market marks missing — valuation blocked")
+            return None
+        if len(marks) >= 2:
             beta = float(b)
             market_pnl_v, hedge_charge = _rebalanced(
                 deltas=deltas, beta=beta, spots=spots, qty=qty, market=marks,

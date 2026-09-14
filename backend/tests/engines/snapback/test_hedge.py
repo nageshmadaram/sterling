@@ -168,3 +168,16 @@ class TestFuturesCost:
 
     def test_zero_notional_costs_nothing(self):
         assert FuturesCost().round_trip(0) == 0.0
+
+
+def test_beta_pairs_returns_across_missing_sessions():
+    rng = np.random.default_rng(49)
+    prices = 1000 * np.exp(np.cumsum(rng.normal(0, .01, 200)))
+    market = tape(prices)
+    stock = tape(prices.copy())
+    keep = np.ones(200, dtype=bool)
+    keep[[100, 120, 150]] = False
+    stock = Bars(*(getattr(stock, field)[keep] for field in ('time','open','high','low','close','volume')))
+    values = rolling_beta(stock, market)
+    assert values
+    assert all(v == pytest.approx(1) for v in values.values())

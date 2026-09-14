@@ -33,7 +33,7 @@ def tape(n: int = 900, seed: int = 4) -> Bars:
                 close=close, volume=np.full(n, 1000.0))
 
 
-CFG = SnapbackConfig(sizing_mode="LOTS", lots=1, scan_indices=(),
+CFG = SnapbackConfig(market_filter="off", hedge_mode="none", sizing_mode="LOTS", lots=1, scan_indices=(),
                      scan_stocks=("RELIANCE", "INFY"))
 
 

@@ -84,7 +84,19 @@ def to_bars(candles: Sequence[Any]) -> Bars:
         ts = _epoch_seconds(t)
         if ts is None or None in (o, h, l, cl):
             continue
-        rows.append((ts, float(o), float(h), float(l), float(cl), float(v or 0.0)))
+        try:
+            row = (ts, float(o), float(h), float(l), float(cl), float(v or 0.0))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if (not all(np.isfinite(x) for x in row) or min(row[1:5]) <= 0
+                or row[5] < 0 or row[2] < max(row[1], row[3], row[4])
+                or row[3] > min(row[1], row[2], row[4])):
+            continue
+        try:
+            datetime.fromtimestamp(ts, IST)
+        except (ValueError, OverflowError, OSError):
+            continue
+        rows.append(row)
     rows.sort(key=lambda r: r[0])
     seen: dict[float, tuple] = {}
     for r in rows:
@@ -107,7 +119,7 @@ def _epoch_seconds(t: Any) -> Optional[float]:
         # correctly, so it never looks wrong until a date is rendered.
         return v / 1000.0 if v > 1e11 else v
     if isinstance(t, datetime):
-        return t.timestamp()
+        return (t if t.tzinfo is not None else t.replace(tzinfo=IST)).timestamp()
     try:
         from datetime import date as _date
         if isinstance(t, _date):
@@ -115,7 +127,8 @@ def _epoch_seconds(t: Any) -> Optional[float]:
     except Exception:                                              # noqa: BLE001
         pass
     try:
-        return datetime.fromisoformat(str(t)).timestamp()
+        parsed = datetime.fromisoformat(str(t))
+        return (parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=IST)).timestamp()
     except Exception:                                              # noqa: BLE001
         return None
 

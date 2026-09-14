@@ -132,27 +132,26 @@ def rolling_beta(bars: Bars, market: Bars, *,
     hit = _BETA_CACHE.get(key)
     if hit is not None:
         return hit
-    m_at = {ist_day(float(market.time[i])): i for i in range(len(market))}
-    m_ret = np.diff(np.log(np.maximum(market.close, 1e-12)), prepend=np.nan)
-    s_ret = np.diff(np.log(np.maximum(bars.close, 1e-12)), prepend=np.nan)
-    days = [ist_day(float(t)) for t in bars.time]
+    m_at = {market.day(i): float(market.close[i]) for i in range(len(market))}
+    # Pair returns over the SAME interval. Indexing two independent trailing
+    # arrays misaligns every return after a missing stock or index session.
+    common = [(bars.day(i), float(bars.close[i]), m_at[bars.day(i)])
+              for i in range(len(bars)) if bars.day(i) in m_at]
+    sr = np.diff(np.log(np.maximum([r[1] for r in common], 1e-12)), prepend=np.nan)
+    mr = np.diff(np.log(np.maximum([r[2] for r in common], 1e-12)), prepend=np.nan)
     out: dict[str, float] = {}
     lo, hi = BETA_BOUNDS
-    for i in range(window + 1, len(bars)):
-        j = m_at.get(days[i])
-        if j is None or j < window + 1:
+    for i in range(window + 1, len(common)):
+        stock_returns, market_returns = sr[i - window:i], mr[i - window:i]
+        if not (np.all(np.isfinite(stock_returns)) and np.all(np.isfinite(market_returns))):
             continue
-        sr = s_ret[i - window:i]
-        mr = m_ret[j - window:j]
-        if len(sr) != len(mr):
-            continue
-        if not (np.all(np.isfinite(sr)) and np.all(np.isfinite(mr))):
-            continue
-        var = float(np.var(mr, ddof=1))
+        var = float(np.var(market_returns, ddof=1))
         if var <= 0:
             continue
-        b = float(np.cov(sr, mr, ddof=1)[0, 1] / var)
-        out[days[i]] = float(min(max(b, lo), hi))
+        b = float(np.cov(stock_returns, market_returns, ddof=1)[0, 1] / var)
+        out[common[i][0]] = float(min(max(b, lo), hi))
+    if len(_BETA_CACHE) >= 256:
+        clear_beta_cache()
     _BETA_CACHE[key] = out
     # Hold a reference so these ids cannot be reused by a different object while
     # the cache still answers for them.

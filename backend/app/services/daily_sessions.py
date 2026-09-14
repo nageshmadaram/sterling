@@ -29,3 +29,22 @@ def closed_daily_candles(candles, asof: datetime) -> list[dict]:
             "close": float(bars.close[i]), "volume": float(bars.volume[i]),
         }
     return [sessions[day] for day in sorted(sessions)]
+
+
+def completed_intraday_candle(candles, resolution: str, asof: datetime):
+    """Aggregate only a full regular session with every expected opening stamp."""
+    minutes = {'1m': 1, '3m': 3, '5m': 5, '10m': 10, '15m': 15,
+               '30m': 30, '60m': 60}.get(resolution)
+    bars = to_bars(candles)
+    if minutes is None or not len(bars):
+        return None
+    day = datetime.fromtimestamp(float(bars.time[0]), IST).date()
+    close = datetime.combine(day, time(15, 30), tzinfo=IST)
+    opening = datetime.combine(day, time(9, 15), tzinfo=IST).timestamp()
+    if close > asof or not is_session_day(day):
+        return None
+    expected = set(range(int(opening), int(close.timestamp()), minutes * 60))
+    if set(bars.time) != expected:
+        return None
+    return dict(time=close.timestamp(), open=float(bars.open[0]), high=float(max(bars.high)),
+                low=float(min(bars.low)), close=float(bars.close[-1]), volume=float(sum(bars.volume)))

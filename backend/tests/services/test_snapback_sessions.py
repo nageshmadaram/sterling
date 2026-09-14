@@ -105,7 +105,7 @@ async def test_full_runner_confirms_board_signal_then_fills_next_open(replay_tap
         ('CONFIRMED', '2026-09-03T15:30:00'), ('STRONG', '2026-09-04T09:15:00')]
     assert len(r._stats.trades) == 1
     trade = r._stats.trades[0]
-    assert trade.spot_entry == pytest.approx(round(fill, 2))
+    assert trade.spot_entry == pytest.approx(fill)
     assert trade.status == 'OPEN'  # daily positions survive session end
     assert trade.bars_held == r._bars_per_session()
     assert all(b['daily_observation'] in ('open', 'close') for b in r._candles)
@@ -187,3 +187,170 @@ def test_stored_close_at_replay_clock_is_available_but_future_session_is_not(mon
     assert len(out) == 1
     assert out[0]['time'] == at
     assert out[0]['close'] == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('settings,move', [
+    ({'hold_days': 2, 'premium_stop_pct': 99}, .999),
+    ({'hold_days': 3, 'premium_stop_pct': 10}, 1.10),
+    ({'hold_days': 3, 'short_leg_delta': .3, 'premium_stop_pct': 99}, .999),
+    ({'hold_days': 3, 'exit_mode': 'mean_touch', 'premium_stop_pct': 99}, .90),
+    ({'hold_days': 3, 'premium_trail_pct': 10, 'premium_stop_pct': 99}, .97),
+    ({'hold_days': 2, 'runner_mult': 1.01, 'premium_stop_pct': 99}, .97),
+    ({'hold_days': 3, 'hedge_mode': 'index_futures', 'premium_stop_pct': 99}, .999),
+    ({'hold_days': 6, 'exit_on_regime_flip': 1, 'premium_stop_pct': 99}, .999),
+])
+async def test_runner_matches_canonical_daily_exits_and_costs(replay_tape, monkeypatch, settings, move):
+    from dataclasses import replace
+    from app.engines.snapback import to_bars
+    from app.engines.snapback.backtest import replay
+    from app.services.snapback_replay import cost_for
+    cfg = replace(snapback.get_config(), **settings)
+    monkeypatch.setattr(snapback, 'get_config', lambda uid=None: cfg)
+    original = ohlcv_store.get_candles
+    rows = {sym: original(sym, '1d', limit=900) for sym in ('MOTILALOFS', 'NIFTY')}
+    for sym, tape in rows.items():
+        for day in ('2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11'):
+            tape.append(candle(day, tape[-1]['close'] * (move if sym == 'MOTILALOFS' else 1.20 if cfg.exit_on_regime_flip else .9985)))
+    def get(sym, resolution, limit=500, since=None, until=None):
+        return [dict(r) for r in rows[sym] if (since is None or r['time'] >= since)
+                and (until is None or r['time'] < until)][-limit:] if resolution == '1d' else []
+    monkeypatch.setattr(ohlcv_store, 'get_candles', get)
+    runner = sim.SimulationRunner()
+    runner._config = sim.SimConfig(date='2026-09-04', end_date='2026-09-11', instruments=['MOTILALOFS'],
+                                   strategies=['snapback'], speed=10_000_000, friction_mode='realistic')
+    runner._speed = 10_000_000
+    await runner._run_loop()
+    actual = runner._stats.trades[0]
+    tapes = {sym: to_bars(daily_sessions.closed_daily_candles(tape, datetime(2026,9,11,16,tzinfo=IST)))
+             for sym, tape in rows.items()}
+    expected = next(t for t in replay(tapes, replace(cfg, sizing_mode='LOTS', lots=actual.lots),
+                         cost=cost_for(runner, 'MOTILALOFS')).trades if t.entry_day == '2026-09-04')
+    if cfg.exit_on_regime_flip:
+        assert expected.reason == 'regime_flip'
+    assert actual.entry_price == pytest.approx(expected.fill_in)
+    assert actual.strike == expected.strike
+    assert actual.pnl_usd == pytest.approx(expected.net, abs=.01)
+    assert actual.fees == expected.costs
+    assert actual.premium_model['sessions'] == expected.held_days
+    if expected.reason != 'tape_ended':
+        assert actual.exit_reason == expected.reason.upper()
+        assert actual.exit_price == pytest.approx(expected.fill_out)
+    # Rewinding before the first close removes ALL later valuations and exits.
+    runner._apply_seek(datetime(2026,9,4,12,tzinfo=IST).timestamp())
+    actual = runner._stats.trades[0]
+    assert actual.status == 'OPEN'
+    assert actual.exit_price is None
+    assert actual.pnl_usd == 0
+    assert actual.premium_model['sessions'] == 0
+    assert actual.bars_held == 0
+
+
+def test_history_contract_and_quantity_match_next_open_outcome(replay_tape):
+    from dataclasses import replace
+    from app.engines.snapback import to_bars
+    from app.engines.snapback.backtest import replay
+    tapes = {s: to_bars(daily_sessions.closed_daily_candles(ohlcv_store.get_candles(s, '1d', limit=900),
+                              datetime(2026,9,4,16,tzinfo=IST))) for s in ('MOTILALOFS', 'NIFTY')}
+    trade = replay(tapes, replace(snapback.get_config(), sizing_mode='LOTS', lots=1)).trades[-1]
+    row = next(r for r in snapback.recent_signals('u') if r['symbol'] == 'MOTILALOFS' and r['outcome'])
+    assert row['contract']['strike'] == trade.strike
+    assert row['quantity'] == trade.qty
+    assert row['lots'] == trade.lots
+    assert row['premium'] == round(trade.fill_in, 2)
+    assert row['deployed_inr'] == round(trade.fill_in * trade.qty, 2)
+
+
+def test_bad_candles_are_rejected_and_naive_times_are_ist():
+    from app.engines.snapback import to_bars
+    valid = {**candle('2026-09-11'), 'time': '2026-09-11T15:30:00'}
+    broken = [{**valid, 'open': 'bad'}, {**valid, 'close': float('nan')},
+              {**valid, 'low': 101}, {**valid, 'volume': -1}, {**valid, 'high': 99}]
+    bars = to_bars(broken + [valid])
+    assert len(bars) == 1
+    assert bars.time[0] == datetime(2026,9,11,15,30,tzinfo=IST).timestamp()
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_only_complete_intraday_sessions_can_be_confirmed(missing):
+    start = datetime(2026,9,11,9,15,tzinfo=IST)
+    rows = [{**candle('2026-09-11', 100 + i / 100), 'time': (start + timedelta(minutes=i*5)).timestamp()}
+            for i in range(75)]
+    if missing:
+        rows.pop(20)
+    before = start.replace(hour=15,minute=29)
+    assert daily_sessions.completed_intraday_candle(rows, '5m', before) is None
+    daily = daily_sessions.completed_intraday_candle(rows, '5m', before.replace(minute=30))
+    if missing:
+        assert daily is None
+    else:
+        assert daily['open'] == 100
+        assert daily['close'] == 100.74
+        assert daily['volume'] == 75000
+
+
+@pytest.mark.asyncio
+async def test_hedge_only_replay_requires_market_even_with_filter_off(replay_tape, monkeypatch):
+    from dataclasses import replace
+    cfg = replace(snapback.get_config(), market_filter='off', hedge_mode='index_futures')
+    monkeypatch.setattr(snapback, 'get_config', lambda uid=None: cfg)
+    original = ohlcv_store.get_candles
+    monkeypatch.setattr(ohlcv_store, 'get_candles', lambda sym, *a, **kw: [] if sym == 'NIFTY' else original(sym, *a, **kw))
+    runner = await run('2026-09-04', instruments=['MOTILALOFS'])
+    assert runner._stats.trades == []
+    assert 'hedged entry blocked' in runner._strategy_notes['snapback']
+
+
+@pytest.mark.asyncio
+async def test_complete_intraday_tape_supplies_missing_daily_close(replay_tape, monkeypatch):
+    original = ohlcv_store.get_candles
+    dc = original('MOTILALOFS', '1d', limit=1)[0]
+    start = datetime(2026,9,4,9,15,tzinfo=IST)
+    intraday = [{**dc, 'time': (start + timedelta(minutes=5*i)).timestamp(), 'volume': 1000 / 75}
+                for i in range(75)]
+    def get(sym, resolution, limit=500, since=None, until=None):
+        rows = (original(sym, resolution, limit=limit, since=since, until=until)
+                if resolution == '1d' else intraday if sym == 'MOTILALOFS' else [])
+        return [r for r in rows if (since is None or r['time'] >= since) and
+                (until is None or r['time'] < until) and not
+                (sym == 'MOTILALOFS' and resolution == '1d' and r['time'] == dc['time'])]
+    monkeypatch.setattr(ohlcv_store, 'get_candles', get)
+    runner = await run('2026-09-04', instruments=['MOTILALOFS'])
+    trade = runner._stats.trades[0]
+    assert trade.premium_model['sessions'] == 1
+    assert any(b.get('daily_candle') for b in runner._candles if b['symbol'] == 'MOTILALOFS')
+
+
+@pytest.mark.asyncio
+async def test_short_daily_replay_can_fill_open_without_revealing_close(replay_tape):
+    runner = sim.SimulationRunner()
+    runner._config = sim.SimConfig(date='2026-09-04', end_time='12:00:00',
+                                   strategies=['snapback'], instruments=['MOTILALOFS'], speed=10_000_000)
+    runner._speed = 10_000_000
+    await runner._run_loop()
+    assert len(runner._stats.trades) == 1
+    trade = runner._stats.trades[0]
+    assert trade.status == 'OPEN'
+    assert trade.premium_model['sessions'] == 0
+    assert all(b.get('daily_candle') is None for b in runner._candles)
+
+
+@pytest.mark.asyncio
+async def test_midday_start_still_shows_confirmed_close(replay_tape):
+    runner = sim.SimulationRunner()
+    runner._config = sim.SimConfig(date='2026-09-03', start_time='12:00:00',
+                                   strategies=['snapback'], instruments=['MOTILALOFS'], speed=10_000_000)
+    runner._speed = 10_000_000
+    await runner._run_loop()
+    assert runner._stats.trades == []
+    assert any(e.strength == 'CONFIRMED' for e in runner._stats.events)
+    assert all(b['daily_observation'] == 'close' for b in runner._candles)
+
+
+def test_history_universe_respects_index_selection_and_stock_switch(monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setattr(ohlcv_store, 'get_status', lambda: [
+        {'symbol': s, 'resolution': '1d'} for s in ('NIFTY', 'BANKNIFTY', 'RELIANCE')])
+    cfg = SnapbackConfig(scan_indices=('NIFTY',), scan_stock_contracts=False)
+    assert snapback._history_universe(cfg) == ('NIFTY',)
+    assert snapback._history_universe(replace(cfg, scan_stock_contracts=True)) == ('NIFTY', 'RELIANCE')

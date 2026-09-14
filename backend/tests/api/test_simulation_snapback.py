@@ -290,7 +290,7 @@ class TestEndToEnd:
         r._in_session_bars = {}
         return r
 
-    def _play(self, runner, day: datetime, closes: list[float], symbol="RELIANCE"):
+    def _play(self, runner, day: datetime, closes: list[float], symbol="RELIANCE", closed=True):
         """Play one session. NIFTY rides along, because the market gate needs a
         bar for TODAY and a replay without the index cannot gate anything."""
         stock = _session_bars(day, closes, symbol)
@@ -306,6 +306,19 @@ class TestEndToEnd:
             at = datetime.fromtimestamp(s_bar["time"], IST)
             runner._evaluate_bar(dict(i_bar), at)
             runner._evaluate_bar(dict(s_bar), at)
+        if closed:
+            at = day.replace(hour=15, minute=30)
+            for name, rows in (("NIFTY", index), (symbol, stock)):
+                dc = sim._forming_session(rows, at.timestamp())
+                b = {**dc, "symbol": name, "daily_observation": "close",
+                     "daily_candle": dc, "intraday_covered": True}
+                runner._candles.append(b)
+                runner._evaluate_bar(b, at)
+
+    def test_incomplete_session_cannot_confirm_a_next_open_entry(self, runner):
+        self._play(runner, datetime(2026, 9, 4, tzinfo=IST), [1500.0] * 4, closed=False)
+        self._play(runner, datetime(2026, 9, 7, tzinfo=IST), [1477.0], closed=False)
+        assert runner._stats.trades == []
 
     def test_a_replay_without_the_index_says_so_instead_of_going_quiet(self, runner):
         """"No Snapback signals" and "Snapback could not gate anything" are

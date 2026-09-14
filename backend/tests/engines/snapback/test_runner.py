@@ -40,7 +40,7 @@ def falling_tape(n: int = 240, spike: float = 1.12, after: float = 0.985,
 #: tape here reaches. These tests are about the fills, the exits and the hedge;
 #: the cheapness filter has its own.
 CFG = SnapbackConfig(max_rv_pct=100.0, sizing_mode="LOTS", lots=1, scan_stocks=("RELIANCE",),
-                     scan_indices=(), hedge_mode="none", premium_stop_pct=100.0)
+                     scan_indices=(), hedge_mode="none", market_filter="off", premium_stop_pct=100.0)
 
 
 def last(cfg, bars, spike_at: int = 240) -> object:

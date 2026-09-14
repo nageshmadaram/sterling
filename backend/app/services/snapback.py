@@ -38,9 +38,9 @@ log = get_logger(__name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 _CONFIG_KEY = "snapback_config"
 #: Daily bars fetched per instrument. The binding input is a 20-session EMA plus
-#: a 60-session margin for the seed to wash out; 400 covers that with room and
+#: a trailing volatility rank; 900 matches the replay/history window and
 #: is one request per instrument.
-LOOKBACK_BARS = 400
+LOOKBACK_BARS = 900
 _CANDLE_TTL_S = 900.0
 #: Closed sessions the scan looks back over. A daily rule fires on ONE bar, and
 #: a scan that does not run on the day it fired never sees it again.
@@ -608,7 +608,7 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
 
     def tape(symbol: str) -> Optional[Bars]:
         rows = _drop_forming(ohlcv_store.get_candles(symbol, "1d", limit=900))
-        if not rows or len(rows) < cfg.warmup_bars() + cfg.hold_days + 2:
+        if not rows or len(rows) < cfg.warmup_bars() + 2:
             return None
         a = np.array([[r["time"], r["open"], r["high"], r["low"], r["close"],
                        r.get("volume", 0.0)] for r in rows], dtype=float)
@@ -630,6 +630,8 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
     market = tapes.get(MARKET_SYMBOL)
     if cfg.market_filter != "off" and not gate:
         raise UnreadableCandles("NIFTY daily tape cannot establish the history market filter")
+    if cfg.hedge_mode != "none" and (market is None or not len(market)):
+        raise UnreadableCandles("NIFTY daily tape is required for the configured hedge")
     cutoff = ""
     if market is not None and len(market) > sessions:
         cutoff = ist_day(float(market.time[-int(sessions)]))
@@ -693,7 +695,7 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
                             "signalled on the last stored session — the fill is "
                             "the next session's open"
                             if int(i) + 1 >= len(bars) else
-                            "the replay did not take this signal")
+                            book.skipped.get("NIFTY", "the replay did not take this signal"))
                         row["historical"] = True
                         out.append(row)
                         continue
@@ -723,6 +725,31 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
                         "hedge_cost": round(t.hedge_cost, 2) if t.beta else None,
                         "net_unhedged": round(t.gross_unhedged, 2) if t.beta else None,
                     }
+                    # These prices belong to the strike chosen at the next OPEN,
+                    # which can differ from the indicative signal-close contract.
+                    from app.engines.snapback.backtest import _value
+                    from app.engines.snapback.pricing import bs_delta
+                    row["contract"] = row["contract"] or {"underlying": sym, "option_type": t.option_type,
+                                                             "lot_size": t.qty // t.lots, "expiry": None}
+                    row["contract"].update(
+                        strike=t.strike, short_strike=t.short_strike,
+                        symbol=f"{sym} {t.strike:g} {t.option_type}" +
+                               (f" / short {t.short_strike:g} {t.option_type}" if t.short_strike else ""),
+                        premium=t.premium_in, dte=t.dte_in, modelled=True,
+                        moneyness=moneyness_label(t.spot_in, t.strike, t.option_type == "CE"),
+                        delta=float(bs_delta(t.spot_in, t.strike, t.dte_in / 365, t.iv,
+                                             call=t.option_type == "CE")))
+                    row["lots"], row["quantity"] = t.lots, t.qty
+                    row["deployed_inr"] = round(t.fill_in * t.qty, 2)
+                    row["min_outlay_inr"] = round(t.fill_in * (t.qty // t.lots), 2)
+                    row["modelled_premium"] = round(t.premium_in, 2)
+                    row["target_premium"] = round(_value(
+                        sig.mean_target, t.strike, t.short_strike,
+                        max(t.dte_in - cfg.hold_days, 1) / 365, t.iv,
+                        t.option_type == "CE", cfg.smile_slope, t.spot_in, cfg.smile_itm_slope), 2)
+                    row["trail_premium"] = (round(t.fill_in * (1 - cfg.premium_trail_pct / 100), 2)
+                                            if cfg.premium_trail_pct else None)
+                    row["runner_premium"] = round(t.fill_in * cfg.runner_mult, 2) if cfg.runner_mult else None
                     # A closed trade's "last price" IS what it closed at.
                     row["premium"] = round(t.fill_in, 2)
                     row["stop_premium"] = round(
@@ -750,8 +777,10 @@ def _history_universe(cfg: SnapbackConfig) -> tuple[str, ...]:
         return cfg.universe()
     names = {str(r.get("symbol")) for r in rows
              if str(r.get("resolution")) == "1d"}
-    have = tuple(sorted(n for n in names if spec_for(n) is not None))
-    return have[:max(int(cfg.max_universe), 1)] or cfg.universe()
+    indices = tuple(canonical(n) for n in cfg.scan_indices if spec_for(canonical(n)) is not None)
+    stocks = tuple(sorted(n for n in names if spec_for(n) is not None and not spec_for(n).is_index))
+    selected = indices + (stocks[:max(int(cfg.max_universe), 1)] if cfg.scan_stock_contracts else ())
+    return tuple(dict.fromkeys(selected)) or cfg.universe()
 
 
 def _named(sig, symbol: str):
