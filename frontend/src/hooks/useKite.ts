@@ -861,6 +861,24 @@ export function useKiteWatchlist() {
       if (p.length >= 50) return p; // Enforce 50 item limit
       return [...p, it];
     });
+  const addMany = (newItems: WatchItem[]): number => {
+    const seen = new Set(items.map((x) => x.symbol));
+    const toAdd: WatchItem[] = [];
+    for (const it of newItems) {
+      if (!it?.symbol || seen.has(it.symbol)) continue;
+      seen.add(it.symbol);
+      toAdd.push(it);
+      if (items.length + toAdd.length >= 50) break;
+    }
+    if (toAdd.length > 0) {
+      setItems((p) => {
+        const pSeen = new Set(p.map((x) => x.symbol));
+        const finalAdd = toAdd.filter((x) => !pSeen.has(x.symbol));
+        return finalAdd.length > 0 ? [...p, ...finalAdd].slice(0, 50) : p;
+      });
+    }
+    return toAdd.length;
+  };
   const remove = (symbol: string) => setItems((p) => p.filter((x) => x.symbol !== symbol));
   // Backfill lot sizes onto items that don't have one yet (persists to storage).
   const mergeLots = (map: Record<string, number>) =>
@@ -891,7 +909,7 @@ export function useKiteWatchlist() {
     });
   };
   const clear = () => setItems([]);
-  return { items, add, remove, reorder, clear, mergeLots, mergeExpiries };
+  return { items, add, addMany, remove, reorder, clear, mergeLots, mergeExpiries };
 }
 
 export function useKiteLtp(symbols: string[], enabled = true, heartbeatMs = 1_000) {

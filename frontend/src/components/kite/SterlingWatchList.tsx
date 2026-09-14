@@ -449,18 +449,22 @@ import { useOrderWindowStore } from '../../store/useOrderWindowStore';
 import { useKiteBasketStore } from '../../store/useKiteBasketStore';
 import { defaultProduct } from './orderTicket';
 
+const MANUAL_EMPTY_KEY = 'sterling.kite.watchlist.manual-empty.v1';
+
 function positionToWatchItem(position: any): WatchItem | null {
   const qty = Number(position?.quantity ?? position?.qty ?? position?.net_quantity ?? 0);
   if (!Number.isFinite(qty) || qty === 0) return null;
-  const tradingsymbol = String(position?.tradingsymbol || position?.trading_symbol || position?.symbol || '').trim();
-  if (!tradingsymbol) return null;
+  const rawSymbol = String(position?.tradingsymbol || position?.trading_symbol || position?.symbol || '').trim();
+  if (!rawSymbol) return null;
   const exchange = String(position?.exchange || 'NFO').trim() || 'NFO';
+  const symbol = rawSymbol.includes(':') ? rawSymbol : `${exchange}:${rawSymbol}`;
+  const name = rawSymbol.includes(':') ? rawSymbol.split(':')[1] : rawSymbol;
   const token = Number(position?.instrument_token || position?.token || 0);
   const product = String(position?.product || '').trim();
   return {
-    symbol: `${exchange}:${tradingsymbol}`,
+    symbol,
     token: Number.isFinite(token) ? token : 0,
-    name: tradingsymbol,
+    name,
     sub: product ? `${exchange} · ${product} position` : `${exchange} · open position`,
     lot_size: position?.lot_size,
     expiry: position?.expiry,
@@ -475,14 +479,47 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
   // per keystroke (each is a heavy full-dump filter server-side).
   const debouncedQuery = useDebounced(query, 300);
   const search = useKiteInstrumentSearch(debouncedQuery);
-  const { items: watch, add, remove, reorder, mergeLots, mergeExpiries } = useKiteWatchlist();
+  const { items: watch, add, addMany, remove, reorder, mergeLots, mergeExpiries } = useKiteWatchlist();
   const sync = useSyncKiteWatchlist();
   const positions = useKitePositions(true);
   const [syncingPositions, setSyncingPositions] = useState(false);
 
+  // Track when user manually empties the watchlist to avoid re-populating against user intent
+  const prevCountRef = React.useRef(watch.length);
+  React.useEffect(() => {
+    const prev = prevCountRef.current;
+    const curr = watch.length;
+    if (prev > 0 && curr === 0) {
+      try { localStorage.setItem(MANUAL_EMPTY_KEY, '1'); } catch {}
+    } else if (curr > 0) {
+      try { localStorage.removeItem(MANUAL_EMPTY_KEY); } catch {}
+    }
+    prevCountRef.current = curr;
+  }, [watch.length]);
+
+  // Auto-sync open positions on initial load if watchlist is unpopulated and not manually emptied
+  const autoSeededRef = React.useRef(false);
+  React.useEffect(() => {
+    if (autoSeededRef.current) return;
+    if (watch.length > 0) return;
+    const isManualEmpty = typeof window !== 'undefined' && localStorage.getItem(MANUAL_EMPTY_KEY) === '1';
+    if (isManualEmpty) return;
+    if (!positions.data?.net) return;
+
+    autoSeededRef.current = true;
+    const openItems = (positions.data.net || [])
+      .map(positionToWatchItem)
+      .filter((item): item is WatchItem => item !== null);
+
+    if (openItems.length > 0) {
+      addMany(openItems);
+    }
+  }, [positions.data, watch.length, addMany]);
+
   const handleSyncPositions = async () => {
     setSyncingPositions(true);
     try {
+      try { localStorage.removeItem(MANUAL_EMPTY_KEY); } catch {}
       const res = await positions.refetch();
       const net = res.data?.net || [];
       const openItems = net
@@ -492,17 +529,29 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
       if (openItems.length === 0) {
         // Fallback to sync endpoint to see if any position records exist
         const syncRes = await sync.mutateAsync().catch(() => null);
-        const fallback = (syncRes?.items || []).filter((it: any) => {
-          const sub = String(it?.sub || '').toLowerCase();
-          return sub.includes('position');
-        });
+        const fallback = (syncRes?.items || [])
+          .filter((it: any) => {
+            const sub = String(it?.sub || '').toLowerCase();
+            const src = String(it?.source || '').toLowerCase();
+            return sub.includes('position') || src.includes('position');
+          })
+          .map((it: any) => ({
+            symbol: String(it.symbol),
+            token: Number(it.token) || 0,
+            name: String(it.name || it.symbol),
+            sub: String(it.sub || 'open position'),
+            lot_size: it.lot_size,
+            expiry: it.expiry,
+          }));
 
         if (fallback.length > 0) {
-          fallback.forEach((it) => add(it));
+          const addedCount = addMany(fallback);
           notifyOrder({
             kind: 'info',
             title: 'Positions synced',
-            message: `Synced ${fallback.length} open position(s) from Kite.`,
+            message: addedCount > 0
+              ? `Synced ${addedCount} open position${addedCount === 1 ? '' : 's'} from Kite.`
+              : `All ${fallback.length} open position(s) are already in your watchlist.`,
           });
           return;
         }
@@ -515,16 +564,13 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
         return;
       }
 
-      let addedCount = 0;
-      openItems.forEach((item) => {
-        add(item);
-        addedCount++;
-      });
-
+      const addedCount = addMany(openItems);
       notifyOrder({
         kind: 'info',
         title: 'Positions synced',
-        message: `Synced ${addedCount} open position${addedCount === 1 ? '' : 's'} from Kite.`,
+        message: addedCount > 0
+          ? `Synced ${addedCount} open position${addedCount === 1 ? '' : 's'} from Kite.`
+          : `All ${openItems.length} open position(s) are already in your watchlist.`,
       });
     } catch (err: any) {
       notifyOrder({
@@ -668,7 +714,7 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
           searchSettingsOpen={searchSettingsOpen} 
           setSearchSettingsOpen={setSearchSettingsOpen} 
           onSyncPositions={handleSyncPositions}
-          syncingPositions={syncingPositions || positions.isFetching}
+          syncingPositions={syncingPositions}
         />
       </div>
 
@@ -856,12 +902,12 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
                   style={{
                     marginTop: 24, padding: '8px 16px', background: t.surface,
                     border: `1px solid ${t.border}`, borderRadius: 4, color: t.blue,
-                    cursor: syncingPositions || positions.isFetching ? 'wait' : 'pointer', fontSize: 13,
+                    cursor: syncingPositions ? 'wait' : 'pointer', fontSize: 13,
                   }}
-                  disabled={syncingPositions || positions.isFetching}
+                  disabled={syncingPositions}
                   onClick={() => void handleSyncPositions()}
                 >
-                  {syncingPositions || positions.isFetching ? 'Syncing…' : 'Sync open positions from Kite'}
+                  {syncingPositions ? 'Syncing…' : 'Sync open positions from Kite'}
                 </button>
               </div>
             )}

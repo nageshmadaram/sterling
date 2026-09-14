@@ -214,7 +214,7 @@ export function WatchlistStartupBoundary({ children }: BoundaryProps) {
     return window.localStorage.getItem('sterling.kite.watchlist.v1') != null
       || window.localStorage.getItem('sterling.kite.watchlist.manual-empty.v1') === '1';
   }, []);
-  const busy = !hadStoredWatchlist && !positions.data && (positions.isLoading || positions.isFetching);
+  const busy = !hadStoredWatchlist && !positions.data && positions.isLoading;
 
   return (
     <StartupBoundary busy={busy} testId="kite-watchlist-startup" minHeight={320} fallback={<WatchlistSkeleton />}>
