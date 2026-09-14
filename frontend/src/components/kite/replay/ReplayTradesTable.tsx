@@ -70,6 +70,9 @@ const TradeRow = memo(function TradeRow({
   const open = t.status === 'OPEN';
   const win = t.status === 'WIN';
   const invested = (t.entry_price || 0) * (t.quantity || 0);
+  const displayMark = open ? (t.raw_mark ?? t.mark_price ?? null) : null;
+  const executableMark = open ? (t.mark_price ?? t.raw_mark ?? null) : null;
+  const pointMove = executableMark != null ? executableMark - t.entry_price : null;
 
   return (
     <tr
@@ -142,7 +145,31 @@ const TradeRow = memo(function TradeRow({
       </td>
       <td data-align="right" className="rd-num">
         {t.exit_price == null ? (
-          open && t.quantity > 0 && t.pnl_usd != null && t.pnl_usd !== 0 ? (
+          open && displayMark != null ? (
+            <>
+              <span
+                title="Current mark for this open trade. P&L still includes slippage, fees and any hedge."
+              >
+                ~{fmtInr(displayMark)}
+              </span>
+              {pointMove != null && (
+                <span
+                  className="rd-sub"
+                  style={{
+                    color: t.pnl_usd >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
+                    fontWeight: 500,
+                  }}
+                >
+                  {pointMove >= 0 ? '+' : ''}{fmtInr(pointMove)} pts
+                </span>
+              )}
+              {hasFriction && t.raw_mark != null && t.mark_price != null && t.raw_mark !== t.mark_price && (
+                <span className="rd-sub" title="Executable mark after spread and slippage">
+                  fill {fmtInr(t.mark_price)}
+                </span>
+              )}
+            </>
+          ) : open && t.quantity > 0 && t.pnl_usd != null && t.pnl_usd !== 0 ? (
             <span
               className="rd-sub"
               style={{
@@ -510,7 +537,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
               <th>Contract</th>
               <th data-align="right" data-col="size">Size</th>
               <th data-align="right">Entry</th>
-              <th data-align="right">Exit</th>
+              <th data-align="right">Exit / Mark</th>
               <th data-align="right" data-col="sltgt">SL / Target</th>
               {hasFriction && <th data-align="right" data-col="slip">Slippage</th>}
               <th data-align="center">Status</th>

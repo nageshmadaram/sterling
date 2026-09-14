@@ -84,6 +84,8 @@ export interface ReplayTrade {
   quantity: number;
   entry_price: number;
   exit_price?: number | null;
+  mark_price?: number | null;
+  raw_mark?: number | null;
   stop_loss: number;
   target_price: number;
   status: string;
@@ -881,7 +883,7 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
  * maintains length and trade_id, so a full fingerprint comparison is required.
  */
 function tradeFingerprint(t: any): string {
-  return `${t.trade_id}:${t.status}:${t.exit_time_iso}:${t.exit_price}:${t.pnl_usd}:${t.slippage}:${t.exit_reason}`;
+  return `${t.trade_id}:${t.status}:${t.exit_time_iso}:${t.exit_price}:${t.mark_price}:${t.raw_mark}:${t.pnl_usd}:${t.slippage}:${t.exit_reason}`;
 }
 
 function sameTrades(a: readonly any[], b: readonly any[]): boolean {

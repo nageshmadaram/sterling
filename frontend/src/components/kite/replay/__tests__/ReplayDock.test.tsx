@@ -431,6 +431,42 @@ describe('trades table', () => {
     expect(screen.getByText(/~[+]1,000/)).toBeTruthy();
   });
 
+  it('shows the current mark separately from slippage for an open Snapback put', async () => {
+    setupDock({
+      tab: 'trades',
+      status: makeStatus({
+        stats: {
+          ...DEFAULT_STATUS.stats,
+          trades: [makeTrade({
+            trade_id: 'TRD-1022',
+            strategy: 'snapback',
+            symbol: 'GVT&D 5300 PE (modelled)',
+            underlying: 'GVT&D',
+            opt_type: 'PE',
+            entry_price: 621.64,
+            exit_price: null,
+            mark_price: 771.38,
+            raw_mark: 779.17,
+            stop_loss: 404.07,
+            target_price: 936.99,
+            quantity: 125,
+            status: 'OPEN',
+            pnl_usd: 18695.56,
+            pnl_pct: 24.06,
+            slippage: 1748.22,
+          })],
+        },
+      }),
+    });
+    await renderDock();
+
+    expect(screen.getByRole('columnheader', { name: 'Exit / Mark' })).toBeTruthy();
+    expect(screen.getByText('~₹779.17')).toBeTruthy();
+    expect(screen.getByText('fill ₹771.38')).toBeTruthy();
+    expect(screen.getByText('−₹1,748.22')).toBeTruthy();
+    expect(screen.getByText('(~+18,695.56)')).toBeTruthy();
+  });
+
   it('says whether the total is net of friction', async () => {
     setupDock({
       tab: 'trades',

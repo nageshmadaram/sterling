@@ -128,6 +128,8 @@ def settle(runner, trade, candle, at):
     trade.premium_model['sessions'] = result.held_days
     trade.bars_held = result.held_days * runner._bars_per_session()
     trade.duration_mins = result.held_days * runner.SESSION_MINUTES
+    trade.mark_price = round(result.fill_out, 2)
+    trade.raw_mark = round(result.premium_out, 2)
     trade.pnl_usd = result.net
     trade.pnl_pct = round(result.ret * 100, 2)
     trade.fees = result.costs
@@ -137,6 +139,8 @@ def settle(runner, trade, candle, at):
     if result.reason != 'tape_ended':
         trade.raw_exit = result.premium_out
         trade.exit_price = result.fill_out
+        trade.mark_price = result.fill_out
+        trade.raw_mark = result.premium_out
         trade.exit_reason = result.reason.upper()
         trade.exit_timestamp_ms = int(at.timestamp() * 1000)
         trade.exit_time_iso = at.strftime('%Y-%m-%dT%H:%M:%S') if getattr(runner, '_is_multi_day', False) else at.strftime('%H:%M:%S')

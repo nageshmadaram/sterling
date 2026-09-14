@@ -512,3 +512,33 @@ class TestTheRunnerReachesTheReplay:
             runner_mult=c.runner_mult, runner_trail_pct=c.runner_trail_pct)
         assert (t.runner_mult, t.runner_trail_pct) == (c.runner_mult,
                                                        c.runner_trail_pct)
+
+
+def test_open_long_put_mark_above_entry_reports_profit():
+    trade = sim.SimTradeEvent(
+        trade_id="TRD-GVT", strategy="snapback", symbol="GVT&D 5300 PE (modelled)",
+        underlying="GVT&D", direction="BUY", opt_type="PE", strike=5300,
+        lots=1, quantity=125, entry_price=621.64, stop_loss=404.07,
+        target_price=936.99, status="OPEN",
+    )
+
+    sim._mark_open_trade(trade, 779.17)
+
+    assert trade.mark_price == 779.17
+    assert trade.pnl_usd == pytest.approx(19691.25)
+    assert trade.pnl_pct == pytest.approx(25.34)
+
+
+def test_open_short_premium_mark_above_entry_reports_loss():
+    trade = sim.SimTradeEvent(
+        trade_id="TRD-SHORT", strategy="example", symbol="ABC 100 PE",
+        underlying="ABC", direction="SELL", opt_type="PE", strike=100,
+        lots=1, quantity=100, entry_price=10.0, stop_loss=15.0,
+        target_price=5.0, status="OPEN",
+    )
+
+    sim._mark_open_trade(trade, 12.0)
+
+    assert trade.mark_price == 12.0
+    assert trade.pnl_usd == -200.0
+    assert trade.pnl_pct == -20.0

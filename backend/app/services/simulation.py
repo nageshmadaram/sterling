@@ -292,6 +292,11 @@ class SimTradeEvent(BaseModel):
     quantity: int
     entry_price: float
     exit_price: Optional[float] = None
+    # Current mark for an OPEN trade. `exit_price` stays reserved for a realised
+    # close; without this field the UI had to show a blank exit next to a red
+    # slippage drag, which made profitable open Snapback puts look like losses.
+    mark_price: Optional[float] = None
+    raw_mark: Optional[float] = None
     stop_loss: float
     target_price: float
     status: str = "OPEN"
@@ -351,6 +356,31 @@ class SimTradeEvent(BaseModel):
     bars_held: int = 0
     scan_origin: Optional[str] = None
     strategy_version: Optional[str] = None
+
+
+
+
+def _trade_pnl(trade: "SimTradeEvent", mark_price: float) -> tuple[float, float]:
+    """Return signed P&L and percent for a trade marked at ``mark_price``.
+
+    Most replay option rows are long premium (`BUY`), including Snapback PE
+    rows whose board badge says SHORT to mean bearish. True short-premium rows
+    must invert the sign: if the option mark rises after a sell, that is a loss.
+    """
+    qty = float(trade.quantity or 0)
+    entry = float(trade.entry_price or 0)
+    mark = float(mark_price or 0)
+    mult = -1.0 if str(trade.direction or "").upper() in {"SELL", "SHORT"} else 1.0
+    pnl = round((mark - entry) * qty * mult, 2)
+    pct = round(((mark - entry) / entry) * 100.0 * mult, 2) if entry > 0 else 0.0
+    return pnl, pct
+
+
+def _mark_open_trade(trade: "SimTradeEvent", mark_price: float, *, raw_mark: Optional[float] = None) -> None:
+    """Attach the current mark to an OPEN trade and refresh unrealised P&L."""
+    trade.mark_price = round(float(mark_price), 2)
+    trade.raw_mark = round(float(raw_mark), 2) if raw_mark is not None else trade.mark_price
+    trade.pnl_usd, trade.pnl_pct = _trade_pnl(trade, trade.mark_price)
 
 
 class SimStats(BaseModel):
@@ -1907,10 +1937,7 @@ class SimulationRunner:
                 if exit_spot is None:
                     # Still open — mark it to this bar so unrealised P&L moves.
                     mark = self._premium_for_spot(trade, close)
-                    trade.pnl_usd = round((mark - trade.entry_price) * trade.quantity, 2)
-                    trade.pnl_pct = round(
-                        ((mark - trade.entry_price) / trade.entry_price) * 100.0, 2
-                    ) if trade.entry_price > 0 else 0.0
+                    _mark_open_trade(trade, mark)
                     trade.duration_mins = trade.bars_held * self._bar_minutes()
 
                     # ── trailing stop ratchet (bar-close based) ────────────────
@@ -2000,10 +2027,9 @@ class SimulationRunner:
         )
         trade.exit_timestamp_ms = int(bar_dt.timestamp() * 1000)
         trade.duration_mins = trade.bars_held * self._bar_minutes()
-        trade.pnl_usd = round((fill_exit - trade.entry_price) * trade.quantity, 2)
-        trade.pnl_pct = round(
-            ((fill_exit - trade.entry_price) / trade.entry_price) * 100.0, 2
-        ) if trade.entry_price > 0 else 0.0
+        trade.mark_price = fill_exit
+        trade.raw_mark = raw_exit
+        trade.pnl_usd, trade.pnl_pct = _trade_pnl(trade, fill_exit)
         # Status follows the money actually made, so the win rate and the P&L
         # cannot disagree.
         trade.status = "WIN" if trade.pnl_usd > 0 else "LOSS"
