@@ -7,6 +7,7 @@ import {
   writeKiteExchanges,
   type KiteExchange,
 } from '../../utils/kiteExchanges';
+import { notifyOrder } from '../../store/useKiteNotifications';
 
 const ORANGE = 'var(--k-brand)';
 
@@ -21,6 +22,11 @@ export function KiteExchangeSettingsCard() {
     void queryClient.invalidateQueries({ queryKey: ['kite-engine-signals'] });
     void queryClient.invalidateQueries({ queryKey: ['kite-engine-open-positions'] });
     window.dispatchEvent(new CustomEvent('kite-exchanges-changed', { detail: saved }));
+    notifyOrder({
+      kind: 'info',
+      title: 'Exchange filters updated',
+      message: `Active: ${saved.join(', ')}`,
+    });
   };
 
   const toggle = (exchange: KiteExchange) => {

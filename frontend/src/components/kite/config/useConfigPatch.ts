@@ -65,6 +65,13 @@ export function useConfigPatch() {
         if (rescan) runScan.mutate();
         else qc.invalidateQueries({ queryKey: ['kite-engine-signals'] });
       },
+      onError: (err) => {
+        notifyOrder({
+          kind: 'error',
+          title: 'Settings NOT saved',
+          message: `Could not apply settings: ${err?.message || 'save rejected'}.`,
+        });
+      },
     });
   };
 

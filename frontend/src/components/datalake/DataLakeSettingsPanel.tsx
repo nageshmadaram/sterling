@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { c, tint } from '../../styles/terminalUI';
 import { useDataLake, type TierPlan } from '../../hooks/useDataLake';
+import { notifyOrder } from '../../store/useKiteNotifications';
 import FolderPicker from './FolderPicker';
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -209,10 +210,29 @@ export function DataLakeSettingsPanel() {
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       {!active && (
-                        <button onClick={() => void activateRoot(k.lake_id)} style={btn(c.blue)}>Use</button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await activateRoot(k.lake_id);
+                              notifyOrder({ kind: 'info', title: 'Folder activated', message: 'Storage location updated.' });
+                            } catch (err: any) {
+                              notifyOrder({ kind: 'error', title: 'Activation failed', message: err?.message || 'Could not activate folder.' });
+                            }
+                          }}
+                          style={btn(c.blue)}
+                        >
+                          Use
+                        </button>
                       )}
                       <button
-                        onClick={() => void forgetRoot(k.lake_id)}
+                        onClick={async () => {
+                          try {
+                            await forgetRoot(k.lake_id);
+                            notifyOrder({ kind: 'info', title: 'Folder removed', message: 'Folder removed from known list.' });
+                          } catch (err: any) {
+                            notifyOrder({ kind: 'error', title: 'Could not remove folder', message: err?.message || 'Failed to forget folder.' });
+                          }
+                        }}
                         style={btn(c.muted)}
                         title="Removes it from this list only — the stored data is not touched"
                       >
@@ -361,7 +381,14 @@ export function DataLakeSettingsPanel() {
       <FolderPicker
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
-        onChoose={(path, lbl) => setRoot(path, lbl)}
+        onChoose={async (path, lbl) => {
+          try {
+            await setRoot(path, lbl);
+            notifyOrder({ kind: 'info', title: 'Data lake folder set', message: `Storage location set to ${path}` });
+          } catch (err: any) {
+            notifyOrder({ kind: 'error', title: 'Could not set folder', message: err?.message || 'Failed to set lake root' });
+          }
+        }}
         listVolumes={listVolumes}
         browse={browse}
       />

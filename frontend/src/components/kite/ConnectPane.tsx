@@ -993,6 +993,7 @@ export function ConnectPane() {
     window.addEventListener('kite-connect-section', onOpen);
     window.addEventListener('kite-scroll-to-draft-bar', onScrollToDraft);
     return () => {
+      window.removeEventListener('kite-connect-section', onOpen);
       window.removeEventListener('kite-scroll-to-draft-bar', onScrollToDraft);
     };
   }, [section]);

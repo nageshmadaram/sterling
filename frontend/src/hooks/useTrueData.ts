@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
+import { notifyOrder } from '../store/useKiteNotifications';
 import type {
   TrueDataCredential,
   TrueDataCredentialCreate,
@@ -22,10 +23,22 @@ export function useUpdateTrueDataSettings() {
   const qc = useQueryClient();
   return useMutation<TrueDataSettings, Error, TrueDataSettings>({
     mutationFn: (body) => api.post<TrueDataSettings>(`${TD}/settings`, body),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['truedata-settings'] });
       qc.invalidateQueries({ queryKey: ['truedata-status'] });
       qc.invalidateQueries({ queryKey: ['adaptive-edge-snapshot'] });
+      notifyOrder({
+        kind: 'info',
+        title: 'Market data source updated',
+        message: `Primary data source set to ${vars.data_source === 'truedata' ? 'TrueData' : 'Zerodha Kite'}.`,
+      });
+    },
+    onError: (err) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Data source update failed',
+        message: err.message || 'Could not update market data source preference.',
+      });
     },
   });
 }
@@ -42,9 +55,21 @@ export function useAddTrueDataCredential() {
   const qc = useQueryClient();
   return useMutation<TrueDataCredential, Error, TrueDataCredentialCreate>({
     mutationFn: (body) => api.post<TrueDataCredential>(`${TD}/credentials`, body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['truedata-credentials'] });
       qc.invalidateQueries({ queryKey: ['truedata-status'] });
+      notifyOrder({
+        kind: 'info',
+        title: 'TrueData credential added',
+        message: `Feed "${data.label}" saved and connected.`,
+      });
+    },
+    onError: (err) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Could not add TrueData feed',
+        message: err.message || 'Failed to save TrueData credentials.',
+      });
     },
   });
 }
@@ -57,9 +82,21 @@ export function useUpdateTrueDataCredential() {
     { id: string } & TrueDataCredentialUpdate
   >({
     mutationFn: ({ id, ...body }) => api.put<TrueDataCredential>(`${TD}/credentials/${id}`, body),
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['truedata-credentials'] });
       qc.invalidateQueries({ queryKey: ['truedata-status'] });
+      notifyOrder({
+        kind: 'info',
+        title: 'TrueData credential saved',
+        message: `Feed "${data.label}" updated.`,
+      });
+    },
+    onError: (err) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Update failed',
+        message: err.message || 'Could not update TrueData credentials.',
+      });
     },
   });
 }
@@ -71,6 +108,18 @@ export function useDeleteTrueDataCredential() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['truedata-credentials'] });
       qc.invalidateQueries({ queryKey: ['truedata-status'] });
+      notifyOrder({
+        kind: 'info',
+        title: 'TrueData credential removed',
+        message: 'Feed deleted successfully.',
+      });
+    },
+    onError: (err) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Delete failed',
+        message: err.message || 'Could not remove TrueData credential.',
+      });
     },
   });
 }

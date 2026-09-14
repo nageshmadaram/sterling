@@ -8,6 +8,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 const PATH = '/api/v1/kite/risk/daily-loss';
 const KEY = ['kite-daily-loss'];
@@ -41,7 +42,23 @@ export function useSetDailyLossLimit() {
   return useMutation({
     mutationFn: (body: { enabled: boolean; soft_warn_inr: number; hard_halt_inr: number }) =>
       api.put<DailyLossLimit>(PATH, body),
-    onSuccess: (data) => qc.setQueryData(KEY, data),
+    onSuccess: (data) => {
+      qc.setQueryData(KEY, data);
+      notifyOrder({
+        kind: 'info',
+        title: 'Daily loss limit saved',
+        message: data.enabled
+          ? `Armed: warn at ₹${Math.abs(data.soft_warn_inr).toLocaleString('en-IN')}, halt at ₹${Math.abs(data.hard_halt_inr).toLocaleString('en-IN')}.`
+          : 'Daily loss limit disabled.',
+      });
+    },
+    onError: (err: any) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Save failed',
+        message: err?.message || 'Could not update daily loss limit.',
+      });
+    },
   });
 }
 
@@ -49,6 +66,20 @@ export function useClearDailyLossLimit() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api.delete<DailyLossLimit>(PATH),
-    onSuccess: (data) => qc.setQueryData(KEY, data),
+    onSuccess: (data) => {
+      qc.setQueryData(KEY, data);
+      notifyOrder({
+        kind: 'info',
+        title: 'Daily loss limit reset',
+        message: 'Restored account defaults.',
+      });
+    },
+    onError: (err: any) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Reset failed',
+        message: err?.message || 'Could not reset daily loss limit.',
+      });
+    },
   });
 }

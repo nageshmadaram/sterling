@@ -7,6 +7,7 @@ import { PanelCard, PanelSectionHeading } from './config/ConfigPrimitives';
 import { TradingModeControls } from './TradingModeControls';
 import { useEngineToggles } from '../../hooks/useEngineToggles';
 import { useAlgoToggles } from '../../hooks/useAlgoToggles';
+import { notifyOrder } from '../../store/useKiteNotifications';
 import type { EngineConfigModel, DeepItmMoneyness } from '../../types/kiteEngine';
 
 type ProfileId = 'atm' | 'otm' | 'slight_itm' | 'deep_itm' | 'futures';

@@ -251,6 +251,21 @@ export function AdaptiveEdgeRightSidebar({ onSelectSignal, onOpenChart, onOpenBo
     return () => window.removeEventListener('kite-nav-click', onNav);
   }, []);
 
+  useEffect(() => {
+    const onDefaultChanged = (e: Event) => {
+      const newDefault = (e as CustomEvent<string>).detail;
+      if (newDefault && tabs.some((t) => t.id === newDefault)) {
+        if (useKiteSettings.getState().defaultSignalEngine !== newDefault) {
+          useKiteSettings.setState({ defaultSignalEngine: newDefault });
+        }
+        touched.current = false;
+        setEngine(newDefault as EngineId);
+      }
+    };
+    window.addEventListener('kite-default-engine-changed', onDefaultChanged);
+    return () => window.removeEventListener('kite-default-engine-changed', onDefaultChanged);
+  }, [tabs]);
+
   return (
     <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: k.bg }}>
       <div style={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${k.border}`, background: k.bg }}>

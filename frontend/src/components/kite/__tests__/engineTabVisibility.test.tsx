@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // A FULL engine config. A minimal `{ engine_enabled }` crashes the pane on the
@@ -135,5 +135,21 @@ describe('the dock follows the running switches', () => {
     gmEnabled = undefined;
     renderPane();
     expect(tab('Gamma Move').length).toBeGreaterThan(0);
+  });
+
+  it('switches active tab when kite-default-engine-changed event is dispatched', async () => {
+    renderPane();
+    const stTab = screen.getByRole('tab', { name: /^SuperTrend/i });
+    expect(stTab).toHaveAttribute('aria-selected', 'true');
+
+    // Fire kite-default-engine-changed with 'adaptive_edge'
+    act(() => {
+      window.dispatchEvent(new CustomEvent('kite-default-engine-changed', { detail: 'adaptive_edge' }));
+    });
+
+    await waitFor(() => {
+      const aeTab = screen.getByRole('tab', { name: /^Adaptive Edge/i });
+      expect(aeTab).toHaveAttribute('aria-selected', 'true');
+    });
   });
 });

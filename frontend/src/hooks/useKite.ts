@@ -54,7 +54,13 @@ export function useAddKiteAccount() {
   const qc = useQueryClient();
   return useMutation<KiteAccount, Error, { label: string; api_key: string; api_secret: string; is_paper: boolean }>({
     mutationFn: (body) => api.post<KiteAccount>(`${K}/accounts`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['kite-accounts'] }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['kite-accounts'] });
+      notifyOrder({ kind: 'info', title: 'Account added', message: `Kite account "${data.label}" added.` });
+    },
+    onError: (err) => {
+      notifyOrder({ kind: 'error', title: 'Add account failed', message: err.message || 'Could not add Kite account.' });
+    },
   });
 }
 
@@ -65,9 +71,13 @@ export function useUpdateKiteAccount() {
     // Also refresh live /status: flipping is_paper changes the banner's paper/live
     // state, which reads from /status (not the accounts list) — without this the
     // status banner stays stale until its 30s poll.
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });
       qc.invalidateQueries({ queryKey: ['kite-status'] });
+      notifyOrder({ kind: 'info', title: 'Account saved', message: `Kite account "${data.label}" updated.` });
+    },
+    onError: (err) => {
+      notifyOrder({ kind: 'error', title: 'Save failed', message: err.message || 'Could not update Kite account.' });
     },
   });
 }
@@ -76,7 +86,14 @@ export function useDeleteKiteAccount() {
   const qc = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: (id) => api.delete<void>(`${K}/accounts/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['kite-accounts'] }); qc.invalidateQueries({ queryKey: ['kite-status'] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['kite-accounts'] });
+      qc.invalidateQueries({ queryKey: ['kite-status'] });
+      notifyOrder({ kind: 'info', title: 'Account removed', message: 'Kite account removed.' });
+    },
+    onError: (err) => {
+      notifyOrder({ kind: 'error', title: 'Delete failed', message: err.message || 'Could not remove Kite account.' });
+    },
   });
 }
 
@@ -84,7 +101,14 @@ export function useActivateKiteAccount() {
   const qc = useQueryClient();
   return useMutation<KiteAccount, Error, string>({
     mutationFn: (id) => api.post<KiteAccount>(`${K}/accounts/${id}/activate`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['kite-accounts'] }); qc.invalidateQueries({ queryKey: ['kite-status'] }); },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['kite-accounts'] });
+      qc.invalidateQueries({ queryKey: ['kite-status'] });
+      notifyOrder({ kind: 'info', title: 'Active account switched', message: `"${data.label}" is now the active account.` });
+    },
+    onError: (err) => {
+      notifyOrder({ kind: 'error', title: 'Activation failed', message: err.message || 'Could not switch active account.' });
+    },
   });
 }
 
@@ -852,15 +876,42 @@ export function useKiteWatchlist() {
   const [items, setItems] = useState<WatchItem[]>(() => {
     try { return JSON.parse(localStorage.getItem(WATCH_KEY) || '[]'); } catch { return []; }
   });
+
   useEffect(() => {
     try { localStorage.setItem(WATCH_KEY, JSON.stringify(items)); } catch { /* quota — ignore */ }
   }, [items]);
+
+  const broadcast = (next: WatchItem[]) => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('sterling-watchlist-changed', { detail: next }));
+    }
+  };
+
+  useEffect(() => {
+    const onSync = (e: Event) => {
+      const custom = e as CustomEvent<WatchItem[]>;
+      if (custom.detail && Array.isArray(custom.detail)) {
+        setItems((prev) => {
+          if (prev.length === custom.detail.length && prev.every((it, i) => it.symbol === custom.detail[i]?.symbol && it.lot_size === custom.detail[i]?.lot_size)) {
+            return prev;
+          }
+          return custom.detail;
+        });
+      }
+    };
+    window.addEventListener('sterling-watchlist-changed', onSync);
+    return () => window.removeEventListener('sterling-watchlist-changed', onSync);
+  }, []);
+
   const add = (it: WatchItem) =>
     setItems((p) => {
       if (p.some((x) => x.symbol === it.symbol)) return p;
       if (p.length >= 50) return p; // Enforce 50 item limit
-      return [...p, it];
+      const next = [...p, it];
+      broadcast(next);
+      return next;
     });
+
   const addMany = (newItems: WatchItem[]): number => {
     const seen = new Set(items.map((x) => x.symbol));
     const toAdd: WatchItem[] = [];
@@ -874,12 +925,20 @@ export function useKiteWatchlist() {
       setItems((p) => {
         const pSeen = new Set(p.map((x) => x.symbol));
         const finalAdd = toAdd.filter((x) => !pSeen.has(x.symbol));
-        return finalAdd.length > 0 ? [...p, ...finalAdd].slice(0, 50) : p;
+        const next = finalAdd.length > 0 ? [...p, ...finalAdd].slice(0, 50) : p;
+        if (next !== p) broadcast(next);
+        return next;
       });
     }
     return toAdd.length;
   };
-  const remove = (symbol: string) => setItems((p) => p.filter((x) => x.symbol !== symbol));
+
+  const remove = (symbol: string) => setItems((p) => {
+    const next = p.filter((x) => x.symbol !== symbol);
+    broadcast(next);
+    return next;
+  });
+
   // Backfill lot sizes onto items that don't have one yet (persists to storage).
   const mergeLots = (map: Record<string, number>) =>
     setItems((p) => {
@@ -888,8 +947,10 @@ export function useKiteWatchlist() {
         if (x.lot_size == null && map[x.symbol] != null) { changed = true; return { ...x, lot_size: map[x.symbol] }; }
         return x;
       });
+      if (changed) broadcast(next);
       return changed ? next : p;
     });
+
   // Backfill F&O expiry onto legacy items saved without it (persists to storage).
   const mergeExpiries = (map: Record<string, string>) =>
     setItems((p) => {
@@ -898,17 +959,25 @@ export function useKiteWatchlist() {
         if (x.expiry == null && map[x.symbol] != null) { changed = true; return { ...x, expiry: map[x.symbol] }; }
         return x;
       });
+      if (changed) broadcast(next);
       return changed ? next : p;
     });
+
   const reorder = (startIndex: number, endIndex: number) => {
     setItems((p) => {
       const result = Array.from(p);
       const [removed] = result.splice(startIndex, 1);
       result.splice(endIndex, 0, removed);
+      broadcast(result);
       return result;
     });
   };
-  const clear = () => setItems([]);
+
+  const clear = () => {
+    setItems([]);
+    broadcast([]);
+  };
+
   return { items, add, addMany, remove, reorder, clear, mergeLots, mergeExpiries };
 }
 

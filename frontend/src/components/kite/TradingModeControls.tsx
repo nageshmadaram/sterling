@@ -10,6 +10,7 @@ import {
 } from '../../hooks/useSterlingKiteEngine';
 import type { EngineConfigModel } from '../../types/kiteEngine';
 import { ModeToggle } from './ModeToggle';
+import { notifyOrder } from '../../store/useKiteNotifications';
 
 function vehicleOrderLabel(cfg?: EngineConfigModel | null): string {
   if (!cfg) return 'option BUY orders';
@@ -71,25 +72,51 @@ export function TradingModeControls() {
   const onExec = (side: 'left' | 'right') => {
     if (side === 'right') { refetchReadiness(); setConfirm('go-live'); return; }
     update.mutate({ id: active.id, is_paper: true });
+    update.mutate({ id: active.id, is_paper: true }, {
+      onSuccess: () => notifyOrder({ kind: 'info', title: 'Trading mode changed', message: 'Account switched to Paper trading.' }),
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
+    });
   };
   const confirmGoLive = () =>
     update.mutate({ id: active.id, is_paper: false }, { onSuccess: () => setConfirm(null) });
+    update.mutate({ id: active.id, is_paper: false }, {
+      onSuccess: () => {
+        setConfirm(null);
+        notifyOrder({ kind: 'info', title: 'Trading mode changed', message: 'Account switched to Live trading.' });
+      },
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
+    });
 
   const onSignals = (side: 'left' | 'right') => {
     if (!cfg) return;
     if (side === 'right') { refetchReadiness(); setConfirm('enable-auto'); return; }
     setCfg.mutate({ auto_execute: false });
+    setCfg.mutate({ auto_execute: false }, {
+      onSuccess: () => notifyOrder({ kind: 'info', title: 'Execution mode changed', message: 'Signals switched to Manual execution.' }),
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
+    });
   };
   const confirmEnableAuto = () =>
     cfg && setCfg.mutate({ auto_execute: true }, { onSuccess: () => setConfirm(null) });
+    cfg && setCfg.mutate({ auto_execute: true }, {
+      onSuccess: () => {
+        setConfirm(null);
+        notifyOrder({ kind: 'info', title: 'Execution mode changed', message: 'Signals switched to Auto execution.' });
+      },
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
+    });
 
   const handleApplyProductionPreset = () => {
     applyProduction.mutate(undefined, {
       onSuccess: () => {
         setConfirm(null);
         setFeedback('Production preset applied: Fast Trail, One-Red Exit, ADX 25, Time Stop 48, 2% Daily Loss.');
+        const msg = 'Production preset applied: Fast Trail, One-Red Exit, ADX 25, Time Stop 48, 2% Daily Loss.';
+        setFeedback(msg);
+        notifyOrder({ kind: 'info', title: 'Preset applied', message: msg });
         setTimeout(() => setFeedback(null), 5000);
       },
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Apply preset failed', message: err.message }),
     });
   };
 
@@ -98,8 +125,10 @@ export function TradingModeControls() {
       onSuccess: (res) => {
         setConfirm(null);
         setFeedback(res.message);
+        notifyOrder({ kind: 'info', title: 'Square off executed', message: res.message });
         setTimeout(() => setFeedback(null), 6000);
       },
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Square off failed', message: err.message }),
     });
   };
 
@@ -108,8 +137,10 @@ export function TradingModeControls() {
       onSuccess: (res) => {
         setConfirm(null);
         setFeedback(res.message);
+        notifyOrder({ kind: 'info', title: 'Emergency halt triggered', message: res.message });
         setTimeout(() => setFeedback(null), 6000);
       },
+      onError: (err) => notifyOrder({ kind: 'error', title: 'Emergency halt failed', message: err.message }),
     });
   };
 

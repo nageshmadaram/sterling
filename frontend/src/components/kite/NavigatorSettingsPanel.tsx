@@ -8,6 +8,7 @@ import { EnginePowerHeader } from './config/EnginePowerHeader';
 import { ScopeLink, ScopedGroup } from './config/EngineScope';
 import { ContractsGroup, InstrumentsGroup, SignalSourceGroup } from './config/ScanSettings';
 import { useNavigatorConfig, useResetNavigatorConfig, useSetNavigatorConfig } from '../../hooks/useNavigator';
+import { notifyOrder } from '../../store/useKiteNotifications';
 import { useEngineConfig } from '../../hooks/useSterlingKiteEngine';
 import type { EngineConfigModel } from '../../types/kiteEngine';
 import type {
@@ -270,7 +271,15 @@ export function NavigatorSettingsPanel() {
         setBaseRevision(saved?.record?.revision ?? null);
       },
       onError: (err) => {
-        if (String(err.message).includes('REVISION_CONFLICT')) setConflict(true);
+        if (String(err.message).includes('REVISION_CONFLICT')) {
+          setConflict(true);
+        } else {
+          notifyOrder({
+            kind: 'error',
+            title: 'Settings NOT saved',
+            message: `Navigator settings were not applied: ${err?.message || 'save failed'}. Your changes are still here — try Apply again.`,
+          });
+        }
       },
     });
   };
@@ -289,7 +298,12 @@ export function NavigatorSettingsPanel() {
       setResetConfirm(true);
       return;
     }
-    resetConfig.mutate(undefined, { onSuccess: () => { setDirty(false); setResetConfirm(false); } });
+    resetConfig.mutate(undefined, {
+      onSuccess: () => { setDirty(false); setResetConfirm(false); },
+      onError: (err) => {
+        notifyOrder({ kind: 'error', title: 'Reset failed', message: err?.message || 'Could not reset Navigator settings.' });
+      },
+    });
   };
 
   const saveError = setConfig.isError && !conflict ? String(setConfig.error?.message ?? 'save failed') : null;

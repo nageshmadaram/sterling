@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SterlingWatchList } from '../SterlingWatchList';
@@ -100,6 +100,41 @@ describe('SterlingWatchList Empty & Sync', () => {
     // Should automatically seed the instrument and not display the empty state
     await waitFor(() => {
       expect(screen.queryByText('Nothing here.')).not.toBeInTheDocument();
+      expect(screen.getByText('1 / 50')).toBeInTheDocument();
+    });
+  });
+
+  it('updates reactively when sterling-watchlist-changed event is dispatched from another component', async () => {
+    localStorage.setItem('sterling.kite.watchlist.v1', '[]');
+    localStorage.setItem('sterling.kite.watchlist.manual-empty.v1', '1');
+
+    vi.spyOn(useKiteModule, 'useKitePositions').mockReturnValue({
+      data: { net: [], day: [] },
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn().mockResolvedValue({ data: { net: [], day: [] } }),
+    } as any);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SterlingWatchList />
+      </QueryClientProvider>
+    );
+
+    expect(screen.getByText('Nothing here.')).toBeInTheDocument();
+
+    // Dispatch event from another simulated component/pane
+    const newItems = [
+      { symbol: 'NSE:INFY', name: 'INFY', exchange: 'NSE', lot_size: 1 },
+    ];
+    act(() => {
+      window.dispatchEvent(new CustomEvent('sterling-watchlist-changed', { detail: newItems }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Nothing here.')).not.toBeInTheDocument();
+      expect(screen.getByText('INFY')).toBeInTheDocument();
       expect(screen.getByText('1 / 50')).toBeInTheDocument();
     });
   });
