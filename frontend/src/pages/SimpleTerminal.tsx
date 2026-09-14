@@ -31,10 +31,19 @@ const TOP_TAB = (active: boolean): React.CSSProperties => ({
 
 export function SimpleTerminal() {
   const [showSettings, setShowSettings] = useState(false);
+  const preferredSection = useKiteSettings((s) => s.defaultSection);
+  const userNavigatedRef = useRef(false);
   const [kiteNav, setKiteNav] = useState<NavItem>(() => useKiteSettings.getState().defaultSection || 'dashboard');
   const { data: kiteStatus } = useKiteStatus();
 
+  useEffect(() => {
+    if (!userNavigatedRef.current && preferredSection && preferredSection !== kiteNav) {
+      setKiteNav(preferredSection);
+    }
+  }, [preferredSection, kiteNav]);
+
   const handleKiteNav = (nav: NavItem) => {
+    userNavigatedRef.current = true;
     if (nav !== kiteNav && hasUnsavedDraft()) {
       window.dispatchEvent(new CustomEvent('kite-scroll-to-draft-bar'));
       if (!window.confirm('You have unsaved settings changes. Leave this page and discard them?')) {
@@ -49,6 +58,10 @@ export function SimpleTerminal() {
     const onNav = (event: Event) => {
       const next = (event as CustomEvent<NavItem>).detail;
       if (typeof next === 'string') setKiteNav(next);
+      if (typeof next === 'string') {
+        userNavigatedRef.current = true;
+        setKiteNav(next);
+      }
     };
     window.addEventListener('kite-nav-click', onNav);
     return () => window.removeEventListener('kite-nav-click', onNav);

@@ -45,6 +45,9 @@ export function useSetAdaptiveEdgeSettings() {
       qc.invalidateQueries({ queryKey: ['adaptive-edge-snapshot'] });
       notifyOrder({ kind: 'info', title: 'Adaptive Edge settings saved', message: 'Research policy only. Live trading stays blocked.' });
     },
+    onError: (err: any) => {
+      notifyOrder({ kind: 'error', title: 'Save failed', message: err?.message || 'Could not save Adaptive Edge settings.' });
+    },
   });
 }
 
@@ -83,6 +86,13 @@ export function useSetAdaptiveEdgeEngineConfig() {
         kind: 'info',
         title: 'Adaptive Edge engine settings saved',
         message: 'Paper only — the strategy is not promoted for live execution.',
+      });
+    },
+    onError: (err: any) => {
+      notifyOrder({
+        kind: 'error',
+        title: 'Save failed',
+        message: err?.message || 'Could not save Adaptive Edge engine config.',
       });
     },
   });

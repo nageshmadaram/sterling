@@ -13,6 +13,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 const KEY = ['snapback-config'];
 const SNAPSHOT_KEY = ['snapback-snapshot'];
@@ -304,6 +305,10 @@ export function useUpdateSnapback() {
       qc.invalidateQueries({ queryKey: KEY });
       qc.invalidateQueries({ queryKey: SNAPSHOT_KEY });
       qc.invalidateQueries({ queryKey: HISTORY_KEY });
+      notifyOrder({ kind: 'info', title: 'Snapback updated', message: 'Snapback settings saved.' });
+    },
+    onError: (err: any) => {
+      notifyOrder({ kind: 'error', title: 'Save failed', message: err?.message || 'Could not update Snapback settings.' });
     },
   });
 }

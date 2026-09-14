@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 const KEY = ['gamma-move-config'];
 const SNAPSHOT_KEY = ['gamma-move-snapshot'];
@@ -287,6 +288,10 @@ export function useUpdateGammaMove() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEY });
       qc.invalidateQueries({ queryKey: SNAPSHOT_KEY });
+      notifyOrder({ kind: 'info', title: 'Gamma Move updated', message: 'Gamma Move settings saved.' });
+    },
+    onError: (err: any) => {
+      notifyOrder({ kind: 'error', title: 'Save failed', message: err?.message || 'Could not update Gamma Move settings.' });
     },
   });
 }

@@ -183,11 +183,26 @@ export const useKiteSettings = create<KiteSettingsState>()(
   persist(
     (set) => ({
       defaultSection: 'dashboard',
-      setDefaultSection: (section) => set({ defaultSection: section }),
+      setDefaultSection: (section) => {
+        set({ defaultSection: section });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kite-default-section-changed', { detail: section }));
+        }
+      },
       defaultSignalEngine: 'supertrend',
-      setDefaultSignalEngine: (engine) => set({ defaultSignalEngine: engine }),
+      setDefaultSignalEngine: (engine) => {
+        set({ defaultSignalEngine: engine });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kite-default-engine-changed', { detail: engine }));
+        }
+      },
       engineOrder: [],
-      setEngineOrder: (order) => set({ engineOrder: [...order] }),
+      setEngineOrder: (order) => {
+        set({ engineOrder: [...order] });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kite-engine-order-changed', { detail: [...order] }));
+        }
+      },
       moveEngine: (engine, delta) => set((st) => {
         const base = st.engineOrder.length ? [...st.engineOrder] : [...ENGINE_ORDER];
         const from = base.indexOf(engine);
@@ -284,7 +299,7 @@ export const useKiteSettings = create<KiteSettingsState>()(
     }),
     {
       name: 'kite-settings',
-      version: 9,
+      version: 10,
       migrate: (persisted: any) => {
         const loaderStyle = (() => {
           const legacy = persisted?.loaderStyle;
@@ -357,9 +372,24 @@ export const useKiteSettings = create<KiteSettingsState>()(
         }
 
         // v9 adds defaultSection setting.
+        // v9/v10 ensures defaultSection setting.
         const validSections: NavItem[] = ['dashboard', 'astro', 'pcr', 'openingLeaders', 'orders', 'holdings', 'positions', 'more', 'data', 'adaptiveEdge', 'backtest', 'connect', 'help'];
         if (!next.defaultSection || !validSections.includes(next.defaultSection)) {
           next = { ...next, defaultSection: 'dashboard' };
+        }
+
+        // v10 ensures defaultSignalEngine and engineOrder validity.
+        if (!next.defaultSignalEngine || typeof next.defaultSignalEngine !== 'string') {
+          next = { ...next, defaultSignalEngine: 'supertrend' };
+        }
+        if (!Array.isArray(next.engineOrder) || next.engineOrder.length === 0) {
+          next = { ...next, engineOrder: [...ENGINE_ORDER] };
+        } else {
+          const seen = new Set(next.engineOrder);
+          const missing = ENGINE_ORDER.filter((id) => !seen.has(id));
+          if (missing.length) {
+            next = { ...next, engineOrder: [...next.engineOrder, ...missing] };
+          }
         }
 
         return next;

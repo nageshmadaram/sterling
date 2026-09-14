@@ -93,6 +93,8 @@ function MorePane({ activeTab, onTabChange }: { activeTab: MoreTab; onTabChange:
 }
 
 export function KiteTab() {
+  const preferredSection = useKiteSettings((s) => s.defaultSection);
+  const userNavigatedRef = useRef(false);
   const [nav, setNav] = useState<NavItem>(() => useKiteSettings.getState().defaultSection || 'dashboard');
   const [moreTab, setMoreTab] = useState<MoreTab>('bids');
   const [instrumentView, setInstrumentView] = useState<{ symbol: string; tab: InstrumentTab; trailTarget?: 'fast' | 'mid' | 'slow'; signalData?: SignalChartData } | null>(null);
@@ -109,6 +111,16 @@ export function KiteTab() {
 
   useEffect(() => {
     const cb = (e: Event) => handleNavClick((e as CustomEvent<NavItem>).detail);
+    if (!userNavigatedRef.current && preferredSection && preferredSection !== nav) {
+      setNav(preferredSection);
+    }
+  }, [preferredSection, nav]);
+
+  useEffect(() => {
+    const cb = (e: Event) => {
+      userNavigatedRef.current = true;
+      handleNavClick((e as CustomEvent<NavItem>).detail);
+    };
     window.addEventListener('kite-nav-click', cb);
     return () => window.removeEventListener('kite-nav-click', cb);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -117,6 +129,7 @@ export function KiteTab() {
   const { isOpen, options, closeOrderWindow } = useOrderWindowStore();
 
   const handleNavClick = (n: NavItem) => {
+    userNavigatedRef.current = true;
     if (n !== nav && hasUnsavedDraft()) {
       window.dispatchEvent(new CustomEvent('kite-scroll-to-draft-bar'));
       if (!window.confirm('You have unsaved settings changes. Leave this page and discard them?')) {

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { k as t, tint, Icons } from '../../styles/kiteUI';
-import { useKiteInstrumentSearch, useKiteInstrumentLots, useKiteInstrumentExpiries, useKiteLtp, useKiteQuote, useKiteWatchlist, useSyncKiteWatchlist, watchLtpSymbols } from '../../hooks/useKite';
-import type { KiteInstrument } from '../../types/kite';
+import { useKiteInstrumentSearch, useKiteInstrumentLots, useKiteInstrumentExpiries, useKiteLtp, useKiteQuote, useKiteWatchlist, useSyncKiteWatchlist, useKitePositions, watchLtpSymbols } from '../../hooks/useKite';
+import type { KiteInstrument, WatchItem } from '../../types/kite';
 import { InstrumentLabel, parseInstrument } from './InstrumentLabel';
 import { SignalMarker } from './SignalMarker';
 import { KiteActionButtons } from './KiteActionButtons';
@@ -10,6 +10,7 @@ import { useKiteSettings } from '../../store/useKiteSettings';
 import { useTickerPins } from '../../store/useTickerPins';
 import { computeGreeksFromSymbol } from '../../utils/computeGreeks';
 import { useDebounced } from '../../hooks/useDebounced';
+import { notifyOrder } from '../../store/useKiteNotifications';
 
 const S = {
   container: { display: 'flex', flexDirection: 'column' as const, height: '100%', background: t.bg, fontFamily: t.fontFamily },
@@ -249,7 +250,7 @@ export function QuoteDetail({ sym, q, expiry, spotName, spotPx, instrumentName, 
 
 export function KiteSearchBar({
   query, setQuery, watchCount, searchSettingsOpen, setSearchSettingsOpen, height = 50,
-  showSettings = true, compact = false
+  showSettings = true, compact = false, onSyncPositions, syncingPositions = false,
 }: {
   query: string; setQuery: (q: string) => void; watchCount?: number;
   searchSettingsOpen: boolean; setSearchSettingsOpen: (v: boolean) => void;
@@ -264,20 +265,9 @@ export function KiteSearchBar({
    */
   showSettings?: boolean;
   height?: number;
-  /**
-   * Match the shared board's filter bar instead of the watchlist's.
-   *
-   * The watchlist owns a tall 50px search bar with a large borderless field,
-   * which is right for a panel whose whole job is search. Dropped into a signal
-   * table's toolbar it made that row half again as tall as the same row on every
-   * other board, and the field read as a different control: 13px borderless
-   * against the shared board's bordered 10px box.
-   *
-   * This switches the metrics rather than adding a second component, because the
-   * behaviour — query, settings panel, icon — is identical and worth keeping in
-   * one place.
-   */
   compact?: boolean;
+  onSyncPositions?: () => void;
+  syncingPositions?: boolean;
 }) {
   const s = useKiteSettings();
   // The row that hosts a compact bar supplies its own horizontal inset, so the
@@ -287,6 +277,7 @@ export function KiteSearchBar({
     <div style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}>
       <style>{`
         .kite-radio, .kite-checkbox { display: none; }
+        @keyframes kitePositionsSpin { to { transform: rotate(360deg); } }
       `}</style>
       <div style={{ padding: outerPad, background: t.bg, display: 'flex', alignItems: 'center', height }}>
         <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
@@ -312,6 +303,44 @@ export function KiteSearchBar({
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {watchCount !== undefined && <span style={{ color: t.dim, fontSize: 12 }}>{watchCount} / 50</span>}
+            {onSyncPositions && (
+              <button
+                type="button"
+                title={syncingPositions ? "Syncing Kite open positions…" : "Sync open positions from Kite"}
+                aria-label="Sync open positions from Kite"
+                disabled={syncingPositions}
+                onClick={onSyncPositions}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  cursor: syncingPositions ? 'wait' : 'pointer',
+                  color: syncingPositions ? t.blue : t.dim,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    animation: syncingPositions ? 'kitePositionsSpin 0.8s linear infinite' : undefined,
+                  }}
+                >
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                  <path d="M8 16H3v5" />
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                  <path d="M16 8h5V3" />
+                </svg>
+              </button>
+            )}
             {showSettings && (
               <>
                 <div style={{ width: 1, height: 16, background: t.border }} />
@@ -407,6 +436,24 @@ import { useOrderWindowStore } from '../../store/useOrderWindowStore';
 import { useKiteBasketStore } from '../../store/useKiteBasketStore';
 import { defaultProduct } from './orderTicket';
 
+function positionToWatchItem(position: any): WatchItem | null {
+  const qty = Number(position?.quantity ?? position?.qty ?? position?.net_quantity ?? 0);
+  if (!Number.isFinite(qty) || qty === 0) return null;
+  const tradingsymbol = String(position?.tradingsymbol || position?.trading_symbol || position?.symbol || '').trim();
+  if (!tradingsymbol) return null;
+  const exchange = String(position?.exchange || 'NFO').trim() || 'NFO';
+  const token = Number(position?.instrument_token || position?.token || 0);
+  const product = String(position?.product || '').trim();
+  return {
+    symbol: `${exchange}:${tradingsymbol}`,
+    token: Number.isFinite(token) ? token : 0,
+    name: tradingsymbol,
+    sub: product ? `${exchange} · ${product} position` : `${exchange} · open position`,
+    lot_size: position?.lot_size,
+    expiry: position?.expiry,
+  };
+}
+
 export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (symbol: string, defaultTab: 'chart' | 'option-chain') => void }) {
   const [query, setQuery] = useState('');
   const [searchSegment, setSearchSegment] = useState<'all' | 'fo' | 'indices' | 'cash' | 'etf'>('all');
@@ -417,6 +464,65 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
   const search = useKiteInstrumentSearch(debouncedQuery);
   const { items: watch, add, remove, reorder, mergeLots, mergeExpiries } = useKiteWatchlist();
   const sync = useSyncKiteWatchlist();
+  const positions = useKitePositions(true);
+  const [syncingPositions, setSyncingPositions] = useState(false);
+
+  const handleSyncPositions = async () => {
+    setSyncingPositions(true);
+    try {
+      const res = await positions.refetch();
+      const net = res.data?.net || [];
+      const openItems = net
+        .map(positionToWatchItem)
+        .filter((item): item is WatchItem => item !== null);
+
+      if (openItems.length === 0) {
+        // Fallback to sync endpoint to see if any position records exist
+        const syncRes = await sync.mutateAsync().catch(() => null);
+        const fallback = (syncRes?.items || []).filter((it: any) => {
+          const sub = String(it?.sub || '').toLowerCase();
+          return sub.includes('position');
+        });
+
+        if (fallback.length > 0) {
+          fallback.forEach((it) => add(it));
+          notifyOrder({
+            kind: 'info',
+            title: 'Positions synced',
+            message: `Synced ${fallback.length} open position(s) from Kite.`,
+          });
+          return;
+        }
+
+        notifyOrder({
+          kind: 'info',
+          title: 'No open positions',
+          message: 'No active open positions found on your Kite account.',
+        });
+        return;
+      }
+
+      let addedCount = 0;
+      openItems.forEach((item) => {
+        add(item);
+        addedCount++;
+      });
+
+      notifyOrder({
+        kind: 'info',
+        title: 'Positions synced',
+        message: `Synced ${addedCount} open position${addedCount === 1 ? '' : 's'} from Kite.`,
+      });
+    } catch (err: any) {
+      notifyOrder({
+        kind: 'error',
+        title: 'Sync failed',
+        message: err?.message || 'Could not sync open positions from Kite.',
+      });
+    } finally {
+      setSyncingPositions(false);
+    }
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [hovered, setHovered] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState<{ symbol: string; top: number; left: number } | null>(null);
@@ -548,6 +654,8 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
           watchCount={watch.length} 
           searchSettingsOpen={searchSettingsOpen} 
           setSearchSettingsOpen={setSearchSettingsOpen} 
+          onSyncPositions={handleSyncPositions}
+          syncingPositions={syncingPositions || positions.isFetching}
         />
       </div>
 
@@ -731,11 +839,16 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
                 <p style={{ marginBottom: 16 }}>Nothing here.</p>
                 <p>Use the search bar to add instruments.</p>
                 <button
-                  style={{ marginTop: 24, padding: '8px 16px', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 4, color: t.blue, cursor: 'pointer', fontSize: 13 }}
-                  disabled={sync.isPending}
-                  onClick={() => sync.mutate(undefined, { onSuccess: (d) => d.items.forEach(add) })}
+                  type="button"
+                  style={{
+                    marginTop: 24, padding: '8px 16px', background: t.surface,
+                    border: `1px solid ${t.border}`, borderRadius: 4, color: t.blue,
+                    cursor: syncingPositions || positions.isFetching ? 'wait' : 'pointer', fontSize: 13,
+                  }}
+                  disabled={syncingPositions || positions.isFetching}
+                  onClick={() => void handleSyncPositions()}
                 >
-                  {sync.isPending ? 'Syncing…' : 'Sync holdings from Kite'}
+                  {syncingPositions || positions.isFetching ? 'Syncing…' : 'Sync open positions from Kite'}
                 </button>
               </div>
             )}

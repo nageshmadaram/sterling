@@ -9,6 +9,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
+import { notifyOrder } from '../store/useKiteNotifications';
 import { useReplayActive as useSimActive } from './useReplayStore';
 
 const KEY = ['intraday-config'];
@@ -372,6 +373,10 @@ export function useUpdateIntraday() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEY });
       qc.invalidateQueries({ queryKey: SNAPSHOT_KEY });
+      notifyOrder({ kind: 'info', title: 'Intraday updated', message: 'Intraday settings saved.' });
+    },
+    onError: (err: any) => {
+      notifyOrder({ kind: 'error', title: 'Save failed', message: err?.message || 'Could not update Intraday settings.' });
     },
   });
 }

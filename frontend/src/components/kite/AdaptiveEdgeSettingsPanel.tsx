@@ -501,6 +501,8 @@ export function AdaptiveEdgeSettingsPanel() {
       <SettingsDraftBar
         dirty={dirty}
         saving={save.isPending}
+        applyDisabled={!!invalid}
+        applyTitle={invalid || undefined}
         onApply={() => { if (!invalid) save.mutate(draft, { onSuccess: () => setDirty(false) }); }}
         onDiscard={() => { if (data) { setDraft(withDefaults(data.settings)); setDirty(false); } }}
         onReset={() => { if (data) { setDraft(withDefaults(data.settings)); setDirty(false); } }}
