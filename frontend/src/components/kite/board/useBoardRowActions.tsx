@@ -53,7 +53,7 @@ export function useBoardRowActions({ onOpenChart }: {
       return null;
     }
     const { symbol, exchange, lotSize } = signal.instrument;
-    const ended = signal.status === 'ended';
+    const disabled = signal.status !== 'armed' || signal.executionEligible === false || !signal.instrument.quoteKey;
     const planned = signal.planPriced === true;
     const planPx = (planned ? signal.levels.entry : null) || signal.levels.ltp || 0;
     const order = (side: 'BUY' | 'SELL') => () => openOrderWindow({
@@ -74,9 +74,9 @@ export function useBoardRowActions({ onOpenChart }: {
         className="sb-row-trade"
         onBuy={order('BUY')}
         onSell={signal.noTrailingStop ? undefined : order('SELL')}
-        buyDisabled={ended}
-        sellDisabled={ended}
-        disabledHint="This row has ended — its levels are a frozen record, not a live plan."
+        buyDisabled={disabled}
+        sellDisabled={disabled}
+        disabledHint={signal.reason || 'This row is not execution eligible.'}
       />
     );
   }, [openOrderWindow]);

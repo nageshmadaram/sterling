@@ -81,6 +81,11 @@ export function resetReplayReachability(): void {
  */
 function applyStatus(next: ReplayStatus, wasDelta: boolean) {
   const store = useReplayStore.getState();
+  const currentRun = store.status.run_id;
+  if (currentRun && next.run_id && currentRun !== next.run_id) {
+    store.setStatus(next);
+    return;
+  }
   if (!wasDelta) {
     store.setStatus(next);
     return;
@@ -288,16 +293,25 @@ export function useReplayStream(enabled: boolean): void {
           useReplayStore.getState().truncateLedger(
             Number(d.events_total ?? 0),
             Number(d.trades_total ?? 0),
+            d.snapshot ?? null,
           );
+        });
+        es.addEventListener('resync', () => {
+          armWatchdog();
+          void fetchStatus().then((full) => full && useReplayStore.getState().setStatus(full));
         });
         es.addEventListener('signal', (e) => {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data) as ReplaySignal;
+          const runId = useReplayStore.getState().status.run_id;
+          if (runId && d.run_id && d.run_id !== runId) return;
           useReplayStore.getState().appendSignals([d]);
         });
         es.addEventListener('trade', (e) => {
           armWatchdog();
           const d = JSON.parse((e as MessageEvent).data) as ReplayTrade;
+          const runId = useReplayStore.getState().status.run_id;
+          if (runId && d.run_id && d.run_id !== runId) return;
           useReplayStore.getState().upsertTrades([d]);
         });
 

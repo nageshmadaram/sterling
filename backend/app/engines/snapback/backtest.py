@@ -84,6 +84,20 @@ class CostModel:
         misc = (buy_v + sell_v) * self.misc_pct / 100.0
         return round(brokerage + exch + stt + gst + misc, 2)
 
+    def spread_charges(
+        self,
+        long_entry: float,
+        long_exit: float,
+        short_exit: float,
+        short_entry: float,
+        qty: int,
+    ) -> float:
+        return round(
+            self.charges(long_entry, long_exit, qty)
+            + self.charges(short_exit, short_entry, qty),
+            2,
+        )
+
 
 @dataclass
 class Trade:
@@ -368,7 +382,11 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
     shut = 0
 
     for d in range(entry_bar, min(last_bar + 1, n)):
-        years = max(dte - (d - i), 1) / 365.0
+        elapsed_calendar_days = max(0.0, (float(bars.time[d]) - float(bars.time[entry_bar])) / 86_400.0)
+        years = max(dte - elapsed_calendar_days, 1.0) / 365.0
+        open_prem = _value(float(bars.open[d]), strike, short_strike, years,
+                           vol, call, cfg.smile_slope, S0,
+                           cfg.smile_itm_slope)
         # The worst point of the session for a long option is the extreme that
         # moves against it. Nothing in a daily bar says whether that came before
         # or after the favourable one, so the harness assumes the worse.
@@ -379,12 +397,15 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
                             vol, call, cfg.smile_slope, S0, cfg.smile_itm_slope)
 
         if cfg.premium_stop_pct < 100.0 and worst_prem <= stop_prem:
-            exit_bar, prem_out, reason = d, stop_prem, "premium_stop"
+            prem_out = open_prem if d > entry_bar and open_prem <= stop_prem else stop_prem
+            exit_bar, reason = d, "premium_stop"
             break
         if cfg.premium_trail_pct > 0:
             trail = best_prem * (1.0 - cfg.premium_trail_pct / 100.0)
             if worst_prem <= trail and d > entry_bar:
-                exit_bar, prem_out, reason = d, trail, "premium_trail"
+                exit_bar = d
+                prem_out = open_prem if open_prem <= trail else trail
+                reason = "premium_trail"
                 break
             best_prem = max(best_prem,
                             _value(float(bars.low[d] if not call
@@ -439,10 +460,19 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
     gross = (fill_out - fill_in) * qty
     charges = cost.charges(fill_in, fill_out, qty)
     if short_strike:
-        # A spread trades TWO contracts each way. Charging the schedule on the
-        # net debit would price a two-legged trade as a one-legged one, which is
-        # exactly the flattery a spread is suspected of.
-        charges *= 2.0
+        years_out = max(dte - (exit_bar - i), 1) / 365.0
+        long_in = _value(S0, strike, 0.0, T0, vol, call, cfg.smile_slope,
+                         S0, cfg.smile_itm_slope)
+        short_in = _value(S0, short_strike, 0.0, T0, vol, call,
+                          cfg.smile_slope, S0, cfg.smile_itm_slope)
+        long_out = _value(float(bars.close[exit_bar]), strike, 0.0, years_out,
+                          vol, call, cfg.smile_slope, S0,
+                          cfg.smile_itm_slope)
+        short_out = _value(float(bars.close[exit_bar]), short_strike, 0.0,
+                           years_out, vol, call, cfg.smile_slope, S0,
+                           cfg.smile_itm_slope)
+        charges = cost.spread_charges(long_in, long_out, short_out, short_in,
+                                      qty)
     net = gross - charges
     outlay = fill_in * qty
     gross_unhedged = net

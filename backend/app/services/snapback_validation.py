@@ -21,6 +21,7 @@ hand.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -30,9 +31,11 @@ from app.core.logging import get_logger
 log = get_logger(__name__)
 
 _KEY = "snapback_validation"
+COST_MODEL_VERSION = "zerodha_options_v2_per_leg_gap_calendar"
 
 __all__ = ["Validation", "load", "record", "is_promoted",
-           "auto_execution_blocker", "clear"]
+           "auto_execution_blocker", "clear", "current_manifest",
+           "is_compatible", "compatibility_reasons"]
 
 
 @dataclass
@@ -67,6 +70,10 @@ class Validation:
     #: A verdict at one slippage says nothing about a book paying another, so
     #: the number travels with it rather than living only in the script.
     slippage_pct: Optional[float] = None
+    engine_version: str = ""
+    config_hash: str = ""
+    calendar_version: str = ""
+    cost_model_version: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +94,16 @@ class Validation:
             "per_year_pct": dict(self.per_year_pct),
             "checks": dict(self.checks), "reasons": list(self.reasons),
             "slippage_pct": self.slippage_pct,
+            "engine_version": self.engine_version,
+            "config_hash": self.config_hash,
+            "calendar_version": self.calendar_version,
+            "cost_model_version": self.cost_model_version,
+            "manifest": {
+                "engine_version": self.engine_version,
+                "config_hash": self.config_hash,
+                "calendar_version": self.calendar_version,
+                "cost_model_version": self.cost_model_version,
+            },
             "passed": sum(1 for v in self.checks.values() if v),
             "total_checks": len(self.checks),
         }
@@ -96,6 +113,44 @@ class Validation:
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in dict(d).items() if k in known})
 
+
+
+def _config_hash(cfg: Any = None) -> str:
+    if cfg is None:
+        from app.engines.snapback import SnapbackConfig
+        cfg = SnapbackConfig()
+    if hasattr(cfg, "as_dict"):
+        payload = cfg.as_dict()
+    else:
+        payload = dict(getattr(cfg, "__dict__", {}) or {})
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+
+def current_manifest(cfg: Any = None) -> dict[str, str]:
+    from app.engines.snapback import CONTRACT_VERSION
+    from app.services.navigator.calendar import CALENDAR_VERSION
+    return {
+        "engine_version": str(CONTRACT_VERSION),
+        "config_hash": _config_hash(cfg),
+        "calendar_version": str(CALENDAR_VERSION),
+        "cost_model_version": COST_MODEL_VERSION,
+    }
+
+
+def compatibility_reasons(record: Optional[dict[str, Any]] = None, cfg: Any = None) -> list[str]:
+    v = dict(load() if record is None else record)
+    manifest = current_manifest(cfg)
+    reasons: list[str] = []
+    for key, expected in manifest.items():
+        got = v.get(key) or (v.get("manifest") or {}).get(key)
+        if got != expected:
+            reasons.append(f"{key} is {got or 'missing'}, expected {expected}")
+    return reasons
+
+
+def is_compatible(record: Optional[dict[str, Any]] = None, cfg: Any = None) -> bool:
+    return not compatibility_reasons(record, cfg)
 
 def load() -> dict[str, Any]:
     """The stored verdict as a plain dict, or ``{}`` when there is none.
@@ -124,6 +179,10 @@ def record(verdict: Validation) -> bool:
     """
     try:
         from app.services import db
+        manifest = current_manifest()
+        for k, v in manifest.items():
+            if not getattr(verdict, k):
+                setattr(verdict, k, v)
         db.set_config(_KEY, json.dumps(verdict.as_dict(), separators=(",", ":")))
         return True
     except Exception as exc:                                       # noqa: BLE001
@@ -140,7 +199,8 @@ def clear() -> None:
 
 
 def is_promoted() -> bool:
-    return bool(load().get("promoted"))
+    v = load()
+    return bool(v.get("promoted")) and is_compatible(v)
 
 
 def auto_execution_blocker() -> Optional[str]:
@@ -151,7 +211,10 @@ def auto_execution_blocker() -> Optional[str]:
     """
     v = load()
     if v.get("promoted"):
-        return None
+        stale = compatibility_reasons(v)
+        if not stale:
+            return None
+        return "Snapback validation evidence is stale for this implementation: " + "; ".join(stale)
     if not v.get("measured_at"):
         return ("Snapback has never been through the walk-forward harness — run "
                 "study/snapback_research.py --part gate")

@@ -199,6 +199,64 @@ def get_candles(
             conn.close()
 
 
+
+def get_session_dates(
+    symbol: str,
+    resolution: str,
+    *,
+    since: Optional[int] = None,
+    until: Optional[int] = None,
+    limit: int = 1000,
+) -> List[str]:
+    """Actual IST session dates that have at least one stored candle.
+
+    `get_symbol_coverage()` answers bounds. Bounds are not proof that every
+    session between them exists, which is how a holiday/empty day reached the
+    replay picker. This helper is intentionally row-backed and distinct.
+    """
+    from datetime import datetime, timezone, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        ist_tz = ZoneInfo("Asia/Kolkata")
+    except Exception:  # pragma: no cover - Python without tzdata
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+
+    sym_u = symbol.upper()
+    symbols = [sym_u]
+    if sym_u in INDEX_ALIASES:
+        symbols.append(INDEX_ALIASES[sym_u])
+
+    clauses = ["symbol=?", "resolution=?"]
+    params_base: list = []
+    dates: set[str] = set()
+    conn = None
+    try:
+        conn = _get_connection()
+        for candidate in symbols:
+            clauses = ["symbol=?", "resolution=?"]
+            params: list = [candidate, resolution]
+            if since is not None:
+                clauses.append("time>=?")
+                params.append(int(since))
+            if until is not None:
+                clauses.append("time<?")
+                params.append(int(until))
+            rows = conn.execute(
+                f"SELECT time FROM ohlcv WHERE {' AND '.join(clauses)} ORDER BY time DESC LIMIT ?",
+                (*params, max(int(limit), 1)),
+            ).fetchall()
+            for (ts,) in rows:
+                dates.add(datetime.fromtimestamp(int(ts), ist_tz).strftime("%Y-%m-%d"))
+            if dates:
+                break
+    except Exception as exc:
+        log.warning("OHLCV session-date lookup failed [%s/%s]: %s", symbol, resolution, exc)
+        return []
+    finally:
+        if conn:
+            conn.close()
+    return sorted(dates)
+
 def get_latest_time(symbol: str, resolution: str) -> Optional[int]:
     """Unix timestamp (seconds) of the newest stored candle, or None."""
     sym_u = symbol.upper()

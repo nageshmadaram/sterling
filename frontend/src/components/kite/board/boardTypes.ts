@@ -281,6 +281,8 @@ export interface BoardSignal {
    * TSL field there would offer a second, competing trail.
    */
   noTrailingStop?: boolean;
+  /** False means draw the action controls but refuse live order entry. */
+  executionEligible?: boolean;
   /** Everything this engine knows that the others do not. */
   sections: BoardSection[];
   /**

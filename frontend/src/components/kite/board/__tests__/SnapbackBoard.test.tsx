@@ -135,6 +135,16 @@ describe('Snapback board', () => {
     expect(screen.getByText(/No active Kite account/)).toBeInTheDocument();
   });
 
+  it('surfaces a failed scan even when stale rows remain visible', () => {
+    snap = {
+      data: snapshot({ last_error: 'No active Kite account' }),
+      isLoading: false,
+      error: null,
+    };
+    render(<SnapbackBoard nowMs={1_789_009_200_000} />);
+    expect(screen.getByText(/Last scan failed: No active Kite account/)).toBeInTheDocument();
+  });
+
   it('shows the auto-execution blocker when there is one', () => {
     snap = {
       data: snapshot({ auto_execution_blocker: 'Snapback did not pass the harness' }),
@@ -176,6 +186,18 @@ describe('Snapback board', () => {
     expect(screen.getByText(/rows marked/)).toBeInTheDocument();
     // The empty-state text must NOT appear when history filled the board.
     expect(screen.queryByText(/deliberately rare/)).toBeNull();
+  });
+
+  it('keeps historical outcome rows even when a live row shares the signal id', () => {
+    historyState = {
+      data: {
+        sessions: 30,
+        count: 1,
+        signals: [row({ historical: true, state: 'ended' })],
+      },
+    };
+    render(<SnapbackBoard nowMs={1_789_009_200_000} />);
+    expect(screen.getAllByText(/NIFTY/).length).toBeGreaterThan(1);
   });
 
   it('runs a scan on demand', () => {

@@ -136,7 +136,8 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
   const signals = React.useMemo(() => {
     const live = data?.rows ?? [];
     const seen = new Set(live.map((r) => r.signal_id));
-    const past = (history.data?.signals ?? []).filter((r) => !seen.has(r.signal_id));
+    const past = (history.data?.signals ?? []).map((r) =>
+      seen.has(r.signal_id) ? { ...r, signal_id: `${r.signal_id}:history` } : r);
     return snapbackRowsToBoard([...live, ...past]);
   }, [data?.rows, history.data?.signals]);
   const view = useBoardView(signals, {
@@ -216,6 +217,12 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
       {(data?.warnings ?? []).map((w) => (
         <p key={w} style={{ ...note, color: k.amber }}>{w}</p>
       ))}
+
+      {data?.last_error && signals.length > 0 && (
+        <p style={{ ...note, color: k.amber, borderBottom: `1px solid ${k.border}` }}>
+          Last scan failed: {data.last_error}
+        </p>
+      )}
 
       {signals.length === 0 ? (
         <p style={note}>

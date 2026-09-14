@@ -33,6 +33,8 @@ def test_status_publishes_capabilities():
     assert body["capabilities"]["friction"] is True
     assert body["capabilities"]["multi_day"] is True
     assert "5m" in body["capabilities"]["resolutions"]
+    assert "run_id" in body
+    assert "revision" in body
 
 
 def test_start_over_a_running_replay_is_a_409_not_a_silent_restart():
@@ -95,9 +97,7 @@ def test_available_dates_declares_whether_its_dates_are_real():
     assert body["source"] in ("store", "fallback")
     assert body["instrument"] == "NIFTY"
     assert body["resolution"] == "5m"
-    # The walk skips weekends but not exchange holidays, and says so rather than
-    # letting the client assume every listed date is a session.
-    assert body["holidays_filtered"] is False
+    assert body["holidays_filtered"] is True
 
 
 def test_available_dates_never_lists_a_weekend():
@@ -106,3 +106,45 @@ def test_available_dates_never_lists_a_weekend():
     body = _client().get("/api/v1/simulation/available-dates").json()
     for iso in body["dates"]:
         assert datetime.strptime(iso, "%Y-%m-%d").weekday() < 5
+
+
+def test_available_dates_are_actual_rows_not_every_date_between_bounds(monkeypatch):
+    from datetime import datetime
+    from app.engines.snapback.models import IST
+    from app.api.v1.endpoints import simulation as endpoint
+
+    start = int(datetime(2026, 9, 11, 9, 15, tzinfo=IST).timestamp())
+    end = int(datetime(2026, 9, 15, 15, 30, tzinfo=IST).timestamp())
+    monkeypatch.setattr(
+        "app.services.ohlcv_store.get_symbol_coverage",
+        lambda *_a, **_k: {"earliest": start, "latest": end, "count": 2},
+    )
+    monkeypatch.setattr(
+        "app.services.ohlcv_store.get_session_dates",
+        lambda *_a, **_k: ["2026-09-11", "2026-09-15"],
+    )
+
+    body = endpoint._available_dates_sync("NIFTY", "5m")
+
+    assert body.source == "store"
+    assert body.dates == ["2026-09-11", "2026-09-15"]
+    assert "2026-09-14" not in body.dates
+
+
+def test_hydration_failure_ends_in_error_state(monkeypatch):
+    from app.services import simulation as sim
+
+    async def fail(*_args, **_kwargs):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(sim, "_hydrate_missing_candles", fail)
+    runner = sim.SimulationRunner()
+    runner._config = sim.SimConfig(date="2026-09-04", instruments=["NIFTY"], strategies=["snapback"])
+    runner._state = sim.SimState.LOADING
+
+    import asyncio
+    asyncio.run(runner._run_loop())
+
+    assert runner.status.state == sim.SimState.ERROR
+    assert runner.status.session_complete is False
+    assert "provider down" in runner.status.status_message

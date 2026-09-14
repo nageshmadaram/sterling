@@ -63,6 +63,9 @@ export interface ReplaySignal {
   level_kind?: string | null;
   level_touches?: number | null;
   regime?: string | null;
+  run_id?: string | null;
+  revision?: number;
+  seq?: number;
 }
 
 export interface ReplayTrade {
@@ -100,6 +103,9 @@ export interface ReplayTrade {
   bars_held?: number;
   /** |delta| for this leg's moneyness, used to mark the premium. */
   leg_delta?: number | null;
+  run_id?: string | null;
+  revision?: number;
+  seq?: number;
 }
 
 export interface ReplayStats {
@@ -175,6 +181,8 @@ export interface ReplayConfigEcho {
 export interface ReplayStatus {
   state: Exclude<ReplayState, 'error'>;
   config: ReplayConfigEcho | null;
+  run_id?: string | null;
+  revision?: number;
   current_time_iso: string;
   current_date?: string | null;
   progress_pct: number;
@@ -269,6 +277,8 @@ const EMPTY_TRADES: ReplayTrade[] = [];
 export const DEFAULT_STATUS: ReplayStatus = {
   state: 'idle',
   config: null,
+  run_id: null,
+  revision: 0,
   current_time_iso: '',
   current_date: null,
   progress_pct: 0,
@@ -546,7 +556,7 @@ export interface ReplayStore {
   setStatus(status: ReplayStatus): void;
   applyFrame(frame: ReplayFrame): void;
   appendSignals(signals: ReplaySignal[]): void;
-  truncateLedger(eventsTotal: number, tradesTotal: number): void;
+  truncateLedger(eventsTotal: number, tradesTotal: number, snapshot?: ReplayStatus | null): void;
   upsertTrades(trades: ReplayTrade[]): void;
   setError(err: ReplayError | null): void;
   clearSession(): Promise<void>;
@@ -786,8 +796,11 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
    * client kept rows the runner had deleted, and the trades entered next
    * merged onto them.
    */
-  truncateLedger: (eventsTotal, tradesTotal) =>
+  truncateLedger: (eventsTotal, tradesTotal, snapshot) =>
     set((s) => {
+      if (snapshot) {
+        return { selectedSignalKey: null, status: snapshot };
+      }
       const { events, trades } = s.status.stats;
       if (events.length <= eventsTotal && trades.length <= tradesTotal) return s;
       const nextEvents = events.slice(0, eventsTotal);

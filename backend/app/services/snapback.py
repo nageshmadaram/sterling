@@ -212,7 +212,8 @@ def resolve_universe(cfg: SnapbackConfig, *, nfo, bfo, equities) -> list:
         if sym and sym not in by_symbol:
             by_symbol[sym] = e if isinstance(e, dict) else e.__dict__
 
-    out: list = [i for i in built if i.is_index]
+    selected_indices = {canonical(n) for n in cfg.scan_indices}
+    out: list = [i for i in built if i.is_index and canonical(i.name) in selected_indices]
     seen: set[str] = {canonical(i.name) for i in out}
     if cfg.scan_stock_contracts:
         stocks: list = []
@@ -328,9 +329,15 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     bid = float((depth.get("buy") or [{}])[0].get("price") or 0.0)
     ask = float((depth.get("sell") or [{}])[0].get("price") or 0.0)
     ltp = float(q.get("last_price") or 0.0)
-    mid = (bid + ask) / 2.0 if bid > 0 and ask > 0 else ltp
+    has_book = bid > 0 and ask > 0 and ask >= bid
+    mid = (bid + ask) / 2.0 if has_book else ltp
     spread_pct = ((ask - bid) / mid * 100.0) if mid > 0 and bid > 0 and ask > 0 else None
     blockers: list[str] = []
+    if not has_book:
+        blockers.append("fresh two-sided book unavailable")
+    stamp = q.get("timestamp") or q.get("last_trade_time") or q.get("exchange_timestamp")
+    if not stamp:
+        blockers.append("quote timestamp unavailable")
     if mid <= 0:
         blockers.append("no premium quoted")
     elif mid < cfg.min_option_premium:
@@ -341,7 +348,8 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     oi = float(q.get("oi") or 0.0)
     if cfg.min_option_oi > 0 and oi < cfg.min_option_oi:
         blockers.append(f"open interest {oi:,.0f} below {cfg.min_option_oi:,.0f}")
-    return {"premium": mid or None, "bid": bid or None, "ask": ask or None,
+    executable_premium = mid if mid > 0 and not blockers else None
+    return {"premium": executable_premium, "bid": bid or None, "ask": ask or None,
             "ltp": ltp or None, "oi": oi or None, "spread_pct": spread_pct,
             "blockers": blockers}
 
@@ -409,6 +417,8 @@ def _row(sig, cfg: SnapbackConfig, *, contract: Optional[dict],
         "symbol": sig.symbol,
         "state": "watching" if blocked else "armed",
         "reason": blocked,
+        "execution_eligible": blocked is None and bool(contract) and quoted is not None,
+        "origin": "live_quote" if quoted is not None else "modelled",
         "direction": sig.direction,
         "opt_type": sig.option_type,
         "timestamp_ms": sig.timestamp_ms,
@@ -526,6 +536,10 @@ async def scan_once(uid: str) -> dict:
                         if contract is None:
                             blocked = (f"no listed {sig.option_type} between "
                                        f"{cfg.min_dte} and {cfg.max_dte} days out")
+                        elif cfg.short_leg_delta > 0:
+                            blocked = "live spread execution is not supported by the manual ticket path"
+                        elif cfg.hedge_mode != "none":
+                            blocked = "live hedge execution is not supported by the manual ticket path"
                         else:
                             quote = await _quote_for(client, contract, cfg)
                             if quote and quote["blockers"]:
@@ -556,6 +570,16 @@ async def scan_once(uid: str) -> dict:
         st.last_scan_ms = ist_now_ms()
     except Exception as exc:                                       # noqa: BLE001
         st.last_error = str(exc)
+        stale_rows = []
+        for row in st.rows:
+            stale = dict(row)
+            stale["state"] = "error"
+            stale["stale"] = True
+            stale["execution_eligible"] = False
+            stale["reason"] = str(exc)
+            stale_rows.append(stale)
+        st.rows = stale_rows
+        st.signals = {}
         log.error("%s scan failed: %s", STRATEGY_ID, exc)
     finally:
         st.scanning = False
@@ -812,8 +836,26 @@ def snapshot(uid: str) -> dict:
     """Config, what the last scan found, and every reason nothing is armed."""
     cfg = get_config(uid)
     st = status(uid)
-    armed = [r for r in st.rows if r["state"] == "armed"]
+    armed = [r for r in st.rows
+             if r.get("state") == "armed" and r.get("execution_eligible", True)]
     from app.services.snapback_validation import auto_execution_blocker
+    manual_reason = None
+    if cfg.short_leg_delta > 0:
+        manual_reason = "manual live execution supports one listed long option leg; configured spreads are replay/model only"
+    elif cfg.hedge_mode != "none":
+        manual_reason = "manual live execution does not place or protect the configured index-futures hedge"
+    capabilities = {
+        "live_scan": True,
+        "historical_model": True,
+        "replay": True,
+        "manual_execution": {
+            "single_leg": manual_reason is None,
+            "spread": False,
+            "hedge": False,
+            "protection_lifecycle": False,
+            "reason": manual_reason,
+        },
+    }
     return {
         "strategy": {**descriptor(), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
@@ -828,4 +870,5 @@ def snapshot(uid: str) -> dict:
         "warnings": cfg.warnings(),
         "auto_execution_blocker": auto_execution_blocker(),
         "catchup_sessions": CATCHUP_SESSIONS,
+        "capabilities": capabilities,
     }

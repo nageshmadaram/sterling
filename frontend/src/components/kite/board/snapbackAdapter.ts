@@ -294,6 +294,7 @@ function sections(row: SnapbackRow): BoardSection[] {
 
 const STATUS: Record<string, BoardStatus> = {
   armed: 'armed', watching: 'watching', running: 'running', ended: 'ended',
+  error: 'error',
 };
 
 export function snapbackRowToBoard(row: SnapbackRow): BoardSignal {
@@ -346,10 +347,11 @@ export function snapbackRowToBoard(row: SnapbackRow): BoardSignal {
     // must be priced off `levels.entry` rather than off a tick that has moved
     // since — otherwise a trade planned at one size silently becomes another.
     planPriced: true,
-    // The exit is a horizon and a premium stop, both enforced server-side. A
-    // trailing-stop field in the order window would offer a second, competing
-    // trail.
+    // Snapback rows carry their own horizon and premium-stop plan. The generic
+    // manual ticket can place only rows the backend marks execution-eligible;
+    // unsupported spreads/hedges stay visible as model/replay evidence.
     noTrailingStop: true,
+    executionEligible: row.execution_eligible === true && !row.historical && !row.premium_is_modelled,
     sections: sections(row),
   };
 }

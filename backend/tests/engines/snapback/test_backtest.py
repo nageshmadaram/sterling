@@ -11,7 +11,7 @@ import pytest
 from dataclasses import replace
 
 from app.engines.snapback import Bars, SnapbackConfig
-from app.engines.snapback.backtest import CostModel, replay, returns_at_vrp
+from app.engines.snapback.backtest import CostModel, replay, returns_at_vrp, _value
 from app.engines.snapback.pricing import break_even_vrp
 
 DAY = 86_400.0
@@ -74,8 +74,14 @@ class TestFills:
         assert res.trades
         t = res.trades[-1]
         assert t.reason == "premium_stop"
-        # Stopped AT the stop, never below it.
-        assert t.premium_out == pytest.approx(t.fill_in * 0.8, rel=1e-9)
+        exit_bar = int(np.where(b.time == t.exit_ms / 1000)[0][0])
+        entry_bar = int(np.where(b.time == t.entry_ms / 1000)[0][0])
+        years = max(t.dte_in - ((b.time[exit_bar] - b.time[entry_bar]) / DAY), 1.0) / 365.0
+        expected_open = _value(float(b.open[exit_bar]), t.strike, t.short_strike, years,
+                               t.iv, t.option_type == "CE", cfg.smile_slope,
+                               t.spot_in, cfg.smile_itm_slope)
+        assert expected_open < t.fill_in * 0.8
+        assert t.premium_out == pytest.approx(expected_open, rel=1e-9)
 
     def test_holding_period_is_honoured_when_nothing_stops_it(self):
         b = spike_tape(after=0.999)
@@ -84,6 +90,30 @@ class TestFills:
                              scan_stocks=("RELIANCE",), scan_indices=())
         res = replay({"RELIANCE": b}, cfg)
         assert res.trades and res.trades[-1].held_days == 6
+
+
+
+    def test_dte_decays_by_calendar_time_not_stored_bar_count(self):
+        b = spike_tape(after=1.0)
+        cfg = directional_config(max_rv_pct=100.0, sizing_mode="LOTS", lots=1,
+                                 premium_stop_pct=99.0, hold_days=3,
+                                 scan_stocks=("RELIANCE",), scan_indices=())
+        base = replay({"RELIANCE": b}, cfg).trades[-1]
+        entry_bar = int(np.where(b.time == base.entry_ms / 1000)[0][0])
+        exit_bar = int(np.where(b.time == base.exit_ms / 1000)[0][0])
+        gapped = Bars(
+            time=b.time.copy(), open=b.open.copy(), high=b.high.copy(), low=b.low.copy(),
+            close=b.close.copy(), volume=b.volume.copy(),
+        )
+        gapped.time[exit_bar:] += 2 * DAY
+        t = replay({"RELIANCE": gapped}, cfg).trades[-1]
+        elapsed = (gapped.time[exit_bar] - gapped.time[entry_bar]) / DAY
+        years = max(t.dte_in - elapsed, 1.0) / 365.0
+        expected = _value(float(gapped.close[exit_bar]), t.strike, t.short_strike, years,
+                          t.iv, t.option_type == "CE", cfg.smile_slope,
+                          t.spot_in, cfg.smile_itm_slope)
+        assert t.premium_out == pytest.approx(expected, rel=1e-9)
+        assert t.premium_out < base.premium_out
 
 
 class TestVegaIsZero:

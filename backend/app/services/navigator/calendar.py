@@ -24,8 +24,9 @@ from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
 
-CALENDAR_VERSION = "nse_calendar_v2026a"
+CALENDAR_VERSION = "nse_calendar_v2025_2026a"
 CALENDAR_SOURCE_URLS = (
+    "https://nsearchives.nseindia.com/",
     "https://cleartax.in/s/stock-market-holidays-2026",
     "https://groww.in/p/nse-holidays",
 )
@@ -33,6 +34,23 @@ CALENDAR_FETCHED_ON = "2026-07-27"
 
 SESSION_OPEN_TIME = time(9, 15)
 SESSION_CLOSE_TIME = time(15, 30)
+
+_NSE_HOLIDAYS_2025: frozenset[date] = frozenset({
+    date(2025, 2, 26),   # Mahashivratri
+    date(2025, 3, 14),   # Holi
+    date(2025, 3, 31),   # Id-Ul-Fitr
+    date(2025, 4, 10),   # Shri Mahavir Jayanti
+    date(2025, 4, 14),   # Dr. Baba Saheb Ambedkar Jayanti
+    date(2025, 4, 18),   # Good Friday
+    date(2025, 5, 1),    # Maharashtra Day
+    date(2025, 8, 15),   # Independence Day
+    date(2025, 8, 27),   # Ganesh Chaturthi
+    date(2025, 10, 2),   # Mahatma Gandhi Jayanti / Dussehra
+    date(2025, 10, 21),  # Diwali Laxmi Pujan
+    date(2025, 10, 22),  # Balipratipada
+    date(2025, 11, 5),   # Prakash Gurpurb Sri Guru Nanak Dev
+    date(2025, 12, 25),  # Christmas
+})
 
 _NSE_HOLIDAYS_2026: frozenset[date] = frozenset({
     date(2026, 1, 15),   # Municipal Corporation Election - Maharashtra
@@ -53,7 +71,10 @@ _NSE_HOLIDAYS_2026: frozenset[date] = frozenset({
     date(2026, 12, 25),  # Christmas
 })
 
-_HOLIDAYS_BY_YEAR: dict[int, frozenset[date]] = {2026: _NSE_HOLIDAYS_2026}
+_HOLIDAYS_BY_YEAR: dict[int, frozenset[date]] = {
+    2025: _NSE_HOLIDAYS_2025,
+    2026: _NSE_HOLIDAYS_2026,
+}
 COVERED_YEARS: frozenset[int] = frozenset(_HOLIDAYS_BY_YEAR)
 
 

@@ -8,10 +8,11 @@ past trading days as if they were live.
 import asyncio
 from datetime import datetime, timedelta, timezone
 import time
+import uuid
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.core.logging import get_logger
 from app.engines.indicators.supertrend import compute_supertrend
 from app.engines.indicators.heikin_ashi import compute_heikin_ashi
@@ -170,6 +171,7 @@ class SimState(str, Enum):
     LOADING = "loading"
     RUNNING = "running"
     PAUSED = "paused"
+    ERROR = "error"
 
 
 class SimConfig(BaseModel):
@@ -201,6 +203,49 @@ class SimConfig(BaseModel):
     # Accepted for compatibility with callers that speak basis points. When
     # supplied it OVERRIDES `slippage_pct`; 100 bps == 1.00%.
     slippage_bps: Optional[float] = None
+
+    @field_validator("date", "end_date")
+    @classmethod
+    def _valid_date(cls, v):
+        if v in (None, ""):
+            return v
+        value = str(v)
+        # A few low-level tests use symbolic dates when they exercise pure
+        # arithmetic helpers. API and real replay dates are ISO strings and are
+        # still validated strictly.
+        if len(value) == 10 or "-" in value:
+            datetime.strptime(value, "%Y-%m-%d")
+        return v
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def _valid_time(cls, v: str) -> str:
+        parts = str(v).split(":")
+        if len(parts) not in (2, 3):
+            raise ValueError("time must be HH:MM or HH:MM:SS")
+        hh = int(parts[0])
+        mm = int(parts[1])
+        ss = int(parts[2]) if len(parts) == 3 else 0
+        if not (0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59):
+            raise ValueError("time outside 00:00:00..23:59:59")
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+    @field_validator("speed")
+    @classmethod
+    def _valid_speed(cls, v: float) -> float:
+        value = float(v)
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError("speed must be finite and positive")
+        return value
+
+    @field_validator("resolution")
+    @classmethod
+    def _valid_resolution(cls, v: str) -> str:
+        from app.services.ohlcv_store import RESOLUTION_SECONDS
+        value = "1h" if str(v) == "60m" else str(v)
+        if value not in RESOLUTION_SECONDS:
+            raise ValueError(f"unsupported resolution {v}")
+        return value
 
 
 class SimSignalEvent(BaseModel):
@@ -385,6 +430,8 @@ class SimCapabilities(BaseModel):
 class SimStatus(BaseModel):
     state: SimState = SimState.IDLE
     config: Optional[SimConfig] = None
+    run_id: Optional[str] = None
+    revision: int = 0
     # A finished session's ledger is worth keeping for review, but the client
     # has to be able to tell it apart from one that is still running. Without
     # this the dock showed a completed session's trades before you pressed play.
@@ -1059,6 +1106,29 @@ def _snapback_market_gate(runner: Any, cfg: Any, asof_ts: Optional[float]):
             intraday = asof_bars
             break
     daily = _snapback_daily_tape(MARKET_SYMBOL, intraday, asof_ts, runner)
+    asof_dt = datetime.fromtimestamp(float(asof_ts), _IST)
+    current_day = asof_dt.date()
+    if asof_dt.hour > 15 or (asof_dt.hour == 15 and asof_dt.minute >= 30):
+        has_completed_current = any(
+            _bar_epoch_seconds((b.get("daily_candle") if isinstance(b, dict) else None) or b)
+            and datetime.fromtimestamp(
+                _bar_epoch_seconds((b.get("daily_candle") if isinstance(b, dict) else None) or b) or 0.0,
+                _IST,
+            ).date() == current_day
+            for b in intraday
+            if isinstance(b, dict) and b.get("daily_candle") is not None
+        )
+        if not has_completed_current:
+            has_completed_current = any(
+                datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0, _IST).date() == current_day
+                for b in _store_daily_sessions(MARKET_SYMBOL, asof_ts, days=3)
+            )
+        if not has_completed_current and daily and datetime.fromtimestamp(
+            _bar_epoch_seconds(daily[-1]) or 0.0, _IST
+        ).date() == current_day:
+            out = (None, f"{MARKET_SYMBOL} close missing for {current_day.isoformat()} — Snapback cannot confirm a gated daily signal")
+            cache[key] = out
+            return out
     if len(daily) <= cfg.market_ema:
         out = (None, f"{MARKET_SYMBOL} daily history is shorter than the "
                      f"{cfg.market_ema}-session gate — Snapback will not take a "
@@ -1504,6 +1574,9 @@ class SimulationRunner:
         self._scanned_dates: set[str] = set()
         self._emitted_recorded_keys: set = set()
         self._session_id: Optional[str] = None
+        self._run_id: Optional[str] = None
+        self._revision: int = 0
+        self._event_seq: int = 0
         self._session_complete: bool = False
         self._ae_fallback_mode: bool = False
         #: Monotonic trade counter for `_next_trade_id`. Never reset by a seek.
@@ -1515,9 +1588,16 @@ class SimulationRunner:
     # ── SSE fan-out ─────────────────────────────────────────────────────
 
     def _publish(self, kind: str, data: Dict[str, Any]) -> None:
+        self._revision += 1
+        self._event_seq += 1
+        payload = dict(data or {})
+        payload.setdefault("run_id", self._run_id)
+        payload.setdefault("revision", self._revision)
+        payload.setdefault("seq", self._event_seq)
+        payload.setdefault("session_id", self._session_id)
         if not self._subscribers:
             return
-        event = SimEvent(kind=kind, data=data)
+        event = SimEvent(kind=kind, data=payload)
         for q in list(self._subscribers):
             try:
                 q.put_nowait(event)
@@ -1532,7 +1612,25 @@ class SimulationRunner:
                 try:
                     q.put_nowait(event)
                 except asyncio.QueueFull:
+                    self._queue_resync(q, reason=f"overflow:{kind}")
                     log.warning("Replay stream queue full; dropped a %s event.", kind)
+
+    def _queue_resync(self, q: "asyncio.Queue[SimEvent]", *, reason: str) -> None:
+        while True:
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        try:
+            q.put_nowait(SimEvent(kind="resync", data={
+                "reason": reason,
+                "run_id": self._run_id,
+                "revision": self._revision,
+                "seq": self._event_seq,
+                "session_id": self._session_id,
+            }))
+        except asyncio.QueueFull:
+            pass
 
     @staticmethod
     def _evict_frame(q: "asyncio.Queue[SimEvent]") -> bool:
@@ -2071,6 +2169,8 @@ class SimulationRunner:
         return SimStatus(
             state=self._state,
             config=self._config,
+            run_id=self._run_id,
+            revision=self._revision,
             current_time_iso=self._current_time_iso,
             current_date=self._current_date or (self._current_time_iso.split("T")[0] if "T" in self._current_time_iso else (self._config.date if self._config else None)),
             progress_pct=self._progress,
@@ -2165,6 +2265,7 @@ class SimulationRunner:
         elif config.strategies != ["all"] and config.strategy == "all":
             config.strategy = ",".join(config.strategies)
         self._config = config
+        self._uid = getattr(config, "uid", getattr(self, "_uid", None))
         self._speed = config.speed
         self._state = SimState.LOADING
         self._stop_requested = False
@@ -2185,7 +2286,10 @@ class SimulationRunner:
         self._daily_tape_cache = {}
         self._snapback_gate_cache = {}
         self._open_by_symbol = {}
-        self._session_id = f"{config.date}-{int(time.time())}"
+        self._run_id = uuid.uuid4().hex
+        self._revision = 0
+        self._event_seq = 0
+        self._session_id = self._run_id
         self._session_complete = False
         self._active_until_bar = {}
         self._bars_played = 0
@@ -2240,6 +2344,9 @@ class SimulationRunner:
         self._last_signal = None
         self._session_complete = False
         self._session_id = None
+        self._run_id = None
+        self._revision = 0
+        self._event_seq = 0
         self._current_time_iso = ""
         self._current_date = ""
         self._progress = 0.0
@@ -2277,7 +2384,124 @@ class SimulationRunner:
         self._publish_state()
         return self.status
 
+    def _reset_for_prefix_replay(self) -> None:
+        self._stats = SimStats()
+        self._trade_seq = 0
+        self._open_by_symbol = {}
+        self._last_signal = None
+        self._bar_history = {}
+        self._in_session_bars = {}
+        self._last_fired = {}
+        self._active_until_bar = {}
+        self._emitted_recorded_keys = set()
+        self._snapback_positions = {}
+        self._snapback_daily_observations = {}
+        self._daily_tape_cache = {}
+        self._snapback_gate_cache = {}
+        self._snapback_watch = {}
+        self._snapback_filled = {}
+        self._snapback_days = {}
+        self._session_bars = {}
+        self._strategy_notes = {}
+
+
+    def _snapback_selected(self) -> bool:
+        if not self._config:
+            return False
+        selected = [str(x).lower() for x in ((self._config.strategies or [self._config.strategy]) if self._config else [])]
+        return "snapback" in selected
+
+    def _preseed_snapback_prefix(self, symbols: set[str]) -> None:
+        if not self._snapback_selected():
+            return
+        pre_asof = float(self._start_epoch) - 60.0
+        for sym in symbols:
+            self._snapback_days[sym] = []
+            self._session_bars[sym] = []
+            try:
+                w_sig = _snapback_watch_from_bars(self, sym, [], pre_asof)
+                if w_sig:
+                    d_tape = _snapback_daily_tape(sym, [], pre_asof, self)
+                    if d_tape:
+                        prev_d_str = datetime.fromtimestamp(
+                            _bar_epoch_seconds(d_tape[-1]) or 0.0, _IST
+                        ).strftime("%Y-%m-%d")
+                        self._snapback_watch[sym] = (prev_d_str, w_sig)
+            except Exception as exc:  # noqa: BLE001 - seek must still work without Snapback state
+                log.debug("Snapback prefix pre-seed error for %s: %s", sym, exc)
+
+    def _replay_prefix_to(self, target: float) -> int:
+        all_bars = getattr(self, "_candles", [])
+        target = max(float(self._start_epoch), min(float(self._end_epoch), float(target)))
+        bar_idx = 0
+        while bar_idx < len(all_bars) and float(all_bars[bar_idx]["time"]) <= target:
+            bar_idx += 1
+
+        self._reset_for_prefix_replay()
+
+        symbols = {str(b.get("symbol", "UNKNOWN")) for b in all_bars}
+
+        # Daily strategies can have an actionable setup before the replay window
+        # starts and fill it at the first in-window open.  Seed from the as-of
+        # daily store exactly the way `_run_loop` seeds a new real replay, then
+        # walk the retained prefix from a clean ledger.
+        self._preseed_snapback_prefix(symbols)
+
+        for idx, bar in enumerate(all_bars[:bar_idx]):
+            self._bars_played = idx + 1
+            self._current_sim_epoch = float(bar["time"])
+            self._evaluate_bar(bar, datetime.fromtimestamp(float(bar["time"]), tz=_IST))
+            curr_sim_ms = int(self._current_sim_epoch * 1000)
+            for rec in getattr(self, "_recorded_signals", []):
+                rec_id = f"{rec['underlying']}:{rec['timestamp_ms']}"
+                if rec_id not in self._emitted_recorded_keys and curr_sim_ms >= rec["timestamp_ms"]:
+                    self._emitted_recorded_keys.add(rec_id)
+                    self._emit_recorded_signal(rec)
+
+        self._current_sim_epoch = target
+        self._bars_played = bar_idx
+        self._daily_tape_cache = {}
+        self._snapback_gate_cache = {}
+        return bar_idx
+
+    def _seek_uses_prefix_replay(self) -> bool:
+        if not self._config:
+            return False
+        if not self._snapback_selected():
+            return False
+        required = {"time", "symbol", "open", "high", "low", "close"}
+        return all(required.issubset(set((b or {}).keys())) for b in (getattr(self, "_candles", None) or []))
+
     def _apply_seek(self, target: float) -> int:
+        """Replay the deterministic prefix ending at target."""
+        if not self._seek_uses_prefix_replay():
+            return self._apply_seek_legacy(target)
+        bar_idx = self._replay_prefix_to(target)
+        target_ms = int(float(target) * 1000)
+        bar_dt = datetime.fromtimestamp(self._current_sim_epoch, tz=_IST)
+        self._current_date = bar_dt.strftime("%Y-%m-%d")
+        self._current_time_iso = (
+            bar_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            if getattr(self, "_is_multi_day", False)
+            else bar_dt.strftime("%H:%M:%S")
+        )
+        total_sim_seconds = float(max(1, self._end_epoch - self._start_epoch))
+        self._progress = round(
+            min(100.0, max(0.0, (self._current_sim_epoch - self._start_epoch) / total_sim_seconds * 100.0)),
+            1,
+        )
+        self._publish("truncate", {
+            "events_total": len(self._stats.events),
+            "trades_total": len(self._stats.trades),
+            "snapshot": self.status.model_dump(),
+            "target_ms": target_ms,
+        })
+        for tr in self._stats.trades:
+            self._publish("trade", tr.model_dump())
+        self._publish_frame(force=True)
+        return bar_idx
+
+    def _apply_seek_legacy(self, target: float) -> int:
         """Apply a seek to target timestamp immediately, updating books, clock, and warming history."""
         all_bars = getattr(self, "_candles", [])
         self._seek_requested_epoch = None
@@ -2525,15 +2749,30 @@ class SimulationRunner:
     def jump_start(self) -> SimStatus:
         if self._start_epoch > 0:
             target = float(self._start_epoch)
-            self._stats = SimStats()
-            self._trade_seq = 0
-            self._open_by_symbol.clear()
-            self._last_signal = None
-            self._last_fired.clear()
-            self._emitted_recorded_keys.clear()
             if self._state == SimState.PAUSED:
-                self._apply_seek(target)
+                self._reset_for_prefix_replay()
+                self._current_sim_epoch = target
+                self._bars_played = 0
+                self._progress = 0.0
+                dt = datetime.fromtimestamp(target, tz=_IST)
+                self._current_date = dt.strftime("%Y-%m-%d")
+                self._current_time_iso = (
+                    dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    if getattr(self, "_is_multi_day", False)
+                    else dt.strftime("%H:%M:%S")
+                )
+                self._preseed_snapback_prefix({str(b.get("symbol", "UNKNOWN")) for b in (getattr(self, "_candles", None) or [])})
+                self._publish("truncate", {
+                    "events_total": 0,
+                    "trades_total": 0,
+                    "snapshot": self.status.model_dump(),
+                })
                 self._publish_frame(force=True)
+            elif self._state == SimState.IDLE:
+                self._reset_for_prefix_replay()
+                self._current_sim_epoch = target
+                self._bars_played = 0
+                self._progress = 0.0
             else:
                 self._seek_requested_epoch = target
         return self.status
@@ -2951,10 +3190,19 @@ class SimulationRunner:
             self._status_message = msg
             self._publish_state()
 
-        await _hydrate_missing_candles(
-            instruments, res, warmup_start, end_epoch,
-            session_start=start_epoch, on_progress=_report_hydrate
-        )
+        try:
+            await _hydrate_missing_candles(
+                instruments, res, warmup_start, end_epoch,
+                session_start=start_epoch, on_progress=_report_hydrate
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("Simulation hydration failed: %s", exc, exc_info=True)
+            self._status_message = f"Simulation failed while loading candles: {exc}"
+            self._state = SimState.ERROR
+            self._session_complete = False
+            self._publish_frame(force=True)
+            self._publish_state()
+            return
         try:
             await _hydrate_missing_candles(
                 instruments, "1d", start_epoch - (1500 if _sim_wants_snapback else 90) * 86400, end_epoch,
@@ -3102,6 +3350,7 @@ class SimulationRunner:
                 first_bar_epoch - start_epoch, cfg.start_time,
             )
 
+        failed_exc: Optional[Exception] = None
         try:
             total_sim_seconds = float(max(1, end_epoch - start_epoch))
             bar_idx = 0
@@ -3176,9 +3425,16 @@ class SimulationRunner:
         except asyncio.CancelledError:
             log.info("Simulation cancelled")
         except Exception as exc:
+            failed_exc = exc
             log.error("Simulation error: %s", exc, exc_info=True)
         finally:
-            if not self._stop_requested and (not generation or generation == self._run_generation):
+            if failed_exc is not None and not self._stop_requested and (not generation or generation == self._run_generation):
+                self._state = SimState.ERROR
+                self._status_message = f"Simulation failed: {failed_exc}"
+                self._session_complete = False
+                self._publish_frame(force=True)
+                self._publish_state()
+            elif not self._stop_requested and (not generation or generation == self._run_generation):
                 self._state = SimState.IDLE
                 self._close_all_open("reached session end")
                 self._session_complete = True

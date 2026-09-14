@@ -210,6 +210,23 @@ describe('array identity across frames', () => {
     expect(useReplayStore.getState().status.stats.trades).toBe(trades);
     expect(useReplayStore.getState().status.stats.pnl).toBe(4120);
   });
+
+  it('replaces equal-length ledgers when a truncate carries an authoritative snapshot', () => {
+    const stale = makeTrade({ status: 'OPEN', pnl_usd: -529 });
+    const fresh = makeTrade({ status: 'OPEN', pnl_usd: 0, duration_mins: 0 });
+    useReplayStore.getState().setStatus(makeStatus({
+      run_id: 'run-a',
+      revision: 4,
+      stats: { ...DEFAULT_STATUS.stats, trades: [stale] },
+    }));
+    useReplayStore.getState().truncateLedger(0, 1, makeStatus({
+      run_id: 'run-a',
+      revision: 5,
+      stats: { ...DEFAULT_STATUS.stats, trades: [fresh] },
+    }));
+    expect(useReplayStore.getState().status.revision).toBe(5);
+    expect(useReplayStore.getState().status.stats.trades[0].pnl_usd).toBe(0);
+  });
 });
 
 describe('incremental updates', () => {

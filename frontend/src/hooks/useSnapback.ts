@@ -25,7 +25,7 @@ export type SnapbackSide = 'fade_up' | 'fade_down';
 export type ExitMode = 'horizon' | 'mean_touch' | 'either';
 export type SizingMode = 'PREMIUM_PCT' | 'LOTS';
 export type StopMode = 'broker' | 'monitor' | 'both';
-export type SignalState = 'armed' | 'watching' | 'running' | 'ended';
+export type SignalState = 'armed' | 'watching' | 'running' | 'ended' | 'error';
 
 export interface SnapbackConfig {
   enabled: boolean;
@@ -131,6 +131,9 @@ export interface SnapbackRow {
   symbol: string;
   state: SignalState;
   reason: string | null;
+  execution_eligible?: boolean;
+  stale?: boolean;
+  origin?: string;
   direction: 'BULLISH' | 'BEARISH';
   opt_type: 'CE' | 'PE';
   timestamp_ms: number;
@@ -224,6 +227,19 @@ export interface SnapbackDescriptor {
   enabled?: boolean;
 }
 
+export interface SnapbackCapabilities {
+  live_scan: boolean;
+  historical_model: boolean;
+  replay: boolean;
+  manual_execution: {
+    single_leg: boolean;
+    spread: boolean;
+    hedge: boolean;
+    protection_lifecycle: boolean;
+    reason: string | null;
+  };
+}
+
 export interface SnapbackSnapshot {
   strategy: SnapbackDescriptor;
   config: SnapbackConfig;
@@ -238,6 +254,7 @@ export interface SnapbackSnapshot {
   warnings: string[];
   auto_execution_blocker: string | null;
   catchup_sessions: number;
+  capabilities?: SnapbackCapabilities;
 }
 
 export interface SnapbackConfigResponse {

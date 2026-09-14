@@ -117,9 +117,13 @@ def descriptor() -> dict:
     never stops being one.
     """
     record: dict = {}
+    compatible = False
+    promoted = False
     try:
-        from app.services.snapback_validation import load as _load
+        from app.services.snapback_validation import is_compatible as _compatible, is_promoted as _is_promoted, load as _load
         record = _load() or {}
+        compatible = _compatible(record)
+        promoted = _is_promoted()
     except Exception:                                              # noqa: BLE001
         record = {}
     return {
@@ -134,7 +138,8 @@ def descriptor() -> dict:
                       "checks; docs/strategy/snapback/VALIDATION_REPORT.md is "
                       "the authority and explains both what the hedge changed "
                       "and what the earlier 3-year result actually was.",
-        "validated": bool(record.get("promoted")),
+        "validated": promoted,
+        "validation_compatible": compatible,
         "validation": record or None,
         "calibration": CALIBRATION,
         "calibrated_fields": sorted(CALIBRATED_FIELDS),

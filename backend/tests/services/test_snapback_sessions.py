@@ -50,6 +50,10 @@ def test_live_filter_uses_wall_time_and_not_simulation_clock(monkeypatch):
     assert datetime.fromtimestamp(rows[0]['time'], IST).day == 11
 
 
+def test_unknown_calendar_year_is_not_treated_as_a_regular_session():
+    assert daily_sessions.is_session_day(datetime(2024, 12, 25, tzinfo=IST).date()) is False
+
+
 @pytest.fixture
 def replay_tape(monkeypatch):
     # A smooth tape that breaks its high only on Sep 3, then fills Sep 4.
@@ -152,6 +156,52 @@ def test_live_evaluation_honors_market_filter(replay_tape):
     cfg = SnapbackConfig(enabled=True, max_rv_pct=100, cooldown_days=0)
     assert snapback.evaluate_symbol(rows, cfg, 'MOTILALOFS')
     assert snapback.evaluate_symbol(rows, cfg, 'MOTILALOFS', market_gate={}) == []
+
+
+def test_fno_universe_honors_selected_indices(monkeypatch):
+    from app.services.kite_engine.universe import UniverseItem
+
+    built = [
+        UniverseItem(name='NIFTY', tradingsymbol='NIFTY', token=1, exchange='NSE', option_exchange='NFO', is_index=True),
+        UniverseItem(name='BANKNIFTY', tradingsymbol='BANKNIFTY', token=2, exchange='NSE', option_exchange='NFO', is_index=True),
+    ]
+    monkeypatch.setattr('app.services.kite_engine.universe.build_universe', lambda **_k: built)
+    cfg = SnapbackConfig(enabled=True, universe_mode='fno', scan_indices=('NIFTY',),
+                         scan_stock_contracts=False)
+    names = [item.name for item in snapback.resolve_universe(cfg, nfo=[], bfo=[], equities=[])]
+    assert names == ['NIFTY']
+
+
+@pytest.mark.asyncio
+async def test_quote_requires_fresh_two_sided_book():
+    class Client:
+        async def get_quote(self, keys):
+            return {keys[0]: {'last_price': 50.0}}
+
+    quote = await snapback._quote_for(
+        Client(),
+        {'exchange': 'NFO', 'symbol': 'NIFTY26SEP24000PE'},
+        SnapbackConfig(min_option_oi=0),
+    )
+    assert quote is not None
+    assert quote['premium'] is None
+    assert any('book' in b or 'timestamp' in b for b in quote['blockers'])
+
+
+@pytest.mark.asyncio
+async def test_failed_scan_marks_old_rows_stale_and_unarmed(monkeypatch):
+    st = snapback.status('u1')
+    st.rows = [dict(signal_id='old', state='armed')]
+    st.signals = {'old': st.rows[0]}
+    monkeypatch.setattr('app.services.exchanges.kite.accounts.get_active', lambda uid: None)
+    monkeypatch.setattr(snapback, 'get_config', lambda uid=None: SnapbackConfig(enabled=True))
+
+    body = await snapback.scan_once('u1')
+
+    assert body['armed'] == 0
+    assert body['rows'][0]['state'] == 'error'
+    assert body['rows'][0]['execution_eligible'] is False
+    assert 'No active Kite account' in body['last_error']
 
 
 @pytest.mark.asyncio
@@ -354,3 +404,16 @@ def test_history_universe_respects_index_selection_and_stock_switch(monkeypatch)
     cfg = SnapbackConfig(scan_indices=('NIFTY',), scan_stock_contracts=False)
     assert snapback._history_universe(cfg) == ('NIFTY',)
     assert snapback._history_universe(replace(cfg, scan_stock_contracts=True)) == ('NIFTY', 'RELIANCE')
+
+
+def test_snapshot_declares_unsupported_live_spread_execution(monkeypatch):
+    snapback.status('spread-user').rows = []
+    monkeypatch.setattr(snapback, 'get_config', lambda uid=None: SnapbackConfig(
+        enabled=True, short_leg_delta=0.30, hedge_mode='none'))
+
+    body = snapback.snapshot('spread-user')
+
+    caps = body['capabilities']['manual_execution']
+    assert caps['single_leg'] is False
+    assert caps['spread'] is False
+    assert 'spreads' in caps['reason']

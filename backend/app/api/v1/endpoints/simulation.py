@@ -4,11 +4,12 @@ Market Replay Simulation endpoints.
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Literal
+from app.core.auth import UserContext, get_current_user
 from app.services.simulation import simulation_runner, SimConfig, SimState, SimStatus
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
@@ -39,7 +40,8 @@ class AvailableDatesResponse(BaseModel):
 
 
 @router.post("/start", response_model=SimStatus)
-async def start_sim(config: SimConfig, force: bool = Query(False)):
+async def start_sim(config: SimConfig, force: bool = Query(False),
+                    user: UserContext = Depends(get_current_user)):
     if config.end_date and config.end_date < config.date:
         raise HTTPException(
             400,
@@ -50,7 +52,7 @@ async def start_sim(config: SimConfig, force: bool = Query(False)):
         )
     # Starting over a live replay used to happen silently, so the client could
     # not tell "your replay restarted" from "your replay was already running".
-    if simulation_runner.status.state != SimState.IDLE and not force:
+    if simulation_runner.status.state in (SimState.LOADING, SimState.RUNNING, SimState.PAUSED) and not force:
         raise HTTPException(
             409,
             detail={
@@ -58,6 +60,7 @@ async def start_sim(config: SimConfig, force: bool = Query(False)):
                 "message": "A replay is already running. Stop it, or start with force=true to restart.",
             },
         )
+    simulation_runner._uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
     return await simulation_runner.start(config)
 
 
@@ -205,8 +208,9 @@ async def available_dates(instrument: str = "NIFTY", resolution: str = "5m"):
 
 
 def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesResponse:
-    from app.services.ohlcv_store import get_symbol_coverage
+    from app.services.ohlcv_store import get_symbol_coverage, get_session_dates
     from datetime import datetime, timezone, timedelta
+    from app.services.daily_sessions import is_session_day
 
     dates = set()
     earliest_iso: Optional[str] = None
@@ -230,10 +234,24 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
         end = datetime.fromtimestamp(entry["latest"], tz=ist_tz)
         earliest_iso = current.strftime("%Y-%m-%d")
         latest_iso = end.strftime("%Y-%m-%d")
-        while current <= end:
-            if current.weekday() < 5:
-                dates.add(current.strftime("%Y-%m-%d"))
-            current += timedelta(days=1)
+        actual_dates = get_session_dates(
+            instrument.upper(), resolution,
+            since=int(entry["earliest"]), until=int(entry["latest"]) + 86400,
+            limit=5000,
+        )
+        if not actual_dates and resolution != "5m":
+            actual_dates = get_session_dates(
+                instrument.upper(), "5m",
+                since=int(entry["earliest"]), until=int(entry["latest"]) + 86400,
+                limit=5000,
+            )
+        if actual_dates:
+            dates.update(d for d in actual_dates if is_session_day(datetime.fromisoformat(d).date()))
+        else:
+            while current <= end:
+                if is_session_day(current.date()):
+                    dates.add(current.strftime("%Y-%m-%d"))
+                current += timedelta(days=1)
 
     source: Literal["store", "fallback"] = "store"
 
@@ -245,7 +263,7 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
         today = datetime.now(tz=ist_tz)
         curr = today - timedelta(days=90)
         while curr <= today:
-            if curr.weekday() < 5:
+            if is_session_day(curr.date()):
                 dates.add(curr.strftime("%Y-%m-%d"))
             curr += timedelta(days=1)
 
@@ -257,5 +275,5 @@ def _available_dates_sync(instrument: str, resolution: str) -> AvailableDatesRes
         source=source,
         earliest=earliest_iso or (ordered[0] if ordered else None),
         latest=latest_iso or (ordered[-1] if ordered else None),
-        holidays_filtered=False,
+        holidays_filtered=True,
     )

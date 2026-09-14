@@ -135,6 +135,26 @@ describe('snapback board adapter', () => {
     expect(s.noTrailingStop).toBe(true);
   });
 
+  it('only marks fresh live quoted rows execution eligible', () => {
+    expect(snapbackRowToBoard({ ...base, execution_eligible: true }).executionEligible).toBe(true);
+    expect(snapbackRowToBoard({
+      ...base,
+      execution_eligible: true,
+      historical: true,
+    }).executionEligible).toBe(false);
+    expect(snapbackRowToBoard({
+      ...base,
+      execution_eligible: true,
+      premium_is_modelled: true,
+    }).executionEligible).toBe(false);
+    expect(snapbackRowToBoard({
+      ...base,
+      state: 'watching',
+      execution_eligible: false,
+      reason: 'quote timestamp unavailable',
+    }).executionEligible).toBe(false);
+  });
+
   it('keeps the vol assumption visible in the detail', () => {
     const s = snapbackRowToBoard(base);
     const vol = s.sections.find((x) => x.title.startsWith('Vol and'));
