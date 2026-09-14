@@ -26,6 +26,16 @@ export function DefaultSectionSettings() {
 
   const [draft, setDraft] = React.useState<NavItem | null>(null);
   const [resetConfirm, setResetConfirm] = React.useState(false);
+  const [highlighted, setHighlighted] = React.useState(false);
+
+  React.useEffect(() => {
+    const onHighlight = () => {
+      setHighlighted(true);
+      setTimeout(() => setHighlighted(false), 1800);
+    };
+    window.addEventListener('sterling-highlight-draft-bar', onHighlight);
+    return () => window.removeEventListener('sterling-highlight-draft-bar', onHighlight);
+  }, []);
 
   const current = draft ?? defaultSection;
   const dirty = draft !== null && draft !== defaultSection;
@@ -102,15 +112,18 @@ export function DefaultSectionSettings() {
 
       {dirty && (
         <div
+          id="settings-draft-bar"
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '8px 12px',
             background: 'var(--k-surface-warm, rgba(255, 87, 34, 0.08))',
-            border: '1px solid var(--k-border-brand, rgba(255, 87, 34, 0.3))',
+            border: highlighted ? '2px solid var(--k-orange, #ff5722)' : '1px solid var(--k-border-brand, rgba(255, 87, 34, 0.3))',
             borderRadius: 7,
+            boxShadow: highlighted ? '0 0 0 4px rgba(255, 87, 34, 0.25)' : undefined,
             marginBottom: 14,
+            transition: 'all 0.2s ease',
           }}
         >
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--k-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -136,6 +149,7 @@ export function DefaultSectionSettings() {
             <button
               type="button"
               onClick={handleApply}
+              aria-label="Apply changes"
               style={{
                 padding: '5px 14px',
                 fontSize: 11.5,
@@ -148,6 +162,7 @@ export function DefaultSectionSettings() {
               }}
             >
               Apply changes
+              Save changes
             </button>
           </div>
         </div>

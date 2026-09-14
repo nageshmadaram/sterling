@@ -16,6 +16,7 @@ import {
 import { useUnsavedDraftGuard } from './kite/config/unsavedDraftGuard';
 import { InstrumentsGroup } from './kite/config/ScanSettings';
 import { EnginePowerHeader } from './kite/config/EnginePowerHeader';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 /**
  * Snapback settings.
@@ -167,7 +168,19 @@ export function SnapbackSettings() {
         (changed as Record<string, unknown>)[key] = draft[key];
       }
     });
-    setCfg.mutate(changed, { onSuccess: () => setDraft(null) });
+    setCfg.mutate(changed, {
+      onSuccess: () => {
+        setDraft(null);
+        notifyOrder({ kind: 'info', title: 'Settings saved', message: 'Snapback settings applied.' });
+      },
+      onError: (err: any) => {
+        notifyOrder({
+          kind: 'error',
+          title: 'Settings NOT saved',
+          message: err?.message || 'Failed to save Snapback settings.',
+        });
+      },
+    });
   }, [draft, server, setCfg]);
   const handleDiscard = React.useCallback(() => setDraft(null), []);
   const handleReset = React.useCallback(() => {

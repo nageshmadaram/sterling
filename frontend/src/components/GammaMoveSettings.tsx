@@ -19,6 +19,7 @@ import { useUnsavedDraftGuard } from './kite/config/unsavedDraftGuard';
 import { InstrumentsGroup } from './kite/config/ScanSettings';
 import { OptionContractsPicker } from './kite/config/OptionContractsPicker';
 import { EnginePowerHeader } from './kite/config/EnginePowerHeader';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 /**
  * Gamma Move settings.
@@ -109,7 +110,21 @@ export function GammaMoveSettings() {
   }, [server]);
 
   const handleApply = React.useCallback(() => {
-    if (draft) setCfg.mutate(draft, { onSuccess: () => setDraft(null) });
+    if (draft) {
+      setCfg.mutate(draft, {
+        onSuccess: () => {
+          setDraft(null);
+          notifyOrder({ kind: 'info', title: 'Settings saved', message: 'Gamma Move settings applied.' });
+        },
+        onError: (err: any) => {
+          notifyOrder({
+            kind: 'error',
+            title: 'Settings NOT saved',
+            message: err?.message || 'Failed to save Gamma Move settings.',
+          });
+        },
+      });
+    }
   }, [draft, setCfg]);
   const handleDiscard = React.useCallback(() => setDraft(null), []);
   const handleReset = React.useCallback(() => {

@@ -499,6 +499,9 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
 
   // Auto-sync open positions on initial load if watchlist is unpopulated and not manually emptied
   const autoSeededRef = React.useRef(false);
+  const isManualEmpty = typeof window !== 'undefined' && localStorage.getItem(MANUAL_EMPTY_KEY) === '1';
+  const hasPendingAutoSeed = !autoSeededRef.current && !isManualEmpty && (positions.isLoading || (positions.data?.net && positions.data.net.length > 0));
+
   React.useEffect(() => {
     if (autoSeededRef.current) return;
     if (watch.length > 0) return;
@@ -514,7 +517,7 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
     if (openItems.length > 0) {
       addMany(openItems);
     }
-  }, [positions.data, watch.length, addMany]);
+  }, [positions.data, watch.length, addMany, isManualEmpty]);
 
   const handleSyncPositions = async () => {
     setSyncingPositions(true);
@@ -894,22 +897,28 @@ export function SterlingWatchList({ onOpenInstrument }: { onOpenInstrument?: (sy
         ) : (
           <div>
             {watch.length === 0 && (
-              <div style={{ padding: 32, textAlign: 'center', color: t.dim, fontSize: 13 }}>
-                <p style={{ marginBottom: 16 }}>Nothing here.</p>
-                <p>Use the search bar to add instruments.</p>
-                <button
-                  type="button"
-                  style={{
-                    marginTop: 24, padding: '8px 16px', background: t.surface,
-                    border: `1px solid ${t.border}`, borderRadius: 4, color: t.blue,
-                    cursor: syncingPositions ? 'wait' : 'pointer', fontSize: 13,
-                  }}
-                  disabled={syncingPositions}
-                  onClick={() => void handleSyncPositions()}
-                >
-                  {syncingPositions ? 'Syncing…' : 'Sync open positions from Kite'}
-                </button>
-              </div>
+              hasPendingAutoSeed ? (
+                <div style={{ padding: 32, textAlign: 'center', color: t.dim, fontSize: 13 }}>
+                  <p style={{ margin: 0 }}>Syncing open positions…</p>
+                </div>
+              ) : (
+                <div style={{ padding: 32, textAlign: 'center', color: t.dim, fontSize: 13 }}>
+                  <p style={{ marginBottom: 16 }}>Nothing here.</p>
+                  <p>Use the search bar to add instruments.</p>
+                  <button
+                    type="button"
+                    style={{
+                      marginTop: 24, padding: '8px 16px', background: t.surface,
+                      border: `1px solid ${t.border}`, borderRadius: 4, color: t.blue,
+                      cursor: syncingPositions ? 'wait' : 'pointer', fontSize: 13,
+                    }}
+                    disabled={syncingPositions}
+                    onClick={() => void handleSyncPositions()}
+                  >
+                    {syncingPositions ? 'Syncing…' : 'Sync open positions from Kite'}
+                  </button>
+                </div>
+              )
             )}
             <style>{`
               .mw-item {

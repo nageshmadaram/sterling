@@ -44,6 +44,16 @@ export function SignalEngineOrderSettings() {
   const [resetConfirm, setResetConfirm] = React.useState(false);
   const [draggedId, setDraggedId] = React.useState<string | null>(null);
   const [dragOverId, setDragOverId] = React.useState<string | null>(null);
+  const [highlighted, setHighlighted] = React.useState(false);
+
+  React.useEffect(() => {
+    const onHighlight = () => {
+      setHighlighted(true);
+      setTimeout(() => setHighlighted(false), 1800);
+    };
+    window.addEventListener('sterling-highlight-draft-bar', onHighlight);
+    return () => window.removeEventListener('sterling-highlight-draft-bar', onHighlight);
+  }, []);
 
   const current = draftDefault ?? storedDefault;
   const order = draftOrder ?? (storedOrder.length ? storedOrder : ENGINE_ORDER);
@@ -163,20 +173,24 @@ export function SignalEngineOrderSettings() {
       <div style={{ color: 'var(--k-ink-5)', fontSize: 11, lineHeight: 1.55, marginBottom: 14 }}>
         Which engine&rsquo;s table opens first, and the order the tabs sit in.
         Drag and drop items to reorder, or use the arrows.
+        Drag and drop items to reorder, or use the arrows. Click any engine to set it as default.
         A switched-off engine stays listed so the order does not rearrange itself when you turn one on.
       </div>
 
       {dirty && (
         <div
+          id="settings-draft-bar"
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '8px 12px',
             background: 'var(--k-surface-warm, rgba(255, 87, 34, 0.08))',
-            border: '1px solid var(--k-border-brand, rgba(255, 87, 34, 0.3))',
+            border: highlighted ? '2px solid var(--k-orange, #ff5722)' : '1px solid var(--k-border-brand, rgba(255, 87, 34, 0.3))',
             borderRadius: 7,
+            boxShadow: highlighted ? '0 0 0 4px rgba(255, 87, 34, 0.25)' : undefined,
             marginBottom: 12,
+            transition: 'all 0.2s ease',
           }}
         >
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--k-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -202,6 +216,7 @@ export function SignalEngineOrderSettings() {
             <button
               type="button"
               onClick={apply}
+              aria-label="Apply changes"
               style={{
                 padding: '5px 14px',
                 fontSize: 11.5,
@@ -214,6 +229,7 @@ export function SignalEngineOrderSettings() {
               }}
             >
               Apply changes
+              Save changes
             </button>
           </div>
         </div>
@@ -262,8 +278,8 @@ export function SignalEngineOrderSettings() {
                 aria-label="Drag handle"
                 style={{
                   color: 'var(--k-ink-5)',
-                  fontSize: 14,
-                  width: 14,
+                  fontSize: 16,
+                  width: 16,
                   cursor: 'grab',
                   userSelect: 'none',
                   display: 'inline-flex',
@@ -300,45 +316,76 @@ export function SignalEngineOrderSettings() {
                   padding: 0,
                   color: 'var(--k-text)',
                   fontSize: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
                 }}
               >
-                <span style={{ fontWeight: isDefault ? 600 : 400 }}>
-                  {ENGINE_LABEL[engineId] ?? id}
-                </span>
-                {isDefault && (
-                  <span
-                    style={{
-                      color: 'var(--k-orange, #ff5722)',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      marginLeft: 8,
-                      padding: '1px 5px',
-                      borderRadius: 3,
-                      background: 'color-mix(in srgb, var(--k-orange) 14%, transparent)',
-                    }}
-                  >
-                    OPENS FIRST
-                  </span>
-                )}
-                {!on && (
-                  <span
+                {/* Radio selection circle indicator */}
+                <span
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: '50%',
+                    border: isDefault ? '4.5px solid var(--k-orange, #ff5722)' : '1.5px solid var(--k-dim)',
+                    background: 'transparent',
+                    display: 'inline-block',
+                    flexShrink: 0,
+                    boxSizing: 'border-box',
+                  }}
+                  aria-hidden="true"
+                />
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: isDefault ? 600 : 400 }}>
+                      {ENGINE_LABEL[engineId] ?? id}
+                    </span>
+                    {isDefault && (
+                      <span
+                        style={{
+                          color: 'var(--k-orange, #ff5722)',
+                          fontSize: 9.5,
+                          fontWeight: 700,
+                          padding: '1px 5px',
+                          borderRadius: 3,
+                          background: 'color-mix(in srgb, var(--k-orange) 14%, transparent)',
+                        }}
+                      >
+                        DEFAULT · OPENS FIRST
+                      </span>
+                    )}
+                    {!isDefault && (
+                      <span
+                        style={{
+                          color: 'var(--k-ink-5)',
+                          fontSize: 9.5,
+                          opacity: 0.8,
+                        }}
+                      >
+                        (Click to set default)
+                      </span>
+                    )}
+                    {!on && (
+                      <span
+                        style={{
+                          color: 'var(--k-ink-5)',
+                          fontSize: 10,
+                        }}
+                      >
+                        off
+                      </span>
+                    )}
+                  </div>
+                  <div
                     style={{
                       color: 'var(--k-ink-5)',
-                      fontSize: 10,
-                      marginLeft: 8,
+                      fontSize: 10.5,
+                      marginTop: 2,
                     }}
                   >
-                    off
-                  </span>
-                )}
-                <div
-                  style={{
-                    color: 'var(--k-ink-5)',
-                    fontSize: 10.5,
-                    marginTop: 2,
-                  }}
-                >
-                  {HINT[engineId] ?? ''}
+                    {HINT[engineId] ?? ''}
+                  </div>
                 </div>
               </button>
 

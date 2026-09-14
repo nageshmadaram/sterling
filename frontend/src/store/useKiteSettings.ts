@@ -279,7 +279,6 @@ export const useKiteSettings = create<KiteSettingsState>()(
       })),
       showAllSignalCols: () => set({ hiddenSignalCols: [] }),
       resetSignalTableSettings: () => set({
-        defaultSection: 'dashboard',
         boardDragColumns: true,
         boardRowScroll: true,
         boardRowActions: true,

@@ -205,6 +205,7 @@ import {
   useAdaptiveEdgeEngineConfig, useAdaptiveEdgeSettings, useAdaptiveEdgeSnapshot,
   useSetAdaptiveEdgeEngineConfig, useSetAdaptiveEdgeSettings,
 } from '../../hooks/useAdaptiveEdge';
+import { notifyOrder } from '../../store/useKiteNotifications';
 import type { AdaptiveEdgeSettings } from '../../types/adaptiveEdge';
 import type { Moneyness, ScanExpiry, ScanSource } from '../../types/kiteEngine';
 
@@ -503,7 +504,23 @@ export function AdaptiveEdgeSettingsPanel() {
         saving={save.isPending}
         applyDisabled={!!invalid}
         applyTitle={invalid || undefined}
-        onApply={() => { if (!invalid) save.mutate(draft, { onSuccess: () => setDirty(false) }); }}
+        onApply={() => {
+          if (!invalid) {
+            save.mutate(draft, {
+              onSuccess: () => {
+                setDirty(false);
+                notifyOrder({ kind: 'info', title: 'Settings saved', message: 'Adaptive Edge settings applied.' });
+              },
+              onError: (err: any) => {
+                notifyOrder({
+                  kind: 'error',
+                  title: 'Settings NOT saved',
+                  message: err?.message || 'Failed to save Adaptive Edge settings.',
+                });
+              },
+            });
+          }
+        }}
         onDiscard={() => { if (data) { setDraft(withDefaults(data.settings)); setDirty(false); } }}
         onReset={() => { if (data) { setDraft(withDefaults(data.settings)); setDirty(false); } }}
       />

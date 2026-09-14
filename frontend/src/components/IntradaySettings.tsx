@@ -12,6 +12,7 @@ import { AdvancedSection, ConfigNote, PanelCard, SettingsDraftBar } from './kite
 import { useUnsavedDraftGuard } from './kite/config/unsavedDraftGuard';
 import { InstrumentsGroup } from './kite/config/ScanSettings';
 import { EnginePowerHeader } from './kite/config/EnginePowerHeader';
+import { notifyOrder } from '../store/useKiteNotifications';
 
 /**
  * Intraday pack settings — three strategies, one page.
@@ -96,7 +97,21 @@ export function IntradaySettings() {
   }, [server]);
 
   const handleApply = React.useCallback(() => {
-    if (draft) setCfg.mutate(draft, { onSuccess: () => setDraft(null) });
+    if (draft) {
+      setCfg.mutate(draft, {
+        onSuccess: () => {
+          setDraft(null);
+          notifyOrder({ kind: 'info', title: 'Settings saved', message: 'Intraday Pack settings applied.' });
+        },
+        onError: (err: any) => {
+          notifyOrder({
+            kind: 'error',
+            title: 'Settings NOT saved',
+            message: err?.message || 'Failed to save Intraday Pack settings.',
+          });
+        },
+      });
+    }
   }, [draft, setCfg]);
   const handleDiscard = React.useCallback(() => setDraft(null), []);
   const handleReset = React.useCallback(() => {

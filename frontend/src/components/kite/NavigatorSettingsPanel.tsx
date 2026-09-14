@@ -269,6 +269,7 @@ export function NavigatorSettingsPanel() {
         setDirty(false);
         setConflict(false);
         setBaseRevision(saved?.record?.revision ?? null);
+        notifyOrder({ kind: 'info', title: 'Settings saved', message: 'Navigator settings applied.' });
       },
       onError: (err) => {
         if (String(err.message).includes('REVISION_CONFLICT')) {
