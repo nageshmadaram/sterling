@@ -1,18 +1,9 @@
 import React from 'react';
-import { k, tint } from '../../styles/kiteUI';
+import { k } from '../../styles/kiteUI';
 import { useKiteStatus } from '../../hooks/useKite';
-import { useEngineSignals, useEngineConfig } from '../../hooks/useSterlingKiteEngine';
-import { useNavigatorConfig } from '../../hooks/useNavigator';
-import { useAdaptiveEdgeSnapshot } from '../../hooks/useAdaptiveEdge';
-import { useGammaMoveSnapshot } from '../../hooks/useGammaMove';
 
 export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void }) {
   const status = useKiteStatus().data;
-  const sig = useEngineSignals().data;
-  const engineOn = useEngineConfig().data?.engine_enabled !== false;
-  const navOn = useNavigatorConfig().data?.record.config.enabled ?? false;
-  const aeOn = !!useAdaptiveEdgeSnapshot().data;
-  const gmOn = !!useGammaMoveSnapshot().data?.strategy?.enabled;
 
   const unknown = !!status?.transient;
   const connected = !!status?.connected;
@@ -29,21 +20,6 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
     : unknown
       ? 'Could not reach Kite to check the session. The stored token is untouched — nothing has expired.'
       : 'Not connected. Click to reconnect.';
-
-  const strategies: Array<{ label: string; on: boolean; note?: string }> = [
-    {
-      label: 'ST',
-      on: engineOn,
-      note: !engineOn ? 'off'
-        : sig?.scanning ? (sig.scanning_label || 'scanning')
-        : sig?.auto_scan === false ? 'manual'
-        : sig?.market_open === false ? 'market closed'
-        : 'auto',
-    },
-    { label: 'NAV', on: navOn, note: navOn ? undefined : 'off' },
-    { label: 'AE', on: aeOn, note: aeOn ? undefined : 'off' },
-    { label: 'GM', on: gmOn, note: gmOn ? undefined : 'off' },
-  ];
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
