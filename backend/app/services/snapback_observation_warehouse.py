@@ -104,6 +104,22 @@ class SnapbackObservationWarehouse:
                     if col_name not in existing_cols:
                         conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col_name} {col_def}")
 
+                # Automatic schema migration for paper_positions table
+                if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_positions'").fetchone():
+                    pos_cols = {
+                        row[1] for row in conn.execute("PRAGMA table_info(paper_positions)").fetchall()
+                    }
+                    pos_migrations = {
+                        "accumulated_costs": "REAL NOT NULL DEFAULT 0.0",
+                        "peak_option_bid": "REAL NOT NULL DEFAULT 0.0",
+                        "sessions_held": "INTEGER NOT NULL DEFAULT 1",
+                        "is_runner": "INTEGER NOT NULL DEFAULT 0",
+                    }
+                    for col_name, col_def in pos_migrations.items():
+                        if col_name not in pos_cols:
+                            conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col_name} {col_def}")
+
+
                 # 2. contract_candidates
                 conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS contract_candidates (
@@ -276,6 +292,10 @@ class SnapbackObservationWarehouse:
                         current_futures_lots    INTEGER NOT NULL,
                         avg_futures_entry_price REAL NOT NULL,
                         realized_futures_pnl    REAL NOT NULL DEFAULT 0.0,
+                        accumulated_costs       REAL NOT NULL DEFAULT 0.0,
+                        peak_option_bid         REAL NOT NULL DEFAULT 0.0,
+                        sessions_held           INTEGER NOT NULL DEFAULT 1,
+                        is_runner               INTEGER NOT NULL DEFAULT 0,
                         entry_spot              REAL NOT NULL,
                         entry_timestamp         TEXT NOT NULL,
                         entry_dte               INTEGER NOT NULL,
@@ -283,6 +303,7 @@ class SnapbackObservationWarehouse:
                         causal_beta             REAL NOT NULL,
                         status                  TEXT NOT NULL DEFAULT 'OPEN'
                     )
+
                 """)
         finally:
             conn.close()
@@ -404,6 +425,10 @@ class SnapbackObservationWarehouse:
         entry_dte: int,
         entry_iv: float,
         causal_beta: float,
+        accumulated_costs: float = 0.0,
+        peak_option_bid: float = 0.0,
+        sessions_held: int = 1,
+        is_runner: int = 0,
         status: str = "OPEN",
     ) -> None:
         """Persist active paper position state ledger."""
@@ -416,18 +441,21 @@ class SnapbackObservationWarehouse:
                         opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
                         option_expiry, option_strike, futures_symbol, futures_lot_size,
                         current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
+                        accumulated_costs, peak_option_bid, sessions_held, is_runner,
                         entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
                         option_expiry, option_strike, futures_symbol, futures_lot_size,
                         current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
+                        accumulated_costs, peak_option_bid or option_entry_price, sessions_held, is_runner,
                         entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
                     ),
                 )
         finally:
             conn.close()
+
 
     def update_paper_position_hedge(
         self,
@@ -450,6 +478,48 @@ class SnapbackObservationWarehouse:
                 )
         finally:
             conn.close()
+
+    def update_paper_position_sessions(
+        self,
+        opportunity_id: str,
+        sessions_held: int,
+    ) -> None:
+        """Update session count held in paper position ledger."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE paper_positions
+                    SET sessions_held = ?
+                    WHERE opportunity_id = ?
+                """,
+                    (sessions_held, opportunity_id),
+                )
+        finally:
+            conn.close()
+
+    def update_paper_position_peak_bid(
+        self,
+        opportunity_id: str,
+        peak_option_bid: float,
+        is_runner: int = 0,
+    ) -> None:
+        """Update peak executable option bid and runner state in paper position ledger."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE paper_positions
+                    SET peak_option_bid = ?, is_runner = ?
+                    WHERE opportunity_id = ?
+                """,
+                    (peak_option_bid, is_runner, opportunity_id),
+                )
+        finally:
+            conn.close()
+
 
     def get_paper_position(self, opportunity_id: str) -> Optional[Dict[str, Any]]:
         """Fetch active paper position state ledger for an opportunity."""
@@ -559,6 +629,8 @@ class SnapbackObservationWarehouse:
             "modeled_total_pnl": round(modeled_total, 2),
             "actual_total_pnl": round(actual_total, 2),
             "observed_vs_model_error": round(error, 2),
+            "actual_costs": round(actual_costs, 2),
+            "modeled_costs": round(modeled_costs, 2),
         }
 
     def record_contract_candidate(

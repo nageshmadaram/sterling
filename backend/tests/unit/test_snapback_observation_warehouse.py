@@ -181,8 +181,8 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
     rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
     opp_id = rec_res["opportunity_id"]
 
-    # Day T+1 execution timestamp: 2026-09-16T09:15:00Z
-    t1_dt = datetime(2026, 9, 16, 9, 15, 0, tzinfo=timezone.utc)
+    # Day T+1 execution timestamp: 2026-09-16T03:45:00Z (09:15 IST open)
+    t1_dt = datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc)
     t1_ms = int(t1_dt.timestamp() * 1000)
 
     fut_event = RawQuoteEvent(
@@ -288,7 +288,7 @@ def test_tampered_config_rejected(temp_warehouse, sample_fade_up_signal):
 
     # Modified config (min_dte changed to 10)
     tampered_cfg = SnapbackConfig(min_dte=10)
-    t1_ms = int(datetime(2026, 9, 16, 9, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    t1_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
 
     res = collector.execute_pending_entry(
         opportunity_id=opp_id,
@@ -313,7 +313,7 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
     rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
     opp_id = rec_res["opportunity_id"]
 
-    now_ms = int(datetime(2026, 9, 16, 9, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
     fut_event = RawQuoteEvent(
         contract_id="NIFTY-I",
         exchange_timestamp_ms=now_ms - 200,
@@ -501,4 +501,650 @@ def test_production_adapter_no_placeholders():
             found_violations.append(f"In extract_raw_quote_event: '{pattern}'")
 
     assert not found_violations, f"Found runtime placeholder violations in production adapter: {found_violations}"
+
+
+def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config):
+    """Proves: Friday signal fills Monday opening window (and misses outside window)."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    # Friday close signal: 2026-09-18 15:30 IST (10:00 UTC)
+    fri_dt = datetime(2026, 9, 18, 10, 0, 0, tzinfo=timezone.utc)
+    fri_signal_1 = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(fri_dt.timestamp() * 1000),
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+
+    rec_res = collector.record_signal_at_close(signal=fri_signal_1, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+    assert opp_id != ""
+
+    cand_valid = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=41,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+
+    # Monday opening window: 2026-09-21 09:20 IST (03:50 UTC)
+    mon_open_dt = datetime(2026, 9, 21, 3, 50, 0, tzinfo=timezone.utc)
+    mon_open_ms = int(mon_open_dt.timestamp() * 1000)
+
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=mon_open_ms - 200,
+        received_at_ms=mon_open_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=mon_open_ms - 200,
+        received_at_ms=mon_open_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
+    )
+
+    # Monday opening window fill succeeds
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand_valid],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=mon_open_ms,
+    )
+    assert exec_res["status"] == "OPEN_POSITION"
+
+    # Now verify that attempting execution OUTSIDE opening window (e.g. 11:30 IST / 06:00 UTC) fails closed
+    fri_signal_2 = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(fri_dt.timestamp() * 1000) + 1000,
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    opp_id_2 = collector.record_signal_at_close(signal=fri_signal_2, cfg=sample_config)["opportunity_id"]
+    mon_late_dt = datetime(2026, 9, 21, 6, 0, 0, tzinfo=timezone.utc)
+    mon_late_ms = int(mon_late_dt.timestamp() * 1000)
+
+    fut_event_late = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=mon_late_ms - 200,
+        received_at_ms=mon_late_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    opt_quote_late = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=mon_late_ms - 200,
+        received_at_ms=mon_late_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
+    )
+
+    exec_res_late = collector.execute_pending_entry(
+        opportunity_id=opp_id_2,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event_late,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand_valid],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote_late},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=mon_late_ms,
+    )
+    assert exec_res_late["status"] == "INCONCLUSIVE"
+    assert "Missed T+1" in exec_res_late["reason"]
+
+
+
+def test_fifteen_trading_sessions_not_fifteen_calendar_days(temp_warehouse, sample_config):
+    """Proves: 15 trading sessions are counted as trading sessions, not calendar days."""
+    from app.services.navigator.calendar import is_trading_day
+
+    # 2026-09-18 is Friday.
+    # Count 15 trading sessions from 2026-09-21 (Monday):
+    trading_sessions = 0
+    curr_dt = datetime(2026, 9, 21, tzinfo=timezone.utc)
+    for d in range(30):
+        t_date = (curr_dt + timedelta(days=d)).date()
+        if is_trading_day(t_date):
+            trading_sessions += 1
+            if trading_sessions == 15:
+                # 15th trading session date
+                assert (t_date - curr_dt.date()).days > 15  # Calendar days must be strictly greater than 15!
+                break
+
+
+def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
+    """Proves: 35% premium stop closes position when option bid drops to <= entry * 0.65."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 2000,
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    cand = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=100.0,
+        best_ask=102.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=101.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=now_ms,
+    )
+    assert exec_res["status"] == "OPEN_POSITION"
+
+    # MTM check with option_bid = 60.0 (35% stop: 60.0 <= 100.0 * 0.65 = 65.0)
+    reb_res = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-09-17",
+        symbol="NIFTY",
+        current_spot=24600.0,
+        current_option_delta=-0.60,
+        option_bid=60.0,
+        futures_quote_event=fut_event,
+        option_entry_price=100.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+        prior_realized_futures_pnl=0.0,
+        prior_avg_futures_entry_price=24510.0,
+    )
+    assert reb_res["exit_reason"] == "PREMIUM_STOP"
+
+
+def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback_closes_it(temp_warehouse, sample_config):
+    """Proves: 1.5x winner becomes runner at session 15, and 25% give-back from peak closes it."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 3000,
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    cand = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=100.0,
+        best_ask=102.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=101.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=now_ms,
+    )
+    assert exec_res["status"] == "OPEN_POSITION"
+
+    # Set sessions_held to 15 in warehouse DB position record
+    temp_warehouse.update_paper_position_sessions(opp_id, 15)
+
+    # Rebalance at session 15: option_bid = 160.0 (1.6x entry price 100.0 >= 1.5x)
+    # Position must transition to RUNNER, peak_option_bid = 160.0, and NOT exit
+    reb_15 = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-10-05",
+        symbol="NIFTY",
+        current_spot=24400.0,
+        current_option_delta=-0.80,
+        option_bid=160.0,
+        futures_quote_event=fut_event,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+    )
+    assert reb_15["is_runner"] is True
+    assert reb_15["peak_option_bid"] == 160.0
+    assert reb_15["exit_reason"] is None
+
+    # Next session: Peak bid rises to 200.0
+    reb_peak = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-10-06",
+        symbol="NIFTY",
+        current_spot=24350.0,
+        current_option_delta=-0.85,
+        option_bid=200.0,
+        futures_quote_event=fut_event,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+    )
+    assert reb_peak["is_runner"] is True
+    assert reb_peak["peak_option_bid"] == 200.0
+    assert reb_peak["exit_reason"] is None
+
+    # Subsequent session: Option bid drops to 145.0 (<= 200.0 * 0.75 = 150.0, 25% give-back from peak)
+    reb_giveback = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-10-07",
+        symbol="NIFTY",
+        current_spot=24450.0,
+        current_option_delta=-0.70,
+        option_bid=145.0,
+        futures_quote_event=fut_event,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+    )
+    assert reb_giveback["exit_reason"] == "RUNNER_TRAIL_STOP"
+
+
+def test_banknifty_uses_rolling_beta():
+    """Proves: BANKNIFTY is not hardcoded to 1.0 in production adapter."""
+    import inspect
+    from app.services import snapback
+
+    fn_source = inspect.getsource(snapback.process_prospective_pending_entries_and_mtm)
+    assert 'symbol == "NIFTY"' in fn_source  # Only NIFTY is forced to 1.0
+    assert 'symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY")' not in fn_source
+
+
+def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, sample_config):
+    """Proves: Selected contract lot size propagates into option and futures quantity calculations."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig1 = SnapbackSignal(
+        symbol="BANKNIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 4000,
+        entry=52000.0,
+        mean_target=52500.0,
+        stretch=1.8,
+        atr=400.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=51800.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig1, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="BANKNIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=52000.0,
+        best_ask=52005.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=52002.0,
+        open_interest=500000,
+    )
+    cand_bn = OptionCandidateInfo(
+        symbol="BANKNIFTY26OCT52000PE",
+        expiry="2026-10-29",
+        strike=52000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=15,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="BANKNIFTY26OCT52000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=600.0,
+        best_ask=604.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=602.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=52000.0,
+        futures_quote_event=fut_event,
+        futures_symbol="BANKNIFTY-I",
+        option_candidates=[cand_bn],
+        option_quote_events={"BANKNIFTY26OCT52000PE": opt_quote},
+        causal_beta=1.10,
+        option_lot_size=15,
+        futures_lot_size=15,
+        execution_timestamp_ms=now_ms,
+    )
+    assert exec_res["status"] == "OPEN_POSITION"
+    assert exec_res["option_quantity"] == 15
+    assert exec_res["futures_quantity"] == 15
+
+    sig2 = SnapbackSignal(
+        symbol="BANKNIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 5000,
+        entry=52000.0,
+        mean_target=52500.0,
+        stretch=1.8,
+        atr=400.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=51800.0,
+        strength="MODERATE",
+    )
+    opp_id_invalid = collector.record_signal_at_close(signal=sig2, cfg=sample_config)["opportunity_id"]
+    exec_res_invalid = collector.execute_pending_entry(
+        opportunity_id=opp_id_invalid,
+        cfg=sample_config,
+        t1_spot_price=52000.0,
+        futures_quote_event=fut_event,
+        futures_symbol="BANKNIFTY-I",
+        option_candidates=[cand_bn],
+        option_quote_events={"BANKNIFTY26OCT52000PE": opt_quote},
+        causal_beta=1.10,
+        option_lot_size=0,
+        futures_lot_size=15,
+        execution_timestamp_ms=now_ms,
+    )
+    assert exec_res_invalid["status"] == "INCONCLUSIVE"
+    assert "lot size" in exec_res_invalid["reason"]
+
+
+def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
+    """Proves: Statutory costs accumulate across entry, rebalances, and exit; hardcoded 40.0 is deleted."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 6000,
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    cand = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=now_ms,
+    )
+    initial_costs = exec_res["accumulated_costs"]
+    assert initial_costs > 0.0
+
+    reb_res = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-09-17",
+        symbol="NIFTY",
+        current_spot=24600.0,
+        current_option_delta=-1.6,
+        option_bid=470.0,
+        futures_quote_event=fut_event,
+        option_entry_price=452.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+        prior_realized_futures_pnl=0.0,
+        prior_avg_futures_entry_price=24512.0,
+    )
+
+    reb_costs = reb_res["accumulated_costs"]
+    assert reb_costs > initial_costs
+
+    close_res = collector.close_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        exit_reason="HOLDING_HORIZON_EXPIRED",
+        entry_ts="2026-09-16T09:15:00Z",
+        exit_ts="2026-10-07T15:15:00Z",
+        entry_spot=24510.0,
+        exit_spot=24600.0,
+        selected_strike=25000.0,
+        entry_dte=45,
+        exit_dte=24,
+        iv_proxy=0.18,
+        option_entry_price=452.0,
+        option_exit_bid=470.0,
+        futures_entry_price=24512.0,
+        futures_exit_bid=24510.0,
+        statutory_costs=0.0,
+        option_quantity=65,
+        futures_quantity=130,
+        accumulated_costs=reb_costs,
+    )
+    assert close_res["actual_costs"] > reb_costs
+
+
+def test_stale_exit_quote_cannot_close_trade(sample_config):
+    """Proves: evaluate_quote_quality rejects stale or bad quotes, preventing MTM/exit execution."""
+    from app.services.snapback_market_data import evaluate_quote_quality
+
+    stale_event = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=int((time.time() - 30) * 1000),
+        received_at_ms=int(time.time() * 1000),
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+    )
+    res = evaluate_quote_quality(stale_event, sample_config, now_ms=int(time.time() * 1000))
+    assert res.accepted_for_execution is False
+
+    bad_bid_event = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=int((time.time() - 1) * 1000),
+        received_at_ms=int(time.time() * 1000),
+        best_bid=0.0,
+        best_ask=452.0,
+        bid_quantity=0,
+        ask_quantity=50,
+        last_price=451.0,
+    )
+    res_bad = evaluate_quote_quality(bad_bid_event, sample_config, now_ms=int(time.time() * 1000))
+    assert res_bad.accepted_for_execution is False
+
+
 

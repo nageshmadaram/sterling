@@ -28,7 +28,7 @@ from app.engines.snapback.intraday_models import QualityDecision, RawQuoteEvent
 from app.engines.snapback.manifest import create_frozen_manifest, verify_manifest_integrity
 from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
-from app.services.navigator.calendar import is_trading_day, next_trading_day
+from app.services.navigator.calendar import entry_delay_cutoff_ist, is_trading_day, next_trading_day
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
@@ -63,6 +63,8 @@ class OptionCandidateInfo:
     theoretical_delta: float = 0.0
     provider_symbol: str = ""
     instrument_token: str = ""
+    lot_size: int = 65
+
 
 
 class SnapbackProspectiveCollector:
@@ -181,6 +183,23 @@ class SnapbackProspectiveCollector:
                 "reason": "Config parameters deviate from frozen SnapbackConfig specification",
             }
 
+        if option_lot_size <= 0 or futures_lot_size <= 0:
+            self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
+            self.warehouse.record_decision(
+                decision_id=f"DECISION-{opportunity_id}",
+                opportunity_id=opportunity_id,
+                symbol=opp.get("symbol", "UNKNOWN"),
+                decision="INCONCLUSIVE",
+                reason=f"Invalid contract lot size: option_lot_size={option_lot_size}, futures_lot_size={futures_lot_size}",
+                provider_timestamp=provider_ts,
+            )
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "INCONCLUSIVE",
+                "reason": f"Invalid contract lot size: option={option_lot_size}, futures={futures_lot_size}",
+            }
+
+
         # 3. Verify Day T -> Day T+1 Session Timing using NSE Trading Calendar
         sig_ts_str = opp.get("signal_timestamp") or opp.get("provider_timestamp") or ""
         sig_date = None
@@ -218,6 +237,24 @@ class SnapbackProspectiveCollector:
                     "opportunity_id": opportunity_id,
                     "status": "INCONCLUSIVE",
                     "reason": f"Missed T+1 entry window (expected next session {expected_t1_date}, attempted on {exec_date})",
+                }
+
+            exec_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
+            cutoff_dt = entry_delay_cutoff_ist(expected_t1_date, delay_minutes=getattr(cfg, "entry_delay_after_open_minutes", 30) or 30)
+            if exec_dt > cutoff_dt:
+                self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
+                self.warehouse.record_decision(
+                    decision_id=f"DECISION-{opportunity_id}",
+                    opportunity_id=opportunity_id,
+                    symbol=opp.get("symbol", "UNKNOWN"),
+                    decision="INCONCLUSIVE",
+                    reason=f"Missed T+1 entry window (attempted at {exec_dt}, past cutoff {cutoff_dt})",
+                    provider_timestamp=provider_ts,
+                )
+                return {
+                    "opportunity_id": opportunity_id,
+                    "status": "INCONCLUSIVE",
+                    "reason": f"Missed T+1 entry window (attempted at {exec_dt}, past cutoff {cutoff_dt})",
                 }
 
         # 4. Check Quote Quality for Index Futures Event on T+1
@@ -543,8 +580,13 @@ class SnapbackProspectiveCollector:
             entry_dte=chosen_cand.dte,
             entry_iv=entry_iv,
             causal_beta=causal_beta,
+            accumulated_costs=total_costs,
+            peak_option_bid=option_fill_price,
+            sessions_held=1,
+            is_runner=0,
             status="OPEN",
         )
+
 
         return {
             "opportunity_id": opportunity_id,
@@ -557,10 +599,14 @@ class SnapbackProspectiveCollector:
             "option_fill_price": round(option_fill_price, 2),
             "futures_fill_price": round(futures_fill_price, 2),
             "target_hedge_lots": hedge_lots,
+            "option_quantity": option_qty,
+            "futures_quantity": actual_futures_qty,
             "actual_futures_qty": actual_futures_qty,
             "hedge_error_pct": round(hedge_error_pct, 2),
+            "accumulated_costs": round(total_costs, 2),
             "statutory_costs": round(total_costs, 2),
         }
+
 
     def rebalance_and_mtm(
         self,
@@ -603,6 +649,22 @@ class SnapbackProspectiveCollector:
 
         realized_pnl = prior_realized_futures_pnl
         avg_entry_price = prior_avg_futures_entry_price if prior_avg_futures_entry_price > 0 else fut_ask
+
+        rebalance_cost = 0.0
+        if new_hedge_lots != current_futures_lots:
+            traded_lots = abs(new_hedge_lots - current_futures_lots)
+            traded_qty = traded_lots * futures_lot_size
+            traded_price = fut_ask if new_hedge_lots > current_futures_lots else fut_bid
+            traded_turnover = traded_qty * traded_price
+            brokerage = 20.0
+            stt = traded_turnover * 0.000125 if new_hedge_lots < current_futures_lots else 0.0
+            exchange_txn_fee = traded_turnover * 0.00002
+            gst = 0.18 * (brokerage + exchange_txn_fee)
+            stamp_duty = traded_turnover * 0.00002 if new_hedge_lots > current_futures_lots else 0.0
+            rebalance_cost = brokerage + stt + exchange_txn_fee + gst + stamp_duty
+
+        accumulated_costs = float(pos.get("accumulated_costs") or 0.0) if pos else 0.0
+        accumulated_costs += rebalance_cost
 
         if new_hedge_lots > current_futures_lots:
             # Increasing LONG index futures hedge -> Buy additional lots at ASK
@@ -658,6 +720,35 @@ class SnapbackProspectiveCollector:
                 realized_futures_pnl=realized_pnl,
             )
 
+        # Frozen Exit Rules Evaluation
+        exit_reason = None
+        sessions_held = int(pos.get("sessions_held") or 1) if pos else 1
+        peak_option_bid = float(pos.get("peak_option_bid") or option_entry_price) if pos else option_entry_price
+        is_runner = int(pos.get("is_runner") or 0) if pos else 0
+        hold_days = 15
+
+        # Rule A: 35% Premium Stop
+        if option_bid <= option_entry_price * 0.65:
+            exit_reason = "PREMIUM_STOP"
+
+        # Rule B: 15-Session Horizon Evaluation & Runner Transition
+        elif sessions_held >= hold_days and not is_runner:
+            if option_bid >= option_entry_price * 1.5:
+                is_runner = 1
+                peak_option_bid = max(peak_option_bid, option_bid)
+            else:
+                exit_reason = "HOLDING_HORIZON_EXPIRED"
+
+        # Rule C: 25% Runner Trail Stop (while in RUNNER state)
+        elif is_runner:
+            if option_bid > peak_option_bid:
+                peak_option_bid = option_bid
+            elif option_bid <= peak_option_bid * 0.75:
+                exit_reason = "RUNNER_TRAIL_STOP"
+
+        if pos and (is_runner != int(pos.get("is_runner") or 0) or peak_option_bid > float(pos.get("peak_option_bid") or 0)):
+            self.warehouse.update_paper_position_peak_bid(opportunity_id, peak_option_bid, is_runner)
+
         # Calculate Liquidation MTM
         option_mtm = (option_bid - option_entry_price) * option_quantity
         open_futures_qty = new_hedge_lots * futures_lot_size
@@ -689,7 +780,13 @@ class SnapbackProspectiveCollector:
             "option_mtm": round(option_mtm, 2),
             "futures_mtm": round(total_futures_mtm, 2),
             "total_mtm": round(total_mtm, 2),
+            "accumulated_costs": round(accumulated_costs, 2),
+            "exit_reason": exit_reason,
+            "is_runner": bool(is_runner),
+            "peak_option_bid": round(peak_option_bid, 2),
+            "sessions_held": sessions_held,
         }
+
 
     def close_opportunity(
         self,
@@ -708,12 +805,13 @@ class SnapbackProspectiveCollector:
         option_exit_bid: float,
         futures_entry_price: float,
         futures_exit_bid: float,
-        statutory_costs: float,
-        option_quantity: int,
-        futures_quantity: int,
+        statutory_costs: float = 0.0,
+        option_quantity: int = 65,
+        futures_quantity: int = 65,
         nifty_futures_entry: Optional[float] = None,
         nifty_futures_exit: Optional[float] = None,
         option_type: str = "PE",
+        accumulated_costs: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Close paper position and calculate canonical Black-Scholes counterfactual model P&L over realized path."""
         actual_opt_pnl = (option_exit_bid - option_entry_price) * option_quantity
@@ -727,10 +825,40 @@ class SnapbackProspectiveCollector:
             open_qty = open_lots * (pos.get("futures_lot_size") or 65)
             open_fut_pnl = (futures_exit_bid - avg_entry) * open_qty if open_lots > 0 else 0.0
             actual_fut_pnl = realized_pnl + open_fut_pnl
+            pos_acc = float(pos.get("accumulated_costs") or 0.0)
         else:
             actual_fut_pnl = (futures_exit_bid - futures_entry_price) * futures_quantity
+            pos_acc = 0.0
 
-        actual_total = actual_opt_pnl + actual_fut_pnl - statutory_costs
+        # Calculate exit statutory fees for option liquidation and futures liquidation
+        opt_exit_turnover = option_quantity * option_exit_bid
+        opt_exit_brokerage = 20.0
+        opt_exit_stt = opt_exit_turnover * 0.00125
+        opt_exit_exch = opt_exit_turnover * 0.0005
+        opt_exit_gst = 0.18 * (opt_exit_brokerage + opt_exit_exch)
+        opt_exit_cost = opt_exit_brokerage + opt_exit_stt + opt_exit_exch + opt_exit_gst
+
+        fut_liq_qty = open_qty if pos else futures_quantity
+        if fut_liq_qty > 0:
+            fut_exit_turnover = fut_liq_qty * futures_exit_bid
+            fut_exit_brokerage = 20.0
+            fut_exit_stt = fut_exit_turnover * 0.000125
+            fut_exit_exch = fut_exit_turnover * 0.00002
+            fut_exit_gst = 0.18 * (fut_exit_brokerage + fut_exit_exch)
+            fut_exit_cost = fut_exit_brokerage + fut_exit_stt + fut_exit_exch + fut_exit_gst
+        else:
+            fut_exit_cost = 0.0
+
+        exit_costs = opt_exit_cost + fut_exit_cost
+
+        if accumulated_costs is not None:
+            final_costs = accumulated_costs + exit_costs
+        elif pos_acc > 0.0:
+            final_costs = pos_acc + exit_costs
+        else:
+            final_costs = statutory_costs if statutory_costs > 0.0 else exit_costs
+
+        actual_total = actual_opt_pnl + actual_fut_pnl - final_costs
 
         t_entry = max(0.001, entry_dte / 365.0)
         t_exit = max(0.001, exit_dte / 365.0)
@@ -748,7 +876,7 @@ class SnapbackProspectiveCollector:
         modeled_fut_pnl = (fut_exit_path - fut_entry_path) * futures_quantity
 
         # Modeled costs equal actual statutory costs (no fabricated multipliers)
-        modeled_costs = statutory_costs
+        modeled_costs = final_costs
         modeled_total = modeled_opt_pnl + modeled_fut_pnl - modeled_costs
 
         self.warehouse.close_paper_position_state(opportunity_id)
@@ -764,5 +892,5 @@ class SnapbackProspectiveCollector:
             modeled_futures_pnl=modeled_fut_pnl,
             actual_futures_pnl=actual_fut_pnl,
             modeled_costs=modeled_costs,
-            actual_costs=statutory_costs,
+            actual_costs=final_costs,
         )

@@ -874,11 +874,12 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                         continue
                     fut_lot_size = fut_spec.lot_size
 
-                    # Causal Beta Calculation: NIFTY/indices default to 1.0; stocks compute trailing rolling_beta
+                    # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
                     _INDEX_CANONICAL_BETA = 1.0
-                    if symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY"):
+                    if symbol == "NIFTY":
                         causal_beta = _INDEX_CANONICAL_BETA
                     else:
+
                         causal_beta = None
                         try:
                             from app.services.ohlcv_store import get_daily_bars
