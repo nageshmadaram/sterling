@@ -63,6 +63,8 @@ class RiskApproval:
     timestamp_ms: int = 0
     available_capital: Optional[float] = None
     capital_required: Optional[float] = None
+    strategy_id: str = ""
+    signal_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,12 @@ class CanonicalExecutionService:
         if is_exposure_increasing:
             if risk_approval is None:
                 return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected or missing risk approval proof")
+
+            # Check approval timestamp expiry (max age 60,000 ms / 60 sec if timestamp_ms > 0)
+            now_ms = int(time.time() * 1000)
+            if risk_approval.timestamp_ms > 0 and (now_ms - risk_approval.timestamp_ms > 60000):
+                return ExecutionResult(success=False, status="REJECTED", error="Risk approval proof expired")
+
             valid_approval = (
                 risk_approval.approved is True
                 and risk_approval.uid == request.uid
@@ -191,9 +199,11 @@ class CanonicalExecutionService:
                 and risk_approval.side.upper() == request.side.upper()
                 and risk_approval.quantity == request.quantity
                 and risk_approval.generation_id == request.generation_id
+                and risk_approval.strategy_id == request.strategy_id
+                and risk_approval.signal_id == request.signal_id
             )
             if not valid_approval:
-                return ExecutionResult(success=False, status="REJECTED", error="Risk approval proof mismatch or invalid")
+                return ExecutionResult(success=False, status="REJECTED", error="Risk approval proof mismatch or invalid (strategy_id/signal_id mismatch)")
         elif risk_approval is not None and not risk_approval.approved:
             return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected")
 
@@ -213,7 +223,7 @@ class CanonicalExecutionService:
         if request.tag:
             payload["user_tag"] = request.tag
 
-        # Capital evidence: prefer verified RiskApproval capital or broker fetch over arbitrary request input
+        # Capital evidence: for exposure increases, NEVER fall back to caller-supplied request capital!
         avail_cap = None
         if risk_approval and risk_approval.available_capital is not None:
             avail_cap = risk_approval.available_capital
@@ -229,12 +239,18 @@ class CanonicalExecutionService:
                         avail_cap = float(m.get("equity", {}).get("available", {}).get("live_balance", 0.0) or m.get("available_capital", 0.0))
             except Exception:
                 pass
-        if avail_cap is None and (risk_approval or not is_exposure_increasing):
-            avail_cap = request.available_capital
 
-        cap_req = request.capital_required
-        if risk_approval and risk_approval.capital_required is not None:
-            cap_req = risk_approval.capital_required
+        if is_exposure_increasing:
+            if avail_cap is None or avail_cap <= 0.0:
+                return ExecutionResult(
+                    success=False,
+                    status="REJECTED",
+                    error="Missing verified capital evidence for exposure increase (caller-supplied capital fallback forbidden)",
+                )
+            cap_req = risk_approval.capital_required if (risk_approval and risk_approval.capital_required is not None) else 0.0
+        else:
+            avail_cap = avail_cap if avail_cap is not None else request.available_capital
+            cap_req = request.capital_required if (risk_approval is None or risk_approval.capital_required is None) else risk_approval.capital_required
 
         try:
             intent = order_journal.reserve(
@@ -420,21 +436,19 @@ class CanonicalExecutionService:
         req_qty = int(changes.get("quantity") or changes.get("size") or 0)
         new_price = float(changes.get("price") or changes.get("limit_price") or changes.get("trigger_price") or 0.0)
         is_exposure_increasing = req_qty > 0 or new_price > 0
-        if changes.get("risk_reducing"):
-            effect = ExposureEffect.REDUCE_EXPOSURE
-        else:
-            effect = ExposureEffect.INCREASE_EXPOSURE if is_exposure_increasing else ExposureEffect.MODIFY_ORDER
+        effect = ExposureEffect.INCREASE_EXPOSURE if is_exposure_increasing else ExposureEffect.MODIFY_ORDER
 
-        # During HALTED or RECOVERY_REQUIRED, generic modifications are blocked unless explicitly risk-reducing
+        # During HALTED or RECOVERY_REQUIRED, generic modifications are strictly blocked.
+        # Caller-supplied risk_reducing claims are NOT trusted; only CANCEL and dedicated protection commands are allowed.
         try:
             ctrl = db.get_execution_control(uid=uid, account_id=account_id)
             op_state = ctrl.get("operator_state", "RUNNING")
             rec_state = ctrl.get("recovery_state", "CLEAN")
-            if (op_state == "HALTED" or rec_state == "RECOVERY_REQUIRED") and not changes.get("risk_reducing"):
+            if op_state == "HALTED" or rec_state == "RECOVERY_REQUIRED":
                 return ExecutionResult(
                     success=False,
                     status="HALTED",
-                    error=f"Order modification blocked during control state {op_state}/{rec_state} unless explicitly proven risk-reducing",
+                    error=f"Order modification blocked during control state {op_state}/{rec_state} (generic modification forbidden)",
                 )
         except Exception as exc:
             log.warning("Control plane state check failed in modify_order: %s", exc)
@@ -542,11 +556,12 @@ class CanonicalExecutionService:
                 error=f"No confirmed OPEN position found for symbol='{symbol}' / position_id='{position_id}'",
             )
 
-        if p.account_id and str(p.account_id).strip() != str(account_id).strip():
+        # Blank or unpopulated position account_id is treated as unknown/untrusted and MUST fail validation
+        if not p.account_id or str(p.account_id).strip() != str(account_id).strip():
             return ExecutionResult(
                 success=False,
                 status="REJECTED",
-                error=f"Position account ownership mismatch: position account {p.account_id} != request account {account_id}",
+                error=f"Position account identity missing or mismatch: position account '{p.account_id}' != request account '{account_id}'",
             )
 
         if position_id and position_id not in (p.order_id, p.symbol, f"POS_{p.order_id}", f"POS_{p.symbol}") and str(p.order_id) != str(position_id) and p.symbol != str(position_id):
@@ -674,20 +689,28 @@ class CanonicalExecutionService:
             inventory_reconciliation_required = True
 
         protection_pending_present = False
+        positions_read_error = False
         try:
             all_positions = positions.open_positions(uid) if hasattr(positions, "open_positions") else []
             protection_pending_present = any(getattr(p, "protection_pending", False) for p in all_positions)
         except Exception as pos_err:
-            log.warning("Positions read failed in startup_recovery: %s", pos_err)
+            log.warning("Positions read failed in startup_recovery: %s — treating as recovery required", pos_err)
+            positions_read_error = True
 
-        uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required or protection_pending_present
+        uncertain = (
+            len(unresolved_intents) > 0
+            or len(pending_projections) > 0
+            or inventory_reconciliation_required
+            or protection_pending_present
+            or positions_read_error
+        )
 
         if uncertain:
             try:
                 ctrl = db.set_recovery_state(
                     recovery_state="RECOVERY_REQUIRED",
                     reason_code="UNRESOLVED_JOURNAL_INTENTS",
-                    reason=f"Startup found unresolved state: {len(unresolved_intents)} journal intent(s), {len(pending_projections)} pending projection(s), protection_pending={protection_pending_present}",
+                    reason=f"Startup found unresolved state: {len(unresolved_intents)} journal intent(s), {len(pending_projections)} pending projection(s), protection_pending={protection_pending_present}, pos_error={positions_read_error}",
                     uid=uid,
                     account_id=account_id,
                 )
@@ -711,13 +734,21 @@ class CanonicalExecutionService:
             inventory_reconciliation_required = True
 
         protection_pending_present = False
+        positions_read_error = False
         try:
             all_positions = positions.open_positions(uid) if hasattr(positions, "open_positions") else []
             protection_pending_present = any(getattr(p, "protection_pending", False) for p in all_positions)
         except Exception as pos_err:
-            log.warning("Positions read after recover failed in startup_recovery: %s", pos_err)
+            log.warning("Positions read after recover failed in startup_recovery: %s — treating as recovery required", pos_err)
+            positions_read_error = True
 
-        remaining_uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required or protection_pending_present
+        remaining_uncertain = (
+            len(unresolved_intents) > 0
+            or len(pending_projections) > 0
+            or inventory_reconciliation_required
+            or protection_pending_present
+            or positions_read_error
+        )
         if not remaining_uncertain:
             try:
                 db.set_recovery_state(
@@ -739,6 +770,7 @@ class CanonicalExecutionService:
             "unresolved_count": len(unresolved_intents),
             "pending_projections_count": len(pending_projections),
             "protection_pending": protection_pending_present,
+            "positions_read_error": positions_read_error,
         }
 
     async def recover_unresolved(self, uid: str, account_id: str, client: Any = None) -> Dict[str, Any]:

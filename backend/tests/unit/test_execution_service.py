@@ -80,10 +80,13 @@ async def test_execution_service_broker_send_ack():
         approval_id="app1",
         uid="u1",
         account_id="acc1",
+        strategy_id="snapback",
+        signal_id="sig101",
         symbol="RELIANCE",
         side="BUY",
         quantity=10,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=MockBrokerClient(), risk_approval=approval)
@@ -117,10 +120,13 @@ async def test_execution_service_transport_uncertainty():
         approval_id="app2",
         uid="u1",
         account_id="acc1",
+        strategy_id="snapback",
+        signal_id="sig102",
         symbol="INFY",
         side="BUY",
         quantity=5,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=TimeoutBrokerClient(), risk_approval=approval)

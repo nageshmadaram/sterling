@@ -140,10 +140,13 @@ async def test_canonical_execution_service_exposure_policy():
         approval_id="app1",
         uid="user1",
         account_id="acc1",
+        strategy_id="strat1",
+        signal_id="sig1",
         symbol="SBIN",
         side="BUY",
         quantity=10,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res_inc = await service.submit_order(req_increase, risk_approval=approval)

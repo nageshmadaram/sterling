@@ -30,7 +30,7 @@
 | **EXEC-CTRL-SPEC** | **ACCEPTED WITH STATE-MODEL AMENDMENT** | Orthogonal 2D control states (`operator_state` + `recovery_state`), CAS revision control |
 | **EXEC-CTRL-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, 1-time legacy state migration, durable kill persistence & Slice 2.2 degraded halt handling |
 | **EXEC-SVC-SPEC** | **ACCEPTED WITH EXPOSURE-EFFECT AMENDMENT** | Exposure effect classification (`INCREASE_EXPOSURE`, `REDUCE_EXPOSURE`, etc.) |
-| **EXEC-SVC-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | Real KiteClient protocol params, RiskApproval proof requirement, identity strictness, protection fences, GTT derivation, net-qty exit semantics, typed broker errors, and UNKNOWN recovery latch (Slice 2.2 complete — Execution Contracts Frozen) |
+| **EXEC-SVC-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | Real KiteClient protocol params, RiskApproval proof requirement (strategy_id/signal_id bound + 60s max age), identity strictness, protection fences, GTT derivation, net-qty exit semantics, typed broker errors, strict capital evidence, blank position account identity rejection, fail-closed position registry read recovery, and UNKNOWN recovery latch (Slice 2.2 & 2.2.1 complete — Execution Contracts Frozen) |
 | **MANUAL-KITE-MIGRATION** | **OPEN** | Not migrated yet |
 | **KITE-JOURNAL/LIFECYCLE** | **VERIFIED REFERENCE IMPLEMENTATION** | Durable journal and execution recovery primitives |
 | **RELEASE-GATE** | **VERIFIED GREEN on `d736d1d7c...`** | Verified green pipeline release gate |

@@ -67,10 +67,13 @@ async def test_real_kite_client_protocol_arguments():
         approval_id="a1",
         uid="u_test1",
         account_id="acct_test1",
+        strategy_id="strat_test",
+        signal_id="sig_1",
         symbol="SBIN",
         side="BUY",
         quantity=10,
         generation_id="gen_1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=client, risk_approval=approval)
@@ -118,10 +121,13 @@ async def test_account_identity_mismatch_rejection():
         approval_id="a2",
         uid="u1",
         account_id="acct_B",
+        strategy_id="strat1",
+        signal_id="sig1",
         symbol="SBIN",
         side="BUY",
         quantity=10,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=client, risk_approval=approval)
@@ -179,10 +185,13 @@ async def test_exposure_effect_inventory_verification():
         approval_id="a3",
         uid="u_spoof",
         account_id="acct_spoof",
+        strategy_id="strat1",
+        signal_id="sig_close",
         symbol="RELIANCE",
         side="SELL",
         quantity=10,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req_spoof_close, broker_client=MagicMock(), risk_approval=approval)
@@ -323,10 +332,13 @@ async def test_typed_broker_outcome_unknown_on_generic_transport_exception():
         approval_id="a4",
         uid="u_tf1",
         account_id="acct_tf1",
+        strategy_id="strat1",
+        signal_id="sig_tf1",
         symbol="TATASTEEL",
         side="BUY",
         quantity=20,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=client, risk_approval=approval)
@@ -365,10 +377,13 @@ async def test_risk_approval_proof_validation():
         approval_id="app_123",
         uid="u_risk1",
         account_id="acct_risk1",
+        strategy_id="strat1",
+        signal_id="sig_risk1",
         symbol="SBIN",
         side="BUY",
         quantity=10,
         generation_id="gen1",
+        available_capital=100000.0,
         approved=True,
     )
     res_valid = await service.submit_order(req, broker_client=client, risk_approval=valid_proof)
@@ -380,10 +395,13 @@ async def test_risk_approval_proof_validation():
         approval_id="app_124",
         uid="u_risk1",
         account_id="acct_risk1",
+        strategy_id="strat1",
+        signal_id="sig_risk1",
         symbol="SBIN",
         side="BUY",
         quantity=5,  # Mismatch (req is 10)
         generation_id="gen1",
+        available_capital=100000.0,
         approved=True,
     )
     res_bad = await service.submit_order(req, broker_client=client, risk_approval=bad_qty_proof)
@@ -417,10 +435,13 @@ async def test_quantity_overshoot_reclassifies_to_increase_exposure():
         approval_id="a5",
         uid="u_over",
         account_id="acct_over",
+        strategy_id="strat1",
+        signal_id="sig_over",
         symbol="RELIANCE",
         side="SELL",
         quantity=100,
         generation_id="gen1",
+        available_capital=100000.0,
     )
 
     res = await service.submit_order(req_overshoot, broker_client=MagicMock(), risk_approval=approval)
@@ -533,7 +554,7 @@ async def test_slice_2_2_protection_requires_confirmed_open_position_and_matchin
     )
     assert not res3.success
     assert res3.status == "REJECTED"
-    assert "account ownership mismatch" in res3.error.lower()
+    assert "identity missing or mismatch" in res3.error.lower() or "account ownership mismatch" in res3.error.lower()
 
 
 @pytest.mark.asyncio
@@ -683,7 +704,7 @@ async def test_slice_2_2_capital_evidence_derived_from_risk_approval():
     )
 
     approval = RiskApproval(
-        approval_id="app_cap1", uid="u_p6", account_id="acct_p6", symbol="AXISBANK", side="BUY", quantity=10,
+        approval_id="app_cap1", uid="u_p6", account_id="acct_p6", strategy_id="s1", signal_id="sig6", symbol="AXISBANK", side="BUY", quantity=10,
         generation_id="g1", available_capital=500000.0, capital_required=15000.0,
     )
 
@@ -718,7 +739,7 @@ async def test_slice_2_2_emergency_halt_db_failure_returns_degraded():
 
 @pytest.mark.asyncio
 async def test_slice_2_2_modify_order_blocked_during_halted_unless_risk_reducing():
-    """Item 8: During HALTED/RECOVERY_REQUIRED, generic modifications are blocked unless explicitly proven risk-reducing."""
+    """Item 8: During HALTED/RECOVERY_REQUIRED, generic modifications are blocked."""
     service = CanonicalExecutionService()
     db.set_operator_state("HALTED", reason="Emergency operator halt", uid="u_p8", account_id="acct_p8")
 
@@ -743,13 +764,13 @@ async def test_slice_2_2_modify_order_blocked_during_halted_unless_risk_reducing
     assert not res2.success
     assert res2.status == "HALTED"
 
-    # 3. Explicitly risk-reducing modification -> ACKNOWLEDGED
+    # 3. Modification with caller risk_reducing flag -> STILL HALTED (caller-controlled flag removed in 2.2.1)
     res3 = await service.modify_order(
         uid="u_p8", account_id="acct_p8", order_id="ORD_MOD_3",
         changes={"price": 480.0, "side": "BUY", "risk_reducing": True}, broker_client=MockBroker(),
     )
-    assert res3.success
-    assert res3.status == "ACKNOWLEDGED"
+    assert not res3.success
+    assert res3.status == "HALTED"
 
 
 @pytest.mark.asyncio
@@ -769,7 +790,7 @@ async def test_slice_2_2_typed_kite_error_imports_from_errors_module():
         exchange="NSE", symbol="INFY", side="BUY", quantity=100,
     )
     approval = RiskApproval(
-        approval_id="app_p9", uid="u_p9", account_id="acct_p9", symbol="INFY", side="BUY", quantity=100, generation_id="g1",
+        approval_id="app_p9", uid="u_p9", account_id="acct_p9", strategy_id="s1", signal_id="sig9", symbol="INFY", side="BUY", quantity=100, generation_id="g1", available_capital=100000.0,
     )
 
     res = await service.submit_order(req, broker_client=RejectingBroker(), risk_approval=approval)
@@ -795,4 +816,124 @@ async def test_slice_2_2_recovery_recalculates_inventory_post_broker_reconcile()
     res = await service.startup_recovery(uid="u_p10", account_id="acct_p10", broker_client=MockBroker())
     assert res["status"] == "success"
     assert res["recovery_state"] == "CLEAN"
+
+
+# ── Slice 2.2.1 Micro-Guardrail Tests ──
+
+@pytest.mark.asyncio
+async def test_slice_2_2_1_risk_approval_signal_and_strategy_binding_and_expiry(monkeypatch):
+    """Guardrail 1: RiskApproval must bind strategy_id and signal_id, and enforce 60s max age."""
+    import time
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_221_1"
+        async def place_order(self, **kwargs):
+            return {"order_id": "ORD_221_1"}
+
+    req = ExecutionRequest(
+        uid="u_221_1", account_id="acct_221_1", strategy_id="snapback", generation_id="g1", signal_id="sig_221_1",
+        exchange="NSE", symbol="INFY", side="BUY", quantity=10,
+    )
+
+    # 1. Missing strategy_id in RiskApproval -> REJECTED
+    app_no_strat = RiskApproval(
+        approval_id="app_1", uid="u_221_1", account_id="acct_221_1", strategy_id="", signal_id="sig_221_1",
+        symbol="INFY", side="BUY", quantity=10, generation_id="g1", available_capital=100000.0,
+    )
+    res1 = await service.submit_order(req, broker_client=MockBroker(), risk_approval=app_no_strat)
+    assert not res1.success
+    assert res1.status == "REJECTED"
+    assert "strategy_id" in res1.error.lower()
+
+    # 2. Mismatched signal_id in RiskApproval -> REJECTED
+    app_wrong_sig = RiskApproval(
+        approval_id="app_2", uid="u_221_1", account_id="acct_221_1", strategy_id="snapback", signal_id="sig_OTHER",
+        symbol="INFY", side="BUY", quantity=10, generation_id="g1", available_capital=100000.0,
+    )
+    res2 = await service.submit_order(req, broker_client=MockBroker(), risk_approval=app_wrong_sig)
+    assert not res2.success
+    assert res2.status == "REJECTED"
+    assert "signal_id" in res2.error.lower()
+
+    # 3. Expired RiskApproval (>60s old) -> REJECTED
+    old_ts = int((time.time() - 100) * 1000)
+    app_expired = RiskApproval(
+        approval_id="app_3", uid="u_221_1", account_id="acct_221_1", strategy_id="snapback", signal_id="sig_221_1",
+        symbol="INFY", side="BUY", quantity=10, generation_id="g1", available_capital=100000.0, timestamp_ms=old_ts,
+    )
+    res3 = await service.submit_order(req, broker_client=MockBroker(), risk_approval=app_expired)
+    assert not res3.success
+    assert res3.status == "REJECTED"
+    assert "expired" in res3.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_1_capital_evidence_never_falls_back_to_request():
+    """Guardrail 2: For exposure increases, never fall back to request.available_capital or request.capital_required."""
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_221_2"
+        async def place_order(self, **kwargs):
+            return {"order_id": "ORD_221_2"}
+
+    req = ExecutionRequest(
+        uid="u_221_2", account_id="acct_221_2", strategy_id="snapback", generation_id="g1", signal_id="sig_221_2",
+        exchange="NSE", symbol="INFY", side="BUY", quantity=10, available_capital=500000.0, capital_required=10000.0,
+    )
+
+    # RiskApproval without capital evidence (available_capital=0.0) -> MUST BE REJECTED
+    approval_no_cap = RiskApproval(
+        approval_id="app_no_cap", uid="u_221_2", account_id="acct_221_2", strategy_id="snapback", signal_id="sig_221_2",
+        symbol="INFY", side="BUY", quantity=10, generation_id="g1", available_capital=0.0,
+    )
+
+    res = await service.submit_order(req, broker_client=MockBroker(), risk_approval=approval_no_cap)
+    assert not res.success
+    assert res.status == "REJECTED"
+    assert "Missing verified capital evidence" in res.error
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_1_blank_position_account_id_fails_protection_validation():
+    """Guardrail 4: Position with blank account_id must fail live protection ownership validation."""
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_221_4"
+        async def place_gtt(self, **kwargs):
+            return {"trigger_id": "GTT_221_4"}
+
+    # Position registered with empty account_id
+    positions.register(
+        positions.OpenPosition(
+            uid="u_221_4", account_id="", symbol="INFY", exchange="NSE", qty=10, order_id="POS_BLANK_ACCT", status=positions.OPEN
+        )
+    )
+
+    res = await service.place_protection(
+        uid="u_221_4", account_id="acct_221_4", position_id="POS_BLANK_ACCT",
+        protection_params={"symbol": "INFY", "trigger_price": 1400.0},
+        broker_client=MockBroker(),
+    )
+    assert not res.success
+    assert res.status == "REJECTED"
+    assert "account identity missing or mismatch" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_1_position_registry_read_failure_triggers_recovery_required(monkeypatch):
+    """Guardrail 5: Position-registry read failure during recovery must force RECOVERY_REQUIRED."""
+    service = CanonicalExecutionService()
+
+    def mock_failing_open_positions(uid=None):
+        raise RuntimeError("Registry read failure")
+
+    monkeypatch.setattr(positions, "open_positions", mock_failing_open_positions)
+
+    res = await service.startup_recovery(uid="u_221_5", account_id="acct_221_5")
+    assert res["status"] == "success"
+    assert res["recovery_state"] == "RECOVERY_REQUIRED"
+    assert res["positions_read_error"] is True
 
