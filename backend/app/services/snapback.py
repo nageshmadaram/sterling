@@ -658,6 +658,12 @@ async def scan_once(uid: str) -> dict:
         st.signals = {r["signal_id"]: r for r in rows if r["state"] == "armed"}
         st.scanned = len(universe)
         st.last_scan_ms = ist_now_ms()
+
+        # Run prospective collector cycle for T+1 entries and daily open position MTM
+        try:
+            await process_prospective_pending_entries_and_mtm(client, cfg)
+        except Exception as collector_cycle_exc:
+            log.warning("Prospective collector cycle error: %s", collector_cycle_exc)
     except Exception as exc:                                       # noqa: BLE001
         st.last_error = str(exc)
         stale_rows = []
@@ -674,6 +680,91 @@ async def scan_once(uid: str) -> dict:
     finally:
         st.scanning = False
     return snapshot(uid)
+
+
+async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfig) -> None:
+    """Process pending T+1 entries and daily open position MTM/rebalances for prospective warehouse."""
+    try:
+        from app.services.snapback_prospective_collector import SnapbackProspectiveCollector
+        from app.engines.snapback.intraday_models import RawQuoteEvent
+        collector = SnapbackProspectiveCollector()
+
+        pending = collector.warehouse.get_pending_opportunities()
+        if pending and client:
+            now_ms = int(time.time() * 1000)
+            for opp in pending:
+                opp_id = opp["opportunity_id"]
+                try:
+                    fut_quotes = await client.get_quote(["NFO:NIFTY-I"])
+                    q_fut = (fut_quotes or {}).get("NFO:NIFTY-I") or {}
+                    if q_fut:
+                        fut_event = RawQuoteEvent(
+                            contract_id="NIFTY-I",
+                            exchange_timestamp_ms=now_ms,
+                            received_at_ms=now_ms,
+                            best_bid=float((q_fut.get("depth", {}).get("buy", [{}])[0] or {}).get("price", 0) or q_fut.get("last_price", 0)),
+                            best_ask=float((q_fut.get("depth", {}).get("sell", [{}])[0] or {}).get("price", 0) or q_fut.get("last_price", 0)),
+                            bid_quantity=int((q_fut.get("depth", {}).get("buy", [{}])[0] or {}).get("quantity", 0)),
+                            ask_quantity=int((q_fut.get("depth", {}).get("sell", [{}])[0] or {}).get("quantity", 0)),
+                            last_price=float(q_fut.get("last_price", 0)),
+                            open_interest=int(q_fut.get("oi", 0)),
+                        )
+                        collector.execute_pending_entry(
+                            opportunity_id=opp_id,
+                            cfg=cfg,
+                            t1_spot_price=float(opp.get("spot_price", 0)),
+                            futures_quote_event=fut_event,
+                            futures_symbol="NIFTY-I",
+                            option_candidates=[],
+                            option_quote_events={},
+                            causal_beta=1.0,
+                            option_lot_size=65,
+                            futures_lot_size=65,
+                        )
+                except Exception as opp_exc:
+                    log.debug("Pending prospective entry check skipped for %s: %s", opp_id, opp_exc)
+
+        open_opps = collector.warehouse.get_open_opportunities()
+        if open_opps and client:
+            now_ms = int(time.time() * 1000)
+            session_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            for opp in open_opps:
+                opp_id = opp["opportunity_id"]
+                symbol = opp["symbol"]
+                try:
+                    fut_quotes = await client.get_quote(["NFO:NIFTY-I"])
+                    q_fut = (fut_quotes or {}).get("NFO:NIFTY-I") or {}
+                    if q_fut:
+                        fut_event = RawQuoteEvent(
+                            contract_id="NIFTY-I",
+                            exchange_timestamp_ms=now_ms,
+                            received_at_ms=now_ms,
+                            best_bid=float((q_fut.get("depth", {}).get("buy", [{}])[0] or {}).get("price", 0) or q_fut.get("last_price", 0)),
+                            best_ask=float((q_fut.get("depth", {}).get("sell", [{}])[0] or {}).get("price", 0) or q_fut.get("last_price", 0)),
+                            bid_quantity=int((q_fut.get("depth", {}).get("buy", [{}])[0] or {}).get("quantity", 0)),
+                            ask_quantity=int((q_fut.get("depth", {}).get("sell", [{}])[0] or {}).get("quantity", 0)),
+                            last_price=float(q_fut.get("last_price", 0)),
+                            open_interest=int(q_fut.get("oi", 0)),
+                        )
+                        collector.rebalance_and_mtm(
+                            opportunity_id=opp_id,
+                            session_date=session_date,
+                            symbol=symbol,
+                            current_spot=float(opp.get("spot_price", 0)),
+                            current_option_delta=-0.70,
+                            option_bid=100.0,
+                            futures_quote_event=fut_event,
+                            option_entry_price=100.0,
+                            option_quantity=65,
+                            current_futures_lots=1,
+                            futures_lot_size=65,
+                            causal_beta=1.0,
+                        )
+                except Exception as mtm_exc:
+                    log.debug("Prospective MTM update skipped for %s: %s", opp_id, mtm_exc)
+
+    except Exception as exc:
+        log.warning("Prospective collector cycle skipped: %s", exc)
 
 
 async def _candles(client, st: ScanState, token: int, name: str) -> list:

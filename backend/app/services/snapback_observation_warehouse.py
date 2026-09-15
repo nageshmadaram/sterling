@@ -67,8 +67,16 @@ class SnapbackObservationWarehouse:
                         opportunity_id    TEXT PRIMARY KEY,
                         signal_type       TEXT NOT NULL,
                         spot_price        REAL NOT NULL,
-                        ema_50            REAL NOT NULL,
-                        ema_200           REAL NOT NULL,
+                        signal_spot       REAL NOT NULL DEFAULT 0.0,
+                        mean_target       REAL NOT NULL DEFAULT 0.0,
+                        breakout_level    REAL NOT NULL DEFAULT 0.0,
+                        stretch_atr       REAL NOT NULL DEFAULT 0.0,
+                        signal_iv         REAL NOT NULL DEFAULT 0.0,
+                        signal_rv         REAL NOT NULL DEFAULT 0.0,
+                        signal_side       TEXT NOT NULL DEFAULT '',
+                        signal_timestamp  TEXT NOT NULL DEFAULT '',
+                        ema_50            REAL NOT NULL DEFAULT 0.0,
+                        ema_200           REAL NOT NULL DEFAULT 0.0,
                         trend             TEXT NOT NULL,
                         is_valid          INTEGER NOT NULL DEFAULT 1,
                         rejection_reason  TEXT NOT NULL DEFAULT '',
@@ -76,6 +84,25 @@ class SnapbackObservationWarehouse:
                         {common_cols}
                     )
                 """)
+
+                # Automatic schema migration for existing databases missing new columns
+                existing_cols = {
+                    row[1] for row in conn.execute("PRAGMA table_info(opportunities)").fetchall()
+                }
+                col_migrations = {
+                    "status": "TEXT NOT NULL DEFAULT 'PENDING_ENTRY'",
+                    "signal_spot": "REAL NOT NULL DEFAULT 0.0",
+                    "mean_target": "REAL NOT NULL DEFAULT 0.0",
+                    "breakout_level": "REAL NOT NULL DEFAULT 0.0",
+                    "stretch_atr": "REAL NOT NULL DEFAULT 0.0",
+                    "signal_iv": "REAL NOT NULL DEFAULT 0.0",
+                    "signal_rv": "REAL NOT NULL DEFAULT 0.0",
+                    "signal_side": "TEXT NOT NULL DEFAULT ''",
+                    "signal_timestamp": "TEXT NOT NULL DEFAULT ''",
+                }
+                for col_name, col_def in col_migrations.items():
+                    if col_name not in existing_cols:
+                        conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col_name} {col_def}")
 
                 # 2. contract_candidates
                 conn.execute(f"""
@@ -242,9 +269,17 @@ class SnapbackObservationWarehouse:
         symbol: str,
         signal_type: str,
         spot_price: float,
-        ema_50: float,
-        ema_200: float,
-        trend: str,
+        signal_spot: float = 0.0,
+        mean_target: float = 0.0,
+        breakout_level: float = 0.0,
+        stretch_atr: float = 0.0,
+        signal_iv: float = 0.0,
+        signal_rv: float = 0.0,
+        signal_side: str = "",
+        signal_timestamp: str = "",
+        ema_50: float = 0.0,
+        ema_200: float = 0.0,
+        trend: str = "",
         is_valid: bool = True,
         rejection_reason: str = "",
         status: str = "PENDING_ENTRY",
@@ -259,17 +294,34 @@ class SnapbackObservationWarehouse:
                 conn.execute(
                     """
                     INSERT INTO opportunities (
-                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, is_valid, rejection_reason, status,
+                        opportunity_id, signal_type, spot_price, signal_spot, mean_target, breakout_level,
+                        stretch_atr, signal_iv, signal_rv, signal_side, signal_timestamp,
+                        ema_50, ema_200, trend, is_valid, rejection_reason, status,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
                         instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
-                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, int(is_valid), rejection_reason, status,
+                        opportunity_id, signal_type, spot_price, signal_spot or spot_price, mean_target, breakout_level,
+                        stretch_atr, signal_iv, signal_rv, signal_side, signal_timestamp or provider_timestamp or now,
+                        ema_50, ema_200, trend, int(is_valid), rejection_reason, status,
                         now, provider_timestamp or now, now, symbol, symbol, "", 0.0, "", source,
                         FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
                     ),
                 )
+        finally:
+            conn.close()
+
+    def get_opportunity_by_id(self, opportunity_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch single opportunity row by opportunity_id."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM opportunities WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                ).fetchone()
+                return dict(row) if row else None
         finally:
             conn.close()
 
@@ -286,6 +338,24 @@ class SnapbackObservationWarehouse:
                 else:
                     rows = conn.execute(
                         "SELECT * FROM opportunities WHERE is_valid = 1 AND status = 'PENDING_ENTRY'"
+                    ).fetchall()
+                return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_open_opportunities(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch all opportunities with active OPEN_POSITION status."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                if symbol:
+                    rows = conn.execute(
+                        "SELECT * FROM opportunities WHERE status = 'OPEN_POSITION' AND symbol = ?",
+                        (symbol,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM opportunities WHERE status = 'OPEN_POSITION'"
                     ).fetchall()
                 return [dict(r) for r in rows]
         finally:

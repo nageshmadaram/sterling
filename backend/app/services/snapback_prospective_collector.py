@@ -1,24 +1,17 @@
-"""Snapback Prospective Evidence Collector Service (PROSPECTIVE CAPTURE 1.0).
+"""Snapback Prospective Evidence Collector Service (PROSPECTIVE CAPTURE 1.0.1).
 
 Provider-agnostic continuous market data collector and paper observation engine.
 Wires frozen Snapback strategy signals (`SnapbackSignal`) directly to the
 prospective observation warehouse (`SnapbackObservationWarehouse`).
 
-Strict Specification & Contract Enforcement (PROSPECTIVE CAPTURE 1.0):
-1. Signal detected at Day T close -> persisted as PENDING_ENTRY in warehouse.
-2. Signal survives restart in SQLite warehouse opportunities table.
-3. Day T+1 first executable session quotes trigger entry observation.
-4. Reads ALL contract parameters from frozen `SnapbackConfig` (no hardcoded overrides).
-5. Validates actual quote quality and timestamps via `evaluate_quote_quality()`.
-6. Persists entire candidate option chain rows.
-7. Uses actual option and futures lot sizes from instrument metadata.
-8. Sizes long index futures hedge with causal beta and checks discrete hedge error
-   (marks INFEASIBLE_HEDGE_DISCRETIZATION if discretization error > 50%).
-9. Rebalances futures hedge on daily session updates.
-10. Calculates observed daily liquidation MTM (Long Option + Long Index Futures).
-11. Freezes model inputs at entry time.
-12. Calculates canonical model counterfactual P&L only after realized path exists.
-13. Paper execution only — absolutely no broker submission.
+Strict Specification & Contract Enforcement (PROSPECTIVE CAPTURE 1.0.1):
+1. Signal detected at Day T close -> persisted as PENDING_ENTRY in warehouse with explicit semantic fields.
+2. Day T+1 first executable session quotes trigger entry observation (verifies exact next eligible session date).
+3. Candidate option_type must match signal direction (PE for fade_up, CE for fade_down).
+4. Verifies frozen SnapbackConfig provenance (min_dte=40, max_dte=60, target_delta=0.70, min_oi=50k, max_spread=2%, min_premium=10).
+5. Bid/Ask-aware index futures rebalancing (increasing lots at ask, decreasing lots at bid, with realized futures P&L ledger).
+6. Canonical Black-Scholes counterfactual calculation using RISK_FREE=0.065 and NIFTY index futures path over realized path.
+7. Paper execution only — absolutely no broker submission.
 """
 from __future__ import annotations
 
@@ -32,11 +25,26 @@ from app.core.logging import get_logger
 from app.engines.snapback.config import SnapbackConfig
 from app.engines.snapback.intraday_models import QualityDecision, RawQuoteEvent
 from app.engines.snapback.models import SnapbackSignal
-from app.engines.snapback.pricing import bs_price
+from app.engines.snapback.pricing import RISK_FREE, bs_price
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
 log = get_logger(__name__)
+
+FROZEN_COMMIT_SHA = "5a1354202e2c960c66b7003fce9cb80abd152008"
+FROZEN_MANIFEST_HASH = "602d28f804e840d046e7b51d020d5718dfd38a08d27d5324ec9d81bfbc4e53e4"
+
+
+def verify_frozen_config(cfg: SnapbackConfig) -> bool:
+    """Verify that configuration parameters match frozen Snapback manifest specifications."""
+    return (
+        cfg.min_dte == 40 and
+        cfg.max_dte == 60 and
+        abs(cfg.target_delta - 0.70) < 1e-6 and
+        cfg.min_option_oi == 50_000 and
+        abs(cfg.max_spread_pct - 2.0) < 1e-6 and
+        abs(cfg.min_option_premium - 10.0) < 1e-6
+    )
 
 
 @dataclass
@@ -73,19 +81,27 @@ class SnapbackProspectiveCollector:
                 "opportunity_id": "",
             }
 
+        if not verify_frozen_config(cfg):
+            log.warning("Config parameters deviate from frozen manifest rules")
+
         ts_ms = signal.timestamp_ms or int(time.time() * 1000)
         opportunity_id = f"OPP-{signal.symbol}-{ts_ms}"
         provider_ts = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat()
 
-        # Record underlying signal opportunity as PENDING_ENTRY
-        # Correct semantic mapping:
-        # ema_50 = signal.mean_target (the 50-session EMA mean target)
-        # ema_200 = signal.level (the breakout level / 200-session level)
+        # Record underlying signal opportunity as PENDING_ENTRY with explicit semantic fields
         self.warehouse.record_opportunity(
             opportunity_id=opportunity_id,
             symbol=signal.symbol,
             signal_type=f"SNAPBACK_{signal.side.upper()}",
             spot_price=signal.entry,
+            signal_spot=signal.entry,
+            mean_target=signal.mean_target,
+            breakout_level=signal.level,
+            stretch_atr=signal.stretch,
+            signal_iv=signal.assumed_iv,
+            signal_rv=signal.realized_vol,
+            signal_side=signal.side,
+            signal_timestamp=provider_ts,
             ema_50=signal.mean_target,
             ema_200=signal.level,
             trend="BEARISH" if signal.side == "fade_up" else "BULLISH",
@@ -120,18 +136,87 @@ class SnapbackProspectiveCollector:
         futures_lot_size: int,
         available_capital: float = 1_000_000.0,
         slippage_pct: float = 0.0005,
+        execution_timestamp_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Day T+1 First Executable Session: Execute entry observation on fresh market quotes."""
-        now_ms = int(time.time() * 1000)
-        provider_ts = datetime.now(timezone.utc).isoformat()
+        now_ms = execution_timestamp_ms or int(time.time() * 1000)
+        provider_ts = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
 
-        # 1. Check Quote Quality for Index Futures Event on T+1
+        # 1. Load pending opportunity from warehouse
+        opp = self.warehouse.get_opportunity_by_id(opportunity_id)
+        if not opp:
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "INCONCLUSIVE",
+                "reason": f"Opportunity {opportunity_id} not found in warehouse",
+            }
+
+        if opp.get("status") != "PENDING_ENTRY":
+            return {
+                "opportunity_id": opportunity_id,
+                "status": opp.get("status"),
+                "reason": f"Opportunity is not PENDING_ENTRY (current status: {opp.get('status')})",
+            }
+
+        # 2. Enforce Frozen Config Provenance
+        if not verify_frozen_config(cfg):
+            self.warehouse.update_opportunity_status(opportunity_id, "NON_FROZEN_CONFIG")
+            self.warehouse.record_decision(
+                decision_id=f"DECISION-{opportunity_id}",
+                opportunity_id=opportunity_id,
+                symbol=opp.get("symbol", "UNKNOWN"),
+                decision="NON_FROZEN_CONFIG_REJECTED",
+                reason="Config parameters deviate from frozen SnapbackConfig specification",
+                provider_timestamp=provider_ts,
+            )
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "NON_FROZEN_CONFIG",
+                "reason": "Config parameters deviate from frozen SnapbackConfig specification",
+            }
+
+        # 3. Verify Day T -> Day T+1 Session Timing
+        sig_ts_str = opp.get("signal_timestamp") or opp.get("provider_timestamp") or ""
+        sig_date = None
+        if sig_ts_str:
+            try:
+                sig_date = datetime.fromisoformat(sig_ts_str.replace("Z", "+00:00")).date()
+            except Exception:
+                pass
+
+        exec_date = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).date()
+
+        if sig_date is not None:
+            if exec_date <= sig_date:
+                return {
+                    "opportunity_id": opportunity_id,
+                    "status": "INVALID_SESSION_TIMING",
+                    "reason": f"Attempted fill on signal day {sig_date} close instead of Day T+1 open ({exec_date})",
+                }
+            days_diff = (exec_date - sig_date).days
+            if days_diff > 3:
+                self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
+                self.warehouse.record_decision(
+                    decision_id=f"DECISION-{opportunity_id}",
+                    opportunity_id=opportunity_id,
+                    symbol=opp.get("symbol", "UNKNOWN"),
+                    decision="INCONCLUSIVE",
+                    reason=f"Missed T+1 entry window (signal date {sig_date}, execution date {exec_date} is {days_diff} days late)",
+                    provider_timestamp=provider_ts,
+                )
+                return {
+                    "opportunity_id": opportunity_id,
+                    "status": "INCONCLUSIVE",
+                    "reason": f"Missed T+1 entry window ({days_diff} days late)",
+                }
+
+        # 4. Check Quote Quality for Index Futures Event on T+1
         if futures_quote_event is None:
             self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
             self.warehouse.record_decision(
                 decision_id=f"DECISION-{opportunity_id}",
                 opportunity_id=opportunity_id,
-                symbol=opportunity_id.split("-")[1] if "-" in opportunity_id else "INDEX",
+                symbol=opp.get("symbol", "INDEX"),
                 decision="INCONCLUSIVE",
                 reason="Fresh executable futures quote event missing",
                 provider_timestamp=provider_ts,
@@ -160,10 +245,11 @@ class SnapbackProspectiveCollector:
                 "reason": reason_msg,
             }
 
-        symbol = futures_quote_event.contract_id.split(":")[0] if ":" in futures_quote_event.contract_id else "NIFTY"
+        symbol = opp.get("symbol", "NIFTY")
+        sig_side = opp.get("signal_side") or ("fade_up" if "FADE_UP" in opp.get("signal_type", "") else "fade_down")
+        expected_option_type = "PE" if sig_side == "fade_up" else "CE"
 
-        # 2. Evaluate Candidate Chain against Frozen SnapbackConfig Rules
-        # Read parameters directly from frozen cfg:
+        # 5. Evaluate Candidate Chain against Frozen SnapbackConfig Rules
         min_dte = cfg.min_dte  # 40
         max_dte = cfg.max_dte  # 60
         target_delta = cfg.target_delta  # 0.70
@@ -178,6 +264,8 @@ class SnapbackProspectiveCollector:
             q_event = option_quote_events.get(cand.symbol)
             rejection_reasons = []
 
+            if cand.option_type != expected_option_type:
+                rejection_reasons.append(f"MISMATCHED_OPTION_TYPE ({cand.option_type} != expected {expected_option_type})")
             if not cand.is_monthly:
                 rejection_reasons.append("NOT_MONTHLY_EXPIRY")
             if not (min_dte <= cand.dte <= max_dte):
@@ -205,13 +293,12 @@ class SnapbackProspectiveCollector:
 
             is_eligible = len(rejection_reasons) == 0
             reason_str = "; ".join(rejection_reasons) if rejection_reasons else "ELIGIBLE"
-            delta_dist = abs(abs(cand.theoretical_delta) - target_delta)
 
             all_ranked_candidates.append((cand, q_event, reason_str))
             if is_eligible and q_event is not None:
+                delta_dist = abs(abs(cand.theoretical_delta) - target_delta)
                 eligible_tuples.append((cand, q_event, delta_dist, reason_str))
 
-        # Sort all candidates (eligible first, sorted by delta distance)
         all_ranked_candidates.sort(
             key=lambda t: (
                 0 if t[2] == "ELIGIBLE" else 1,
@@ -225,7 +312,7 @@ class SnapbackProspectiveCollector:
             eligible_tuples.sort(key=lambda x: x[2])
             chosen_cand, chosen_quote = eligible_tuples[0][0], eligible_tuples[0][1]
 
-        # Record ALL candidate contract rows & option quote snapshots in warehouse
+        # Record ALL candidate rows & option quote snapshots in warehouse
         for rank, (cand, q_event, r_reason) in enumerate(all_ranked_candidates, start=1):
             is_chosen = (cand == chosen_cand)
             cand_id = f"CAND-{opportunity_id}-{cand.symbol}"
@@ -292,7 +379,6 @@ class SnapbackProspectiveCollector:
             source="PROSPECTIVE_PAPER",
         )
 
-        # 3. If no candidate satisfied frozen contract constraints -> NO_FILL
         if chosen_cand is None or chosen_quote is None:
             log.info(f"Opportunity {opportunity_id} resulting in NO_FILL: no candidate met frozen contract rules.")
             self.warehouse.update_opportunity_status(opportunity_id, "NO_FILL")
@@ -301,7 +387,7 @@ class SnapbackProspectiveCollector:
                 opportunity_id=opportunity_id,
                 symbol=symbol,
                 decision="NO_FILL",
-                reason="No candidate option satisfied frozen contract constraints (40-60 DTE, monthly, PE, OI>=50k, spread<=2%, ask>0)",
+                reason="No candidate option satisfied frozen contract constraints (40-60 DTE, monthly, matching option_type, OI>=50k, spread<=2%, ask>0)",
                 provider_timestamp=provider_ts,
             )
             return {
@@ -311,18 +397,14 @@ class SnapbackProspectiveCollector:
                 "candidates_recorded": len(all_ranked_candidates),
             }
 
-        # 4. Index Futures Hedge Sizing & Discrete Error Check
-        # For fade_up PE option (Put option delta is negative, delta < 0):
-        # Market exposure = delta * beta * option_qty * spot_price < 0 (Short market).
-        # Hedge is LONG index futures (BUY index futures) to neutralize short market delta!
+        # 6. Index Futures Hedge Sizing & Discrete Error Check
         chosen_delta_mag = abs(chosen_cand.theoretical_delta)
-        option_qty = option_lot_size  # 1 option lot
+        option_qty = option_lot_size
 
         raw_futures_qty = (chosen_delta_mag * causal_beta * option_qty * t1_spot_price) / futures_quote_event.best_ask
         hedge_lots = round(raw_futures_qty / futures_lot_size)
         actual_futures_qty = hedge_lots * futures_lot_size
 
-        # Check discrete hedge error percentage:
         hedge_error_pct = (abs(actual_futures_qty - raw_futures_qty) / (raw_futures_qty + 1e-9)) * 100.0
 
         if raw_futures_qty > 0 and hedge_error_pct > 50.0:
@@ -342,7 +424,7 @@ class SnapbackProspectiveCollector:
                 "reason": f"Discrete futures hedge error too high ({hedge_error_pct:.1f}%)",
             }
 
-        # 5. Execute T+1 Paper Position
+        # 7. Execute T+1 Paper Position
         option_fill_price = chosen_quote.best_ask * (1.0 + slippage_pct)
         futures_fill_price = futures_quote_event.best_ask * (1.0 + slippage_pct)
 
@@ -387,7 +469,7 @@ class SnapbackProspectiveCollector:
             prior_hedge_lots=0,
             new_hedge_lots=hedge_lots,
             futures_fill_price=futures_fill_price,
-            reason="Initial Long Index Futures Hedge Entry",
+            reason="Initial Long Index Futures Hedge Entry (bought at ask)",
             provider_symbol=futures_quote_event.contract_id,
             provider_timestamp=provider_ts,
         )
@@ -456,21 +538,39 @@ class SnapbackProspectiveCollector:
         current_spot: float,
         current_option_delta: float,
         option_bid: float,
-        futures_bid: float,
+        futures_quote_event: RawQuoteEvent,
         option_entry_price: float,
-        futures_entry_price: float,
         option_quantity: int,
         current_futures_lots: int,
         futures_lot_size: int,
         causal_beta: float,
+        prior_realized_futures_pnl: float = 0.0,
+        prior_avg_futures_entry_price: float = 0.0,
     ) -> Dict[str, Any]:
-        """Daily session update: Rebalance index futures hedge and record liquidation MTM."""
-        # 1. Daily Futures Rebalance Sizing
+        """Bid/Ask-aware futures rebalancing and MTM calculation with realized P&L ledger."""
+        now_ms = int(time.time() * 1000)
+        provider_ts = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
+
+        fut_bid = futures_quote_event.best_bid
+        fut_ask = futures_quote_event.best_ask
+
         delta_mag = abs(current_option_delta)
-        new_raw_qty = (delta_mag * causal_beta * option_quantity * current_spot) / futures_bid
+        new_raw_qty = (delta_mag * causal_beta * option_quantity * current_spot) / fut_bid
         new_hedge_lots = round(new_raw_qty / futures_lot_size)
 
-        if new_hedge_lots != current_futures_lots:
+        realized_pnl = prior_realized_futures_pnl
+        avg_entry_price = prior_avg_futures_entry_price if prior_avg_futures_entry_price > 0 else fut_ask
+
+        if new_hedge_lots > current_futures_lots:
+            # Increasing LONG index futures hedge -> Buy additional lots at ASK
+            add_lots = new_hedge_lots - current_futures_lots
+            fill_price = fut_ask
+            if current_futures_lots > 0:
+                tot_open_cost = (current_futures_lots * prior_avg_futures_entry_price) + (add_lots * fill_price)
+                avg_entry_price = tot_open_cost / new_hedge_lots
+            else:
+                avg_entry_price = fill_price
+
             reb_id = f"REB-{opportunity_id}-{session_date}"
             self.warehouse.record_hedge_rebalance(
                 rebalance_id=reb_id,
@@ -478,17 +578,40 @@ class SnapbackProspectiveCollector:
                 symbol=symbol,
                 prior_hedge_lots=current_futures_lots,
                 new_hedge_lots=new_hedge_lots,
-                futures_fill_price=futures_bid,
-                reason=f"Daily delta rebalance on session {session_date}",
+                futures_fill_price=fill_price,
+                reason=f"Increase long futures hedge at ask ({current_futures_lots} -> {new_hedge_lots} lots)",
+                provider_timestamp=provider_ts,
             )
 
-        # 2. Observed Daily Liquidation MTM
-        # Long Option MTM = (option_bid - option_entry_price) * option_quantity
-        # Long Futures MTM = (futures_bid - futures_entry_price) * actual_futures_qty
-        actual_futures_qty = current_futures_lots * futures_lot_size
+        elif new_hedge_lots < current_futures_lots:
+            # Decreasing LONG index futures hedge -> Sell reduced lots at BID
+            red_lots = current_futures_lots - new_hedge_lots
+            fill_price = fut_bid
+            closed_qty = red_lots * futures_lot_size
+            closed_pnl = (fill_price - prior_avg_futures_entry_price) * closed_qty
+            realized_pnl += closed_pnl
+
+            # Open entry price remains prior_avg_futures_entry_price for remaining open lots
+            avg_entry_price = prior_avg_futures_entry_price if new_hedge_lots > 0 else 0.0
+
+            reb_id = f"REB-{opportunity_id}-{session_date}"
+            self.warehouse.record_hedge_rebalance(
+                rebalance_id=reb_id,
+                opportunity_id=opportunity_id,
+                symbol=symbol,
+                prior_hedge_lots=current_futures_lots,
+                new_hedge_lots=new_hedge_lots,
+                futures_fill_price=fill_price,
+                reason=f"Decrease long futures hedge at bid ({current_futures_lots} -> {new_hedge_lots} lots, realized PnL: {closed_pnl:.2f})",
+                provider_timestamp=provider_ts,
+            )
+
+        # Calculate Liquidation MTM
         option_mtm = (option_bid - option_entry_price) * option_quantity
-        futures_mtm = (futures_bid - futures_entry_price) * actual_futures_qty
-        total_mtm = option_mtm + futures_mtm
+        open_futures_qty = new_hedge_lots * futures_lot_size
+        unrealized_futures_mtm = (fut_bid - avg_entry_price) * open_futures_qty if new_hedge_lots > 0 else 0.0
+        total_futures_mtm = realized_pnl + unrealized_futures_mtm
+        total_mtm = option_mtm + total_futures_mtm
 
         mtm_id = f"MTM-{opportunity_id}-{session_date}"
         self.warehouse.record_daily_mtm(
@@ -497,10 +620,11 @@ class SnapbackProspectiveCollector:
             opportunity_id=opportunity_id,
             symbol=symbol,
             option_mtm=option_mtm,
-            futures_mtm=futures_mtm,
+            futures_mtm=total_futures_mtm,
             total_mtm=total_mtm,
             option_liquidation_bid=option_bid,
-            futures_liquidation_quote=futures_bid,
+            futures_liquidation_quote=fut_bid,
+            provider_timestamp=provider_ts,
         )
 
         return {
@@ -508,8 +632,10 @@ class SnapbackProspectiveCollector:
             "session_date": session_date,
             "prior_hedge_lots": current_futures_lots,
             "new_hedge_lots": new_hedge_lots,
+            "realized_futures_pnl": round(realized_pnl, 2),
+            "avg_open_futures_entry_price": round(avg_entry_price, 2),
             "option_mtm": round(option_mtm, 2),
-            "futures_mtm": round(futures_mtm, 2),
+            "futures_mtm": round(total_futures_mtm, 2),
             "total_mtm": round(total_mtm, 2),
         }
 
@@ -533,24 +659,30 @@ class SnapbackProspectiveCollector:
         statutory_costs: float,
         option_quantity: int,
         futures_quantity: int,
+        nifty_futures_entry: Optional[float] = None,
+        nifty_futures_exit: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Close paper position and calculate canonical Black-Scholes counterfactual model P&L."""
+        """Close paper position and calculate canonical Black-Scholes counterfactual model P&L over realized path."""
         actual_opt_pnl = (option_exit_bid - option_entry_price) * option_quantity
         actual_fut_pnl = (futures_exit_bid - futures_entry_price) * futures_quantity
         actual_total = actual_opt_pnl + actual_fut_pnl - statutory_costs
 
-        # Canonical Black-Scholes counterfactual calculation over realized path:
-        # P_entry = bs_price(entry_spot, selected_strike, entry_dte/365, 0.06, iv_proxy, is_call=False)
-        # P_exit  = bs_price(exit_spot,  selected_strike, exit_dte/365,  0.06, iv_proxy, is_call=False)
         t_entry = max(0.001, entry_dte / 365.0)
         t_exit = max(0.001, exit_dte / 365.0)
 
-        bs_entry = bs_price(entry_spot, selected_strike, t_entry, iv_proxy, call=False, rate=0.06)
-        bs_exit = bs_price(exit_spot, selected_strike, t_exit, iv_proxy, call=False, rate=0.06)
+        # Canonical Black-Scholes counterfactual calculation using RISK_FREE = 0.065
+        bs_entry = bs_price(entry_spot, selected_strike, t_entry, iv_proxy, call=False, rate=RISK_FREE)
+        bs_exit = bs_price(exit_spot, selected_strike, t_exit, iv_proxy, call=False, rate=RISK_FREE)
 
         modeled_opt_pnl = (bs_exit - bs_entry) * option_quantity
-        modeled_fut_pnl = (exit_spot - entry_spot) * futures_quantity
-        modeled_costs = statutory_costs * 0.90
+
+        # Modeled futures leg uses NIFTY index futures path (not stock spot path)
+        fut_entry_path = nifty_futures_entry if nifty_futures_entry is not None else futures_entry_price
+        fut_exit_path = nifty_futures_exit if nifty_futures_exit is not None else futures_exit_bid
+        modeled_fut_pnl = (fut_exit_path - fut_entry_path) * futures_quantity
+
+        # Modeled costs equal actual statutory costs (no fabricated multipliers)
+        modeled_costs = statutory_costs
         modeled_total = modeled_opt_pnl + modeled_fut_pnl - modeled_costs
 
         return self.warehouse.record_outcome(
