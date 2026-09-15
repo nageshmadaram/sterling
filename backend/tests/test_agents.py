@@ -26,6 +26,17 @@ from app.services import live_safety
 
 
 @pytest.fixture(autouse=True)
+def _init_test_db(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "test_agents.db")
+    monkeypatch.setenv("STERLING_DB_PATH", db_file)
+    from app.services import db
+    monkeypatch.setattr(db, "_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_available", True)
+    db.init()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_safety():
     live_safety.reset_all_for_tests()
     yield

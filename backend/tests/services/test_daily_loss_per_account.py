@@ -15,6 +15,16 @@ from app.services import db, live_safety
 
 
 @pytest.fixture(autouse=True)
+def _init_test_db(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "test_dl.db")
+    monkeypatch.setenv("STERLING_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_available", True)
+    db.init()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_config(monkeypatch):
     """A config store of its own, so one test cannot set another's thresholds."""
     store: dict[str, str] = {}

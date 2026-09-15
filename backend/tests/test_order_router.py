@@ -29,6 +29,17 @@ from app.services.execution.order_router import (
 # ─── Fixtures ─────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _init_test_db(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "test_order_router.db")
+    monkeypatch.setenv("STERLING_DB_PATH", db_file)
+    from app.services import db
+    monkeypatch.setattr(db, "_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_available", True)
+    db.init()
+    yield
+
+
 @dataclass
 class _FakeInstrument:
     underlying: str = "NIFTY"

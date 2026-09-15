@@ -28,6 +28,16 @@ _DB_PATH = _resolve_default_db_path()
 _available = False
 
 
+class ControlPlaneUnavailableError(RuntimeError):
+    """Raised when database or control plane state is uninitialized, unavailable, or unreadable."""
+    pass
+
+
+class ExecutionControlCASConflictError(RuntimeError):
+    """Raised when a set_execution_control compare-and-swap (CAS) revision check fails."""
+    pass
+
+
 def _create_tables(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS positions (
@@ -395,15 +405,30 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             scope TEXT NOT NULL DEFAULT 'global',
             uid TEXT NOT NULL DEFAULT 'default',
             account_id TEXT NOT NULL DEFAULT 'default',
-            state TEXT NOT NULL DEFAULT 'RUNNING',
+            operator_state TEXT NOT NULL DEFAULT 'RUNNING',
+            recovery_state TEXT NOT NULL DEFAULT 'CLEAN',
+            reason_code TEXT NOT NULL DEFAULT '',
             reason TEXT NOT NULL DEFAULT '',
-            revision INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1,
             actor TEXT NOT NULL DEFAULT 'system',
-            created_ms INTEGER NOT NULL,
-            updated_ms INTEGER NOT NULL,
+            last_reconciled_ms INTEGER NOT NULL DEFAULT 0,
+            created_ms INTEGER NOT NULL DEFAULT 0,
+            updated_ms INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (scope, uid, account_id)
         )
     """)
+    cols = [r[1] if isinstance(r, tuple) else r["name"] for r in conn.execute("PRAGMA table_info(execution_control)").fetchall()]
+    if "operator_state" not in cols:
+        conn.execute("ALTER TABLE execution_control ADD COLUMN operator_state TEXT NOT NULL DEFAULT 'RUNNING'")
+    if "recovery_state" not in cols:
+        conn.execute("ALTER TABLE execution_control ADD COLUMN recovery_state TEXT NOT NULL DEFAULT 'CLEAN'")
+    if "reason_code" not in cols:
+        conn.execute("ALTER TABLE execution_control ADD COLUMN reason_code TEXT NOT NULL DEFAULT ''")
+    if "last_reconciled_ms" not in cols:
+        conn.execute("ALTER TABLE execution_control ADD COLUMN last_reconciled_ms INTEGER NOT NULL DEFAULT 0")
+    if "state" in cols:
+        conn.execute("UPDATE execution_control SET operator_state = state WHERE operator_state = 'RUNNING' AND state IS NOT NULL")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS atm_trades (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -601,6 +626,7 @@ def init() -> bool:
     global _available
     try:
         conn = sqlite3.connect(_DB_PATH, timeout=30.0)
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         _create_tables(conn)
         conn.close()
@@ -1062,50 +1088,112 @@ def get_execution_control(
     account_id: str = "default",
 ) -> dict:
     if not _available:
-        return {"state": "RUNNING", "reason": "Database uninitialized", "revision": 0}
+        raise ControlPlaneUnavailableError("Cannot read execution control: Database unavailable")
     try:
         with _conn() as c:
             row = c.execute(
-                "SELECT scope, uid, account_id, state, reason, revision, actor, created_ms, updated_ms"
+                "SELECT scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, created_ms, updated_ms"
                 " FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
                 (scope, uid, account_id),
             ).fetchone()
         if not row:
-            return {"state": "RUNNING", "reason": "", "revision": 0, "scope": scope, "uid": uid, "account_id": account_id}
-        return dict(row)
+            return {
+                "scope": scope,
+                "uid": uid,
+                "account_id": account_id,
+                "operator_state": "RUNNING",
+                "state": "RUNNING",
+                "recovery_state": "CLEAN",
+                "reason_code": "",
+                "reason": "",
+                "revision": 0,
+                "actor": "system",
+                "last_reconciled_ms": 0,
+                "created_ms": 0,
+                "updated_ms": 0,
+            }
+        d = dict(row)
+        if "state" not in d:
+            d["state"] = d.get("operator_state", "RUNNING")
+        if "operator_state" not in d:
+            d["operator_state"] = d.get("state", "RUNNING")
+        if "recovery_state" not in d:
+            d["recovery_state"] = "CLEAN"
+        return d
     except Exception as exc:
-        if "no such table" in str(exc).lower():
-            return {"state": "RUNNING", "reason": "Schema uninitialized", "revision": 0}
-        log.warning("get_execution_control failed: %s", exc)
-        return {"state": "HALTED", "reason": f"Database read failure: {exc}", "revision": 0}
+        if isinstance(exc, ControlPlaneUnavailableError):
+            raise
+        raise ControlPlaneUnavailableError(f"Database read failure in get_execution_control: {exc}") from exc
 
 
 def set_execution_control(
-    state: str,
+    operator_state: str = "RUNNING",
+    recovery_state: str = "CLEAN",
+    reason_code: str = "",
     reason: str = "",
     actor: str = "system",
     scope: str = "global",
     uid: str = "default",
     account_id: str = "default",
+    expected_revision: int | None = None,
+    last_reconciled_ms: int | None = None,
+    state: str | None = None,
 ) -> dict:
+    if state is not None:
+        operator_state = state
+
+    if operator_state not in ("RUNNING", "HALTED"):
+        raise ValueError(f"Invalid operator_state: '{operator_state}'. Must be 'RUNNING' or 'HALTED'.")
+    if recovery_state not in ("CLEAN", "RECOVERY_REQUIRED"):
+        raise ValueError(f"Invalid recovery_state: '{recovery_state}'. Must be 'CLEAN' or 'RECOVERY_REQUIRED'.")
+
     if not _available:
-        raise RuntimeError("Cannot write execution control: Database unavailable")
+        raise ControlPlaneUnavailableError("Cannot write execution control: Database unavailable")
+
     now_ms = int(time.time() * 1000)
     with _conn() as c:
         row = c.execute(
-            "SELECT revision FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
+            "SELECT revision, last_reconciled_ms, created_ms FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
             (scope, uid, account_id),
         ).fetchone()
+
+        if expected_revision is not None:
+            curr_rev = row["revision"] if row else 0
+            if curr_rev != expected_revision:
+                raise ExecutionControlCASConflictError(
+                    f"CAS conflict in set_execution_control: expected revision {expected_revision}, current revision is {curr_rev}"
+                )
+
         next_rev = (row["revision"] + 1) if row else 1
+        created_ms = row["created_ms"] if row else now_ms
+        reconciled_ms = last_reconciled_ms if last_reconciled_ms is not None else (row["last_reconciled_ms"] if row else 0)
+
         c.execute(
-            "INSERT INTO execution_control (scope, uid, account_id, state, reason, revision, actor, created_ms, updated_ms)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO execution_control ("
+            "scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, created_ms, updated_ms"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(scope, uid, account_id) DO UPDATE SET"
-            " state=excluded.state, reason=excluded.reason, revision=excluded.revision,"
-            " actor=excluded.actor, updated_ms=excluded.updated_ms",
-            (scope, uid, account_id, state, reason, next_rev, actor, now_ms, now_ms),
+            " operator_state=excluded.operator_state, recovery_state=excluded.recovery_state,"
+            " reason_code=excluded.reason_code, reason=excluded.reason, revision=excluded.revision,"
+            " actor=excluded.actor, last_reconciled_ms=excluded.last_reconciled_ms, updated_ms=excluded.updated_ms",
+            (scope, uid, account_id, operator_state, recovery_state, reason_code, reason, next_rev, actor, reconciled_ms, created_ms, now_ms),
         )
-    return {"state": state, "reason": reason, "revision": next_rev, "actor": actor, "updated_ms": now_ms}
+
+    return {
+        "scope": scope,
+        "uid": uid,
+        "account_id": account_id,
+        "operator_state": operator_state,
+        "state": operator_state,
+        "recovery_state": recovery_state,
+        "reason_code": reason_code,
+        "reason": reason,
+        "revision": next_rev,
+        "actor": actor,
+        "last_reconciled_ms": reconciled_ms,
+        "created_ms": created_ms,
+        "updated_ms": now_ms,
+    }
 
 
 def record_calibration_trade(source_trade_id: str, pnl_pct: float, regime: str = "default") -> bool:

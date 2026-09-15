@@ -1,7 +1,7 @@
 # Sterling System Audit Baseline — 15 September 2026
 
 **Audit Baseline Commit:** `68537029ee31126bbde68298677e08d10d169aeb`  
-**Current Synchronized Commit:** `6ffdad9de480c67fe7e73a328df1777ab6be24e1`  
+**Current Synchronized Commit:** `6c8d59d43ea67eaba2a9d598e1314a409cf32f29`  
 **Audit Date:** 15 September 2026  
 **Scope:** Repository architecture, release governance, market-data path, signal generation, replay, risk, execution, persistence, broker reconciliation, frontend contracts, security, observability and production-readiness evidence.
 
@@ -27,6 +27,13 @@
 
 | Item | Status | Notes |
 |---|---|---|
+| **EXEC-CTRL-SPEC** | **ACCEPTED WITH STATE-MODEL AMENDMENT** | Orthogonal 2D control states (`operator_state` + `recovery_state`), CAS revision control |
+| **EXEC-CTRL-IMPL** | **P0 OPEN** | Implementation underway for durable control authority |
+| **EXEC-SVC-SPEC** | **ACCEPTED WITH EXPOSURE-EFFECT AMENDMENT** | Exposure effect classification (`INCREASE_EXPOSURE`, `REDUCE_EXPOSURE`, etc.) |
+| **EXEC-SVC-IMPL** | **P0 OPEN / SCAFFOLD ONLY** | `CanonicalExecutionService` pipeline implementation underway |
+| **MANUAL-KITE-MIGRATION** | **OPEN** | Not migrated yet |
+| **KITE-JOURNAL/LIFECYCLE** | **VERIFIED REFERENCE IMPLEMENTATION** | Durable journal and execution recovery primitives |
+| **RELEASE-GATE** | **VERIFIED GREEN on `049941759...`** | Verified green pipeline release gate |
 | **SEC-01** | **VERIFIED IMPLEMENTED** | Fail-closed ordering, DB secret inspection, 32+ char entropy, Fernet backend |
 | **CI-01** | **VERIFIED IMPLEMENTED** | `release-gate` with `always()` and explicit upstream status evaluation |
 | **BUILD-01** | **VERIFIED RESOLVED** | Frontend `tsc --noEmit` returns 0 errors |
@@ -34,4 +41,4 @@
 | **KITE-CONTRACT-01** | **VERIFIED RESOLVED** | `KiteSessionResult` backend model & endpoints expose `account_id`, `useKite.ts` consumes `kite_user_id` |
 | **ORION-01** | **ACCEPTED** | Two-layer validation contract, 30+ session certification preferred |
 | **GOV-01** | **OPEN** | `main` is still unprotected and required-check enforcement is off |
-| **RELEASE-GATE** | **VERIFIED ACTIVE** | Hardened with `if: ${{ always() }}` evaluating all upstream job statuses |
+

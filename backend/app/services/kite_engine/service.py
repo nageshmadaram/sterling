@@ -2484,7 +2484,7 @@ async def emergency_square_off_all(client, uid: str) -> dict:
 
 async def emergency_halt(client, uid: str, reason: str = "Operator Emergency Halt") -> dict:
     """Simultaneously engage the global kill switch and square off all open positions."""
-    live_safety.set_kill_switch(True, reason=reason)
+    live_safety.set_kill_switch(True, reason=reason, uid=uid, reason_code="EMERGENCY_HALT")
     cfg = state.get_config(uid)
     if cfg.auto_execute:
         state.set_config(uid, cfg.model_copy(update={"auto_execute": False}))

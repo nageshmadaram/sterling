@@ -9,8 +9,21 @@ log=logging.getLogger(__name__)
 _KILL_SWITCH={"enabled":False,"reason":"","set_ts_ms":0}; _IDEMPOTENCY_CACHE={}; _IDEMPOTENCY_TTL_MS=60000; _RETRY_QUEUE={}
 
 def kill_switch_state(): return dict(_KILL_SWITCH)
-def set_kill_switch(enabled:bool,reason:str=""):
-    _KILL_SWITCH.update({"enabled":bool(enabled),"reason":reason or ("manual halt" if enabled else ""),"set_ts_ms":int(time.time()*1000)}); return dict(_KILL_SWITCH)
+def set_kill_switch(enabled: bool, reason: str = "", uid: str = "default", reason_code: str = "kill_switch"):
+    _KILL_SWITCH.update({"enabled": bool(enabled), "reason": reason or ("manual halt" if enabled else ""), "set_ts_ms": int(time.time() * 1000)})
+    try:
+        from app.services import db
+        if db._available:
+            db.set_execution_control(
+                operator_state="HALTED" if enabled else "RUNNING",
+                reason=reason or ("manual halt" if enabled else ""),
+                reason_code=reason_code,
+                uid=uid,
+                actor="operator",
+            )
+    except Exception as exc:
+        log.warning("Failed to persist durable kill switch state: %s", exc)
+    return dict(_KILL_SWITCH)
 
 @dataclass
 class DailyLossConfig:
@@ -163,23 +176,38 @@ class SafetyDecision:
     allowed:bool; reason:str=""; code:str=""
     def to_dict(self):return {"allowed":self.allowed,"reason":self.reason,"code":self.code}
 
-def assert_safe_to_trade(positions,idempotency_key=None,*,check_daily_loss=True,uid:str|None=None):
+def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=True, uid: str | None = None, exposure_effect: str = "INCREASE_EXPOSURE"):
     try:
         from app.services import db
         ctrl = db.get_execution_control(uid=uid or "default")
-        if ctrl.get("state") == "HALTED":
-            return SafetyDecision(False, f"Durable control plane HALTED: {ctrl.get('reason') or 'Halted'}", "durable_halt")
-        if ctrl.get("state") == "RECOVERY_REQUIRED":
-            return SafetyDecision(False, "Durable control plane RECOVERY_REQUIRED", "recovery_required")
-        if kill_switch_state().get("enabled"):return SafetyDecision(False,f"Kill switch active: {kill_switch_state().get('reason') or 'manual halt'}","kill_switch")
-        if check_daily_loss:
-            dl=daily_loss_state(positions,uid=uid)
-            if dl["level"]=="halt":return SafetyDecision(False,f"Daily loss circuit breaker: INR {dl['pnl_inr']:.2f} <= INR {dl['hard_halt_inr']:.2f}","daily_loss_halt")
+        op_state = ctrl.get("operator_state") or ctrl.get("state", "HALTED")
+        rec_state = ctrl.get("recovery_state", "CLEAN")
+
+        is_exposure_increasing = exposure_effect == "INCREASE_EXPOSURE"
+
+        if is_exposure_increasing:
+            if rec_state == "RECOVERY_REQUIRED":
+                return SafetyDecision(False, "Durable control plane RECOVERY_REQUIRED (broker reconciliation pending)", "recovery_required")
+            if op_state == "HALTED":
+                code = ctrl.get("reason_code") or "kill_switch"
+                if not code or code in ("MANUAL_HALT", "EMERGENCY_HALT", "durable_halt"):
+                    code = "kill_switch"
+                return SafetyDecision(False, f"Durable control plane HALTED: {ctrl.get('reason') or 'Halted'}", code)
+            if kill_switch_state().get("enabled"):
+                return SafetyDecision(False, f"Kill switch active: {kill_switch_state().get('reason') or 'manual halt'}", "kill_switch")
+            if check_daily_loss:
+                dl = daily_loss_state(positions, uid=uid)
+                if dl["level"] == "halt":
+                    return SafetyDecision(False, f"Daily loss circuit breaker: INR {dl['pnl_inr']:.2f} <= INR {dl['hard_halt_inr']:.2f}", "daily_loss_halt")
+
         if idempotency_key:
-            prior=check_idempotency(idempotency_key)
-            if prior:return SafetyDecision(False,f"Duplicate order — already placed as {prior}","duplicate_order")
+            prior = check_idempotency(idempotency_key)
+            if prior:
+                return SafetyDecision(False, f"Duplicate order — already placed as {prior}", "duplicate_order")
         return SafetyDecision(True)
-    except Exception as exc:return SafetyDecision(False,f"Safety evaluation failed closed: {exc}","safety_unknown")
+    except Exception as exc:
+        return SafetyDecision(False, f"Safety evaluation failed closed: {exc}", "safety_unknown")
+
 
 @dataclass
 class PerSymbolCapConfig:max_per_symbol:int=3
@@ -198,3 +226,11 @@ def per_symbol_cap_breach(sym,positions):
 def reset_all_for_tests():
     _KILL_SWITCH.update({"enabled":False,"reason":"","set_ts_ms":0});_IDEMPOTENCY_CACHE.clear();_RETRY_QUEUE.clear()
     global _DAILY_LOSS_CFG;_DAILY_LOSS_CFG=DailyLossConfig()
+    try:
+        from app.services import db
+        if db._available:
+            with db._conn() as c:
+                c.execute("DELETE FROM execution_control")
+    except Exception:
+        pass
+

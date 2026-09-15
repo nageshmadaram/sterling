@@ -35,6 +35,17 @@ from app.services.live_safety import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _init_test_db(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "test_live_safety.db")
+    monkeypatch.setenv("STERLING_DB_PATH", db_file)
+    from app.services import db
+    monkeypatch.setattr(db, "_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_available", True)
+    db.init()
+    yield
+
+
 @dataclass
 class _FakePos:
     """Minimal stand-in for PaperPosition — only the fields live_safety reads."""
