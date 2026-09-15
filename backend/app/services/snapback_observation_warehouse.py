@@ -260,6 +260,30 @@ class SnapbackObservationWarehouse:
                         {common_cols}
                     )
                 """)
+
+                # 12. paper_positions (Active paper position state ledger)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS paper_positions (
+                        opportunity_id          TEXT PRIMARY KEY,
+                        symbol                  TEXT NOT NULL,
+                        option_symbol           TEXT NOT NULL,
+                        option_qty              INTEGER NOT NULL,
+                        option_entry_price      REAL NOT NULL,
+                        option_expiry           TEXT NOT NULL,
+                        option_strike           REAL NOT NULL,
+                        futures_symbol          TEXT NOT NULL,
+                        futures_lot_size        INTEGER NOT NULL,
+                        current_futures_lots    INTEGER NOT NULL,
+                        avg_futures_entry_price REAL NOT NULL,
+                        realized_futures_pnl    REAL NOT NULL DEFAULT 0.0,
+                        entry_spot              REAL NOT NULL,
+                        entry_timestamp         TEXT NOT NULL,
+                        entry_dte               INTEGER NOT NULL,
+                        entry_iv                REAL NOT NULL,
+                        causal_beta             REAL NOT NULL,
+                        status                  TEXT NOT NULL DEFAULT 'OPEN'
+                    )
+                """)
         finally:
             conn.close()
 
@@ -358,6 +382,115 @@ class SnapbackObservationWarehouse:
                         "SELECT * FROM opportunities WHERE status = 'OPEN_POSITION'"
                     ).fetchall()
                 return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def save_paper_position(
+        self,
+        opportunity_id: str,
+        symbol: str,
+        option_symbol: str,
+        option_qty: int,
+        option_entry_price: float,
+        option_expiry: str,
+        option_strike: float,
+        futures_symbol: str,
+        futures_lot_size: int,
+        current_futures_lots: int,
+        avg_futures_entry_price: float,
+        realized_futures_pnl: float,
+        entry_spot: float,
+        entry_timestamp: str,
+        entry_dte: int,
+        entry_iv: float,
+        causal_beta: float,
+        status: str = "OPEN",
+    ) -> None:
+        """Persist active paper position state ledger."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO paper_positions (
+                        opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
+                        option_expiry, option_strike, futures_symbol, futures_lot_size,
+                        current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
+                        option_expiry, option_strike, futures_symbol, futures_lot_size,
+                        current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def update_paper_position_hedge(
+        self,
+        opportunity_id: str,
+        new_futures_lots: int,
+        avg_futures_entry_price: float,
+        realized_futures_pnl: float,
+    ) -> None:
+        """Update open futures lots, weighted average entry price, and realized futures PnL in ledger."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE paper_positions
+                    SET current_futures_lots = ?, avg_futures_entry_price = ?, realized_futures_pnl = ?
+                    WHERE opportunity_id = ?
+                """,
+                    (new_futures_lots, avg_futures_entry_price, realized_futures_pnl, opportunity_id),
+                )
+        finally:
+            conn.close()
+
+    def get_paper_position(self, opportunity_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch active paper position state ledger for an opportunity."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM paper_positions WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                ).fetchone()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_active_paper_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch all active paper positions with status = 'OPEN'."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                if symbol:
+                    rows = conn.execute(
+                        "SELECT * FROM paper_positions WHERE status = 'OPEN' AND symbol = ?",
+                        (symbol,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM paper_positions WHERE status = 'OPEN'"
+                    ).fetchall()
+                return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def close_paper_position_state(self, opportunity_id: str) -> None:
+        """Mark paper position status as CLOSED in state ledger."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE paper_positions SET status = 'CLOSED' WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                )
         finally:
             conn.close()
 

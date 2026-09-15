@@ -356,7 +356,7 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         futures_symbol="NIFTY-I",
         option_candidates=[cand_valid],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
-        causal_beta=1.15,
+        causal_beta=1.65,
         option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=now_ms,
@@ -381,14 +381,14 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         session_date="2026-09-17",
         symbol="NIFTY",
         current_spot=24600.0,
-        current_option_delta=-0.85,
+        current_option_delta=-0.95,
         option_bid=470.0,
         futures_quote_event=fut_event_up,
         option_entry_price=exec_res["option_fill_price"],
-        option_quantity=130,  # 2 option lots
+        option_quantity=65,
         current_futures_lots=1,
         futures_lot_size=65,
-        causal_beta=1.15,
+        causal_beta=1.65,
         prior_realized_futures_pnl=0.0,
         prior_avg_futures_entry_price=exec_res["futures_fill_price"],
     )
@@ -420,7 +420,7 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         option_quantity=65,
         current_futures_lots=2,
         futures_lot_size=65,
-        causal_beta=1.15,
+        causal_beta=1.65,
         prior_realized_futures_pnl=reb_up["realized_futures_pnl"],
         prior_avg_futures_entry_price=reb_up["avg_open_futures_entry_price"],
     )
@@ -461,3 +461,44 @@ def test_stock_trade_counterfactual_uses_nifty_path(temp_warehouse, sample_confi
     assert len(outcomes) == 1
     assert outcomes[0]["modeled_costs"] == 250.0  # Equals actual statutory costs (no 0.90 multiplier!)
     assert outcomes[0]["modeled_futures_pnl"] == (24700.0 - 24500.0) * 65  # NIFTY path used!
+
+
+def test_production_adapter_no_placeholders():
+    """Adversarial Test 7: Verify real production prospective adapter in snapback.py contains no runtime placeholders."""
+    import inspect
+    from app.services import snapback
+
+    source = inspect.getsource(snapback)
+
+    # Locate process_prospective_pending_entries_and_mtm function body inside snapback.py
+    fn_source = inspect.getsource(snapback.process_prospective_pending_entries_and_mtm)
+
+    forbidden_patterns = [
+        "option_candidates=[]",
+        "option_candidates = []",
+        "option_bid=100.0",
+        "option_bid = 100.0",
+        "option_entry_price=100.0",
+        "option_entry_price = 100.0",
+        "causal_beta=1.0,",
+        "causal_beta = 1.0",
+        "option_lot_size=65",
+        "option_lot_size = 65",
+        "futures_lot_size=65",
+        "futures_lot_size = 65",
+        "exchange_timestamp_ms=now_ms",
+        "exchange_timestamp_ms = now_ms",
+        "depth_bid or last_price",
+        "depth_ask or last_price",
+        "depth_price or last_price",
+    ]
+
+    found_violations = []
+    for pattern in forbidden_patterns:
+        if pattern in fn_source:
+            found_violations.append(f"In process_prospective_pending_entries_and_mtm: '{pattern}'")
+        if pattern in inspect.getsource(snapback.extract_raw_quote_event):
+            found_violations.append(f"In extract_raw_quote_event: '{pattern}'")
+
+    assert not found_violations, f"Found runtime placeholder violations in production adapter: {found_violations}"
+

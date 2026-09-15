@@ -1,31 +1,34 @@
-"""Snapback Prospective Evidence Collector Service (PROSPECTIVE CAPTURE 1.0.1).
+"""Snapback Prospective Evidence Collector Service (PROSPECTIVE CAPTURE 1.0.2).
 
 Provider-agnostic continuous market data collector and paper observation engine.
 Wires frozen Snapback strategy signals (`SnapbackSignal`) directly to the
 prospective observation warehouse (`SnapbackObservationWarehouse`).
 
-Strict Specification & Contract Enforcement (PROSPECTIVE CAPTURE 1.0.1):
+Strict Specification & Contract Enforcement (PROSPECTIVE CAPTURE 1.0.2):
 1. Signal detected at Day T close -> persisted as PENDING_ENTRY in warehouse with explicit semantic fields.
-2. Day T+1 first executable session quotes trigger entry observation (verifies exact next eligible session date).
+2. Day T+1 first executable session quotes trigger entry observation (verifies exact next NSE trading session date via `next_trading_day`).
 3. Candidate option_type must match signal direction (PE for fade_up, CE for fade_down).
-4. Verifies frozen SnapbackConfig provenance (min_dte=40, max_dte=60, target_delta=0.70, min_oi=50k, max_spread=2%, min_premium=10).
-5. Bid/Ask-aware index futures rebalancing (increasing lots at ask, decreasing lots at bid, with realized futures P&L ledger).
-6. Canonical Black-Scholes counterfactual calculation using RISK_FREE=0.065 and NIFTY index futures path over realized path.
-7. Paper execution only — absolutely no broker submission.
+4. Verifies full frozen SnapbackConfig & Manifest provenance via `verify_manifest_integrity`. Non-frozen signals recorded as NON_FROZEN_OBSERVATION.
+5. Bid/Ask-aware index futures rebalancing (increasing lots at ask, decreasing lots at bid, with persisted realized futures P&L ledger).
+6. Persists active paper position state ledger in `paper_positions` table.
+7. Canonical Black-Scholes counterfactual calculation using RISK_FREE=0.065 and NIFTY index futures path over realized path.
+8. Paper execution only — absolutely no broker submission.
 """
 from __future__ import annotations
 
 import math
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.logging import get_logger
 from app.engines.snapback.config import SnapbackConfig
 from app.engines.snapback.intraday_models import QualityDecision, RawQuoteEvent
+from app.engines.snapback.manifest import create_frozen_manifest, verify_manifest_integrity
 from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
+from app.services.navigator.calendar import is_trading_day, next_trading_day
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
@@ -36,15 +39,16 @@ FROZEN_MANIFEST_HASH = "602d28f804e840d046e7b51d020d5718dfd38a08d27d5324ec9d81bf
 
 
 def verify_frozen_config(cfg: SnapbackConfig) -> bool:
-    """Verify that configuration parameters match frozen Snapback manifest specifications."""
-    return (
-        cfg.min_dte == 40 and
-        cfg.max_dte == 60 and
-        abs(cfg.target_delta - 0.70) < 1e-6 and
-        cfg.min_option_oi == 50_000 and
-        abs(cfg.max_spread_pct - 2.0) < 1e-6 and
-        abs(cfg.min_option_premium - 10.0) < 1e-6
-    )
+    """Verify that candidate configuration matches the frozen manifest specification."""
+    try:
+        manifest = create_frozen_manifest(cfg)
+        ok, reasons = verify_manifest_integrity(manifest, current_cfg=cfg)
+        if not ok:
+            log.warning("Config verification failed: %s", reasons)
+        return ok
+    except Exception as exc:
+        log.warning("Config verification exception: %s", exc)
+        return False
 
 
 @dataclass
@@ -81,8 +85,8 @@ class SnapbackProspectiveCollector:
                 "opportunity_id": "",
             }
 
-        if not verify_frozen_config(cfg):
-            log.warning("Config parameters deviate from frozen manifest rules")
+        is_frozen = verify_frozen_config(cfg)
+        status = "PENDING_ENTRY" if is_frozen else "NON_FROZEN_OBSERVATION"
 
         ts_ms = signal.timestamp_ms or int(time.time() * 1000)
         opportunity_id = f"OPP-{signal.symbol}-{ts_ms}"
@@ -105,21 +109,22 @@ class SnapbackProspectiveCollector:
             ema_50=signal.mean_target,
             ema_200=signal.level,
             trend="BEARISH" if signal.side == "fade_up" else "BULLISH",
-            is_valid=True,
-            rejection_reason="",
-            status="PENDING_ENTRY",
+            is_valid=is_frozen,
+            rejection_reason="" if is_frozen else "NON_FROZEN_CONFIG",
+            status=status,
             provider_timestamp=provider_ts,
             source=source,
         )
 
-        log.info(f"Recorded signal at Day T close: {opportunity_id} (PENDING_ENTRY)")
+        log.info(f"Recorded signal at Day T close: {opportunity_id} ({status})")
         return {
-            "status": "PENDING_ENTRY",
+            "status": status,
             "opportunity_id": opportunity_id,
             "symbol": signal.symbol,
             "side": signal.side,
             "entry_spot": signal.entry,
             "mean_target": signal.mean_target,
+            "is_frozen": is_frozen,
         }
 
     def execute_pending_entry(
@@ -175,7 +180,7 @@ class SnapbackProspectiveCollector:
                 "reason": "Config parameters deviate from frozen SnapbackConfig specification",
             }
 
-        # 3. Verify Day T -> Day T+1 Session Timing
+        # 3. Verify Day T -> Day T+1 Session Timing using NSE Trading Calendar
         sig_ts_str = opp.get("signal_timestamp") or opp.get("provider_timestamp") or ""
         sig_date = None
         if sig_ts_str:
@@ -193,21 +198,25 @@ class SnapbackProspectiveCollector:
                     "status": "INVALID_SESSION_TIMING",
                     "reason": f"Attempted fill on signal day {sig_date} close instead of Day T+1 open ({exec_date})",
                 }
-            days_diff = (exec_date - sig_date).days
-            if days_diff > 3:
+            try:
+                expected_t1_date = next_trading_day(sig_date)
+            except Exception:
+                expected_t1_date = sig_date + timedelta(days=1)
+
+            if exec_date > expected_t1_date:
                 self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
                 self.warehouse.record_decision(
                     decision_id=f"DECISION-{opportunity_id}",
                     opportunity_id=opportunity_id,
                     symbol=opp.get("symbol", "UNKNOWN"),
                     decision="INCONCLUSIVE",
-                    reason=f"Missed T+1 entry window (signal date {sig_date}, execution date {exec_date} is {days_diff} days late)",
+                    reason=f"Missed T+1 entry window (signal date {sig_date}, expected next trading session {expected_t1_date}, execution attempt {exec_date})",
                     provider_timestamp=provider_ts,
                 )
                 return {
                     "opportunity_id": opportunity_id,
                     "status": "INCONCLUSIVE",
-                    "reason": f"Missed T+1 entry window ({days_diff} days late)",
+                    "reason": f"Missed T+1 entry window (expected next session {expected_t1_date}, attempted on {exec_date})",
                 }
 
         # 4. Check Quote Quality for Index Futures Event on T+1
@@ -514,6 +523,28 @@ class SnapbackProspectiveCollector:
             provider_timestamp=provider_ts,
         )
 
+        # 8. Save active paper position state ledger
+        self.warehouse.save_paper_position(
+            opportunity_id=opportunity_id,
+            symbol=symbol,
+            option_symbol=chosen_cand.symbol,
+            option_qty=option_qty,
+            option_entry_price=option_fill_price,
+            option_expiry=chosen_cand.expiry,
+            option_strike=chosen_cand.strike,
+            futures_symbol=futures_quote_event.contract_id,
+            futures_lot_size=futures_lot_size,
+            current_futures_lots=hedge_lots,
+            avg_futures_entry_price=futures_fill_price,
+            realized_futures_pnl=0.0,
+            entry_spot=t1_spot_price,
+            entry_timestamp=provider_ts,
+            entry_dte=chosen_cand.dte,
+            entry_iv=0.0,
+            causal_beta=causal_beta,
+            status="OPEN",
+        )
+
         return {
             "opportunity_id": opportunity_id,
             "status": "OPEN_POSITION",
@@ -550,6 +581,17 @@ class SnapbackProspectiveCollector:
         """Bid/Ask-aware futures rebalancing and MTM calculation with realized P&L ledger."""
         now_ms = int(time.time() * 1000)
         provider_ts = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
+
+        # Load persisted position state from warehouse if available
+        pos = self.warehouse.get_paper_position(opportunity_id)
+        if pos:
+            current_futures_lots = pos.get("current_futures_lots", current_futures_lots)
+            prior_avg_futures_entry_price = pos.get("avg_futures_entry_price", prior_avg_futures_entry_price)
+            prior_realized_futures_pnl = pos.get("realized_futures_pnl", prior_realized_futures_pnl)
+            option_entry_price = pos.get("option_entry_price", option_entry_price)
+            option_quantity = pos.get("option_qty", option_quantity)
+            futures_lot_size = pos.get("futures_lot_size", futures_lot_size)
+            causal_beta = pos.get("causal_beta", causal_beta)
 
         fut_bid = futures_quote_event.best_bid
         fut_ask = futures_quote_event.best_ask
@@ -604,6 +646,15 @@ class SnapbackProspectiveCollector:
                 futures_fill_price=fill_price,
                 reason=f"Decrease long futures hedge at bid ({current_futures_lots} -> {new_hedge_lots} lots, realized PnL: {closed_pnl:.2f})",
                 provider_timestamp=provider_ts,
+            )
+
+        # Update position state ledger in warehouse
+        if pos:
+            self.warehouse.update_paper_position_hedge(
+                opportunity_id=opportunity_id,
+                new_futures_lots=new_hedge_lots,
+                avg_futures_entry_price=avg_entry_price,
+                realized_futures_pnl=realized_pnl,
             )
 
         # Calculate Liquidation MTM
@@ -684,6 +735,8 @@ class SnapbackProspectiveCollector:
         # Modeled costs equal actual statutory costs (no fabricated multipliers)
         modeled_costs = statutory_costs
         modeled_total = modeled_opt_pnl + modeled_fut_pnl - modeled_costs
+
+        self.warehouse.close_paper_position_state(opportunity_id)
 
         return self.warehouse.record_outcome(
             opportunity_id=opportunity_id,
