@@ -131,7 +131,7 @@ export function KiteCommandPalette({
         zIndex: 200000,
         display: 'flex',
         alignItems: 'flex-start',
-        justify: 'center',
+        justifyContent: 'center',
         paddingTop: '10vh',
         background: 'rgba(15, 23, 42, 0.45)',
         backdropFilter: 'blur(6px)',
@@ -290,7 +290,7 @@ export function KiteCommandPalette({
             color: 'var(--k-dim)',
             display: 'flex',
             alignItems: 'center',
-            justify: 'space-between',
+            justifyContent: 'space-between',
           }}
         >
           <span>Use <kbd style={{ fontWeight: 700 }}>↑</kbd> <kbd style={{ fontWeight: 700 }}>↓</kbd> to navigate, <kbd style={{ fontWeight: 700 }}>↵</kbd> to select</span>

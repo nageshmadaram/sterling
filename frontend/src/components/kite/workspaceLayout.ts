@@ -28,6 +28,8 @@ export interface WorkspaceLayoutState {
   locked: boolean;
 }
 
+export type WorkspaceLayout = WorkspaceLayoutState;
+
 export type WorkspacePresetId = 'classic' | 'chart' | 'execution';
 
 export const WORKSPACE_LAYOUT_KEY = 'sterling:kite-workspace:v2';

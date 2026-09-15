@@ -38,15 +38,12 @@ async def _background_kite_alerts(interval: int = 60) -> None:
 async def lifespan(app: FastAPI):
     setup_logging()
     configure_json_logging()  # no-op unless settings.log_json (Phase 2 observability)
-    from app.core.security import validate_production_security
-    validate_production_security()
-    # The SQLite store must be open BEFORE anything reads it. This used to
-    # happen as a side effect of importing `exchange_account_store`, which went
-    # with the crypto surface — after which `kite_accounts.bootstrap()` found
-    # `db._available` False, loaded nothing, and `/kite/status` reported
-    # "No active Kite account" even though the row was still in the database.
+    # The SQLite store must be open BEFORE anything reads it (including production security credential inspection).
     from app.services import db as _db
     _db.init()
+
+    from app.core.security import validate_production_security
+    validate_production_security()
 
     from app.services.exchanges.kite import accounts as _kite_accounts
     _kite_accounts.bootstrap()

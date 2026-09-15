@@ -137,7 +137,10 @@ def validate_production_security() -> None:
         raise RuntimeError("Production security error: Fernet encryption is unavailable (weaker backend active)")
 
     from app.services import db
-    if hasattr(db, "is_available") and db.is_available():
+    if not (hasattr(db, "is_available") and db.is_available()):
+        raise RuntimeError("Production security error: Database store is uninitialized or unavailable for credential inspection")
+
+    try:
         # 1. Check system_config table
         configs = db.get_all_configs()
         for k, v in configs.items():
@@ -150,38 +153,37 @@ def validate_production_security() -> None:
                     raise RuntimeError(f"Production security error: Secret in system_config for key '{k}' failed decryption: {exc}")
 
         # 2. Inspect all table columns ending in '_enc' (kite_accounts, truedata_credentials, etc.)
-        try:
-            with db._conn() as c:
-                tables = c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-                for t in tables:
-                    tname = t["name"] if isinstance(t, dict) else t[0]
-                    cols_info = c.execute(f"PRAGMA table_info({tname})").fetchall()
-                    cols = [info["name"] if isinstance(info, dict) else info[1] for info in cols_info]
-                    enc_cols = [col for col in cols if col.endswith("_enc")]
-                    if not enc_cols:
-                        continue
-                    query = f"SELECT {', '.join(enc_cols)} FROM {tname}"
-                    rows = c.execute(query).fetchall()
-                    for row in rows:
-                        for col in enc_cols:
-                            val = row[col] if isinstance(row, dict) else row[enc_cols.index(col)]
-                            if val:
-                                sval = str(val)
-                                if not sval.startswith(_FERNET_PREFIX):
-                                    raise RuntimeError(
-                                        f"Production security error: Credential column '{col}' in table '{tname}' "
-                                        f"contains unencrypted/legacy value (must start with '{_FERNET_PREFIX}')"
-                                    )
-                                try:
-                                    decrypt(sval)
-                                except Exception as exc:
-                                    raise RuntimeError(
-                                        f"Production security error: Credential in '{tname}.{col}' failed decryption under active key: {exc}"
-                                    )
-        except Exception as exc:
-            if "Production security error" in str(exc):
-                raise
-            log.warning("Persisted credential store inspection error: %s", exc)
+        with db._conn() as c:
+            tables = c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            for t in tables:
+                tname = t["name"] if isinstance(t, dict) else t[0]
+                cols_info = c.execute(f"PRAGMA table_info({tname})").fetchall()
+                cols = [info["name"] if isinstance(info, dict) else info[1] for info in cols_info]
+                enc_cols = [col for col in cols if col.endswith("_enc")]
+                if not enc_cols:
+                    continue
+                query = f"SELECT {', '.join(enc_cols)} FROM {tname}"
+                rows = c.execute(query).fetchall()
+                for row in rows:
+                    for col in enc_cols:
+                        val = row[col] if isinstance(row, dict) else row[enc_cols.index(col)]
+                        if val:
+                            sval = str(val)
+                            if not sval.startswith(_FERNET_PREFIX):
+                                raise RuntimeError(
+                                    f"Production security error: Credential column '{col}' in table '{tname}' "
+                                    f"contains unencrypted/legacy value (must start with '{_FERNET_PREFIX}')"
+                                )
+                            try:
+                                decrypt(sval)
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"Production security error: Credential in '{tname}.{col}' failed decryption under active key: {exc}"
+                                )
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and "Production security error" in str(exc):
+            raise
+        raise RuntimeError(f"Production security error: Credential store inspection failed: {exc}")
 
 
 

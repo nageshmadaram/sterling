@@ -342,7 +342,7 @@ export function CustomizeLayoutModal({
             background: 'var(--k-surface-3)',
             display: 'flex',
             alignItems: 'center',
-            justify: 'space-between',
+            justifyContent: 'space-between',
           }}
         >
           <button

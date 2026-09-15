@@ -204,10 +204,39 @@ jobs:
   release-gate:
     name: Sterling Release Gate
     runs-on: ubuntu-latest
+    if: ${{ always() }}
     needs: [backend-tests, frontend-typecheck, frontend-tests, e2e, orb-options-gate, parity-matrix]
     steps:
-      - name: Verify All Release Gates Passed
+      - name: Evaluate All Upstream Jobs
         run: |
-          echo "All mandatory CI jobs (backend, typecheck, Vitest, Playwright E2E, safety, parity) executed and passed."
-          echo "Release Gate: SUCCESS"
+          set -euo pipefail
+          echo "Evaluating status of all mandatory release jobs..."
+
+          BACKEND="${{ needs.backend-tests.result }}"
+          TYPECHECK="${{ needs.frontend-typecheck.result }}"
+          FRONTEND_TESTS="${{ needs.frontend-tests.result }}"
+          E2E="${{ needs.e2e.result }}"
+          SAFETY="${{ needs.orb-options-gate.result }}"
+          PARITY="${{ needs.parity-matrix.result }}"
+
+          echo "backend-tests:      $BACKEND"
+          echo "frontend-typecheck: $TYPECHECK"
+          echo "frontend-tests:     $FRONTEND_TESTS"
+          echo "e2e:                $E2E"
+          echo "orb-options-gate:   $SAFETY"
+          echo "parity-matrix:       $PARITY"
+
+          FAILED=0
+          for status in "$BACKEND" "$TYPECHECK" "$FRONTEND_TESTS" "$E2E" "$SAFETY" "$PARITY"; do
+            if [ "$status" != "success" ]; then
+              FAILED=1
+            fi
+          done
+
+          if [ $FAILED -ne 0 ]; then
+            echo "::error::Release Gate FAILED. One or more mandatory jobs failed, were cancelled, or were skipped."
+            exit 1
+          fi
+
+          echo "All mandatory release jobs executed and passed cleanly. Release Gate: SUCCESS."
 

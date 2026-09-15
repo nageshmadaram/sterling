@@ -206,7 +206,7 @@ export function ReplaySessionDropdown() {
             style={{
               display: 'flex',
               alignItems: 'center',
-              justify: 'space-between',
+              justifyContent: 'space-between',
               gap: 8,
               padding: '8px 10px',
               borderTop: '1px solid var(--k-border-2)',
