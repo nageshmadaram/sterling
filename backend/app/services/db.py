@@ -383,9 +383,25 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS calibration_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_trade_id TEXT UNIQUE,
             pnl_pct REAL NOT NULL,
             regime TEXT,
             closed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_calibration_trades_source ON calibration_trades(source_trade_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS execution_control (
+            scope TEXT NOT NULL DEFAULT 'global',
+            uid TEXT NOT NULL DEFAULT 'default',
+            account_id TEXT NOT NULL DEFAULT 'default',
+            state TEXT NOT NULL DEFAULT 'RUNNING',
+            reason TEXT NOT NULL DEFAULT '',
+            revision INTEGER NOT NULL DEFAULT 0,
+            actor TEXT NOT NULL DEFAULT 'system',
+            created_ms INTEGER NOT NULL,
+            updated_ms INTEGER NOT NULL,
+            PRIMARY KEY (scope, uid, account_id)
         )
     """)
     conn.execute("""
@@ -726,6 +742,17 @@ def get_config(key: str, default: str = "") -> str:
         return default
 
 
+def get_all_configs() -> dict[str, str]:
+    if not _available:
+        return {}
+    try:
+        with _conn() as c:
+            rows = c.execute("SELECT key, value FROM system_config").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+    except Exception:
+        return {}
+
+
 def set_config(key: str, value: str) -> None:
     if not _available:
         return
@@ -1015,3 +1042,86 @@ def get_equity_snapshots(limit: int = 500) -> list:
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def execution_ready() -> bool:
+    return _available
+
+
+def risk_state_ready() -> bool:
+    return _available
+
+
+def credentials_ready() -> bool:
+    return _available
+
+
+def get_execution_control(
+    scope: str = "global",
+    uid: str = "default",
+    account_id: str = "default",
+) -> dict:
+    if not _available:
+        return {"state": "RUNNING", "reason": "Database uninitialized", "revision": 0}
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT scope, uid, account_id, state, reason, revision, actor, created_ms, updated_ms"
+                " FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
+                (scope, uid, account_id),
+            ).fetchone()
+        if not row:
+            return {"state": "RUNNING", "reason": "", "revision": 0, "scope": scope, "uid": uid, "account_id": account_id}
+        return dict(row)
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return {"state": "RUNNING", "reason": "Schema uninitialized", "revision": 0}
+        log.warning("get_execution_control failed: %s", exc)
+        return {"state": "HALTED", "reason": f"Database read failure: {exc}", "revision": 0}
+
+
+def set_execution_control(
+    state: str,
+    reason: str = "",
+    actor: str = "system",
+    scope: str = "global",
+    uid: str = "default",
+    account_id: str = "default",
+) -> dict:
+    if not _available:
+        raise RuntimeError("Cannot write execution control: Database unavailable")
+    now_ms = int(time.time() * 1000)
+    with _conn() as c:
+        row = c.execute(
+            "SELECT revision FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
+            (scope, uid, account_id),
+        ).fetchone()
+        next_rev = (row["revision"] + 1) if row else 1
+        c.execute(
+            "INSERT INTO execution_control (scope, uid, account_id, state, reason, revision, actor, created_ms, updated_ms)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(scope, uid, account_id) DO UPDATE SET"
+            " state=excluded.state, reason=excluded.reason, revision=excluded.revision,"
+            " actor=excluded.actor, updated_ms=excluded.updated_ms",
+            (scope, uid, account_id, state, reason, next_rev, actor, now_ms, now_ms),
+        )
+    return {"state": state, "reason": reason, "revision": next_rev, "actor": actor, "updated_ms": now_ms}
+
+
+def record_calibration_trade(source_trade_id: str, pnl_pct: float, regime: str = "default") -> bool:
+    """Record a trade close for calibration with exactly-once idempotency."""
+    if not _available:
+        return False
+    try:
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO calibration_trades (source_trade_id, pnl_pct, regime) VALUES (?, ?, ?)"
+                " ON CONFLICT(source_trade_id) DO NOTHING",
+                (source_trade_id, float(pnl_pct), regime),
+            )
+        return True
+    except Exception as exc:
+        log.warning("record_calibration_trade failed: %s", exc)
+        return False
+
+

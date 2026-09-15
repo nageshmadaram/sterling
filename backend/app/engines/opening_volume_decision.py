@@ -312,7 +312,10 @@ def build_opening_decision(
 
     return {
         "model": MODEL_ID,
+        "model_id": MODEL_ID,
         "provenance": "Sterling-owned transparent replacement; not ORION proprietary parity",
+        "parity_target": "ORION",
+        "parity_status": "partial_observable_only",
         "score": {
             "lower_bound": lower_bound,
             "upper_bound": upper_bound,
@@ -343,5 +346,6 @@ def build_opening_decision(
         },
         "sterling_combo": sterling_combo,
         "combo_rule": "Box Y with an aligned first ORB break in the 09:16 candle",
+        "sterling_execution_eligible": sterling_combo and score_trade,
         "execution_eligible": sterling_combo and score_trade,
     }

@@ -165,6 +165,12 @@ class SafetyDecision:
 
 def assert_safe_to_trade(positions,idempotency_key=None,*,check_daily_loss=True,uid:str|None=None):
     try:
+        from app.services import db
+        ctrl = db.get_execution_control(uid=uid or "default")
+        if ctrl.get("state") == "HALTED":
+            return SafetyDecision(False, f"Durable control plane HALTED: {ctrl.get('reason') or 'Halted'}", "durable_halt")
+        if ctrl.get("state") == "RECOVERY_REQUIRED":
+            return SafetyDecision(False, "Durable control plane RECOVERY_REQUIRED", "recovery_required")
         if kill_switch_state().get("enabled"):return SafetyDecision(False,f"Kill switch active: {kill_switch_state().get('reason') or 'manual halt'}","kill_switch")
         if check_daily_loss:
             dl=daily_loss_state(positions,uid=uid)

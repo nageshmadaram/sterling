@@ -5,6 +5,7 @@ last daily valuation intraday; partial bars cannot advance their horizon.
 """
 from dataclasses import replace
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -215,7 +216,8 @@ def run_intraday_causal_replay(
 
         # Position management if position is active
         if active_position is not None:
-            quote = next((q for q in option_quotes if abs(q.get("timestamp_ms", 0) - ts_ms) <= 60000), None)
+            from app.services.causal_series import latest_asof
+            quote = latest_asof(option_quotes, ts_ms, max_age_ms=60000)
             current_bid = quote.get("bid", active_position.desired_stop) if quote else active_position.desired_stop
             
             active_position, exit_reason = advance_position_lifecycle(
@@ -265,7 +267,8 @@ def run_intraday_causal_replay(
             is_eligible=True,
         )
 
-        quote = next((q for q in option_quotes if abs(q.get("timestamp_ms", 0) - ts_ms) <= 60000), None)
+        from app.services.causal_series import latest_asof
+        quote = latest_asof(option_quotes, ts_ms, max_age_ms=60000)
         ask_entry = quote.get("ask", 100.0) if quote else 100.0
         bid_exit = quote.get("bid", 99.0) if quote else 99.0
 

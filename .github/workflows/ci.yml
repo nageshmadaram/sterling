@@ -200,3 +200,14 @@ jobs:
       - name: Run parity tests
         working-directory: backend
         run: python -m pytest tests/test_common_trailing.py -q --disable-warnings -m "${{ matrix.parity }}" --tb=line
+
+  release-gate:
+    name: Sterling Release Gate
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-typecheck, frontend-tests, e2e, orb-options-gate, parity-matrix]
+    steps:
+      - name: Verify All Release Gates Passed
+        run: |
+          echo "All mandatory CI jobs (backend, typecheck, Vitest, Playwright E2E, safety, parity) executed and passed."
+          echo "Release Gate: SUCCESS"
+
