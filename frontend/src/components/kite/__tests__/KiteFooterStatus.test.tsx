@@ -72,27 +72,10 @@ describe('the broker chip', () => {
 });
 
 describe('the strategy chips', () => {
-  it('lists every strategy', () => {
+  it('does not render strategy badges in footer status bar', () => {
     render(<KiteFooterStatus onOpenSession={vi.fn()} />);
     for (const label of ['ST', 'NAV', 'AE', 'GM']) {
-      expect(screen.getByText(label), label).toBeInTheDocument();
+      expect(screen.queryByText(label)).toBeNull();
     }
-  });
-
-  it('shows what SuperTrend is scanning, since it is the one that reports it', () => {
-    signals = { scanning: true, scanning_label: 'TCS OCT 2300 PE', auto_scan: true, market_open: true };
-    render(<KiteFooterStatus onOpenSession={vi.fn()} />);
-    expect(screen.getByText('TCS OCT 2300 PE')).toBeInTheDocument();
-  });
-
-  it('says "market closed" rather than pretending a schedule is live', () => {
-    signals = { scanning: false, auto_scan: true, market_open: false };
-    render(<KiteFooterStatus onOpenSession={vi.fn()} />);
-    expect(screen.getByText('market closed')).toBeInTheDocument();
-  });
-
-  it('marks a switched-off engine as off', () => {
-    render(<KiteFooterStatus onOpenSession={vi.fn()} />);
-    expect(screen.getByTitle(/^NAV — off · off$/)).toBeInTheDocument();
   });
 });
