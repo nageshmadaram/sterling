@@ -79,6 +79,7 @@ class RefreshSessionRequest(BaseModel):
 
 class KiteSessionResult(BaseModel):
     connected: bool
+    account_id: Optional[str] = None
     kite_user_id: Optional[str] = None
     user_name: Optional[str] = None
     email: Optional[str] = None

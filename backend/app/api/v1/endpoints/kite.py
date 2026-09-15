@@ -202,6 +202,7 @@ async def create_session(body: GenerateSessionRequest,
         if fresh is not None and fresh.token_is_live:
             return KiteSessionResult(
                 connected=True,
+                account_id=fresh.id,
                 kite_user_id=fresh.kite_user_id or None,
                 user_name=fresh.user_name or None,
                 login_time=None,
@@ -226,7 +227,7 @@ async def create_session(body: GenerateSessionRequest,
         user_name=data.get("user_name", ""),
     )
     return KiteSessionResult(
-        connected=True, kite_user_id=data.get("user_id"),
+        connected=True, account_id=acct.id, kite_user_id=data.get("user_id"),
         user_name=data.get("user_name"), email=data.get("email"),
         login_time=data.get("login_time"),
     )
@@ -263,7 +264,7 @@ async def refresh_session(body: RefreshSessionRequest,
         user_name=data.get("user_name", ""),
     )
     return KiteSessionResult(
-        connected=True, kite_user_id=data.get("user_id"),
+        connected=True, account_id=acct.id, kite_user_id=data.get("user_id"),
         user_name=data.get("user_name"), email=data.get("email"),
         login_time=data.get("login_time"),
     )

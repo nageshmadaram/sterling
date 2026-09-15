@@ -157,7 +157,7 @@ export function useGenerateKiteSession() {
         connected: true,
         account_id: data.account_id || prev.account_id,
         user_name: data.user_name || prev.user_name,
-        kite_user_id: data.user_id || prev.kite_user_id,
+        kite_user_id: data.kite_user_id || prev.kite_user_id,
       } : prev);
       qc.invalidateQueries({ queryKey: ['kite-status'] });
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });
@@ -182,7 +182,7 @@ export function useRefreshKiteSession() {
         connected: true,
         account_id: data.account_id || prev.account_id,
         user_name: data.user_name || prev.user_name,
-        kite_user_id: data.user_id || prev.kite_user_id,
+        kite_user_id: data.kite_user_id || prev.kite_user_id,
       } : prev);
       qc.invalidateQueries({ queryKey: ['kite-status'] });
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });

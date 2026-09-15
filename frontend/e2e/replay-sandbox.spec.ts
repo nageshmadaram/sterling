@@ -43,7 +43,7 @@ test.describe('replay browser-to-backend acceptance', () => {
     expect(dates.body).toMatchObject({
       instrument: 'NIFTY',
       holidays_filtered: true,
-      source: expect.stringMatching(/^(store|sample)$/),
+      source: expect.stringMatching(/^(store|fallback)$/),
     });
     expect(Array.isArray(dates.body.dates)).toBe(true);
   });
