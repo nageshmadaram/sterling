@@ -36,12 +36,14 @@ This is a candidate hypothesis to validate, not established alpha.
 
 At completed underlying bar t:
 1. Compute Bollinger mean and sample standard deviation from 20 strictly prior closes. Bands = mean ± 2 standard deviations. The band for t-1 must likewise use its own prior window.
-2. Compute causal EMA9 and ADX14. Require enough real observations for indicator warmup.
-3. For a bearish setup: t-1 closed above its upper band; t closes back inside its upper band but above its prior-window mean; t is a bearish candle, closes below the previous close and at/below EMA9.
-4. For a bullish setup: mirror the conditions below the lower band and require t at/above EMA9. The existing allow_fade_down setting explicitly controls this side.
-5. Reject ADX greater than 25 at entry. Missing/non-finite ADX rejects rather than passing.
-6. If enabled, relative volume = current completed volume / mean volume of 20 prior bars. Missing reliable volume rejects this optional branch.
-7. Require valid session, fresh completed bar, contiguous warmup, and no current position/cooldown conflict.
+2. Baseline entry requires Bollinger stretch followed by confirmed re-entry:
+   - For PE / bearish setup: t-1 closed above its upper band; t closes back inside its upper band.
+   - For CE / bullish setup: t-1 closed below its lower band; t closes back inside its lower band.
+3. EMA9, ADX14, relative volume, PCR, OI changes, and VWAP are **disabled initially** in the baseline configuration to prevent overfitting.
+4. When optional experiments are explicitly enabled for testing:
+   - EMA9 confirmation requires t at/below EMA9 (PE) or at/above EMA9 (CE).
+   - ADX14 filter rejects entry if ADX > 25.
+5. Require valid session, fresh completed bar, contiguous warmup (30 bars), and no current position/cooldown conflict.
 
 The setup artifact includes current price, band re-entry, mean objective, invalidation reference, timestamps, indicator values, availability, and every rule pass/fail. The scanner cannot label more stretch as a better probability without evidence.
 
@@ -49,18 +51,18 @@ Signal generation occurs at bar close. A fill at that same historical close is n
 
 ## 3. Indicator policy and experiments
 
-| Input | Initial role | Proposed experiment / limitation |
+| Input | Baseline status | Proposed experiment / limitation |
 |---|---|---|
-| EMA9 | Reversal confirmation | Compare no EMA vs EMA9; trend slope as separately versioned context |
-| Bollinger20/2 | Identify extension and re-entry | Compare against ATR extension; use predeclared small parameter grid |
-| ADX14 | Refuse strong-trend fades | Compare disabled vs threshold; do not interpret as direction |
-| ATR14 | Volatility and movement feasibility context | Volatility-scaled stop/trail only as a distinct candidate |
-| Open interest | Contract-liquidity floor | Never a stand-alone buy/sell direction rule |
-| Relative volume | Optional participation filter | Exclude index volume proxies that are not comparable |
-| VWAP | Optional context for instruments with valid volume | No pseudo-VWAP for an index with missing trade volume |
-| PCR | Optional synchronized option-chain context | Fixed comparable strike/expiry universe; minimum coverage; no daily-final PCR in intraday replay |
-| Change in OI | Optional price/OI context | Compare same contract and comparable interval, retain units and timestamps; never subtract across expiry rolls |
-| Fibonacci | Deferred | No demonstrated incremental evidence in the current task; avoid discretionary anchor selection |
+| Bollinger20/2 | **Active (Core Entry)** | Identify extension and re-entry; compare against ATR extension |
+| EMA9 | Disabled initially | Reversal confirmation experiment (compare baseline vs EMA9) |
+| ADX14 | Disabled initially | Refuse strong-trend fades experiment (compare baseline vs ADX filter) |
+| ATR14 | Volatility context | Movement feasibility context; volatility-scaled stop/trail experiment |
+| Open interest | Liquidity floor | Contract-liquidity floor; never a stand-alone directional rule |
+| Relative volume | Disabled initially | Optional participation filter experiment |
+| VWAP | Disabled initially | Optional context experiment for instruments with valid volume |
+| PCR | Disabled initially | Optional synchronized option-chain context experiment |
+| Change in OI | Disabled initially | Optional price/OI context experiment |
+| Fibonacci | Deferred | Deferred; no demonstrated incremental evidence |
 
 Ablation reports must include trade count, net expectancy, costs, drawdown and uncertainty, not just win rate. Adding all filters together would make attribution and overfitting control impossible.
 

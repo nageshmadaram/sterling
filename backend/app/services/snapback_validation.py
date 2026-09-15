@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -226,3 +227,91 @@ def auto_execution_blocker(cfg: Any = None) -> Optional[str]:
     tally = f" (passed {passed} of {total} checks)" if passed is not None else ""
     first = reasons[0] if reasons else "it did not clear the gate"
     return f"Snapback did not pass the harness on {v['measured_at']}{tally}: {first}"
+
+
+def build_validation_report_for_run(
+    replay_result: dict[str, Any],
+    cfg: Any,
+    dataset_manifest_hash: str = "dataset_v1",
+) -> Any:
+    """Generate a formal ValidationReport artifact from a causal replay run."""
+    from app.engines.snapback.intraday_models import ValidationReport
+    import numpy as np
+
+    trades = replay_result.get("trades", [])
+    opportunities = replay_result.get("opportunities", 0)
+    completed = len(trades)
+
+    if completed == 0:
+        return ValidationReport(
+            run_id=f"run_{int(hashlib.sha256(str(replay_result).encode()).hexdigest()[:12], 16)}",
+            config_hash=_config_hash(cfg),
+            rule_hash=_config_hash(cfg),
+            dataset_manifest_hash=dataset_manifest_hash,
+            total_sessions=1,
+            total_opportunities=opportunities,
+            completed_trades=0,
+            net_expectancy_per_trade=0.0,
+            lower_95_ci=0.0,
+            win_rate=0.0,
+            profit_factor=0.0,
+            max_drawdown_pct=0.0,
+            is_promotable=False,
+            limitations=["no_completed_trades_in_replay"],
+        )
+
+    net_pnls = [t["net_pnl"] for t in trades]
+    total_net = sum(net_pnls)
+    net_expectancy = total_net / float(completed)
+
+    wins = [p for p in net_pnls if p > 0]
+    losses = [abs(p) for p in net_pnls if p < 0]
+
+    win_rate = len(wins) / float(completed)
+    profit_factor = (sum(wins) / sum(losses)) if sum(losses) > 0 else (999.0 if sum(wins) > 0 else 0.0)
+
+    # Compute lower 95% CI via bootstrap
+    if len(net_pnls) > 5:
+        bootstrap_means = [np.mean(np.random.choice(net_pnls, size=len(net_pnls), replace=True)) for _ in range(500)]
+        lower_95_ci = float(np.percentile(bootstrap_means, 2.5))
+    else:
+        lower_95_ci = net_expectancy - 1.96 * (np.std(net_pnls) / math.sqrt(completed) if completed > 1 else 0.0)
+
+    # Calculate max drawdown
+    cum_equity = np.cumsum(net_pnls)
+    peak = np.maximum.accumulate(cum_equity)
+    drawdowns = (peak - cum_equity)
+    max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+
+    # Economic gates
+    promotable = (
+        completed >= 50
+        and lower_95_ci > 0.0
+        and net_expectancy > 0.0
+        and max_dd <= 1000.0
+    )
+
+    limitations: list[str] = []
+    if completed < 50:
+        limitations.append("sample_size_below_50_trades")
+    if lower_95_ci <= 0.0:
+        limitations.append("lower_95_ci_expectancy_not_positive")
+    if not promotable:
+        limitations.append("economic_gates_not_cleared")
+
+    return ValidationReport(
+        run_id=f"run_{hashlib.sha256(str(net_pnls).encode()).hexdigest()[:12]}",
+        config_hash=_config_hash(cfg),
+        rule_hash=_config_hash(cfg),
+        dataset_manifest_hash=dataset_manifest_hash,
+        total_sessions=1,
+        total_opportunities=opportunities,
+        completed_trades=completed,
+        net_expectancy_per_trade=round(net_expectancy, 2),
+        lower_95_ci=round(lower_95_ci, 2),
+        win_rate=round(win_rate, 4),
+        profit_factor=round(profit_factor, 2),
+        max_drawdown_pct=round(max_dd, 2),
+        is_promotable=promotable,
+        limitations=limitations,
+    )

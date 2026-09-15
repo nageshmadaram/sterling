@@ -117,6 +117,13 @@ class SnapbackConfig:
     scalp_entry_end_minute: int = 885
     scalp_square_off_minute: int = 915
 
+    # ── experiment toggles (disabled initially for baseline) ──────────────────
+    use_ema_confirmation: bool = False
+    use_adx_filter: bool = False
+    use_pcr_filter: bool = False
+    use_oi_filter: bool = False
+    use_vwap_filter: bool = False
+
     # ── what is watched ──────────────────────────────────────────────────────
     universe_mode: str = "fno"
     scan_indices: tuple[str, ...] = _INDEX_DEFAULTS

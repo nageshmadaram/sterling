@@ -102,5 +102,28 @@ export function SnapbackScalpSettings({ cfg, defaults, patch }: {
           onChange={() => patch({ allow_fade_down: !cfg.allow_fade_down })} />
       </Field>
     </Section>
+    <Section title="Ablation indicator experiments" description="Test each indicator addition independently against the frozen baseline on chronological validation datasets. All disabled by default."
+      summary="EMA9, ADX, PCR, OI, VWAP toggles" persistKey="snapback-scalp-experiments">
+      <Field label="EMA9 reversal confirmation" hint="Require candle close to confirm direction across EMA9 before entry.">
+        <Switch checked={!!cfg.use_ema_confirmation} label={cfg.use_ema_confirmation ? 'Enabled' : 'Disabled (Baseline)'}
+          onChange={() => patch({ use_ema_confirmation: !cfg.use_ema_confirmation })} />
+      </Field>
+      <Field label="ADX14 trend filter" hint="Refuse entries when ADX exceeds max ADX threshold (avoids strong trends).">
+        <Switch checked={!!cfg.use_adx_filter} label={cfg.use_adx_filter ? 'Enabled' : 'Disabled (Baseline)'}
+          onChange={() => patch({ use_adx_filter: !cfg.use_adx_filter })} />
+      </Field>
+      <Field label="PCR option chain filter" hint="Optional synchronized put/call ratio threshold check.">
+        <Switch checked={!!cfg.use_pcr_filter} label={cfg.use_pcr_filter ? 'Enabled' : 'Disabled (Baseline)'}
+          onChange={() => patch({ use_pcr_filter: !cfg.use_pcr_filter })} />
+      </Field>
+      <Field label="OI change filter" hint="Optional contract open interest change filter.">
+        <Switch checked={!!cfg.use_oi_filter} label={cfg.use_oi_filter ? 'Enabled' : 'Disabled (Baseline)'}
+          onChange={() => patch({ use_oi_filter: !cfg.use_oi_filter })} />
+      </Field>
+      <Field label="VWAP context filter" hint="Optional Volume Weighted Average Price context check.">
+        <Switch checked={!!cfg.use_vwap_filter} label={cfg.use_vwap_filter ? 'Enabled' : 'Disabled (Baseline)'}
+          onChange={() => patch({ use_vwap_filter: !cfg.use_vwap_filter })} />
+      </Field>
+    </Section>
   </>;
 }

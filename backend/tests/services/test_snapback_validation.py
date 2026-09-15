@@ -47,3 +47,28 @@ def test_config_change_invalidates_validation(monkeypatch):
     rec = promoted(config_hash=val.current_manifest(original)["config_hash"]).as_dict()
     assert val.is_compatible(rec, original)
     assert not val.is_compatible(rec, changed)
+
+
+def test_build_validation_report_for_run():
+    from app.engines.snapback import SnapbackConfig
+    cfg = SnapbackConfig()
+
+    replay_result = {
+        "opportunities": 10,
+        "completed_trades": 5,
+        "trades": [
+            {"net_pnl": 100.0},
+            {"net_pnl": -50.0},
+            {"net_pnl": 150.0},
+            {"net_pnl": 200.0},
+            {"net_pnl": -40.0},
+        ],
+    }
+
+    report = val.build_validation_report_for_run(replay_result, cfg)
+    assert report.total_opportunities == 10
+    assert report.completed_trades == 5
+    assert report.win_rate == 0.6  # 3 wins out of 5
+    assert report.net_expectancy_per_trade == 72.0
+    assert report.is_promotable is False  # completed trades < 50
+    assert "sample_size_below_50_trades" in report.limitations

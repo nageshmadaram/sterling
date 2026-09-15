@@ -106,9 +106,11 @@ def set_config(values: dict[str, Any], uid: str | None = None) -> SnapbackConfig
     # A row's eligibility and quote plan belong to the configuration that
     # produced it, including its timeframe. Never reuse it after a settings edit.
     if uid:
-        status(uid).rows = []
-        status(uid).signals = {}
-        status(uid).candles = {}
+        st = status(uid)
+        st.rows = []
+        st.signals = {}
+        st.candles = {}
+        st.config_generation += 1
     return cfg
 
 
@@ -128,6 +130,7 @@ class ScanState:
     failures: list[str] = field(default_factory=list)
     candles: dict[Any, tuple[float, list]] = field(default_factory=dict)
     signals: dict[str, dict] = field(default_factory=dict)
+    config_generation: int = 0
 
 
 _state: dict[str, ScanState] = {}
@@ -357,8 +360,8 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     else:
         from app.engines.snapback.models import _epoch_seconds
         ts = _epoch_seconds(stamp)
-        age = datetime.now(_IST).timestamp() - ts if ts is not None else float("inf")
-        if age < -5 or age > (10 if cfg.trading_mode != "swing" else 60):
+        age = (datetime.now(_IST).timestamp() - ts) if (ts is not None and math.isfinite(ts)) else float("inf")
+        if not math.isfinite(age) or age < -5 or age > (10 if cfg.trading_mode != "swing" else 60):
             blockers.append("quote is stale or has an invalid timestamp")
     if mid <= 0:
         blockers.append("no premium quoted")
@@ -550,6 +553,7 @@ async def scan_once(uid: str) -> dict:
         return snapshot(uid)
 
     st.scanning = True
+    start_gen = st.config_generation
     st.failures = []
     st.last_error = None
     st.rows = [] if cfg.trading_mode != "swing" else st.rows
@@ -636,6 +640,11 @@ async def scan_once(uid: str) -> dict:
                     st.failures.append(f"{item.name}: {exc}")
 
         await asyncio.gather(*(one(i) for i in universe))
+        if st.config_generation != start_gen:
+            st.rows = []
+            st.signals = {}
+            log.info("%s: config changed during scan; discarding stale scan result", STRATEGY_ID)
+            return snapshot(uid)
         rows.sort(key=lambda r: (r["state"] != "armed", -abs(r["stretch"]),
                                  r["symbol"]))
         st.rows = rows

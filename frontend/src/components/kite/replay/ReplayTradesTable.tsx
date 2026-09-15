@@ -85,7 +85,14 @@ const TradeRow = memo(function TradeRow({
         {t.trade_id}
       </td>
       <td className="rd-num" style={{ color: 'var(--k-dim)' }}>
-        {fmtTime(t.entry_time_iso)}
+        <span title={t.signal_date ? `Signal Date: ${t.signal_date} (Session Close) → Executed at Next Session Open: ${t.entry_time_iso}` : undefined}>
+          {fmtTime(t.entry_time_iso)}
+        </span>
+        {t.signal_date && (
+          <span className="rd-sub" style={{ fontSize: '9px', color: 'var(--k-amber, #f59e0b)' }} title={`Signal setup completed on session close ${t.signal_date}`}>
+            sig {t.signal_date.slice(5)}
+          </span>
+        )}
       </td>
       <td data-col="out" className="rd-num">
         {open ? (

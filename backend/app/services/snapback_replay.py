@@ -148,3 +148,156 @@ def settle(runner, trade, candle, at):
         runner._active_until_bar.pop((trade.underlying, 'snapback'), None)
     runner._publish('trade', trade.model_dump())
     runner._recompute_totals()
+
+
+def run_intraday_causal_replay(
+    spot_bars: list[dict],
+    option_quotes: list[dict],
+    cfg: Any,
+    symbol: str = "NIFTY",
+    lot_size: int = 50,
+    available_cash: float = 100000.0,
+) -> dict[str, Any]:
+    """Execute causal intraday replay over spot bars and option quotes.
+
+    Enforces A0-A5 pipeline:
+    - Causal feature extraction and 30-bar contiguous warmup.
+    - Setup decision based on Bollinger stretch + re-entry.
+    - Cost estimate and target feasibility ceiling check.
+    - Durable risk reservation.
+    - Deterministic position lifecycle state machine.
+    """
+    from app.engines.snapback.intraday_features import build_feature_snapshot
+    from app.engines.snapback.intraday_models import SetupDecision
+    from app.engines.snapback.intraday_economics import build_trade_plan
+    from app.engines.snapback.intraday_lifecycle import create_initial_position, advance_position_lifecycle
+    from app.services.snapback_execution import AccountRiskManager
+
+    risk_mgr = AccountRiskManager()
+    trades: list[dict] = []
+    opportunities: int = 0
+    rejections: list[str] = []
+
+    active_position = None
+    remaining_day_loss = available_cash * (getattr(cfg, "scalp_daily_loss_pct", 2.0) / 100.0)
+
+    for i in range(30, len(spot_bars)):
+        prefix = spot_bars[: i + 1]
+        feat = build_feature_snapshot(prefix, cfg, min_warmup_bars=30)
+        if feat is None:
+            continue
+
+        bar = spot_bars[i]
+        ts_ms = feat.timestamp_ms
+
+        # Position management if position is active
+        if active_position is not None:
+            quote = next((q for q in option_quotes if abs(q.get("timestamp_ms", 0) - ts_ms) <= 60000), None)
+            current_bid = quote.get("bid", active_position.desired_stop) if quote else active_position.desired_stop
+            
+            active_position, exit_reason = advance_position_lifecycle(
+                active_position, current_bid, bar, cfg, now_ms=ts_ms
+            )
+
+            if exit_reason is not None or active_position.active_phase == "EXIT_REQUIRED":
+                exit_price = current_bid
+                gross_pnl = (exit_price - active_position.entry_vwap) * active_position.confirmed_quantity
+                net_pnl = gross_pnl - getattr(cfg, "scalp_fixed_cost_inr", 40.0)
+
+                trades.append({
+                    "position_id": active_position.position_id,
+                    "symbol": symbol,
+                    "side": active_position.side,
+                    "entry_price": active_position.entry_vwap,
+                    "exit_price": exit_price,
+                    "quantity": active_position.confirmed_quantity,
+                    "gross_pnl": gross_pnl,
+                    "net_pnl": net_pnl,
+                    "exit_reason": exit_reason or "exit_required",
+                    "bars_held": active_position.bars_held,
+                })
+                active_position = None
+            continue
+
+        # Evaluate entry setup
+        prev_bar = spot_bars[i - 1]
+        up_reentry = prev_bar["close"] > feat.upper_band and feat.close <= feat.upper_band
+        down_reentry = getattr(cfg, "allow_fade_down", False) and prev_bar["close"] < feat.lower_band and feat.close >= feat.lower_band
+
+        if not (up_reentry or down_reentry):
+            continue
+
+        opportunities += 1
+        side = "PE" if up_reentry else "CE"
+
+        setup = SetupDecision(
+            setup_id=f"setup_{ts_ms}",
+            timestamp_ms=ts_ms,
+            symbol=symbol,
+            side=side,
+            trigger_price=feat.close,
+            mean_target=feat.mean,
+            invalidation_reference=feat.upper_band if up_reentry else feat.lower_band,
+            band_reentry_confirmed=True,
+            is_eligible=True,
+        )
+
+        quote = next((q for q in option_quotes if abs(q.get("timestamp_ms", 0) - ts_ms) <= 60000), None)
+        ask_entry = quote.get("ask", 100.0) if quote else 100.0
+        bid_exit = quote.get("bid", 99.0) if quote else 99.0
+
+        plan = build_trade_plan(
+            setup=setup,
+            contract_symbol=f"{symbol}_{side}",
+            ask_entry=ask_entry,
+            bid_exit=bid_exit,
+            lot_size=lot_size,
+            cfg=cfg,
+            available_cash=available_cash,
+            remaining_day_loss=remaining_day_loss,
+            now_ms=ts_ms,
+        )
+
+        if plan.quantity <= 0 or plan.feasibility_status != "FEASIBLE":
+            rejections.append(f"Plan rejected: feasibility={plan.feasibility_status}")
+            continue
+
+        res = risk_mgr.reserve_risk(
+            plan=plan,
+            account_id="sim_acc",
+            session_id="sim_sess",
+            cfg=cfg,
+            available_cash=available_cash,
+            settled_session_loss=sum(abs(t["net_pnl"]) for t in trades if t["net_pnl"] < 0),
+            open_positions_risk=0.0,
+            now_ms=ts_ms,
+        )
+
+        if res is None:
+            rejections.append("Risk reservation failed")
+            continue
+
+        active_position = create_initial_position(
+            position_id=f"pos_{ts_ms}",
+            account_id="sim_acc",
+            contract_symbol=plan.selected_contract_symbol,
+            side=side,
+            confirmed_quantity=plan.quantity,
+            entry_vwap=ask_entry,
+            cfg=cfg,
+            now_ms=ts_ms,
+        )
+
+    total_net = sum(t["net_pnl"] for t in trades)
+    win_count = sum(1 for t in trades if t["net_pnl"] > 0)
+    win_rate = (win_count / len(trades)) if trades else 0.0
+
+    return {
+        "symbol": symbol,
+        "opportunities": opportunities,
+        "completed_trades": len(trades),
+        "trades": trades,
+        "total_net_pnl": round(total_net, 2),
+        "win_rate": round(win_rate, 4),
+        "rejections": rejections,
+    }

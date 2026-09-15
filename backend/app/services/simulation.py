@@ -269,6 +269,7 @@ class SimSignalEvent(BaseModel):
     premium_target: Optional[float] = None
     scan_origin: Optional[str] = None
     strategy_version: Optional[str] = None
+    signal_date: Optional[str] = None
     # Gamma Move level filter only. Absent on every other engine.
     level_price: Optional[float] = None
     level_kind: Optional[str] = None
@@ -3312,9 +3313,10 @@ class SimulationRunner:
                                          "daily_observation": "open" if opening else "close",
                                          "intraday_covered": has_intraday,
                                          "daily_candle": None if opening else dc})
-            self._strategy_notes["snapback"] = (
-                "Daily-close setups fill at the next session open. Premiums, fees, "
-                "hedges and daily exits use the Snapback model; actual intraday option fills are unavailable.")
+            if getattr(self, "_cached_snapback_cfg", None) is None or self._cached_snapback_cfg.trading_mode == "swing":
+                self._strategy_notes["snapback"] = (
+                    "Daily-close setups fill at the next session open. Premiums, fees, "
+                    "hedges and daily exits use the Snapback model; actual intraday option fills are unavailable.")
 
         from app.services.daily_sessions import is_session_day
         all_bars = [b for b in all_bars if is_session_day(datetime.fromtimestamp(b["time"], ist).date())]
@@ -5103,6 +5105,7 @@ class SimulationRunner:
                 premium_target=_premium_at(leg, spot_ref, target),
                 scan_origin=scan_origin,
                 strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
+                signal_date=sdef.get("snapback_day"),
             )
             self._stats.signals_fired += 1
             self._stats.events.append(event)
@@ -5140,13 +5143,6 @@ class SimulationRunner:
                     quantity=qty,
                     entry_price=entry_p,
                     exit_price=None,
-                    # The premium implied at the levels the engine ACTUALLY
-                    # enforces. These used to be entry x0.75 and x1.5 while
-                    # settlement was decided entirely from `spot_stop` and
-                    # `spot_target`, so a row could be stamped TARGET with an
-                    # exit price far below the target it displayed. Same
-                    # function the signal's ladder uses, so a trade and its
-                    # signal cannot disagree.
                     stop_loss=_premium_at(leg, spot_ref, stop),
                     target_price=_premium_at(leg, spot_ref, target),
                     status="OPEN",
@@ -5155,10 +5151,6 @@ class SimulationRunner:
                     duration_mins=0,
                     raw_entry=raw_entry_p,
                     raw_exit=None,
-                    # "ideal" is friction MODELLED AND FREE, not friction
-                    # unmodelled — the recorded-signal path already reported it
-                    # as 0.0 and the two disagreed, which made a mixed session
-                    # print a drag of zero for trades it had never modelled.
                     slippage=0.0 if friction_mode == "ideal" else max(0.0, entry_slip),
                     leg_delta=leg.get("delta"),
                     spot_entry=spot_ref,
@@ -5175,6 +5167,7 @@ class SimulationRunner:
                     bars_held=0,
                     scan_origin=scan_origin,
                     strategy_version=sdef.get("strategy_version") or (adaptive_ver if strategy == "adaptive_edge" else None),
+                    signal_date=sdef.get("snapback_day"),
                 )
                 if strategy == "snapback":
                     from app.services.snapback_replay import attach

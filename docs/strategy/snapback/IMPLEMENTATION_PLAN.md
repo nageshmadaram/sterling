@@ -30,8 +30,9 @@ The local audit found 1,596,586 option snapshots but only eight dates of usable 
 - First intraday version buys one CE or PE contract per position; no naked option selling, futures hedge, spreads, averaging down or martingale.
 - Start research with a small explicit liquid universe. No dynamic historical universe built from today's listings.
 - Both scalp and intraday use the same causal reversal rules with different timeframes and time allowances. A trend-following strategy is a separate future experiment.
-- Use Bollinger re-entry, EMA confirmation and ADX as testable candidate filters. OI and depth primarily establish whether the contract is tradeable.
-- PCR, change in OI, VWAP and other context only become active after availability checks and held-out ablation evidence.
+- Baseline entry rule: Bollinger stretch followed by confirmed re-entry (candle close back inside band).
+- Execution filters: quote freshness, acceptable spread/depth, and affordable quantity subject to risk caps.
+- Optional experiments: EMA, ADX, PCR, OI changes and VWAP—all disabled initially. Test each addition separately against the unchanged baseline.
 - Automatic upgrades modify the remaining position's exit policy, never its quantity.
 - Build the complete data-to-accounting loop before enabling broker submissions.
 

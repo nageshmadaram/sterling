@@ -739,6 +739,49 @@ async def snapback_validation(user: UserContext = Depends(get_current_user)) -> 
             "how_to_measure": "python -m study.snapback_research --part gate --record"}
 
 
+@router.get("/snapback/readiness")
+async def snapback_readiness(user: UserContext = Depends(get_current_user)) -> dict:
+    """Detailed operational readiness state, config generation, and promotion blockers."""
+    from app.services.snapback import get_config, status
+    from app.services.snapback_validation import auto_execution_blocker
+    uid = _snapback_uid(user)
+    cfg = get_config(uid)
+    st = status(uid)
+    blocker = auto_execution_blocker(cfg)
+
+    blockers: list[str] = []
+    if blocker:
+        blockers.append(blocker)
+    if not cfg.enabled:
+        blockers.append("engine disabled")
+
+    return {
+        "trading_mode": cfg.trading_mode,
+        "operational_mode": "OBSERVE",
+        "config_generation": getattr(st, "config_generation", 0),
+        "is_live_eligible": len(blockers) == 0,
+        "blockers": blockers,
+        "supported_scope": {
+            "max_lots": 1,
+            "max_risk_pct": cfg.scalp_risk_pct,
+            "max_daily_loss_pct": cfg.scalp_daily_loss_pct,
+            "universe_mode": cfg.universe_mode,
+        },
+    }
+
+
+@router.get("/snapback/positions")
+async def snapback_positions(user: UserContext = Depends(get_current_user)) -> dict:
+    """Current Snapback intraday/scalp position state machine projections."""
+    from app.services.snapback import status
+    uid = _snapback_uid(user)
+    st = status(uid)
+    return {
+        "positions": getattr(st, "active_positions", []),
+        "count": len(getattr(st, "active_positions", [])),
+    }
+
+
 @router.get("/snapback/history")
 async def snapback_history(sessions: int = 30,
                            user: UserContext = Depends(get_current_user)) -> dict:

@@ -58,6 +58,7 @@ export interface ReplaySignal {
   premium_target?: number | null;
   scan_origin?: string | null;
   strategy_version?: string | null;
+  signal_date?: string | null;
   /** Gamma Move only. The daily level the watch is keyed to. Absent elsewhere. */
   level_price?: number | null;
   level_kind?: string | null;
@@ -101,6 +102,7 @@ export interface ReplayTrade {
   spot_target?: number | null;
   scan_origin?: string | null;
   strategy_version?: string | null;
+  signal_date?: string | null;
   exit_reason?: string | null;
   bars_held?: number;
   /** |delta| for this leg's moneyness, used to mark the premium. */

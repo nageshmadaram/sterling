@@ -51,6 +51,12 @@ export interface SnapbackConfig {
   scalp_entry_end_minute?: number;
   scalp_square_off_minute?: number;
 
+  use_ema_confirmation?: boolean;
+  use_adx_filter?: boolean;
+  use_pcr_filter?: boolean;
+  use_oi_filter?: boolean;
+  use_vwap_filter?: boolean;
+
   universe_mode: 'curated' | 'fno';
   max_universe: number;
   market_filter: 'off' | 'bearish' | 'bullish';

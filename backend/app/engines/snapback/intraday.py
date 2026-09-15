@@ -114,16 +114,25 @@ def evaluate_intraday(bars: Bars, cfg: SnapbackConfig, symbol: str = "",
     prior_lo, prior_hi = prior_mean - 2 * prior_sd, prior_mean + 2 * prior_sd
     ema = compute_ema(c, 9)
     strength = float(adx(b.high, b.low, c, 14)[-1])
-    if strength > cfg.scalp_max_adx:
+    use_adx = getattr(cfg, "use_adx_filter", False) or cfg.scalp_max_adx < 25.0
+    if use_adx and strength > cfg.scalp_max_adx:
         return []
     volume_mean = float(np.mean(b.volume[-21:-1]))
     rvol = float(b.volume[-1] / volume_mean) if volume_mean > 0 else None
     if cfg.scalp_min_relative_volume > 0 and (rvol is None or rvol < cfg.scalp_min_relative_volume):
         return []
+
+    use_ema = getattr(cfg, "use_ema_confirmation", False)
     up = (c[-2] > prior_hi and mean < c[-1] < hi and c[-1] < b.open[-1]
-          and c[-1] < c[-2] and c[-1] <= ema[-1])
+          and c[-1] < c[-2])
+    if use_ema:
+        up = up and (c[-1] <= ema[-1])
+
     down = (cfg.allow_fade_down and c[-2] < prior_lo and lo < c[-1] < mean
-            and c[-1] > b.open[-1] and c[-1] > c[-2] and c[-1] >= ema[-1])
+            and c[-1] > b.open[-1] and c[-1] > c[-2])
+    if use_ema:
+        down = down and (c[-1] >= ema[-1])
+
     if not (up or down):
         return []
     tr = np.maximum.reduce((b.high[1:] - b.low[1:],
