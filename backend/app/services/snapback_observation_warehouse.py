@@ -325,8 +325,393 @@ class SnapbackObservationWarehouse:
             "observed_vs_model_error": round(error, 2),
         }
 
+    def record_contract_candidate(
+        self,
+        candidate_id: str,
+        opportunity_id: str,
+        candidate_rank: int,
+        option_type: str,
+        dte: int,
+        strike_distance: float,
+        theoretical_delta: float,
+        is_chosen: bool,
+        symbol: str,
+        provider_symbol: str = "",
+        expiry: str = "",
+        strike: float = 0.0,
+        instrument_token: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record an eligible contract candidate immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO contract_candidates (
+                        candidate_id, opportunity_id, candidate_rank, option_type, dte,
+                        strike_distance, theoretical_delta, is_chosen,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        candidate_id, opportunity_id, candidate_rank, option_type, dte,
+                        strike_distance, theoretical_delta, int(is_chosen),
+                        now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_option_quote(
+        self,
+        quote_id: str,
+        opportunity_id: str,
+        symbol: str,
+        bid: float,
+        ask: float,
+        bidqty: int = 0,
+        askqty: int = 0,
+        ltp: float = 0.0,
+        oi: int = 0,
+        iv: float = 0.0,
+        delta: float = 0.0,
+        quote_age_ms: float = 0.0,
+        is_stale: bool = False,
+        provider_symbol: str = "",
+        expiry: str = "",
+        strike: float = 0.0,
+        instrument_token: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record option quote snapshot immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO option_quotes (
+                        quote_id, opportunity_id, bid, ask, bidqty, askqty, ltp, oi, iv, delta,
+                        quote_age_ms, is_stale,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        quote_id, opportunity_id, bid, ask, bidqty, askqty, ltp, oi, iv, delta,
+                        quote_age_ms, int(is_stale),
+                        now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_futures_quote(
+        self,
+        quote_id: str,
+        opportunity_id: str,
+        symbol: str,
+        futures_symbol: str,
+        bid: float,
+        ask: float,
+        ltp: float = 0.0,
+        basis: float = 0.0,
+        quote_age_ms: float = 0.0,
+        is_stale: bool = False,
+        provider_symbol: str = "",
+        expiry: str = "",
+        instrument_token: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record futures quote snapshot immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO futures_quotes (
+                        quote_id, opportunity_id, futures_symbol, bid, ask, ltp, basis,
+                        quote_age_ms, is_stale,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        quote_id, opportunity_id, futures_symbol, bid, ask, ltp, basis,
+                        quote_age_ms, int(is_stale),
+                        now, provider_timestamp or now, now, symbol, provider_symbol or futures_symbol, expiry, 0.0,
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_decision(
+        self,
+        decision_id: str,
+        opportunity_id: str,
+        symbol: str,
+        decision: str,
+        chosen_option_symbol: str = "",
+        chosen_strike: float = 0.0,
+        chosen_delta: float = 0.0,
+        causal_beta: float = 1.0,
+        target_hedge_lots: int = 0,
+        reason: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record selection / rejection decision immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO decisions (
+                        decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
+                        chosen_delta, causal_beta, target_hedge_lots, reason,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
+                        chosen_delta, causal_beta, target_hedge_lots, reason,
+                        now, provider_timestamp or now, now, symbol, symbol, "", chosen_strike,
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_paper_fill(
+        self,
+        fill_id: str,
+        opportunity_id: str,
+        symbol: str,
+        order_side: str,
+        fill_price: float,
+        fill_quantity: int,
+        slippage: float = 0.0,
+        provider_symbol: str = "",
+        expiry: str = "",
+        strike: float = 0.0,
+        instrument_token: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record paper fill execution immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO paper_fills (
+                        fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
+                        now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_hedge_rebalance(
+        self,
+        rebalance_id: str,
+        opportunity_id: str,
+        symbol: str,
+        prior_hedge_lots: int,
+        new_hedge_lots: int,
+        futures_fill_price: float,
+        reason: str = "",
+        provider_symbol: str = "",
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record futures hedge rebalance execution immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO hedge_rebalances (
+                        rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
+                        now, provider_timestamp or now, now, symbol, provider_symbol or symbol, "", 0.0,
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_daily_mtm(
+        self,
+        mtm_id: str,
+        session_date: str,
+        opportunity_id: str,
+        symbol: str,
+        option_mtm: float,
+        futures_mtm: float,
+        total_mtm: float,
+        option_liquidation_bid: float = 0.0,
+        futures_liquidation_quote: float = 0.0,
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record end-of-day liquidation MTM snapshot immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO daily_mtm (
+                        mtm_id, session_date, opportunity_id, option_mtm, futures_mtm, total_mtm,
+                        option_liquidation_bid, futures_liquidation_quote,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        mtm_id, session_date, opportunity_id, option_mtm, futures_mtm, total_mtm,
+                        option_liquidation_bid, futures_liquidation_quote,
+                        now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_margin_snapshot(
+        self,
+        snapshot_id: str,
+        opportunity_id: str,
+        symbol: str,
+        option_margin_required: float,
+        futures_margin_required: float,
+        total_margin: float,
+        available_capital: float,
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record margin utilization snapshot immutably."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO margin_snapshots (
+                        snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
+                        total_margin, available_capital,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
+                        total_margin, available_capital,
+                        now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_cost(
+        self,
+        cost_id: str,
+        opportunity_id: str,
+        symbol: str,
+        brokerage: float = 0.0,
+        stt: float = 0.0,
+        exchange_txn_fee: float = 0.0,
+        clearing_fee: float = 0.0,
+        gst: float = 0.0,
+        stamp_duty: float = 0.0,
+        total_statutory_costs: float = 0.0,
+        provider_timestamp: Optional[str] = None,
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Record statutory fees and transaction costs immutably."""
+        now = _now_iso()
+        if total_statutory_costs == 0.0:
+            total_statutory_costs = (
+                brokerage + stt + exchange_txn_fee + clearing_fee + gst + stamp_duty
+            )
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO costs (
+                        cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
+                        total_statutory_costs,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
+                        total_statutory_costs,
+                        now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def get_records_by_table(self, table_name: str, opportunity_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Query stored rows from any of the 11 warehouse tables."""
+        valid_tables = {
+            "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
+            "decisions", "paper_fills", "hedge_rebalances", "daily_mtm",
+            "margin_snapshots", "costs", "outcomes"
+        }
+        if table_name not in valid_tables:
+            raise ValueError(f"Invalid table name: {table_name}")
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                if opportunity_id:
+                    rows = conn.execute(f"SELECT * FROM {table_name} WHERE opportunity_id = ?", (opportunity_id,)).fetchall()
+                else:
+                    rows = conn.execute(f"SELECT * FROM {table_name}").fetchall()
+                return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
     def generate_falsification_report(self) -> Dict[str, Any]:
-        """Generate model-vs-observed falsification report from recorded outcomes."""
+        """Generate model-vs-observed falsification report from recorded outcomes.
+        
+        NOTE: This report is for DIAGNOSTIC SUMMARY ONLY.
+        It does NOT constitute promotion authorization or capital clearance.
+        Capital promotion requires clearing the Authoritative Economic Gate.
+        """
         conn = self._get_connection()
         try:
             with conn:
@@ -340,6 +725,8 @@ class SnapbackObservationWarehouse:
             if not rows:
                 return {
                     "evidence_status": "INCONCLUSIVE",
+                    "report_type": "DIAGNOSTIC_ONLY",
+                    "promotion_permitted": False,
                     "observed_sessions": 0,
                     "completed_trades": 0,
                     "total_outcomes": 0,
@@ -350,7 +737,7 @@ class SnapbackObservationWarehouse:
                     "avg_error": 0.0,
                     "model_optimism_bias": 0.0,
                     "survives_falsification": False,
-                    "notes": "Zero evidence outcomes recorded. Falsification status is INCONCLUSIVE.",
+                    "notes": "Zero evidence outcomes recorded. Falsification status is INCONCLUSIVE. (DIAGNOSTIC ONLY — NO PROMOTION PERMISSION)",
                     "outcomes": [],
                 }
 
