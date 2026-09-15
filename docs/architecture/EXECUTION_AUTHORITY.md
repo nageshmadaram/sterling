@@ -66,7 +66,7 @@ Every live order request must pass `assert_safe_to_trade`:
 Strategy Signal
       │
       ▼
-RiskAuthority.evaluate(...) [Requires explicit risk_approved=True]
+RiskAuthority.evaluate(...) [Requires RiskApproval proof or explicit risk approval]
       │
       ▼
 ExecutionControl.assert_safe_to_trade(...) [Reads durable DB 2D state + unresolved journal]
@@ -133,7 +133,7 @@ Broker Send → ACK / UNKNOWN (RECOVERY_REQUIRED on transport error)
 
 | Order | Component / Runner | Migration Status | Target Execution Pipeline |
 |---:|---|---|---|
-| **1** | **Sterling Canonical Execution Engine** | Implemented (Slice 1 & 2) | `order_journal` + `CanonicalExecutionService` |
+| **1** | **Sterling Canonical Execution Engine** | In Progress (Hardening Slice 2) | `order_journal` + `CanonicalExecutionService` |
 | **2** | **Manual Kite Orders API** | Open (Target #1) | `CanonicalExecutionService.submit_order(...)` |
 | **3** | **Opening Volume Leaders** | Open (Target #2) | Replace direct `place_order` with `ExecutionService` |
 | **4** | **Intraday Runner** | Open (Target #3) | Route via `ExecutionService` |

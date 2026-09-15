@@ -1,7 +1,7 @@
 # Sterling System Audit Baseline — 15 September 2026
 
 **Audit Baseline Commit:** `68537029ee31126bbde68298677e08d10d169aeb`  
-**Implementation commit audited through:** `f0538330d0e4f8193f5e1a8f4192f8e81c5c702b`  
+**Implementation commit audited through:** `d47b8e414212562b945865b8ac1dc6e99dbd605a`  
 **Audit Date:** 15 September 2026  
 **Scope:** Repository architecture, release governance, market-data path, signal generation, replay, risk, execution, persistence, broker reconciliation, frontend contracts, security, observability and production-readiness evidence.
 
@@ -28,12 +28,12 @@
 | Item | Status | Notes |
 |---|---|---|
 | **EXEC-CTRL-SPEC** | **ACCEPTED WITH STATE-MODEL AMENDMENT** | Orthogonal 2D control states (`operator_state` + `recovery_state`), CAS revision control |
-| **EXEC-CTRL-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, 1-time legacy state migration, and orthogonal lost-update safety |
+| **EXEC-CTRL-IMPL** | **MOSTLY IMPLEMENTED, P0 STILL OPEN** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, 1-time legacy state migration, and durable kill persistence |
 | **EXEC-SVC-SPEC** | **ACCEPTED WITH EXPOSURE-EFFECT AMENDMENT** | Exposure effect classification (`INCREASE_EXPOSURE`, `REDUCE_EXPOSURE`, etc.) |
-| **EXEC-SVC-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | Real KiteClient protocol params, NRML/allow_amo=False defaults, account identity binding, risk approval check, exposure verification, exit semantics, typed broker errors, and UNKNOWN recovery latch |
+| **EXEC-SVC-IMPL** | **PARTIAL, P0 OPEN** | Real KiteClient protocol params, RiskApproval proof, identity strictness, protection fences, exit semantics, typed broker errors, and UNKNOWN recovery latch |
 | **MANUAL-KITE-MIGRATION** | **OPEN** | Not migrated yet |
 | **KITE-JOURNAL/LIFECYCLE** | **VERIFIED REFERENCE IMPLEMENTATION** | Durable journal and execution recovery primitives |
-| **RELEASE-GATE** | **VERIFIED GREEN on `f0538330d...`** | Verified green pipeline release gate |
+| **RELEASE-GATE** | **VERIFIED GREEN on `d47b8e414...`** | Verified green pipeline release gate |
 | **SEC-01** | **VERIFIED IMPLEMENTED** | Fail-closed ordering, DB secret inspection, 32+ char entropy, Fernet backend |
 | **CI-01** | **VERIFIED IMPLEMENTED** | `release-gate` with `always()` and explicit upstream status evaluation |
 | **BUILD-01** | **VERIFIED RESOLVED** | Frontend `tsc --noEmit` returns 0 errors |

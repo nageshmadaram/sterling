@@ -294,3 +294,130 @@ async def test_typed_broker_outcome_unknown_on_generic_transport_exception():
 
     ctrl = db.get_execution_control(scope="global", uid="u_tf1", account_id="acct_tf1")
     assert ctrl["recovery_state"] == "RECOVERY_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_risk_approval_proof_validation():
+    """Verify RiskApproval proof object is required and validated against request fields."""
+    from app.services.execution_service import RiskApproval
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_risk1"
+        async def place_order(self, **kwargs):
+            return {"order_id": "ORD_RISK_1"}
+
+    client = MockBroker()
+    req = ExecutionRequest(
+        uid="u_risk1",
+        account_id="acct_risk1",
+        strategy_id="strat1",
+        generation_id="gen1",
+        signal_id="sig_risk1",
+        exchange="NSE",
+        symbol="SBIN",
+        side="BUY",
+        quantity=10,
+    )
+
+    # Valid proof matching all fields
+    valid_proof = RiskApproval(
+        approval_id="app_123",
+        uid="u_risk1",
+        account_id="acct_risk1",
+        symbol="SBIN",
+        side="BUY",
+        quantity=10,
+        generation_id="gen1",
+        approved=True,
+    )
+    res_valid = await service.submit_order(req, broker_client=client, risk_approval=valid_proof)
+    assert res_valid.success
+    assert res_valid.status == "ACKNOWLEDGED"
+
+    # Mismatched quantity proof
+    bad_qty_proof = RiskApproval(
+        approval_id="app_124",
+        uid="u_risk1",
+        account_id="acct_risk1",
+        symbol="SBIN",
+        side="BUY",
+        quantity=5,  # Mismatch (req is 10)
+        generation_id="gen1",
+        approved=True,
+    )
+    res_bad = await service.submit_order(req, broker_client=client, risk_approval=bad_qty_proof)
+    assert not res_bad.success
+    assert res_bad.status == "REJECTED"
+    assert "Risk approval proof mismatch" in res_bad.error
+
+
+@pytest.mark.asyncio
+async def test_quantity_overshoot_reclassifies_to_increase_exposure():
+    """Verify SELL 100 declared as CLOSE_POSITION on net LONG 10 is reclassified to INCREASE_EXPOSURE due to overshoot."""
+    service = CanonicalExecutionService()
+    db.set_inventory(account_id="acct_over", uid="u_over", symbol="RELIANCE", net_quantity=10)
+    db.set_operator_state("HALTED", reason="Test halt", scope="global")
+
+    # Request SELL 100 on net LONG 10 (overshoot)
+    req_overshoot = ExecutionRequest(
+        uid="u_over",
+        account_id="acct_over",
+        strategy_id="strat1",
+        generation_id="gen1",
+        signal_id="sig_over",
+        exchange="NSE",
+        symbol="RELIANCE",
+        side="SELL",
+        quantity=100,
+        exposure_effect=ExposureEffect.CLOSE_POSITION,
+    )
+
+    res = await service.submit_order(req_overshoot, broker_client=MagicMock(), risk_approved=True)
+    assert not res.success
+    assert res.status == "HALTED"  # Reclassified to INCREASE_EXPOSURE and blocked by HALTED!
+
+
+@pytest.mark.asyncio
+async def test_protection_lease_acquired_and_busy_rejection():
+    """Verify place_protection acquires protection lease with correct signature and rejects when lease is busy."""
+    from app.services.kite_engine import execution_lease
+    service = CanonicalExecutionService()
+
+    class MockGTTBroker:
+        _account_id = "acct_prot1"
+        async def place_gtt(self, **kwargs):
+            return {"trigger_id": "GTT_999"}
+
+    client = MockGTTBroker()
+
+    # Pre-acquire lease in process
+    token = execution_lease.acquire("protection", account_id="acct_prot1", uid="u_prot1", symbol="INFY")
+    assert token is not None
+
+    try:
+        # Service call must fail with lease busy rejection
+        res = await service.place_protection(
+            uid="u_prot1",
+            account_id="acct_prot1",
+            position_id="POS_1234567890",
+            protection_params={"symbol": "INFY", "trigger_price": 1400.0},
+            broker_client=client,
+        )
+        assert not res.success
+        assert res.status == "REJECTED"
+        assert "lease busy" in res.error.lower()
+    finally:
+        execution_lease.release("protection", account_id="acct_prot1", uid="u_prot1", symbol="INFY", owner=token)
+
+
+@pytest.mark.asyncio
+async def test_durable_kill_switch_persistence_failure_raises():
+    """Verify set_kill_switch(True) raises ControlPlaneUnavailableError when DB is unavailable."""
+    monkeypatch_db = pytest.MonkeyPatch()
+    try:
+        monkeypatch_db.setattr(db, "_available", False)
+        with pytest.raises(ControlPlaneUnavailableError):
+            live_safety.set_kill_switch(True, reason="Emergency halt")
+    finally:
+        monkeypatch_db.undo()

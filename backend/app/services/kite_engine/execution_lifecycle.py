@@ -205,8 +205,33 @@ def _book_entry(uid: str, account_id: str, intent, order: dict) -> bool:
     return True
 
 
+def _book_exit(uid: str, account_id: str, intent, order: dict) -> bool:
+    """Record the journal's confirmed exit quantity/value in the signed ledger."""
+    if intent.filled_quantity <= 0 or intent.filled_value <= 0 or not intent.order_id:
+        return True
+    try:
+        applied = fill_ledger.record(
+            account_id=account_id, uid=uid, symbol=intent.symbol,
+            exchange=intent.exchange, side=intent.side.upper(),
+            order_id=intent.order_id, cumulative_quantity=intent.filled_quantity,
+            cumulative_value=intent.filled_value, source="exit",
+            lot_size=int(intent.payload.get("lot_size") or 0),
+            exchange_ts_ms=exchange_ms(order))
+    except Exception as exc:  # noqa: BLE001
+        state.log(uid, "order_failed",
+                  f"{intent.symbol}: exit fill could not be booked to the ledger "
+                  f"({exc}); cost basis needs reconciliation")
+        return False
+    if applied.reconciliation_required:
+        state.log(uid, "order_failed",
+                  f"{intent.symbol}: contradictory exit fill evidence quarantined "
+                  f"({applied.inventory.reconciliation_reason})")
+        return False
+    return True
+
+
 async def consume_order(client, uid: str, order: dict) -> bool:
-    """True means a journal-owned entry was handled (including blocked evidence)."""
+    """True means a journal-owned entry or exit was handled (including blocked evidence)."""
     aid = account_id(client)
     oid = str(order.get("order_id") or "")
     symbol = str(order.get("tradingsymbol") or "")
@@ -230,6 +255,30 @@ async def consume_order(client, uid: str, order: dict) -> bool:
         if observed.reconciliation_required:
             state.log(uid, "order_failed", f"{symbol}: conflicting broker fill evidence")
             return True
+
+        is_exit = (
+            intent.payload.get("intent_type") == "EXIT"
+            or intent.payload.get("exposure_effect") in ("CLOSE_POSITION", "REDUCE_EXPOSURE")
+        )
+        if is_exit:
+            p = positions.get(uid, symbol)
+            latest = observed.intent
+            filled = latest.filled_quantity
+            if p:
+                if filled > 0:
+                    p.qty = max(0, p.entry_requested_qty - filled)
+                    if p.qty == 0 and latest.state in journal.TERMINAL:
+                        p.status = positions.CLOSED
+                    positions.persist_strict(uid)
+            if not _book_exit(uid, aid, latest, order):
+                if p:
+                    p.pnl_reconciliation_required = True
+                    positions.persist_strict(uid)
+            elif latest.state in journal.TERMINAL and p:
+                await apply_broker_charges(client, uid, p, oid, order)
+            journal.mark_projected(intent.intent_key, latest.projection_version)
+            return True
+
         if not observed.accepted and not observed.intent.projection_pending:
             p = positions.get(uid, symbol)
             if p and p.order_id == oid and p.account_id == aid and not p.gtt_id:

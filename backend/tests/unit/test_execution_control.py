@@ -158,6 +158,7 @@ async def test_canonical_execution_service_exposure_policy():
     )
 
     class MockBroker:
+        _account_id = "acc1"
         async def place_order(self, **kwargs):
             return {"order_id": "ORD_CLOSE_123"}
 

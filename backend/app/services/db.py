@@ -1276,6 +1276,22 @@ def get_inventory(account_id: str, uid: str, symbol: str) -> dict | None:
         return None
 
 
+def get_inventory_strict(account_id: str, uid: str, symbol: str) -> dict | None:
+    """Strict inventory reader for safety-critical execution. Raises on database failure."""
+    if not _available:
+        raise ControlPlaneUnavailableError("Cannot read inventory: Database unavailable")
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT account_id, uid, symbol, exchange, net_quantity, lot_size, average_cost, realized_pnl, fees, reconciliation_required, reconciliation_reason, version, updated_ms"
+                " FROM kite_inventory WHERE account_id=? AND uid=? AND symbol=?",
+                (account_id, uid, symbol),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception as exc:
+        raise ControlPlaneUnavailableError(f"Database error reading inventory for {symbol}: {exc}") from exc
+
+
 def get_inventory_all(account_id: str, uid: str) -> list[dict]:
     if not _available:
         return []
@@ -1289,6 +1305,22 @@ def get_inventory_all(account_id: str, uid: str) -> list[dict]:
             return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def get_inventory_all_strict(account_id: str, uid: str) -> list[dict]:
+    """Strict inventory reader for all symbols. Raises on database failure."""
+    if not _available:
+        raise ControlPlaneUnavailableError("Cannot read inventory: Database unavailable")
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT account_id, uid, symbol, exchange, net_quantity, lot_size, average_cost, realized_pnl, fees, reconciliation_required, reconciliation_reason, version, updated_ms"
+                " FROM kite_inventory WHERE account_id=? AND uid=?",
+                (account_id, uid),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as exc:
+        raise ControlPlaneUnavailableError(f"Database error reading all inventory: {exc}") from exc
 
 
 def set_inventory(account_id: str, uid: str, symbol: str, net_quantity: int, exchange: str = "NSE") -> dict:

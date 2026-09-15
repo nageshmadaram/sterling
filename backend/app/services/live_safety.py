@@ -11,17 +11,23 @@ _KILL_SWITCH={"enabled":False,"reason":"","set_ts_ms":0}; _IDEMPOTENCY_CACHE={};
 def kill_switch_state(): return dict(_KILL_SWITCH)
 def set_kill_switch(enabled: bool, reason: str = "", uid: str = "default", reason_code: str = "kill_switch"):
     _KILL_SWITCH.update({"enabled": bool(enabled), "reason": reason or ("manual halt" if enabled else ""), "set_ts_ms": int(time.time() * 1000)})
+    from app.services import db
+    if not db.is_available():
+        if enabled:
+            raise db.ControlPlaneUnavailableError("Cannot set kill switch: Durable database unavailable")
+        log.warning("Database unavailable while disabling kill switch")
+        return dict(_KILL_SWITCH)
     try:
-        from app.services import db
-        if db._available:
-            db.set_operator_state(
-                operator_state="HALTED" if enabled else "RUNNING",
-                reason=reason or ("manual halt" if enabled else ""),
-                reason_code=reason_code,
-                uid=uid,
-                actor="operator",
-            )
+        db.set_operator_state(
+            operator_state="HALTED" if enabled else "RUNNING",
+            reason=reason or ("manual halt" if enabled else ""),
+            reason_code=reason_code,
+            uid=uid,
+            actor="operator",
+        )
     except Exception as exc:
+        if enabled:
+            raise db.ControlPlaneUnavailableError(f"Failed to persist durable kill switch state: {exc}") from exc
         log.warning("Failed to persist durable kill switch state: %s", exc)
     return dict(_KILL_SWITCH)
 

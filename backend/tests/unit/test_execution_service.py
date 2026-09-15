@@ -57,6 +57,7 @@ async def test_execution_service_risk_rejection():
 @pytest.mark.asyncio
 async def test_execution_service_broker_send_ack():
     class MockBrokerClient:
+        _account_id = "acc1"
         async def place_order(self, **kwargs):
             return {"order_id": "ORD_12345"}
 
@@ -83,6 +84,7 @@ async def test_execution_service_broker_send_ack():
 @pytest.mark.asyncio
 async def test_execution_service_transport_uncertainty():
     class TimeoutBrokerClient:
+        _account_id = "acc1"
         async def place_order(self, **kwargs):
             raise TimeoutError("Broker Gateway Timeout 504")
 
@@ -111,6 +113,7 @@ async def test_execution_service_transport_uncertainty():
 @pytest.mark.asyncio
 async def test_execution_service_cancel_and_protection():
     class MockBrokerClient:
+        _account_id = "acc1"
         async def cancel_order(self, variety, order_id):
             return True
 
