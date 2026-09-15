@@ -50,8 +50,12 @@ def test_live_filter_uses_wall_time_and_not_simulation_clock(monkeypatch):
     assert datetime.fromtimestamp(rows[0]['time'], IST).day == 11
 
 
-def test_unknown_calendar_year_is_not_treated_as_a_regular_session():
-    assert daily_sessions.is_session_day(datetime(2024, 12, 25, tzinfo=IST).date()) is False
+def test_unknown_calendar_year_falls_back_to_weekday_coverage():
+    # 2024-12-25 is a Wednesday (weekday < 5), so older tapes retain weekday coverage.
+    assert daily_sessions.is_session_day(datetime(2024, 12, 25, tzinfo=IST).date()) is True
+    # 2024-12-28 is a Saturday (weekday 5), so weekends are rejected even for uncovered years.
+    assert daily_sessions.is_session_day(datetime(2024, 12, 28, tzinfo=IST).date()) is False
+
 
 
 @pytest.fixture

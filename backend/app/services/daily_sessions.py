@@ -8,8 +8,9 @@ from app.services.navigator.calendar import COVERED_YEARS, is_trading_day
 def is_session_day(day) -> bool:
     """Known exchange closures; older stored tapes retain weekday coverage."""
     if day.year not in COVERED_YEARS:
-        return False
+        return day.weekday() < 5
     return is_trading_day(day)
+
 
 
 def closed_daily_candles(candles, asof: datetime) -> list[dict]:
