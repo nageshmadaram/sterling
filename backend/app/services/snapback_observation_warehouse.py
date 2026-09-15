@@ -249,14 +249,14 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
     ) -> None:
-        """Record underlying signal opportunity."""
+        """Record underlying signal opportunity immutably."""
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO opportunities (
+                    INSERT INTO opportunities (
                         opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, is_valid, rejection_reason,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
                         instrument_token, source, strategy_commit, manifest_hash
@@ -286,7 +286,7 @@ class SnapbackObservationWarehouse:
         actual_costs: float,
         source: str = "PROSPECTIVE_PAPER",
     ) -> Dict[str, Any]:
-        """Record trade outcome and compute model-vs-observed error."""
+        """Record trade outcome immutably and compute model-vs-observed error."""
         now = _now_iso()
         modeled_total = modeled_option_pnl + modeled_futures_pnl - modeled_costs
         actual_total = actual_option_pnl + actual_futures_pnl - actual_costs
@@ -298,7 +298,7 @@ class SnapbackObservationWarehouse:
             with conn:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO outcomes (
+                    INSERT INTO outcomes (
                         outcome_id, opportunity_id, exit_reason, entry_ts, exit_ts,
                         modeled_option_pnl, actual_option_pnl, modeled_futures_pnl, actual_futures_pnl,
                         modeled_costs, actual_costs, modeled_total_pnl, actual_total_pnl, observed_vs_model_error,
@@ -331,14 +331,26 @@ class SnapbackObservationWarehouse:
         try:
             with conn:
                 rows = conn.execute("SELECT * FROM outcomes").fetchall()
+                sessions_rows = conn.execute(
+                    "SELECT DISTINCT strftime('%Y-%m-%d', entry_ts) as session_date FROM outcomes"
+                ).fetchall()
+            
+            observed_sessions = len(sessions_rows)
+
             if not rows:
                 return {
+                    "evidence_status": "INCONCLUSIVE",
+                    "observed_sessions": 0,
+                    "completed_trades": 0,
                     "total_outcomes": 0,
+                    "mean_modeled_net": 0.0,
+                    "mean_actual_net": 0.0,
                     "avg_modeled_pnl": 0.0,
                     "avg_actual_pnl": 0.0,
                     "avg_error": 0.0,
                     "model_optimism_bias": 0.0,
-                    "survives_falsification": True,
+                    "survives_falsification": False,
+                    "notes": "Zero evidence outcomes recorded. Falsification status is INCONCLUSIVE.",
                     "outcomes": [],
                 }
 
@@ -370,11 +382,24 @@ class SnapbackObservationWarehouse:
             # Model optimism bias = modeled PnL - actual PnL
             optimism_bias = avg_modeled - avg_actual
 
-            # Falsification rule: if actual PnL <= 0 while model claimed positive, strategy fails
-            survives = avg_actual > 0.0
+            # Falsification rules
+            if n < 30:
+                evidence_status = "INSUFFICIENT_SAMPLES"
+                survives = False
+            elif avg_actual <= 0.0:
+                evidence_status = "FALSIFIED"
+                survives = False
+            else:
+                evidence_status = "SURVIVED"
+                survives = True
 
             return {
+                "evidence_status": evidence_status,
+                "observed_sessions": observed_sessions,
+                "completed_trades": n,
                 "total_outcomes": n,
+                "mean_modeled_net": round(avg_modeled, 2),
+                "mean_actual_net": round(avg_actual, 2),
                 "avg_modeled_pnl": round(avg_modeled, 2),
                 "avg_actual_pnl": round(avg_actual, 2),
                 "avg_error": round(avg_err, 2),
@@ -384,3 +409,4 @@ class SnapbackObservationWarehouse:
             }
         finally:
             conn.close()
+

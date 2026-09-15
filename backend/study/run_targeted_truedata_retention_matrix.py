@@ -38,32 +38,29 @@ async def main():
 
     print(f"Discovered {len(nifty_fo_symbols)} NIFTY provider symbols and {len(reliance_fo_symbols)} RELIANCE provider symbols.")
 
-    # Provider symbol resolution logic
-    current_nifty_fut = "NIFTY-I"
-    recent_expired_nifty_fut = "NIFTY-II"
-    current_nifty_opt = "NIFTY26SEP24000PE"
-    expired_nifty_opt = "NIFTY24JUL22500PE"
-    recent_reliance_opt = "RELIANCE-I"
-    expired_reliance_opt = "RELIANCE24JUL3000CE"
+    # Provider symbol resolution logic (Micro-Fix 4: NEVER substitute guessed option symbols on discovery failure)
+    current_nifty_fut = "SYMBOL_UNRESOLVED"
+    recent_expired_nifty_fut = "SYMBOL_UNRESOLVED"
+    current_nifty_opt = "SYMBOL_UNRESOLVED"
+    expired_nifty_opt = "SYMBOL_UNRESOLVED"
+    recent_reliance_opt = "SYMBOL_UNRESOLVED"
+    expired_reliance_opt = "SYMBOL_UNRESOLVED"
 
     if nifty_fo_symbols:
         futs = [s for s in nifty_fo_symbols if "-I" in s or "FUT" in s]
         opts = [s for s in nifty_fo_symbols if "PE" in s or "CE" in s]
         if futs:
             current_nifty_fut = futs[0]
-            if len(futs) > 1:
-                recent_expired_nifty_fut = futs[1]
+            recent_expired_nifty_fut = futs[1] if len(futs) > 1 else futs[0]
         if opts:
             current_nifty_opt = opts[0]
-            if len(opts) > 1:
-                expired_nifty_opt = opts[-1]
+            expired_nifty_opt = opts[-1] if len(opts) > 1 else opts[0]
 
     if reliance_fo_symbols:
         rel_opts = [s for s in reliance_fo_symbols if "PE" in s or "CE" in s]
         if rel_opts:
             recent_reliance_opt = rel_opts[0]
-            if len(rel_opts) > 1:
-                expired_reliance_opt = rel_opts[-1]
+            expired_reliance_opt = rel_opts[-1] if len(rel_opts) > 1 else rel_opts[0]
 
     # Target test matrix (6 specified targets)
     targets: List[Tuple[str, str]] = [
@@ -89,6 +86,20 @@ async def main():
     for c_symbol, c_label in targets:
         print(f"\nProbing Target: {c_symbol} ({c_label})")
         print("-" * 75)
+
+        if c_symbol == "SYMBOL_UNRESOLVED":
+            print("  [ALL HORIZONS          ] SKIPPED: Provider symbol discovery failed (SYMBOL_UNRESOLVED).")
+            summary_rows.append({
+                "contract": c_symbol,
+                "label": c_label,
+                "horizon": "ALL",
+                "entitlement_status": "SYMBOL_UNRESOLVED",
+                "ticks_available": False,
+                "bars_available": False,
+                "error": "Symbol resolution failed; provider symbols unavailable",
+            })
+            continue
+
         consecutive_empty = 0
 
         for w_label, start_d, end_d in time_windows:
@@ -99,6 +110,8 @@ async def main():
             try:
                 res = await probe.probe_symbol(c_symbol, start_d, end_d)
                 d = res.as_dict()
+                status = d.get("entitlement_status")
+
                 row = {
                     "contract": c_symbol,
                     "label": c_label,
@@ -106,7 +119,7 @@ async def main():
                     "requested": f"{start_d} to {end_d}",
                     "tick_status": d.get("tick_status"),
                     "bar_status": d.get("bar_status"),
-                    "entitlement_status": d.get("entitlement_status"),
+                    "entitlement_status": status,
                     "ticks_available": d.get("ticks_available"),
                     "bars_available": d.get("bars_available"),
                     "tick_count": d.get("tick_count"),
@@ -118,6 +131,11 @@ async def main():
                 }
                 summary_rows.append(row)
 
+                # Micro-Fix 5: 401 / NOT_ENTITLED / CONFIG_MISSING aborts probe immediately and NEVER counts toward empty retention windows
+                if status in ("NOT_ENTITLED", "CONFIG_MISSING", "ERROR") and ("401" in str(row["error"]) or "credentials unavailable" in str(row["error"]).lower()):
+                    print(f"  [{w_label:22s}] Status={status:14s} | PROBE ABORTED (Auth/Credential failure - Retention depth UNKNOWN) | Err={str(row['error'])[:40]}")
+                    break
+
                 is_empty = not d.get("ticks_available") and not d.get("bars_available")
                 if is_empty:
                     consecutive_empty += 1
@@ -127,7 +145,7 @@ async def main():
                 print(f"  [{w_label:22s}] Status={row['entitlement_status']:14s} | Ticks={row['tick_count']:6d} ({row['bid_ask_coverage_pct']:5.1f}% bid/ask) | Bars={row['bar_count']:5d} | Err={str(row['error'])[:40]}")
             except Exception as e:
                 print(f"  [{w_label:22s}] ERROR: {e}")
-                consecutive_empty += 1
+                break
 
     output_dir = "research/snapback_reality_v1"
     os.makedirs(output_dir, exist_ok=True)
@@ -141,4 +159,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 

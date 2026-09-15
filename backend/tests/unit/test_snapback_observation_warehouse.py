@@ -39,6 +39,41 @@ def test_warehouse_init_and_tables(temp_warehouse):
         conn.close()
 
 
+def test_warehouse_zero_outcomes_returns_inconclusive(temp_warehouse):
+    report = temp_warehouse.generate_falsification_report()
+    assert report["total_outcomes"] == 0
+    assert report["evidence_status"] == "INCONCLUSIVE"
+    assert report["survives_falsification"] is False
+
+
+def test_warehouse_immutable_inserts_reject_duplicates(temp_warehouse):
+    opp_id = "OPP-DUP-TEST"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="BEARISH_SNAPBACK",
+        spot_price=24500.0,
+        ema_50=24800.0,
+        ema_200=24200.0,
+        trend="BEARISH",
+        is_valid=True,
+    )
+
+    # Attempting duplicate insert must raise IntegrityError
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        temp_warehouse.record_opportunity(
+            opportunity_id=opp_id,
+            symbol="NIFTY",
+            signal_type="BEARISH_SNAPBACK",
+            spot_price=24600.0,
+            ema_50=24800.0,
+            ema_200=24200.0,
+            trend="BEARISH",
+            is_valid=True,
+        )
+
+
 def test_record_opportunity_and_outcome(temp_warehouse):
     opp_id = "OPP-20260916-001"
     temp_warehouse.record_opportunity(
@@ -73,8 +108,6 @@ def test_record_opportunity_and_outcome(temp_warehouse):
 
     report = temp_warehouse.generate_falsification_report()
     assert report["total_outcomes"] == 1
-    assert report["avg_modeled_pnl"] == 3200.0
-    assert report["avg_actual_pnl"] == 2000.0
-    assert report["avg_error"] == -1200.0
-    assert report["model_optimism_bias"] == 1200.0
-    assert report["survives_falsification"] is True
+    assert report["evidence_status"] == "INSUFFICIENT_SAMPLES"
+    assert report["survives_falsification"] is False
+

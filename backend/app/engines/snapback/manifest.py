@@ -34,8 +34,24 @@ FROZEN_TRIAL_REGISTRY_METADATA: Dict[str, Any] = {
 }
 
 
-def verify_trial_registry_file_hash(filepath: str = "research/snapback_reality_v1/frozen_trial_registry.json") -> Tuple[bool, str]:
+def verify_trial_registry_file_hash(filepath: Optional[str] = None) -> Tuple[bool, str]:
     """Verify that the immutable trial-registry artifact file on disk exists and its SHA256 matches FROZEN_TRIAL_REGISTRY_HASH."""
+    if not filepath:
+        from pathlib import Path
+        manifest_path = Path(__file__).resolve()
+        repo_root = manifest_path.parents[4]  # /home/nageshmadaram/Sterling
+        candidates = [
+            repo_root / "research" / "snapback_reality_v1" / "frozen_trial_registry.json",
+            Path("research/snapback_reality_v1/frozen_trial_registry.json"),
+            Path("../research/snapback_reality_v1/frozen_trial_registry.json"),
+        ]
+        target_path = None
+        for c in candidates:
+            if c.exists():
+                target_path = str(c)
+                break
+        filepath = target_path or str(candidates[0])
+
     if not os.path.exists(filepath):
         return False, f"Trial registry file missing: {filepath}"
     try:
@@ -46,6 +62,7 @@ def verify_trial_registry_file_hash(filepath: str = "research/snapback_reality_v
         return True, computed_hash
     except Exception as exc:
         return False, f"Failed to read trial registry file: {exc}"
+
 
 
 @dataclass(frozen=True)
