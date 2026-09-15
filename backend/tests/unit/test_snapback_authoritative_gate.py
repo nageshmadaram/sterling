@@ -25,11 +25,15 @@ def test_authoritative_gate_promotion_when_all_gates_cleared():
     # 350 positive trades across 70 sessions
     pnls = [200.0] * 350
     costs = [10.0] * 350
+    dates = [f"2024-06-{(i % 70) + 1:02d}" for i in range(350)]
+    mtm_series = [1000000.0 + (i * 100.0) for i in range(350)]
     
     verdict = evaluate_authoritative_snapback_gate(
         trade_pnls=pnls,
-        entry_sessions_count=70,
+        entry_dates=dates,
         statutory_costs=costs,
+        daily_mtm_equity_series=mtm_series,
+        require_mtm_evidence=True,
     )
     
     assert verdict.promoted is True

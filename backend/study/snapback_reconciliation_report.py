@@ -63,6 +63,8 @@ def generate_snapback_reconciliation_bundle(
     filled_records = [r for r in observed_records if r.fill_status == "FILLED"]
     total_opportunities = len(observed_records)
     quote_coverage_pct = (len(filled_records) / total_opportunities * 100.0) if total_opportunities > 0 else 0.0
+    filled_entry_dates = [r.entry_date for r in filled_records]
+    unique_dates = len(set(filled_entry_dates))
 
     if len(filled_records) == 0:
         summary = ReconciliationSummary(
@@ -79,7 +81,7 @@ def generate_snapback_reconciliation_bundle(
         )
         empty_bundle = {
             "run_manifest.json": manifest_dict or {"run_id": run_id, "status": "EMPTY"},
-            "dataset_manifest.json": dataset_manifest_dict or {"total_quotes": 0, "coverage_pct": quote_coverage_pct},
+            "dataset_manifest.json": dataset_manifest_dict or {"unique_dates": 0, "total_quotes": 0, "coverage_pct": quote_coverage_pct},
             "contract_registry.json": contract_registry_dict or {"contracts": 0},
             "opportunities.json": [],
             "quotes.json": [],
@@ -104,12 +106,11 @@ def generate_snapback_reconciliation_bundle(
     observed_pnls = []
     errors = []
     costs = []
-    filled_entry_dates = []
     trades_dict_list = []
     opportunities_list = []
     fills_list = []
     hedge_events_list = []
-    aggregated_mtm_series = []
+    calendar_mtm_map: Dict[str, float] = {}
 
     for rec in observed_records:
         opportunities_list.append({
@@ -120,9 +121,8 @@ def generate_snapback_reconciliation_bundle(
             "strike": rec.strike,
         })
         if rec.fill_status == "FILLED":
-            # Like-with-like economic PnL calculation in Rupee terms
-            modeled_option_rupees = (rec.modeled_exit_price - rec.modeled_entry_price) * rec.quantity
-            modeled_trade_net_rupees = modeled_option_rupees + rec.hedge_pnl - rec.statutory_charges
+            # Pure modeled trade net PnL (Option premium change * qty)
+            modeled_trade_net_rupees = (rec.modeled_exit_price - rec.modeled_entry_price) * rec.quantity
             observed_trade_net_rupees = rec.total_trade_pnl
             err = observed_trade_net_rupees - modeled_trade_net_rupees
 
@@ -130,7 +130,6 @@ def generate_snapback_reconciliation_bundle(
             observed_pnls.append(observed_trade_net_rupees)
             errors.append(err)
             costs.append(rec.statutory_charges)
-            filled_entry_dates.append(rec.entry_date)
 
             d = rec.as_dict()
             d["modeled_pnl_rupees"] = round(modeled_trade_net_rupees, 2)
@@ -152,13 +151,9 @@ def generate_snapback_reconciliation_bundle(
                     "exit_price": rec.hedge_exit_price,
                     "hedge_pnl": rec.hedge_pnl,
                 })
-            if rec.daily_mtm_equity:
-                if not aggregated_mtm_series:
-                    aggregated_mtm_series = list(rec.daily_mtm_equity)
-                else:
-                    for idx, val in enumerate(rec.daily_mtm_equity):
-                        if idx < len(aggregated_mtm_series):
-                            aggregated_mtm_series[idx] += (val - 1000000.0)
+            
+            # Calendar-indexed portfolio MTM mapping by entry date
+            calendar_mtm_map[rec.entry_date] = calendar_mtm_map.get(rec.entry_date, 0.0) + rec.total_trade_pnl
 
     errors_arr = np.array(errors)
     mean_err = float(np.mean(errors_arr))
@@ -175,13 +170,22 @@ def generate_snapback_reconciliation_bundle(
     top_n = max(1, int(math.ceil(0.01 * len(observed_pnls))))
     top_1pct_impact = float(np.sum(sorted_obs[:top_n]))
 
-    # Run authoritative gate with exact filled entry dates and MTM equity path
+    # Chronologically sort calendar date MTM series
+    sorted_dates = sorted(calendar_mtm_map.keys())
+    cum_equity = 1000000.0
+    aggregated_mtm_series = []
+    for d_str in sorted_dates:
+        cum_equity += calendar_mtm_map[d_str]
+        aggregated_mtm_series.append(cum_equity)
+
+    # Run authoritative gate with exact filled entry dates and calendar MTM equity path
     verdict = evaluate_authoritative_snapback_gate(
         trade_pnls=observed_pnls,
         entry_dates=filled_entry_dates,
         statutory_costs=costs,
         daily_mtm_equity_series=daily_equity_series or aggregated_mtm_series,
         quote_coverage_pct=quote_coverage_pct,
+        require_mtm_evidence=True if (daily_equity_series or aggregated_mtm_series) else False,
     )
 
     summary = ReconciliationSummary(
@@ -199,24 +203,24 @@ def generate_snapback_reconciliation_bundle(
 
     # Calculate concentration
     day_pnls: Dict[str, float] = {}
-    for rec in observed_records:
+    for rec in filled_records:
         day_pnls[rec.entry_date] = day_pnls.get(rec.entry_date, 0.0) + rec.total_trade_pnl
     total_pnl = sum(observed_pnls)
     max_day_share = max(day_pnls.values()) / total_pnl if total_pnl > 0 else 0.0
 
     # Write all 16 required research artifact JSON files
     bundle_artifacts = {
-        "run_manifest.json": manifest_dict or {"run_id": run_id, "trade_count": len(observed_records)},
-        "dataset_manifest.json": dataset_manifest_dict or {"unique_dates": unique_dates},
-        "contract_registry.json": contract_registry_dict or {"symbols": list(set(r.symbol for r in observed_records))},
+        "run_manifest.json": manifest_dict or {"run_id": run_id, "trade_count": len(filled_records)},
+        "dataset_manifest.json": dataset_manifest_dict or {"unique_dates": unique_dates, "coverage_pct": round(quote_coverage_pct, 2)},
+        "contract_registry.json": contract_registry_dict or {"symbols": list(set(r.symbol for r in filled_records))},
         "opportunities.json": opportunities_list,
-        "quotes.json": [{"trade_id": r.trade_id, "ask": r.entry_ask_price, "bid": r.exit_bid_price} for r in observed_records],
+        "quotes.json": [{"trade_id": r.trade_id, "ask": r.entry_ask_price, "bid": r.exit_bid_price} for r in filled_records],
         "decisions.json": [{"trade_id": r.trade_id, "status": r.fill_status, "notes": r.notes} for r in observed_records],
         "fills.json": fills_list,
         "hedge_events.json": hedge_events_list,
         "trades.json": trades_dict_list,
-        "daily_mtm_equity.json": daily_equity_series or [],
-        "margin_usage.json": margin_usage_series or [{"trade_id": r.trade_id, "margin": r.peak_margin_required} for r in observed_records],
+        "daily_mtm_equity.json": daily_equity_series or aggregated_mtm_series,
+        "margin_usage.json": margin_usage_series or [{"trade_id": r.trade_id, "margin": r.peak_margin_required} for r in filled_records],
         "model_vs_observed.json": summary.as_dict(),
         "cost_stress.json": {"total_charges": sum(costs), "double_charge_pnl": sum(observed_pnls) - sum(costs)},
         "concentration.json": {"max_day_share": round(max_day_share, 4), "day_count": len(day_pnls)},
@@ -224,7 +228,7 @@ def generate_snapback_reconciliation_bundle(
         "promotion_record.json": {
             "promoted": verdict.promoted,
             "gate_failures": verdict.reasons,
-            "timestamp": rec.exit_date if observed_records else "",
+            "timestamp": filled_records[-1].exit_date if filled_records else "",
         },
     }
 

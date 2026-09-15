@@ -185,3 +185,112 @@ def test_adversarial_reconciliation_filters_unfilled_trades():
     
     shutil.rmtree(os.path.join(output_dir, run_id), ignore_errors=True)
 
+
+def test_snapback_v121_point_in_time_delta_selection():
+    """Verify Black-Scholes point-in-time delta contract selection picks the strike closest to 0.70 delta."""
+    from study.snapback_observed_replay import bs_delta, select_contract_by_delta
+
+    # Spot 22500, 50 DTE, fade_up (PUT option)
+    strike, opt_type, delta = select_contract_by_delta(
+        spot=22500.0,
+        dte_days=50,
+        side="fade_up",
+        target_delta=0.70,
+        strike_step=50.0,
+    )
+    assert opt_type == "PE"
+    assert abs(abs(delta) - 0.70) < 0.05
+    # For PUT 0.70 delta, strike must be ITM (strike > spot)
+    assert strike > 22500.0
+
+
+def test_snapback_v121_futures_hedge_lot_sizing():
+    """Verify option market delta * causal beta translates into actual index futures lots."""
+    store = {
+        "NIFTY_2024-06-03_23650.0_PE_ASK": {"price": 200.0},
+        "NIFTY_2024-06-18_23650.0_PE_BID": {"price": 250.0},
+        "NIFTY_FUT_2024-06_2024-06-03_ASK": {"price": 22510.0},
+        "NIFTY_FUT_2024-06_2024-06-18_BID": {"price": 22610.0},
+    }
+    rec = replay_snapback_observed_trade(
+        trade_id="trade_hedge_lot_1",
+        entry_date="2024-06-03",
+        exit_date="2024-06-18",
+        symbol="NIFTY",
+        side="fade_up",
+        spot_at_entry=22500.0,
+        spot_at_exit=22600.0,
+        quote_store=store,
+    )
+    assert rec.fill_status == "FILLED"
+    # NIFTY lot size on 2024-06-03 was 25 according to exact historical revision schedule
+    assert rec.quantity == 25
+    assert rec.hedge_symbol.startswith("NIFTY_FUT_2024-06")
+
+
+def test_snapback_v121_no_synthetic_mtm_interpolation():
+    """Verify synthetic linear MTM interpolation is removed and missing MTM fails gate when required."""
+    store = {
+        "NIFTY_2024-06-03_23650.0_PE_ASK": {"price": 200.0},
+        "NIFTY_2024-06-18_23650.0_PE_BID": {"price": 250.0},
+    }
+    rec = replay_snapback_observed_trade(
+        trade_id="trade_no_mtm_1",
+        entry_date="2024-06-03",
+        exit_date="2024-06-18",
+        symbol="NIFTY",
+        side="fade_up",
+        spot_at_entry=22500.0,
+        spot_at_exit=22600.0,
+        quote_store=store,
+    )
+    assert rec.fill_status == "FILLED"
+    # Without daily marks in store, daily_mtm_equity MUST NOT contain synthetic linear interpolation
+    assert rec.daily_mtm_equity == []
+
+
+def test_snapback_v121_trial_registry_file_verification():
+    """Verify trial registry artifact research/snapback_reality_v1/frozen_trial_registry.json exists and matches hash."""
+    from app.engines.snapback.manifest import verify_trial_registry_file_hash
+    valid, msg = verify_trial_registry_file_hash()
+    assert valid is True, f"Trial registry verification failed: {msg}"
+
+
+def test_snapback_v121_contract_registry_loader():
+    """Verify SnapbackContractRegistry loader interfaces for historical membership."""
+    registry = SnapbackContractRegistry()
+    registry.load_from_dict({
+        "membership": {"HISTICAL_NAME": ["2018-01-01", "2025-12-31"]},
+        "lot_sizes": {"HISTICAL_NAME": [["2018-01-01", "2025-12-31", 250]]},
+        "strike_steps": {"HISTICAL_NAME": 25.0},
+    })
+    assert registry.is_fo_eligible("HISTICAL_NAME", "2020-05-15") is True
+    assert registry.is_fo_eligible("HISTICAL_NAME", "2028-05-15") is False
+    assert registry.get_lot_size("HISTICAL_NAME", "2020-05-15") == 250
+    assert registry.get_strike_step("HISTICAL_NAME") == 25.0
+
+
+def test_snapback_v121_truedata_probe_evidence_metrics():
+    """Verify TrueDataEntitlementProbe produces evidence-grade result fields."""
+    mock_client = MagicMock()
+    mock_client.get_bars.return_value = [
+        MagicMock(timestamp="2024-06-03 09:15:00"),
+        MagicMock(timestamp="2024-06-03 15:30:00"),
+    ]
+    mock_client.get_ticks.return_value = [
+        MagicMock(timestamp="2024-06-03 09:15:00", bid=100.0, ask=100.5),
+        MagicMock(timestamp="2024-06-03 15:30:00", bid=120.0, ask=120.5),
+    ]
+
+    prober = TrueDataHistoricalClientProbe(client=mock_client)
+    res = prober.probe_contract_retention("NIFTY", "2024-06-03", "2024-06-03")
+
+    assert res.ticks_available is True
+    assert res.bars_available is True
+    assert res.first_tick_timestamp == "2024-06-03 09:15:00"
+    assert res.last_tick_timestamp == "2024-06-03 15:30:00"
+    assert res.tick_count == 2
+    assert res.bid_ask_coverage_pct == 100.0
+    assert res.entitlement_status == "OK"
+
+

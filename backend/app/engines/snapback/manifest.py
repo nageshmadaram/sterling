@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
@@ -21,13 +22,28 @@ EXPECTED_RULE_HASH: str = "e03ddf75f29463a8"
 EXPECTED_CONFIG_HASH: str = "6ecbeb53e9768a91"
 EXPECTED_COST_MODEL_HASH: str = "630a4de9ad143e2c"
 
-# Immutable trial registry hash (396 historical trials evaluated)
-FROZEN_TRIAL_REGISTRY_HASH: str = "c7d2e8f10a9b3c4d"
+# Immutable trial registry hash (396 historical trials evaluated from research/snapback_reality_v1/frozen_trial_registry.json)
+FROZEN_TRIAL_REGISTRY_HASH: str = "186d4dba8b341d66"
 FROZEN_TRIAL_REGISTRY_METADATA: Dict[str, Any] = {
     "total_historical_trials": 396,
     "registry_hash": FROZEN_TRIAL_REGISTRY_HASH,
     "provenance_commit": FROZEN_COMMIT_SHA,
+    "registry_filepath": "research/snapback_reality_v1/frozen_trial_registry.json",
 }
+
+
+def verify_trial_registry_file_hash(filepath: str = "research/snapback_reality_v1/frozen_trial_registry.json") -> Tuple[bool, str]:
+    """Verify that the immutable trial-registry artifact file on disk exists and its SHA256 matches FROZEN_TRIAL_REGISTRY_HASH."""
+    if not os.path.exists(filepath):
+        return False, f"Trial registry file missing: {filepath}"
+    try:
+        with open(filepath, "rb") as f:
+            computed_hash = hashlib.sha256(f.read()).hexdigest()[:16]
+        if computed_hash != FROZEN_TRIAL_REGISTRY_HASH:
+            return False, f"Trial registry file hash mismatch: {computed_hash} != {FROZEN_TRIAL_REGISTRY_HASH}"
+        return True, computed_hash
+    except Exception as exc:
+        return False, f"Failed to read trial registry file: {exc}"
 
 
 @dataclass(frozen=True)

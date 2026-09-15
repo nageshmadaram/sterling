@@ -158,11 +158,15 @@ class SnapbackContractRegistry:
         return DEFAULT_STRIKE_STEPS.get(symbol.upper(), 10.0)
 
     def get_monthly_expiry(self, symbol: str, entry_date_str: str, min_dte: int = 40, max_dte: int = 60) -> str:
-        """Resolve monthly expiry date (last Thursday of month) targeting 40-60 DTE."""
-        dt = datetime.datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+        """Resolve monthly expiry date (last Thursday of month) strictly enforcing min_dte <= dte <= max_dte."""
+        try:
+            dt = datetime.datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return "UNKNOWN"
+
         candidates = []
         
-        for month_offset in range(0, 4):
+        for month_offset in range(0, 5):
             # Advance month
             y = dt.year + (dt.month - 1 + month_offset) // 12
             m = (dt.month - 1 + month_offset) % 12 + 1
@@ -179,14 +183,53 @@ class SnapbackContractRegistry:
             last_thursday = last_day - datetime.timedelta(days=days_back)
             
             dte = (last_thursday - dt).days
-            if dte > 0:
+            if min_dte <= dte <= max_dte:
                 candidates.append((abs(dte - 50), dte, last_thursday.strftime("%Y-%m-%d")))
         
         if not candidates:
-            return entry_date_str
+            return "UNKNOWN"
             
         candidates.sort(key=lambda x: x[0])
         return candidates[0][2]
+
+    def load_from_dict(self, registry_data: Dict[str, Any]) -> None:
+        """Load dated historical F&O membership, lot sizes, and strike steps from external dictionary."""
+        membership = registry_data.get("membership", {})
+        for symbol, window in membership.items():
+            if isinstance(window, (list, tuple)) and len(window) == 2:
+                KNOWN_FNO_MEMBERSHIP_WINDOWS[symbol.upper()] = (str(window[0]), str(window[1]))
+            elif isinstance(window, dict):
+                self._fno_membership.setdefault(symbol.upper(), set()).update(window.keys())
+
+        lot_sizes = registry_data.get("lot_sizes", {})
+        for symbol, schedule in lot_sizes.items():
+            if isinstance(schedule, list):
+                HISTORICAL_LOT_SIZES[symbol.upper()] = [
+                    (str(item[0]), str(item[1]), int(item[2])) for item in schedule
+                ]
+
+        strike_steps = registry_data.get("strike_steps", {})
+        for symbol, step in strike_steps.items():
+            DEFAULT_STRIKE_STEPS[symbol.upper()] = float(step)
+
+    def load_from_json(self, filepath: str) -> None:
+        """Load historical F&O contract registry from JSON file."""
+        import json
+        with open(filepath, "r") as f:
+            data = json.load(f)
+        self.load_from_dict(data)
+
+    def load_from_csv(self, filepath: str) -> None:
+        """Load historical F&O membership from CSV file."""
+        import csv
+        with open(filepath, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sym = row.get("symbol", "").upper()
+                start = row.get("start_date", "2017-01-01")
+                end = row.get("end_date", "2099-12-31")
+                if sym:
+                    KNOWN_FNO_MEMBERSHIP_WINDOWS[sym] = (start, end)
 
     def resolve_contract_spec(
         self,
@@ -208,7 +251,7 @@ class SnapbackContractRegistry:
         return HistoricalContractSpec(
             trade_date=date_str,
             underlying=symbol.upper(),
-            fno_eligible=eligible and lot > 0,
+            fno_eligible=eligible and lot > 0 and resolved_expiry != "UNKNOWN",
             exchange=exchange,
             tradingsymbol=tsym,
             instrument_type=instrument_type,

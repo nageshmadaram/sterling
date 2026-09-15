@@ -59,7 +59,7 @@ def evaluate_authoritative_snapback_gate(
     quote_coverage_pct: float = 100.0,
     seed: int = 42,
     entry_sessions_count: Optional[int] = None,
-    require_mtm_evidence: bool = False,
+    require_mtm_evidence: bool = True,
 ) -> AuthoritativeGateVerdict:
     """Evaluate Snapback observed replay results against the 04_VALIDATION_AND_DELIVERY.md contract."""
     n_trades = len(trade_pnls)
@@ -69,10 +69,32 @@ def evaluate_authoritative_snapback_gate(
     cost_evidence_valid = statutory_costs is not None and len(statutory_costs) == n_trades
     checks["cost_evidence_provided"] = cost_evidence_valid
     if not cost_evidence_valid:
-        reasons.append(f"Missing or mismatched cost evidence: costs={len(statutory_costs) if statutory_costs else 0} vs trades={n_trades}")
+        reasons.append(f"Missing or mismatched statutory cost evidence: costs={len(statutory_costs) if statutory_costs else 0} vs trades={n_trades}")
+
+    entry_dates_valid = entry_dates is not None and len(entry_dates) == n_trades
+    checks["entry_dates_provided"] = entry_dates_valid
+    if not entry_dates_valid:
+        reasons.append(f"Missing or mismatched actual entry dates evidence: entry_dates={len(entry_dates) if entry_dates else 0} vs trades={n_trades}")
+
+    dates = list(entry_dates) if entry_dates_valid else [f"day_{i}" for i in range(n_trades)]
+    unique_sessions = len(set(dates)) if n_trades > 0 else 0
+
+    has_mtm_evidence = daily_mtm_equity_series is not None and len(daily_mtm_equity_series) > 0
+    checks["daily_mtm_evidence_provided"] = has_mtm_evidence or not require_mtm_evidence
+
+    if not (cost_evidence_valid and entry_dates_valid):
+        checks["independent_sessions_ge_60"] = unique_sessions >= 60
+        checks["completed_trades_ge_300"] = n_trades >= 300
+        checks["positive_lower_95_ci"] = False
+        checks["positive_baseline_expectancy"] = False
+        checks["positive_under_2x_costs"] = False
+        checks["drawdown_within_budget"] = False
+        checks["zero_unresolved_exposures"] = unresolved_exposures_count == 0
+        checks["quote_coverage_ge_95"] = quote_coverage_pct >= 95.0
+
         return AuthoritativeGateVerdict(
             promoted=False,
-            total_sessions=len(set(entry_dates)) if entry_dates else (entry_sessions_count or 0),
+            total_sessions=unique_sessions,
             completed_trades=n_trades,
             net_expectancy=0.0,
             lower_95_ci=0.0,
@@ -86,12 +108,7 @@ def evaluate_authoritative_snapback_gate(
             reasons=reasons,
         )
 
-    if entry_dates and len(entry_dates) == n_trades:
-        dates = list(entry_dates)
-    elif entry_sessions_count and entry_sessions_count > 0 and n_trades > 0:
-        dates = [f"day_{i % entry_sessions_count}" for i in range(n_trades)]
-    else:
-        dates = [f"day_{i}" for i in range(n_trades)]
+    dates = list(entry_dates)
 
     if n_trades == 0:
         checks["completed_trades_ge_300"] = False
@@ -107,7 +124,7 @@ def evaluate_authoritative_snapback_gate(
             max_mtm_drawdown_pct=0.0,
             top_1pct_pnl_share=0.0,
             unresolved_exposures_count=unresolved_exposures_count,
-            quote_coverage_pct=quote_coverage_pct,
+            quote_coverage_pct=coverage_val,
             checks=checks,
             reasons=reasons,
         )
