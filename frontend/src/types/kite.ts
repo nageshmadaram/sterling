@@ -56,7 +56,6 @@ export interface KiteStatus {
 export interface KiteSessionResult {
   connected: boolean;
   account_id?: string | null;
-  user_id?: string | null;
   kite_user_id?: string | null;
   user_name?: string | null;
   email?: string | null;
