@@ -127,19 +127,21 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
   const rowActions = useBoardRowActions({ onOpenChart });
   const snapshot = useSnapbackSnapshot();
   const scan = useRunSnapbackScan();
+  const data = snapshot.data;
+  const mode = data?.trading_mode ?? data?.config?.trading_mode ?? 'swing';
+  const shortHorizon = mode !== 'swing';
   // Replayed from stored bars. The live scan only looks at the last few closed
   // sessions and this rule fires on ONE, so without these the board is blank
   // almost always — and blank reads as broken.
-  const history = useSnapbackHistory(30);
+  const history = useSnapbackHistory(30, !shortHorizon);
 
-  const data = snapshot.data;
   const signals = React.useMemo(() => {
-    const live = data?.rows ?? [];
+    const live = (data?.rows ?? []).filter((r) => (r.trading_mode ?? 'swing') === mode);
     const seen = new Set(live.map((r) => r.signal_id));
-    const past = (history.data?.signals ?? []).map((r) =>
+    const past = (shortHorizon ? [] : history.data?.signals ?? []).map((r) =>
       seen.has(r.signal_id) ? { ...r, signal_id: `${r.signal_id}:history` } : r);
     return snapbackRowsToBoard([...live, ...past]);
-  }, [data?.rows, history.data?.signals]);
+  }, [data?.rows, history.data?.signals, mode, shortHorizon]);
   const view = useBoardView(signals, {
     endedByDefault: true, storageKey: 'snapback', nowMs,
   });
@@ -167,7 +169,7 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
           onClick={() => scan.mutate()}
           disabled={scan.isPending || !enabled}
           title={enabled
-            ? 'Run one universe → daily candles → signals pass'
+            ? `Scan the universe using completed ${shortHorizon ? 'minute' : 'daily'} candles`
             : 'Snapback is switched off'}
           style={{
             background: 'transparent', border: `1px solid ${k.border}`,
@@ -179,8 +181,11 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
           {scan.isPending ? 'Scanning…' : 'Scan now'}
         </button>
         <span style={{ fontSize: 11, color: k.dim }}>
-          {data?.scanned ?? 0} instruments · daily bars
-          {data?.auto_execution_blocker
+          {data?.scanned ?? 0} instruments · {shortHorizon
+            ? `${data?.config?.scalp_timeframe_minutes ?? 1}-minute bars · ${mode}` : 'daily bars'}
+          {shortHorizon
+            ? <> · <strong style={{ color: k.amber }}>RESEARCH ONLY</strong></>
+            : data?.auto_execution_blocker
             ? <> · <strong style={{ color: k.amber }}>MANUAL ONLY</strong></>
             : <> · <strong style={{ color: k.green }}>AUTO ELIGIBLE</strong></>}
           {enabled ? '' : ' · disabled'}
@@ -192,11 +197,15 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
         )}
       </div>
 
-      {validation && <Evidence v={validation} />}
+      {!shortHorizon && validation && <Evidence v={validation} />}
 
       {/* A daily engine's board does not move through the session. Saying so is
           the difference between "quiet" and "broken". */}
-      <p style={{ ...note, borderBottom: `1px solid ${k.border}` }}>
+      {shortHorizon ? <p style={{ ...note, borderBottom: `1px solid ${k.border}` }}>
+        Scalp and intraday plans read completed minute bars. Targets, stops and trails are option premium points.
+        A qualifying target hit can upgrade to a runner; the trailing stop and session square-off bound the plan.
+        Daily swing evidence does not validate this mode. These plans do not place or manage broker orders.
+      </p> : <p style={{ ...note, borderBottom: `1px solid ${k.border}` }}>
         Every rule here reads a daily CLOSE, so these rows change once a session
         and not once a tick. The scan looks back over the last{' '}
         {data?.catchup_sessions ?? 3} closed sessions, because a rule that fires
@@ -206,7 +215,7 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
           rule over the last 30 stored sessions — nobody traded them; they are
           here so a quiet board can be told apart from a broken one.</>
         )}
-      </p>
+      </p>}
 
       {data?.auto_execution_blocker && (
         <p style={{ ...note, color: k.amber, borderBottom: `1px solid ${k.border}` }}>
@@ -228,7 +237,9 @@ export function SnapbackBoard({ nowMs = Date.now(), onOpenDetail, onOpenChart }:
         <p style={note}>
           {data?.last_error
             ? `Last scan failed: ${data.last_error}`
-            : 'Nothing fired on the last closed sessions, and nothing in the '
+            : shortHorizon
+              ? 'No eligible reversal plan on the latest completed bars. Entry filters, quoted liquidity, risk budgets and trading costs can reject a setup.'
+              : 'Nothing fired on the last closed sessions, and nothing in the '
               + 'stored history either. This engine is deliberately rare — it '
               + 'wants a close through a 20-session extreme, at least 1.5 ATR '
               + 'of stretch, AND a market below its own 50-session mean.'}

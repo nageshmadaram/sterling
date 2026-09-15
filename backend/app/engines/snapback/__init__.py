@@ -54,7 +54,7 @@ from .pricing import (RISK_FREE, TRADING_DAYS, VRP_BAND, break_even_vrp, bs_delt
 from .strategy import Features, entry_indices, evaluate, evaluate_at, features, fires
 
 STRATEGY_NAME = "Snapback"
-CONTRACT_VERSION = "A500.1"
+CONTRACT_VERSION = "A501.0"
 
 #: One entry per side, published so the board, the settings page and the replay
 #: dock name a side the same way without three private lists.
@@ -108,7 +108,7 @@ DESCRIPTORS: dict[str, dict] = {
 SIDE_KEYS: tuple[str, ...] = ("fade_up", "fade_down")
 
 
-def descriptor() -> dict:
+def descriptor(cfg: SnapbackConfig | None = None) -> dict:
     """Static identity plus what the walk-forward harness has actually found.
 
     ``validated`` is a MEASUREMENT read from the validation record, never a
@@ -116,14 +116,35 @@ def descriptor() -> dict:
     measured and becomes a lie the moment something is; a hardcoded ``True``
     never stops being one.
     """
+    if cfg is not None and cfg.trading_mode != "swing":
+        return {
+            "id": STRATEGY_ID, "name": STRATEGY_NAME,
+            "contract_version": CONTRACT_VERSION,
+            "trading_mode": cfg.trading_mode,
+            "tagline": "Confirmed intraday snapbacks with cost-aware option targets and a profit runner.",
+            "sides": [
+                {**dict(DESCRIPTORS[k]),
+                 "tagline": "A completed bar re-enters its Bollinger band after an extension.",
+                 "how_it_works": "EMA direction, ADX and optional volume qualify a reversal. "
+                     "Premium targets include estimated costs; a confirmed continuation "
+                     "can run under a tightening stop until the time or session limit.",
+                 "evidence": "Unvalidated intraday hypothesis; daily swing evidence does not apply."}
+                for k in SIDE_KEYS
+            ],
+            "provenance": "Option-tape replay uses observed synchronized option candles, "
+                          "next-bar fills and conservative stop ordering.",
+            "validated": False, "validation_compatible": False, "validation": None,
+            "calibration": {"verdict": "UNVALIDATED — requires held-out option-tape evidence"},
+            "calibrated_fields": [], "vrp_band": list(VRP_BAND),
+        }
     record: dict = {}
     compatible = False
     promoted = False
     try:
         from app.services.snapback_validation import is_compatible as _compatible, is_promoted as _is_promoted, load as _load
         record = _load() or {}
-        compatible = _compatible(record)
-        promoted = _is_promoted()
+        compatible = _compatible(record, cfg)
+        promoted = bool(record.get("promoted")) and compatible
     except Exception:                                              # noqa: BLE001
         record = {}
     return {

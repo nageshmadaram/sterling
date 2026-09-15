@@ -3196,6 +3196,14 @@ class SimulationRunner:
             from dataclasses import replace
             self._cached_snapback_cfg = replace(get_config(getattr(self, "_uid", None)), enabled=True)
             sb_cfg = self._cached_snapback_cfg
+            if sb_cfg.trading_mode != "swing" and set(_sim_strats) == {"snapback"}:
+                raise ValueError(
+                    "Intraday Snapback needs synchronized candles of the actual option "
+                    "contract. Use /api/v1/config/snapback/replay-intraday; "
+                    "the daily model replay cannot value scalps.")
+            if sb_cfg.trading_mode != "swing":
+                self._strategy_notes["snapback"] = (
+                    "Intraday Snapback skipped: actual synchronized option candles are required")
             if not cfg.instruments:
                 sb_universe = list(_history_universe(sb_cfg))
                 if set(_sim_strats) == {"snapback"}:
@@ -4772,7 +4780,8 @@ class SimulationRunner:
         # Filling at the signal bar's close would report a price the strategy
         # never pays, and the difference is the whole gap between a backtest and
         # a backtest that works.
-        if wanted("snapback"):
+        if wanted("snapback") and (
+                getattr(self, "_cached_snapback_cfg", None) or _snapback_config()).trading_mode == "swing":
          try:
             if not hasattr(self, "_snapback_watch"):
                 self._snapback_watch: Dict[str, Tuple[str, Optional[Dict[str, Any]]]] = {}

@@ -205,6 +205,27 @@ describe('Snapback board', () => {
     screen.getByRole('button', { name: /Scan now/ }).click();
     expect(scanState.mutate).toHaveBeenCalled();
   });
+
+  it('keeps cached daily evidence and history out of the scalp board', () => {
+    snap.data = snapshot({ config: { enabled: true, trading_mode: 'scalp', scalp_timeframe_minutes: 1 }, rows: [] });
+    historyState.data = { sessions: 30, count: 1, signals: [row({ historical: true, state: 'ended' })] };
+    render(<SnapbackBoard nowMs={1_789_009_200_000} />);
+    expect(screen.getByText('RESEARCH ONLY')).toBeInTheDocument();
+    expect(screen.getByText(/1-minute bars · scalp/)).toBeInTheDocument();
+    expect(screen.getByText(/Daily swing evidence does not validate/)).toBeInTheDocument();
+    expect(screen.getByText(/No eligible reversal plan/)).toBeInTheDocument();
+    expect(screen.queryByText(/PASSES 7 OF 9/)).toBeNull();
+    expect(screen.queryByText(/AUTO ELIGIBLE/)).toBeNull();
+    expect(screen.queryByText(/once a session and not once a tick/)).toBeNull();
+    expect(screen.queryByText(/rows marked/)).toBeNull();
+  });
+
+  it('filters a stale live row from another trading mode', () => {
+    snap.data = snapshot({ config: { enabled: true, trading_mode: 'intraday', scalp_timeframe_minutes: 5 } });
+    render(<SnapbackBoard nowMs={1_789_009_200_000} />);
+    expect(screen.getByText(/No eligible reversal plan/)).toBeInTheDocument();
+    expect(screen.getByText(/5-minute bars · intraday/)).toBeInTheDocument();
+  });
 });
 
 

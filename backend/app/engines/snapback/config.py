@@ -13,6 +13,7 @@ control silently changes the size of the bet when vol moves.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+import math
 from typing import Any, Iterable, Literal
 
 #: Which way a setup may fire. ``fade_up`` buys puts into strength and is the
@@ -45,6 +46,7 @@ from .hedge import HEDGE_MODES  # noqa: E402,F401
 #: fillable is the spread on the contract, and that is measurable at scan time.
 UNIVERSE_MODES: frozenset[str] = frozenset({"curated", "fno"})
 STOP_MODES: frozenset[str] = frozenset({"broker", "monitor", "both"})
+TRADING_MODES: frozenset[str] = frozenset({"swing", "scalp", "intraday"})
 
 #: Index instruments this engine will name a contract for.
 _INDEX_DEFAULTS: tuple[str, ...] = ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX")
@@ -91,6 +93,29 @@ class SnapbackConfig:
     #: Every engine in this repo that shipped with automatic execution on was
     #: turned off again within the week.
     auto_execute: bool = False
+
+    # Intraday is a separate, uncalibrated hypothesis. Daily evidence applies
+    # only to swing. Point distances below refer to the traded OPTION premium.
+    trading_mode: str = "swing"
+    scalp_timeframe_minutes: int = 1
+    scalp_target_points: float = 5.0
+    scalp_stop_points: float = 4.0
+    scalp_trail_points: float = 2.0
+    scalp_lock_points: float = 1.0
+    scalp_max_hold_bars: int = 20
+    scalp_runner_max_bars: int = 60
+    scalp_cooldown_bars: int = 5
+    scalp_max_trades_per_day: int = 6
+    scalp_risk_pct: float = 0.5
+    scalp_daily_loss_pct: float = 2.0
+    scalp_round_trip_cost_points: float = 1.0
+    scalp_fixed_cost_inr: float = 40.0
+    scalp_min_net_rr: float = 1.0
+    scalp_max_adx: float = 25.0
+    scalp_min_relative_volume: float = 0.0
+    scalp_entry_start_minute: int = 575
+    scalp_entry_end_minute: int = 885
+    scalp_square_off_minute: int = 915
 
     # ── what is watched ──────────────────────────────────────────────────────
     universe_mode: str = "fno"
@@ -479,6 +504,15 @@ class SnapbackConfig:
         still be one this engine has no evidence for, and refusing it would be
         wrong while saying nothing would be worse.
         """
+        if self.trading_mode != "swing":
+            return [
+                "Scalping/intraday is unvalidated; daily Snapback results do not apply. "
+                "Replay requires synchronized candles of the actual option contract.",
+                "Targets, stops and costs are OPTION premium points. High quantity "
+                "does not improve expectancy; cash and estimated stop risk cap sizing.",
+                "Runner and daily-loss controls operate in option-tape replay. "
+                "The live board is a plan; automatic broker protection is not connected.",
+            ]
         out: list[str] = []
         if self.auto_execute:
             out.append("Automatic execution is on. This engine has not been "
@@ -564,6 +598,9 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
 
     merged = cfg.as_dict()
     merged.update(values)
+    for name in known:
+        if isinstance(getattr(cfg, name), bool) and not isinstance(merged[name], bool):
+            raise ValueError(f"{name} must be true or false")
 
     for name in TUPLE_FIELDS:
         v = merged.get(name)
@@ -573,6 +610,8 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
             raise ValueError(f"{name} must be a list of instrument names")
         merged[name] = tuple(str(x).strip().upper() for x in v if str(x).strip())
 
+    if merged["trading_mode"] not in TRADING_MODES:
+        raise ValueError(f"trading_mode must be one of {sorted(TRADING_MODES)}")
     if merged["hedge_mode"] not in HEDGE_MODES:
         raise ValueError(f"hedge_mode must be one of {sorted(HEDGE_MODES)}")
     if merged["market_filter"] not in MARKET_FILTERS:
@@ -617,6 +656,39 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
     _range(merged, "max_spread_pct", 0.0, 100.0, float)
     _range(merged, "min_option_oi", 0.0, 1e12, float)
 
+    for name in ("scalp_target_points", "scalp_stop_points", "scalp_trail_points"):
+        _range(merged, name, 0.05, 10_000, float)
+    _range(merged, "scalp_lock_points", 0.0, 10_000, float)
+    _range(merged, "scalp_round_trip_cost_points", 0.0, 10_000, float)
+    _range(merged, "scalp_fixed_cost_inr", 0.0, 100_000, float)
+    _range(merged, "scalp_min_net_rr", 0.1, 10.0, float)
+    _range(merged, "scalp_risk_pct", 0.01, 5.0, float)
+    _range(merged, "scalp_daily_loss_pct", 0.01, 20.0, float)
+    _range(merged, "scalp_max_adx", 1.0, 100.0, float)
+    _range(merged, "scalp_min_relative_volume", 0.0, 20.0, float)
+    for name, lo, hi in (
+        ("scalp_timeframe_minutes", 1, 5),
+        ("scalp_max_hold_bars", 1, 375),
+        ("scalp_runner_max_bars", 1, 375),
+        ("scalp_cooldown_bars", 0, 375),
+        ("scalp_max_trades_per_day", 1, 100),
+        ("scalp_entry_start_minute", 555, 925),
+        ("scalp_entry_end_minute", 556, 925),
+        ("scalp_square_off_minute", 557, 925),
+    ):
+        _range(merged, name, lo, hi, int)
+    if merged["scalp_timeframe_minutes"] not in (1, 3, 5):
+        raise ValueError("scalp_timeframe_minutes must be 1, 3 or 5")
+    if merged["scalp_runner_max_bars"] < merged["scalp_max_hold_bars"]:
+        raise ValueError("scalp_runner_max_bars cannot be below scalp_max_hold_bars")
+    if merged["scalp_lock_points"] >= merged["scalp_target_points"]:
+        raise ValueError("scalp_lock_points must be below scalp_target_points")
+    if merged["scalp_daily_loss_pct"] < merged["scalp_risk_pct"]:
+        raise ValueError("scalp_daily_loss_pct cannot be below scalp_risk_pct")
+    if not (merged["scalp_entry_start_minute"] < merged["scalp_entry_end_minute"]
+            < merged["scalp_square_off_minute"]):
+        raise ValueError("intraday entry start must precede entry end and square off")
+
     if merged["short_leg_delta"] and merged["short_leg_delta"] >= merged["target_delta"]:
         raise ValueError(
             f"short_leg_delta ({merged['short_leg_delta']}) must be BELOW "
@@ -635,7 +707,7 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
             f"unprofitable trade run as well")
     # A holding period that outlives the contract prices an expired option at
     # intrinsic and calls it an exit. Refuse rather than silently truncate.
-    if merged["hold_days"] >= merged["min_dte"]:
+    if merged["trading_mode"] == "swing" and merged["hold_days"] >= merged["min_dte"]:
         raise ValueError(
             f"hold_days ({merged['hold_days']}) must be shorter than min_dte "
             f"({merged['min_dte']}) — the contract has to outlive the trade")
@@ -648,8 +720,13 @@ def validate(values: dict[str, Any], base: SnapbackConfig | None = None) -> Snap
 
 def _range(d: dict[str, Any], key: str, lo: float, hi: float, cast) -> None:
     try:
+        if isinstance(d[key], bool):
+            raise ValueError("boolean is not a numeric setting")
+        numeric = float(d[key])
+        if not math.isfinite(numeric) or (cast is int and not numeric.is_integer()):
+            raise ValueError("setting must be finite and integer where required")
         v = cast(d[key])
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{key} must be a number") from exc
     if not (lo <= v <= hi):
         raise ValueError(f"{key} must be between {lo} and {hi}")

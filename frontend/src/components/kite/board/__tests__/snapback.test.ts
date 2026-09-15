@@ -268,4 +268,36 @@ describe('snapback board adapter', () => {
   it('maps a list without dropping rows', () => {
     expect(snapbackRowsToBoard([base, { ...base, signal_id: 'b' }])).toHaveLength(2);
   });
+
+  it('shows a minute-bar target and runner plan without borrowing swing claims', () => {
+    const s = snapbackRowToBoard({
+      ...base, trading_mode: 'scalp', hold_days: 0, timeframe_minutes: 1,
+      max_hold_bars: 20, runner_max_bars: 60, trail_points: 2, lock_points: 1,
+      runner_premium: 527.6, target_premium: 527.6, stop_premium: 516.5,
+      metrics: {
+        requested_target_points: 5, effective_target_points: 7.1,
+        estimated_variable_cost_points: 1, estimated_fixed_cost_inr: 40,
+        estimated_net_target_inr: 417.5, estimated_stop_loss_inr: 415,
+        net_reward_risk: 1.006, adx: 19.3,
+      },
+    });
+    expect(s.flags?.some((f) => f.label === 'hold ≤20m')).toBe(true);
+    expect(s.flags?.some((f) => f.label === 'hold 0d')).toBe(false);
+    expect(s.origin?.hint).toContain('Bollinger');
+    const runner = s.flags?.find((f) => f.label.startsWith('runs above'));
+    expect(runner?.hint).toContain('research plan');
+    expect(runner?.hint).not.toContain('409 entry days');
+    const plan = s.sections.find((section) => section.title === 'Premium target and runner plan');
+    expect(plan?.stats).toEqual(expect.arrayContaining([
+      { label: 'Requested target', value: '5.00 pts' },
+      { label: 'Effective target', value: '7.10 pts' },
+      { label: 'Estimated net target', value: '₹417.50' },
+      { label: 'Planned stop loss + costs', value: '₹415.00' },
+    ]));
+    expect(s.levels.target).toBe(527.6);
+  });
+
+  it('cannot expose a scalp research plan as executable even with a stale eligibility flag', () => {
+    expect(snapbackRowToBoard({ ...base, trading_mode: 'scalp', execution_eligible: true }).executionEligible).toBe(false);
+  });
 });

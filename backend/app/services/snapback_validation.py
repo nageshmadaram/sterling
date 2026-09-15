@@ -203,15 +203,18 @@ def is_promoted() -> bool:
     return bool(v.get("promoted")) and is_compatible(v)
 
 
-def auto_execution_blocker() -> Optional[str]:
+def auto_execution_blocker(cfg: Any = None) -> Optional[str]:
     """Why Snapback may not trade unattended, or ``None`` if it may.
 
     The sentence is the point. "Not promoted" tells an operator nothing; the
     harness's own first reason tells them what would have to change.
     """
+    if cfg is not None and cfg.trading_mode != "swing":
+        return ("Snapback scalping/intraday has no promoted option-tape validation "
+                "or connected broker protection lifecycle; live rows are plans only")
     v = load()
     if v.get("promoted"):
-        stale = compatibility_reasons(v)
+        stale = compatibility_reasons(v, cfg)
         if not stale:
             return None
         return "Snapback validation evidence is stale for this implementation: " + "; ".join(stale)

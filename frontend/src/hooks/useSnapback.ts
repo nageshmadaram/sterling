@@ -1,5 +1,5 @@
 /**
- * Snapback — the only engine here that reads DAILY bars.
+ * Snapback — daily swing and minute-bar research plans.
  *
  * Field names are identical to the Python dataclass, so a setting added on one
  * side is readable on the other without a translation table. Defaults, enums
@@ -7,9 +7,8 @@
  * the recurring bug in this codebase is a UI that claims backend behaviour the
  * backend does not honour.
  *
- * The refetch cadence is deliberately slow. Every rule in this engine is stated
- * on a daily CLOSE, so nothing it watches can change intraday, and polling it
- * like a tick-driven board would spend a rate limit to redraw the same rows.
+ * Snapshot polling follows the selected mode. Daily replay evidence is never
+ * used as evidence for the minute-bar modes.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api';
@@ -22,6 +21,7 @@ const HISTORY_KEY = ['snapback-history'];
 const BASE = '/api/v1/config/snapback';
 
 export type SnapbackSide = 'fade_up' | 'fade_down';
+export type SnapbackTradingMode = 'swing' | 'scalp' | 'intraday';
 export type ExitMode = 'horizon' | 'mean_touch' | 'either';
 export type SizingMode = 'PREMIUM_PCT' | 'LOTS';
 export type StopMode = 'broker' | 'monitor' | 'both';
@@ -30,6 +30,26 @@ export type SignalState = 'armed' | 'watching' | 'running' | 'ended' | 'error';
 export interface SnapbackConfig {
   enabled: boolean;
   auto_execute: boolean;
+  trading_mode?: SnapbackTradingMode;
+  scalp_timeframe_minutes?: number;
+  scalp_target_points?: number;
+  scalp_stop_points?: number;
+  scalp_trail_points?: number;
+  scalp_lock_points?: number;
+  scalp_max_hold_bars?: number;
+  scalp_runner_max_bars?: number;
+  scalp_cooldown_bars?: number;
+  scalp_max_trades_per_day?: number;
+  scalp_risk_pct?: number;
+  scalp_daily_loss_pct?: number;
+  scalp_round_trip_cost_points?: number;
+  scalp_fixed_cost_inr?: number;
+  scalp_min_net_rr?: number;
+  scalp_max_adx?: number;
+  scalp_min_relative_volume?: number;
+  scalp_entry_start_minute?: number;
+  scalp_entry_end_minute?: number;
+  scalp_square_off_minute?: number;
 
   universe_mode: 'curated' | 'fno';
   max_universe: number;
@@ -125,6 +145,16 @@ export interface SnapbackOutcome {
 }
 
 export interface SnapbackRow {
+  trading_mode?: SnapbackTradingMode;
+  timeframe_minutes?: number;
+  max_hold_bars?: number;
+  runner_max_bars?: number;
+  trail_points?: number;
+  lock_points?: number;
+  planned_risk_inr?: number | null;
+  round_trip_cost_points?: number;
+  fixed_cost_inr?: number;
+  net_target_inr?: number | null;
   signal_id: string;
   strategy: 'snapback';
   side: SnapbackSide;
@@ -241,6 +271,7 @@ export interface SnapbackCapabilities {
 }
 
 export interface SnapbackSnapshot {
+  trading_mode?: SnapbackTradingMode;
   strategy: SnapbackDescriptor;
   config: SnapbackConfig;
   contract_version: string;
@@ -278,11 +309,12 @@ export function useSnapbackSnapshot() {
   return useQuery<SnapbackSnapshot>({
     queryKey: SNAPSHOT_KEY,
     queryFn: () => api.get(`${BASE}/snapshot`),
-    // Five minutes, not five seconds. A daily rule cannot change intraday, and
-    // a board that polls faster than its own data moves burns a rate limit to
-    // redraw identical rows.
-    refetchInterval: 300_000,
-    staleTime: 120_000,
+    refetchInterval: (query) => {
+      const snapshot = query.state.data;
+      const mode = snapshot?.trading_mode ?? snapshot?.config.trading_mode ?? 'swing';
+      return mode === 'swing' ? 300_000 : 15_000;
+    },
+    staleTime: 10_000,
   });
 }
 
@@ -303,10 +335,11 @@ export function useSnapbackValidation() {
  * closed sessions and these rules fire on ONE. Without it the board is blank
  * almost always — and a blank board reads as a broken engine.
  */
-export function useSnapbackHistory(sessions = 30) {
+export function useSnapbackHistory(sessions = 30, enabled = true) {
   return useQuery<{ sessions: number; signals: SnapbackRow[]; count: number }>({
     queryKey: [...HISTORY_KEY, sessions],
     queryFn: () => api.get(`${BASE}/history?sessions=${sessions}`),
+    enabled,
     staleTime: 600_000,
   });
 }

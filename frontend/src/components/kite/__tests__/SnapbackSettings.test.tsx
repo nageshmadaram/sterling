@@ -121,4 +121,42 @@ describe('Snapback settings', () => {
     render(<SnapbackSettings />);
     expect(screen.getByText(/Loading strategy settings/)).toBeInTheDocument();
   });
+
+  it('switches to scalp controls without attaching daily evidence or changing execution flags', () => {
+    cfgState.data.config.auto_execute = true;
+    render(<SnapbackSettings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scalp' }));
+    expect(screen.getByText('Requested target')).toBeInTheDocument();
+    expect(screen.getByText('Runner trailing distance')).toBeInTheDocument();
+    expect(screen.getByText('Variable round-trip costs')).toBeInTheDocument();
+    expect(screen.getByText(/Daily swing results do not validate/)).toBeInTheDocument();
+    expect(screen.queryByText(/Passes 7 of 9/)).toBeNull();
+    expect(screen.queryByText('Holding period')).toBeNull();
+    expect(screen.queryByText('Market exposure')).toBeNull();
+    expect(screen.getByLabelText('Square-off (IST)')).toHaveValue('15:15');
+    fireEvent.click(screen.getByRole('button', { name: /Apply/i }));
+    expect(mutate.mock.calls[0][0]).toEqual({
+      trading_mode: 'scalp', scalp_timeframe_minutes: 1,
+      scalp_max_hold_bars: 20, scalp_runner_max_bars: 60,
+    });
+  });
+
+  it('loads the intraday candle and holding preset while preserving risk settings', () => {
+    cfgState.data.config.scalp_risk_pct = 0.25;
+    render(<SnapbackSettings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Intraday' }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply/i }));
+    expect(mutate.mock.calls[0][0]).toEqual({
+      trading_mode: 'intraday', scalp_timeframe_minutes: 5,
+      scalp_max_hold_bars: 12, scalp_runner_max_bars: 36,
+    });
+  });
+
+  it('saves an IST time as minutes after midnight without changing unrelated controls', () => {
+    cfgState.data.config.trading_mode = 'scalp';
+    render(<SnapbackSettings />);
+    fireEvent.change(screen.getByLabelText('Last entry (IST)'), { target: { value: '14:30' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/i }));
+    expect(mutate.mock.calls[0][0]).toEqual({ scalp_entry_end_minute: 870 });
+  });
 });

@@ -28,6 +28,12 @@ const price = (v: number | null | undefined): number | null =>
 const n = (v: number | null | undefined, dp = 2): string =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(dp);
 
+const isIntraday = (row: SnapbackRow) => row.trading_mode === 'scalp' || row.trading_mode === 'intraday';
+const metric = (row: SnapbackRow, key: string): number | null => {
+  const value = row.metrics?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
 const SIDE_LABEL: Record<SnapbackSide, string> = {
   fade_up: 'Fade push',
   fade_down: 'Fade flush',
@@ -64,7 +70,9 @@ function instrument(row: SnapbackRow): BoardInstrument {
 function origin(row: SnapbackRow): BoardOrigin {
   return {
     label: SIDE_LABEL[row.side] ?? row.side,
-    hint: row.side === 'fade_up'
+    hint: isIntraday(row)
+      ? 'A completed candle reversed a Bollinger stretch across EMA9, with ADX below the entry cutoff.'
+      : row.side === 'fade_up'
       ? `Closed above its ${row.metrics?.lookback_days ?? 20}-session high while `
         + 'stretched above its own mean — buys the put.'
       : 'Closed below its 20-session low while stretched below its own mean — '
@@ -81,10 +89,13 @@ function origin(row: SnapbackRow): BoardOrigin {
  */
 function flags(row: SnapbackRow): BoardOrigin[] {
   const o = row.outcome;
+  const intraday = isIntraday(row);
   const out: BoardOrigin[] = [{
     label: `${row.stretch >= 0 ? '+' : ''}${row.stretch.toFixed(1)} ATR`,
-    hint: `Distance from the ${row.metrics?.mean_ema ?? 20}-session mean, in `
-      + 'ATR(14). This is the size of the move being faded.',
+    hint: intraday
+      ? 'Prior candle stretch from its intraday Bollinger mean, measured in ATR(14).'
+      : `Distance from the ${row.metrics?.mean_ema ?? 20}-session mean, in `
+        + 'ATR(14). This is the size of the move being faded.',
     tone: Math.abs(row.stretch) >= 3 ? 'green' : 'dim',
   }];
   if (row.premium_is_modelled) {
@@ -100,7 +111,9 @@ function flags(row: SnapbackRow): BoardOrigin[] {
   if (row.runner_premium != null) {
     out.push({
       label: `runs above \u20b9${row.runner_premium.toFixed(0)}`,
-      hint: 'Above this premium the position is held PAST the horizon, under a '
+      hint: intraday
+        ? `A strong completed candle above this premium can activate a runner. Trail ${n(row.trail_points)} premium points, with a ${n(row.lock_points)}-point lock above estimated break-even. This is a research plan, not an active broker stop.`
+        : 'Above this premium the position is held PAST the horizon, under a '
         + 'give-back ratchet, instead of being closed on the session count. '
         + 'The edge here is a right tail — the top 1% of trades carry 148% of '
         + 'the P&L — so a fixed horizon closes the few trades that pay for the '
@@ -180,17 +193,28 @@ function flags(row: SnapbackRow): BoardOrigin[] {
       tone: 'dim',
     });
   }
-  out.push({
-    label: `hold ${row.hold_days}d`,
-    hint: 'Sessions held. The measured edge is a MEAN over this horizon, so an '
-      + 'early exit collects a different distribution from the one measured.',
-    tone: 'dim',
-  });
+  if (intraday) {
+    out.push({ label: row.trading_mode!, tone: 'blue', hint: 'Minute-bar research; daily swing results do not validate this mode.' });
+    const timeframe = row.timeframe_minutes ?? metric(row, 'timeframe_minutes');
+    out.push({
+      label: row.max_hold_bars && timeframe ? `hold ≤${row.max_hold_bars * timeframe}m` : 'same session',
+      hint: `${row.max_hold_bars ?? '—'} initial bars; runner maximum ${row.runner_max_bars ?? '—'} bars in total. Session square-off takes precedence.`,
+      tone: 'dim',
+    });
+  } else {
+    out.push({
+      label: `hold ${row.hold_days}d`,
+      hint: 'Sessions held. The measured edge is a MEAN over this horizon, so an '
+        + 'early exit collects a different distribution from the one measured.',
+      tone: 'dim',
+    });
+  }
   return out;
 }
 
 function sections(row: SnapbackRow): BoardSection[] {
   const out: BoardSection[] = [];
+  const intraday = isIntraday(row);
   out.push({
     title: 'Why it fired',
     layout: 'rows',
@@ -212,13 +236,19 @@ function sections(row: SnapbackRow): BoardSection[] {
   out.push({
     title: 'Vol and what the premium assumes',
     layout: 'tiles',
-    summary: 'The exit is valued at the ENTRY’s vol in every measurement '
+    summary: intraday
+      ? 'Premium plans require observed option quotes. The intraday realised-vol proxy is not quoted implied volatility; daily swing measurements do not validate this plan.'
+      : 'The exit is valued at the ENTRY’s vol in every measurement '
       + 'behind this engine, so the vega a successful fade would earn is '
       + 'credited at exactly zero.',
     stats: [
-      { label: 'Realised vol', value: `${n(row.realized_vol_pct, 1)}%` },
-      { label: 'Modelled IV', value: `${n(row.assumed_iv_pct, 1)}%` },
-      { label: 'Assumed VRP', value: `${row.assumed_vrp.toFixed(2)}x` },
+      ...(intraday
+        ? [{ label: 'Intraday vol proxy', value: `${n(row.realized_vol_pct, 1)}%` }]
+        : [
+          { label: 'Realised vol', value: `${n(row.realized_vol_pct, 1)}%` },
+          { label: 'Modelled IV', value: `${n(row.assumed_iv_pct, 1)}%` },
+          { label: 'Assumed VRP', value: `${row.assumed_vrp.toFixed(2)}x` },
+        ]),
       {
         label: 'Premium',
         value: row.premium == null ? '—'
@@ -237,6 +267,28 @@ function sections(row: SnapbackRow): BoardSection[] {
       },
     ],
   });
+  if (intraday) {
+    out.push({
+      title: 'Premium target and runner plan', layout: 'tiles',
+      summary: 'Research only. The target rises when needed to cover estimated costs and net reward/risk. A strong completed candle may extend the trade; protection is not connected to broker execution.',
+      stats: [
+        { label: 'Requested target', value: `${n(metric(row, 'requested_target_points'))} pts` },
+        { label: 'Effective target', value: `${n(metric(row, 'effective_target_points'))} pts` },
+        { label: 'Runner trigger', value: n(row.runner_premium) },
+        { label: 'Trailing distance', value: `${n(row.trail_points)} pts` },
+        { label: 'Lock above break-even', value: `${n(row.lock_points)} pts` },
+        { label: 'Initial hold', value: `${row.max_hold_bars ?? '—'} bars` },
+        { label: 'Runner total limit', value: `${row.runner_max_bars ?? '—'} bars` },
+        { label: 'Candle interval', value: `${row.timeframe_minutes ?? '—'} min` },
+        { label: 'Variable costs', value: `${n(row.round_trip_cost_points ?? metric(row, 'estimated_variable_cost_points'))} pts` },
+        { label: 'Fixed costs', value: `₹${n(row.fixed_cost_inr ?? metric(row, 'estimated_fixed_cost_inr'))}` },
+        { label: 'Estimated net target', value: `₹${n(row.net_target_inr ?? metric(row, 'estimated_net_target_inr'))}` },
+        { label: 'Planned stop loss + costs', value: `₹${n(row.planned_risk_inr ?? metric(row, 'estimated_stop_loss_inr'))}` },
+        { label: 'Net reward/risk', value: `${n(metric(row, 'net_reward_risk'))}x` },
+        { label: 'ADX14', value: n(metric(row, 'adx'), 1) },
+      ],
+    });
+  }
   if (row.outcome) {
     const o2 = row.outcome;
     out.push({
@@ -351,7 +403,7 @@ export function snapbackRowToBoard(row: SnapbackRow): BoardSignal {
     // manual ticket can place only rows the backend marks execution-eligible;
     // unsupported spreads/hedges stay visible as model/replay evidence.
     noTrailingStop: true,
-    executionEligible: row.execution_eligible === true && !row.historical && !row.premium_is_modelled,
+    executionEligible: !isIntraday(row) && row.execution_eligible === true && !row.historical && !row.premium_is_modelled,
     sections: sections(row),
   };
 }

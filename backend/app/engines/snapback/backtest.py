@@ -223,6 +223,10 @@ def replay(tapes: Mapping[str, Bars], cfg: SnapbackConfig, *,
     an 80-session warm-up, and every fold comes back with zero trades and no
     error.
     """
+    if getattr(cfg, "trading_mode", "swing") != "swing":
+        raise ValueError(
+            "Daily replay only supports trading_mode='swing'; use "
+            "replay_intraday with real option candles for scalp/intraday modes")
     cost = cost or CostModel()
     vrp = float(cfg.assumed_vrp if vrp is None else vrp)
     res = Result()
@@ -371,11 +375,13 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
     best_prem = fill_in
     reason: ExitReason = "horizon"
     horizon_bar = entry_bar + cfg.hold_days - 1
-    # A runner may hold past the horizon, but never into the expiry cliff: the
-    # last five days of a contract are gamma, not the drift this trade is for.
-    last_bar = horizon_bar
-    if cfg.runner_mult > 0:
-        last_bar = entry_bar + max(cfg.hold_days, dte - 5) - 1
+    # A runner's deadline is CALENDAR time. Counting stored sessions here lets
+    # weekends/holidays extend a 40-DTE contract well beyond its expiry. The
+    # last complete daily interval before the five-day buffer ends is its
+    # final close; a missing session that jumps past that deadline exits at the
+    # next observed open, never at a price from an unseen session.
+    last_bar = n - 1 if cfg.runner_mult > 0 else horizon_bar
+    runner_close_after = max(dte - 6, 0)
     best_run = 0.0
     exit_bar = min(horizon_bar, n - 1)
     prem_out = 0.0
@@ -395,6 +401,10 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
                             cfg.smile_slope, S0, cfg.smile_itm_slope)
         close_prem = _value(float(bars.close[d]), strike, short_strike, years,
                             vol, call, cfg.smile_slope, S0, cfg.smile_itm_slope)
+
+        if cfg.runner_mult > 0 and elapsed_calendar_days > runner_close_after:
+            exit_bar, prem_out, reason = d, open_prem, "runner"
+            break
 
         if cfg.premium_stop_pct < 100.0 and worst_prem <= stop_prem:
             prem_out = open_prem if d > entry_bar and open_prem <= stop_prem else stop_prem
@@ -441,12 +451,17 @@ def _run_one(symbol: str, bars: Bars, f: Features, iv: np.ndarray,
             if d > horizon_bar:
                 give = best_run * (1.0 - cfg.runner_trail_pct / 100.0)
                 if cfg.runner_trail_pct > 0 and worst_prem <= give:
-                    exit_bar, prem_out, reason = d, give, "runner"
+                    exit_bar = d
+                    prem_out = min(open_prem, give)
+                    reason = "runner"
                     break
-                if not running or d == last_bar:
+                if not running:
                     exit_bar, prem_out, reason = d, close_prem, "runner"
                     break
             best_run = max(best_run, close_prem)
+        if cfg.runner_mult > 0 and elapsed_calendar_days >= runner_close_after:
+            exit_bar, prem_out, reason = d, close_prem, "runner"
+            break
         exit_bar, prem_out = d, close_prem
     else:
         # The loop ran out of TAPE rather than out of rules. That is a position

@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from app.engines.snapback import Bars, SnapbackConfig
-from app.engines.snapback.backtest import replay
+from app.engines.snapback.backtest import _value, replay
 
 DAY = 86_400.0
 HOLD = SnapbackConfig().hold_days
@@ -58,6 +58,11 @@ def last(cfg, bars, spike_at: int = 240) -> object:
 
 
 class TestItOnlyRunsWhenTold:
+    @pytest.mark.parametrize("mode", ["scalp", "intraday"])
+    def test_daily_replay_refuses_intraday_modes(self, mode):
+        with pytest.raises(ValueError, match="replay_intraday with real option candles"):
+            replay({"RELIANCE": falling_tape()}, replace(CFG, trading_mode=mode))
+
     def test_the_shipped_runner_is_the_measured_one(self):
         c = SnapbackConfig()
         assert (c.runner_mult, c.runner_trail_pct) == (1.5, 25.0)
@@ -102,6 +107,42 @@ class TestItCannotInventMoney:
         t = last(replace(CFG, runner_mult=1.2, runner_trail_pct=20.0), rev)
         assert t.reason == "runner"
         assert t.held_days > HOLD
+
+    def test_runner_gap_through_trail_fills_at_open_not_unreachable_stop(self):
+        bars = falling_tape(after=0.97, tail=60)
+        gap_bar = 240 + HOLD + 3
+        # The put has qualified as a runner before an adverse overnight gap.
+        bars.open[gap_bar] = bars.close[gap_bar - 1] * 1.6
+        bars.high[gap_bar] = bars.open[gap_bar] * 1.004
+        bars.close[gap_bar] = bars.open[gap_bar] * 0.999
+        bars.low[gap_bar] = bars.close[gap_bar] * 0.996
+        cfg = replace(CFG, runner_mult=1.2, runner_trail_pct=20.0)
+        trade = last(cfg, bars)
+        assert trade.exit_ms == int(bars.time[gap_bar] * 1000)
+        assert trade.reason == "runner"
+        elapsed = (bars.time[gap_bar] - bars.time[240]) / DAY
+        expected = _value(float(bars.open[gap_bar]), trade.strike, trade.short_strike,
+                          max(cfg.min_dte - elapsed, 1) / 365, trade.iv, False,
+                          cfg.smile_slope, trade.spot_in, cfg.smile_itm_slope)
+        assert trade.premium_out == pytest.approx(expected)
+
+    def test_runner_deadline_counts_calendar_days_in_sparse_daily_tape(self):
+        bars = falling_tape(after=0.97, tail=90)
+        # Alternate calendar days reproduce the bar-count error without
+        # assuming anything about a particular exchange holiday calendar.
+        bars.time[240:] = bars.time[240] + np.arange(len(bars) - 240) * 2 * DAY
+        cfg = replace(CFG, runner_mult=1.05, runner_trail_pct=0.0)
+        trade = last(cfg, bars)
+        elapsed = (trade.exit_ms - trade.entry_ms) / (DAY * 1000)
+        assert elapsed == cfg.min_dte - 6
+        assert trade.held_days < cfg.min_dte - 5
+        assert trade.reason == "runner"
+
+    def test_runner_deadline_does_not_read_future_session_to_close_prefix(self):
+        cfg = replace(CFG, runner_mult=1.05, runner_trail_pct=0.0)
+        bars = falling_tape(after=0.97, tail=cfg.hold_days + 2)
+        trade = last(cfg, bars)
+        assert trade.reason == "tape_ended"
 
     def test_the_multiple_is_of_what_the_trade_COST(self):
         """A multiple below 1.0 would let every losing trade run, which is the

@@ -24,15 +24,14 @@ STRATEGY_ID = "snapback"
 
 @dataclass(frozen=True)
 class Bars:
-    """Daily candles as columns, built once per evaluation.
+    """OHLCV columns, with opening timestamps in epoch seconds.
 
-    Daily and not intraday, deliberately. The effect this engine trades is a
-    multi-session reversion; measured on the same instruments at a 5-minute
-    timeframe, this repo's own harness found the costs of trading it eat more
-    than the whole gross edge.
+    The original swing rule consumes daily bars. The separate intraday engine
+    validates minute alignment and session continuity; sharing this container
+    does not transfer daily calibration to minute signals.
     """
 
-    time: NDArray[np.float64]          # epoch seconds of each session, ascending
+    time: NDArray[np.float64]          # opening epoch seconds, ascending
     open: NDArray[np.float64]
     high: NDArray[np.float64]
     low: NDArray[np.float64]

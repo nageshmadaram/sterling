@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -102,6 +103,12 @@ def set_config(values: dict[str, Any], uid: str | None = None) -> SnapbackConfig
     from app.services import db
     db.set_config(f"{_CONFIG_KEY}:{uid}" if uid else _CONFIG_KEY,
                   json.dumps(cfg.as_dict(), separators=(",", ":")))
+    # A row's eligibility and quote plan belong to the configuration that
+    # produced it, including its timeframe. Never reuse it after a settings edit.
+    if uid:
+        status(uid).rows = []
+        status(uid).signals = {}
+        status(uid).candles = {}
     return cfg
 
 
@@ -119,7 +126,7 @@ class ScanState:
     last_error: Optional[str] = None
     scanned: int = 0
     failures: list[str] = field(default_factory=list)
-    candles: dict[int, tuple[float, list]] = field(default_factory=dict)
+    candles: dict[Any, tuple[float, list]] = field(default_factory=dict)
     signals: dict[str, dict] = field(default_factory=dict)
 
 
@@ -152,6 +159,9 @@ class UnreadableCandles(RuntimeError):
 def evaluate_symbol(candles, cfg: SnapbackConfig, symbol: str, *, market_gate=None) -> list:
     """Signals on the last few CLOSED sessions of one instrument."""
     bars = to_bars(candles)
+    if cfg.trading_mode != "swing":
+        from app.engines.snapback.intraday import evaluate_intraday
+        return evaluate_intraday(bars, cfg, symbol, asof=datetime.now(_IST).timestamp())
     if len(bars) == 0:
         if candles:
             raise UnreadableCandles(
@@ -325,10 +335,16 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     except Exception as exc:                                       # noqa: BLE001
         return {"premium": None, "blockers": [f"quote unavailable: {exc}"]}
     q = (quotes or {}).get(key) or {}
+    def number(value):
+        try:
+            v = float(value or 0.0)
+            return v if math.isfinite(v) else 0.0
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
     depth = (q.get("depth") or {})
-    bid = float((depth.get("buy") or [{}])[0].get("price") or 0.0)
-    ask = float((depth.get("sell") or [{}])[0].get("price") or 0.0)
-    ltp = float(q.get("last_price") or 0.0)
+    bid = number((depth.get("buy") or [{}])[0].get("price"))
+    ask = number((depth.get("sell") or [{}])[0].get("price"))
+    ltp = number(q.get("last_price"))
     has_book = bid > 0 and ask > 0 and ask >= bid
     mid = (bid + ask) / 2.0 if has_book else ltp
     spread_pct = ((ask - bid) / mid * 100.0) if mid > 0 and bid > 0 and ask > 0 else None
@@ -338,6 +354,12 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     stamp = q.get("timestamp") or q.get("last_trade_time") or q.get("exchange_timestamp")
     if not stamp:
         blockers.append("quote timestamp unavailable")
+    else:
+        from app.engines.snapback.models import _epoch_seconds
+        ts = _epoch_seconds(stamp)
+        age = datetime.now(_IST).timestamp() - ts if ts is not None else float("inf")
+        if age < -5 or age > (10 if cfg.trading_mode != "swing" else 60):
+            blockers.append("quote is stale or has an invalid timestamp")
     if mid <= 0:
         blockers.append("no premium quoted")
     elif mid < cfg.min_option_premium:
@@ -345,10 +367,11 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     if spread_pct is not None and spread_pct > cfg.max_spread_pct:
         blockers.append(f"spread {spread_pct:.1f}% wider than "
                         f"{cfg.max_spread_pct:g}%")
-    oi = float(q.get("oi") or 0.0)
+    oi = number(q.get("oi"))
     if cfg.min_option_oi > 0 and oi < cfg.min_option_oi:
         blockers.append(f"open interest {oi:,.0f} below {cfg.min_option_oi:,.0f}")
-    executable_premium = mid if mid > 0 and not blockers else None
+    # Long options pay the ask. Mid-price sizing understated cash and risk.
+    executable_premium = ask if has_book and not blockers else None
     return {"premium": executable_premium, "bid": bid or None, "ask": ask or None,
             "ltp": ltp or None, "oi": oi or None, "spread_pct": spread_pct,
             "blockers": blockers}
@@ -367,6 +390,9 @@ def _row(sig, cfg: SnapbackConfig, *, contract: Optional[dict],
     price, and an operator cannot size a trade off a figure whose provenance is
     ambiguous.
     """
+    if cfg.trading_mode != "swing":
+        return _intraday_row(sig, cfg, contract=contract, quote=quote,
+                             blocked=blocked, underlying_token=underlying_token)
     spec = spec_for(sig.symbol)
     lot = int((contract or {}).get("lot_size") or (spec.lot_size if spec else 0))
     quoted = (quote or {}).get("premium")
@@ -465,6 +491,49 @@ def _row(sig, cfg: SnapbackConfig, *, contract: Optional[dict],
 
 # -------------------------------------------------------------------- scan
 
+def _intraday_row(sig, cfg, *, contract, quote, blocked, underlying_token):
+    """An observed-quote plan, never an executable promise of protection."""
+    from app.engines.snapback.intraday import make_plan
+    premium = (quote or {}).get("premium")
+    lot = int((contract or {}).get("lot_size") or 0)
+    spread = max(0.0, float((quote or {}).get("ask") or 0)
+                 - float((quote or {}).get("bid") or 0))
+    plan = make_plan(float(premium), lot, cfg, spread_points=spread) if premium and lot else {}
+    lots = int(plan.get("lots") or 0)
+    quantity = int(plan.get("quantity") or 0)
+    reasons = list(plan.get("rejection_reasons") or [])
+    reason = blocked or (reasons[0] if reasons else None) or (
+        "Research plan: automatic broker protection is not connected")
+    return {
+        "signal_id": signal_id_for(sig.symbol, sig.side, sig.timestamp_ms),
+        "strategy": STRATEGY_ID, "trading_mode": cfg.trading_mode,
+        "side": sig.side, "symbol": sig.symbol, "state": "watching",
+        "reason": reason, "execution_eligible": False,
+        "origin": "live_quote" if premium else "unavailable",
+        "direction": sig.direction, "opt_type": sig.option_type,
+        "timestamp_ms": sig.timestamp_ms, "spot": round(sig.entry, 2),
+        "mean_target": round(sig.mean_target, 2), "distance_pct": round(sig.distance_pct, 2),
+        "stretch": round(sig.stretch, 2), "level": round(sig.level, 2),
+        "strength": sig.strength, "realized_vol_pct": round(sig.realized_vol * 100, 1),
+        "assumed_iv_pct": round(sig.assumed_iv * 100, 1), "assumed_vrp": cfg.assumed_vrp,
+        "hold_days": 0, "underlying_token": underlying_token, "contract": contract,
+        "premium": premium, "premium_is_modelled": False, "modelled_premium": None,
+        "quote": quote, "stop_premium": plan.get("stop"),
+        "target_premium": plan.get("target"), "trail_premium": plan.get("stop"),
+        "runner_premium": plan.get("runner_trigger"), "outcome": None,
+        "lots": lots, "quantity": quantity,
+        "deployed_inr": round(premium * quantity, 2) if premium and quantity else None,
+        "min_outlay_inr": round(premium * lot, 2) if premium and lot else None,
+        "timeframe_minutes": cfg.scalp_timeframe_minutes,
+        "max_hold_bars": cfg.scalp_max_hold_bars, "runner_max_bars": cfg.scalp_runner_max_bars,
+        "trail_points": cfg.scalp_trail_points, "lock_points": cfg.scalp_lock_points,
+        "round_trip_cost_points": plan.get("estimated_variable_cost_points"),
+        "fixed_cost_inr": cfg.scalp_fixed_cost_inr,
+        "planned_risk_inr": plan.get("estimated_stop_loss_inr"),
+        "net_target_inr": plan.get("estimated_net_target_inr"),
+        "reasons": list(sig.reasons), "metrics": {**dict(sig.metrics), **plan},
+    }
+
 async def scan_once(uid: str) -> dict:
     """One universe pass: daily candles -> signals -> rows.
 
@@ -483,6 +552,7 @@ async def scan_once(uid: str) -> dict:
     st.scanning = True
     st.failures = []
     st.last_error = None
+    st.rows = [] if cfg.trading_mode != "swing" else st.rows
     # Cleared UP FRONT, not on success: a scan that throws halfway would
     # otherwise leave armed rows behind that nothing has re-checked.
     st.signals = {}
@@ -502,7 +572,7 @@ async def scan_once(uid: str) -> dict:
         universe = resolve_universe(cfg, nfo=nfo, bfo=bfo, equities=nse + bse)
         from app.engines.snapback.regime import MARKET_SYMBOL, gate_for
         market_gate = None
-        if cfg.market_filter != "off":
+        if cfg.trading_mode == "swing" and cfg.market_filter != "off":
             index = next((i for i in universe if canonical(i.name) == MARKET_SYMBOL), None)
             if index is None:
                 raise UnreadableCandles("NIFTY daily tape is required for the market filter")
@@ -522,10 +592,14 @@ async def scan_once(uid: str) -> dict:
         async def one(item) -> None:
             async with sem:
                 try:
-                    raw = _drop_forming(await _candles(client, st, item.token,
-                                                       item.tradingsymbol))
+                    if cfg.trading_mode == "swing":
+                        raw = _drop_forming(await _candles(client, st, item.token,
+                                                           item.tradingsymbol))
+                    else:
+                        raw = await _intraday_candles(client, st, item.token,
+                                                      item.tradingsymbol, cfg)
                     if not raw:
-                        st.failures.append(f"{item.name}: no daily candles")
+                        st.failures.append(f"{item.name}: no {cfg.trading_mode} candles")
                         return
                     for sig in evaluate_symbol(raw, cfg, item.name, market_gate=market_gate):
                         blocked = None
@@ -536,9 +610,9 @@ async def scan_once(uid: str) -> dict:
                         if contract is None:
                             blocked = (f"no listed {sig.option_type} between "
                                        f"{cfg.min_dte} and {cfg.max_dte} days out")
-                        elif cfg.short_leg_delta > 0:
+                        elif cfg.trading_mode == "swing" and cfg.short_leg_delta > 0:
                             blocked = "live spread execution is not supported by the manual ticket path"
-                        elif cfg.hedge_mode != "none":
+                        elif cfg.trading_mode == "swing" and cfg.hedge_mode != "none":
                             blocked = "live hedge execution is not supported by the manual ticket path"
                         else:
                             quote = await _quote_for(client, contract, cfg)
@@ -600,6 +674,22 @@ async def _candles(client, st: ScanState, token: int, name: str) -> list:
     return rows
 
 
+async def _intraday_candles(client, st: ScanState, token: int, name: str,
+                           cfg: SnapbackConfig) -> list:
+    resolution = f"{cfg.scalp_timeframe_minutes}m"
+    key = (token, resolution)
+    hit = st.candles.get(key)
+    if hit and time.monotonic() - hit[0] < 5.0:
+        return hit[1]
+    from app.schemas.instruments import InstrumentMeta
+    inst = InstrumentMeta(underlying=name, tick_size=0.05, strike_step=1.0,
+                          exchange_currency="INR", index_name=name,
+                          has_options=True, exchange="zerodha", zerodha_token=int(token))
+    rows = await client.get_candles(inst, resolution, 400)
+    st.candles[key] = (time.monotonic(), rows)
+    return rows
+
+
 HISTORY_SESSIONS = 30
 _history_cache: dict[str, tuple[float, list[dict]]] = {}
 _HISTORY_TTL_S = 300.0
@@ -620,6 +710,10 @@ def recent_signals(uid: str, *, sessions: int = HISTORY_SESSIONS) -> list[dict]:
     signal for a live one.
     """
     cfg = get_config(uid)
+    if cfg.trading_mode != "swing":
+        # Daily modelled outcomes must never appear as intraday performance.
+        # Observed-option research results are returned by option-tape replay.
+        return []
     key = f"{uid}:{sessions}:{ist_today()}:{json.dumps(cfg.as_dict(), sort_keys=True)}"
     hit = _history_cache.get(key)
     if hit and (time.monotonic() - hit[0]) < _HISTORY_TTL_S:
@@ -840,14 +934,17 @@ def snapshot(uid: str) -> dict:
              if r.get("state") == "armed" and r.get("execution_eligible", True)]
     from app.services.snapback_validation import auto_execution_blocker
     manual_reason = None
-    if cfg.short_leg_delta > 0:
+    if cfg.trading_mode != "swing":
+        manual_reason = "research plans only: automatic broker protection is not connected"
+    elif cfg.short_leg_delta > 0:
         manual_reason = "manual live execution supports one listed long option leg; configured spreads are replay/model only"
     elif cfg.hedge_mode != "none":
         manual_reason = "manual live execution does not place or protect the configured index-futures hedge"
     capabilities = {
         "live_scan": True,
-        "historical_model": True,
-        "replay": True,
+        "historical_model": cfg.trading_mode == "swing",
+        "replay": cfg.trading_mode == "swing",
+        "option_tape_replay": cfg.trading_mode != "swing",
         "manual_execution": {
             "single_leg": manual_reason is None,
             "spread": False,
@@ -857,7 +954,7 @@ def snapshot(uid: str) -> dict:
         },
     }
     return {
-        "strategy": {**descriptor(), "enabled": cfg.enabled},
+        "strategy": {**descriptor(cfg), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
         "contract_version": CONTRACT_VERSION,
         "rows": st.rows,
@@ -868,7 +965,7 @@ def snapshot(uid: str) -> dict:
         "last_error": st.last_error,
         "failures": list(st.failures[:20]),
         "warnings": cfg.warnings(),
-        "auto_execution_blocker": auto_execution_blocker(),
-        "catchup_sessions": CATCHUP_SESSIONS,
+        "auto_execution_blocker": auto_execution_blocker(cfg),
+        "catchup_sessions": CATCHUP_SESSIONS if cfg.trading_mode == "swing" else 0,
         "capabilities": capabilities,
     }

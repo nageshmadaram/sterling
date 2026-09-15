@@ -1,8 +1,8 @@
 """Indian-market strategy configuration endpoints."""
-from typing import Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.auth import UserContext, get_current_user
 
@@ -651,10 +651,12 @@ async def get_snapback_config(user: UserContext = Depends(get_current_user)) -> 
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
     cfg = get_config(uid)
     return {
-        "strategy": {**descriptor(), "enabled": cfg.enabled},
+        "strategy": {**descriptor(cfg), "enabled": cfg.enabled},
         "config": cfg.as_dict(),
         "defaults": SnapbackConfig().as_dict(),
         "vocabularies": {
+            "trading_mode": ["swing", "scalp", "intraday"],
+            "scalp_timeframe_minutes": [1, 3, 5],
             "exit_mode": sorted(EXIT_MODES),
             "sizing_mode": sorted(SIZING_MODES),
             "stop_mode": sorted(STOP_MODES),
@@ -726,7 +728,14 @@ async def snapback_validation(user: UserContext = Depends(get_current_user)) -> 
     hand.
     """
     from app.services.snapback_validation import auto_execution_blocker, load
-    return {"record": load(), "auto_execution_blocker": auto_execution_blocker(),
+    from app.services.snapback import get_config
+    cfg = get_config(_snapback_uid(user))
+    if cfg.trading_mode != "swing":
+        return {"record": {}, "auto_execution_blocker": auto_execution_blocker(cfg),
+                "how_to_measure": "Replay synchronized real option candles via "
+                                  "/api/v1/config/snapback/replay-intraday; "
+                                  "daily evidence cannot promote intraday modes"}
+    return {"record": load(), "auto_execution_blocker": auto_execution_blocker(cfg),
             "how_to_measure": "python -m study.snapback_research --part gate --record"}
 
 
@@ -746,3 +755,51 @@ async def snapback_history(sessions: int = 30,
     rows = recent_signals(_snapback_uid(user),
                           sessions=max(1, min(int(sessions), 180)))
     return {"sessions": sessions, "signals": rows, "count": len(rows)}
+
+
+class SnapbackReplayCandle(BaseModel):
+    """Strict caller-supplied candle; time is its opening epoch in seconds."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    time: float
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: float = Field(default=0, ge=0)
+
+
+class SnapbackIntradayReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=1, max_length=64)
+    option_symbol: str = Field(min_length=1, max_length=100)
+    option_type: Literal["CE", "PE"]
+    lot_size: int = Field(gt=0, le=100_000, strict=True)
+    underlying: list[SnapbackReplayCandle] = Field(min_length=1, max_length=10_000)
+    option_candles: list[SnapbackReplayCandle] = Field(min_length=1, max_length=10_000)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.post("/snapback/replay-intraday")
+def snapback_replay_intraday(body: SnapbackIntradayReplayRequest,
+                            user: UserContext = Depends(get_current_user)) -> dict:
+    """Research-only replay; does not save settings or place broker orders."""
+    import numpy as np
+    from app.engines.snapback import Bars, validate
+    from app.engines.snapback.intraday import replay_intraday
+    from app.services.snapback import get_config
+
+    def columns(candles):
+        # Do not use the tolerant live parser here: dropping a malformed or
+        # duplicate bar changes a financial replay's sample without disclosure.
+        return Bars(*(np.asarray([getattr(c, key) for c in candles], dtype=float)
+                      for key in ("time", "open", "high", "low", "close", "volume")))
+
+    try:
+        cfg = validate(body.settings, base=get_config(_snapback_uid(user)))
+        result = replay_intraday(columns(body.underlying), columns(body.option_candles), cfg,
+                                 body.symbol, option_type=body.option_type,
+                                 lot_size=body.lot_size, option_symbol=body.option_symbol)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**result, "data_source": "Caller-supplied candles; provenance is not independently verified",
+            "config": cfg.as_dict()}

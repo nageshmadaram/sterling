@@ -5,6 +5,7 @@ import {
   type ExitMode,
   type SizingMode,
   type SnapbackConfig,
+  type SnapbackTradingMode,
   type StopMode,
 } from '../hooks/useSnapback';
 import {
@@ -17,6 +18,7 @@ import { useUnsavedDraftGuard } from './kite/config/unsavedDraftGuard';
 import { InstrumentsGroup } from './kite/config/ScanSettings';
 import { EnginePowerHeader } from './kite/config/EnginePowerHeader';
 import { notifyOrder } from '../store/useKiteNotifications';
+import { SnapbackScalpSettings } from './SnapbackScalpSettings';
 
 /**
  * Snapback settings.
@@ -133,6 +135,11 @@ const CHECK_LABEL: Record<string, string> = {
 };
 
 const ADVANCED_SETTING_COUNT = 6;
+const TRADING_MODES: Array<{ value: SnapbackTradingMode; label: string; hint: string }> = [
+  { value: 'swing', label: 'Swing', hint: 'Daily signals and session-based holding periods.' },
+  { value: 'scalp', label: 'Scalp', hint: 'Research preset: 1-minute bars, 20-bar initial hold, 60-bar runner limit.' },
+  { value: 'intraday', label: 'Intraday', hint: 'Research preset: 5-minute bars, 12-bar initial hold, 36-bar runner limit.' },
+];
 
 export function SnapbackSettings() {
   const { data, isLoading } = useSnapbackConfig();
@@ -201,6 +208,7 @@ export function SnapbackSettings() {
   const measured = (key: string) => strategy.calibrated_fields.includes(key);
   const tag = (key: string, hint: string) =>
     (measured(key) ? `${hint} MEASURED.` : `${hint} Not measured — a judgement call.`);
+  const shortHorizon = cfg.trading_mode === 'scalp' || cfg.trading_mode === 'intraday';
 
   return (
     <>
@@ -216,18 +224,31 @@ export function SnapbackSettings() {
 
       <EnginePowerHeader
         name={strategy.name}
-        tagline={strategy.tagline}
+        tagline={shortHorizon ? 'Minute-bar reversal research with cost-aware targets and runner plans.' : strategy.tagline}
         on={cfg.enabled}
         liveOn={server.enabled}
         busy={setCfg.isPending}
         onToggle={() => patch({ enabled: !cfg.enabled })}
-        runningNote="Scanning daily bars for instruments stretched past a 20-session extreme."
+        runningNote={shortHorizon
+          ? 'Scanning completed minute bars for reversal plans. Broker execution is unavailable for this mode.'
+          : 'Scanning daily bars for instruments stretched past a 20-session extreme.'}
         offNote="Off. Nothing is scanned and no orders can be placed."
       />
 
+      <Section title="Trading mode" description="Choose the signal horizon. Changing mode loads its candle and holding presets."
+        summary={shortHorizon ? 'Intraday research' : 'Daily swing'} defaultOpen persistKey="snapback-mode">
+        <Field label="Mode" hint="Scalp and intraday use separate rules and require their own validation. Saving a mode does not enable execution.">
+          <ChoiceRow value={cfg.trading_mode ?? 'swing'} options={TRADING_MODES} onChange={(mode) => patch({
+            trading_mode: mode,
+            ...(mode === 'scalp' ? { scalp_timeframe_minutes: 1, scalp_max_hold_bars: 20, scalp_runner_max_bars: 60 } : {}),
+            ...(mode === 'intraday' ? { scalp_timeframe_minutes: 5, scalp_max_hold_bars: 12, scalp_runner_max_bars: 36 } : {}),
+          })} />
+        </Field>
+      </Section>
+
       {/* The scorecard, in full. A settings page is read carefully, so the
           evidence belongs here rather than on a hover. */}
-      {validation && (
+      {!shortHorizon && validation && (
         <ConfigNote>
           <span>
             <strong>
@@ -252,7 +273,7 @@ export function SnapbackSettings() {
           </span>
         </ConfigNote>
       )}
-      {validation?.reasons?.length ? (
+      {!shortHorizon && validation?.reasons?.length ? (
         <ConfigNote>
           <span>
             {/* Verbatim from the harness. A summary of a summary is where a
@@ -261,7 +282,7 @@ export function SnapbackSettings() {
           </span>
         </ConfigNote>
       ) : null}
-      <ConfigNote>
+      {!shortHorizon && <ConfigNote>
         <span>
           The premium behind every measurement is <strong>modelled</strong>, not
           quoted — no store here holds option price history. So the number that
@@ -270,14 +291,14 @@ export function SnapbackSettings() {
           {validation?.breakeven_vrp ?? '—'}x against a market that charges{' '}
           {(data.vrp_band ?? [1.15, 1.3]).join('–')}x of realised vol.
         </span>
-      </ConfigNote>
-      <ConfigNote><span>{strategy.provenance}</span></ConfigNote>
+      </ConfigNote>}
+      {!shortHorizon && <ConfigNote><span>{strategy.provenance}</span></ConfigNote>}
 
       {warnings.map((w) => <ConfigNote key={w}><span>{w}</span></ConfigNote>)}
 
       <Section
         title="Instruments"
-        description="What gets scanned, on daily bars."
+        description={shortHorizon ? 'What gets scanned, on completed minute bars.' : 'What gets scanned, on daily bars.'}
         summary="Indices and single stocks"
         persistKey="snapback-instruments"
       >
@@ -287,15 +308,16 @@ export function SnapbackSettings() {
         >
           <ChoiceRow
             value={cfg.universe_mode}
-            options={UNIVERSE_OPTIONS}
+            options={shortHorizon ? [
+              { value: 'fno', label: 'Whole F&O list', hint: 'Scan the eligible derivatives universe; each contract still needs usable quotes and affordable costs.' },
+              { value: 'curated', label: 'Curated fourteen', hint: 'Use the shared registry and indices.' },
+            ] : UNIVERSE_OPTIONS}
             onChange={(v) => patch({ universe_mode: v })}
           />
         </Field>
         <NumberField
           label="Universe cap"
-          hint="How many instruments one F&O scan covers. A pass is one
-                daily-candle request plus one chain lookup per name, so this
-                trades scan time against coverage. Only read in F&O mode."
+          hint="How many instruments one F&O scan covers. Candle and contract requests trade scan time against coverage. Only read in F&O mode."
           value={cfg.max_universe}
           defaultValue={defaults.max_universe}
           onChange={(v) => patch({ max_universe: v })}
@@ -320,6 +342,7 @@ export function SnapbackSettings() {
         />
       </Section>
 
+      {shortHorizon ? <SnapbackScalpSettings cfg={cfg} defaults={defaults} patch={patch} /> : <>
       <Section
         title="What makes it fire"
         description="A close through a 20-session extreme, far enough from its own mean to be worth fading — and only while the market itself is weak."
@@ -673,6 +696,7 @@ export function SnapbackSettings() {
           />
         </Field>
       </AdvancedSection>
+      </>}
     </>
   );
 }
