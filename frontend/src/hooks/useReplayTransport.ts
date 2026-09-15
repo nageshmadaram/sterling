@@ -11,6 +11,11 @@ import { syncReplayStatus } from './useReplayStream';
 
 const API = '/api/v1/simulation';
 
+/** How long a single POST to the engine may take before we give up. Generous
+ *  enough for a cold `/start` that hydrates candles; short enough that a stuck
+ *  backend does not look like a button that does nothing. */
+const CALL_TIMEOUT_MS = 15_000;
+
 type ApiError = { code: string; message: string };
 
 /** How long a freshly started replay may stay in `loading` before we say so. */
@@ -52,18 +57,33 @@ async function confirmStarted(): Promise<boolean> {
 }
 
 async function call(path: string, body?: unknown): Promise<ReplayStatus> {
-  const res = await fetch(`${API}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    throw Object.assign(new Error(`replay ${path} failed`), {
-      status: res.status,
-      api: await readApiError(res),
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
     });
+    if (!res.ok) {
+      throw Object.assign(new Error(`replay ${path} failed`), {
+        status: res.status,
+        api: await readApiError(res),
+      });
+    }
+    return res.json();
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw Object.assign(new Error(`replay ${path} timed out`), {
+        status: 0,
+        api: { code: 'timeout', message: 'The replay engine did not respond in time. It may be overloaded or not running.' },
+      });
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 /**
@@ -196,6 +216,9 @@ export function useReplayTransport(): ReplayTransport {
     const config = draftToConfig(store.draft);
     store.setError(null);
     store.reset();
+    // Show spinner IMMEDIATELY so the user knows the click registered.
+    // Without this, the UI stays idle while the POST is in flight.
+    store.setStatus({ ...store.status, state: 'loading', status_message: 'Starting replay…' });
     store.setTab(store.tab === 'signals' ? 'signals' : 'trades');
     clearFeedCache();
 
@@ -246,10 +269,12 @@ export function useReplayTransport(): ReplayTransport {
           }
           return;
         } catch (retryErr: any) {
+          useReplayStore.getState().setStatus({ ...useReplayStore.getState().status, state: 'idle' });
           fail(retryErr?.api?.code ?? 'start_failed', retryErr?.api?.message || 'Could not start the replay.', () => { void start(); });
           return;
         }
       }
+      useReplayStore.getState().setStatus({ ...useReplayStore.getState().status, state: 'idle' });
       fail(api.code, api.message || 'Could not start the replay.', () => { void start(); });
     }
   }, [fail, queryClient]);
