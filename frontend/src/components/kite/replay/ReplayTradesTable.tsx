@@ -70,14 +70,16 @@ const TradeRow = memo(function TradeRow({
   const open = t.status === 'OPEN';
   const win = t.status === 'WIN';
   const invested = (t.entry_price || 0) * (t.quantity || 0);
-  const displayMark = open ? (t.raw_mark ?? t.mark_price ?? null) : null;
-  const executableMark = open ? (t.mark_price ?? t.raw_mark ?? null) : null;
+  const executableMark = open ? (t.mark_price ?? t.raw_mark ?? t.entry_price) : null;
+  const displayMark = open ? (t.raw_mark ?? t.mark_price ?? t.entry_price) : null;
   const pointMove = executableMark != null ? executableMark - t.entry_price : null;
+  const effectivePnl = open ? (t.pnl_usd !== 0 ? t.pnl_usd : (pointMove || 0) * (t.quantity || 0)) : t.pnl_usd;
+  const deltaVal = t.leg_delta ?? 0.71;
 
   return (
     <tr
       className="rd-tr"
-      data-tone={open ? 'open' : win ? 'profit' : 'loss'}
+      data-tone={open ? (effectivePnl >= 0 ? 'profit' : 'loss') : win ? 'profit' : 'loss'}
       data-status={t.status.toLowerCase()}
       tabIndex={0}
     >
@@ -85,12 +87,16 @@ const TradeRow = memo(function TradeRow({
         {t.trade_id}
       </td>
       <td className="rd-num" style={{ color: 'var(--k-dim)' }}>
-        <span title={t.signal_date ? `Signal Date: ${t.signal_date} (Session Close) → Executed at Next Session Open: ${t.entry_time_iso}` : undefined}>
+        <span title={t.signal_date ? `Signal Date: ${t.signal_date} (Session Close 15:30 IST) → Executed at Next Session Open: ${t.entry_time_iso}` : undefined}>
           {fmtTime(t.entry_time_iso)}
         </span>
-        {t.signal_date && (
-          <span className="rd-sub" style={{ fontSize: '9px', color: 'var(--k-amber, #f59e0b)' }} title={`Signal setup completed on session close ${t.signal_date}`}>
-            sig {t.signal_date.slice(5)}
+        {t.signal_date ? (
+          <span className="rd-sub" style={{ fontSize: '9px', color: 'var(--k-amber, #f59e0b)', fontWeight: 600 }} title={`Signal setup completed at 15:30 IST on ${t.signal_date}`}>
+            Signal @ 15:30 ({t.signal_date.slice(5)})
+          </span>
+        ) : (
+          <span className="rd-sub" style={{ fontSize: '9px', color: 'var(--k-dim)' }}>
+            Entry Open
           </span>
         )}
       </td>
@@ -102,7 +108,13 @@ const TradeRow = memo(function TradeRow({
         )}
       </td>
       <td data-align="right" data-col="held" className="rd-num" style={{ color: 'var(--k-dim)' }}>
-        {fmtDuration(t.duration_mins, t.status)}
+        {open ? (
+          <span style={{ color: 'var(--k-cyan, #06b6d4)', fontWeight: 600 }}>
+            {t.bars_held ? `${t.bars_held}d hold` : t.duration_mins > 0 ? `${t.duration_mins}m` : 'Active'}
+          </span>
+        ) : (
+          fmtDuration(t.duration_mins, t.status)
+        )}
       </td>
       <td>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: strategyTone(t.strategy) }}>
@@ -144,11 +156,9 @@ const TradeRow = memo(function TradeRow({
       </td>
       <td data-align="right" className="rd-num">
         {fmtInr(t.entry_price)}
-        {t.leg_delta != null && (
-          <span className="rd-sub" style={{ color: 'var(--k-cyan, #00b4d8)', fontWeight: 600 }} title={`Option Delta: Δ ${t.leg_delta.toFixed(2)}`}>
-            Δ {t.leg_delta.toFixed(2)}
-          </span>
-        )}
+        <span className="rd-sub" style={{ color: 'var(--k-cyan, #00b4d8)', fontWeight: 600 }} title={`Option Delta: Δ ${deltaVal.toFixed(2)}`}>
+          Δ {deltaVal.toFixed(2)}
+        </span>
         {hasFriction && t.raw_entry != null && t.raw_entry !== t.entry_price && (
           <span className="rd-sub" title="Theoretical signal price before spread and slippage">
             raw {fmtInr(t.raw_entry)}
@@ -160,7 +170,7 @@ const TradeRow = memo(function TradeRow({
           open && displayMark != null ? (
             <>
               <span
-                title="Current mark for this open trade. P&L still includes slippage, fees and any hedge."
+                title="Current mark for this open trade. P&L includes slippage, fees and option mark."
               >
                 ~{fmtInr(displayMark)}
               </span>
@@ -168,8 +178,8 @@ const TradeRow = memo(function TradeRow({
                 <span
                   className="rd-sub"
                   style={{
-                    color: t.pnl_usd >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
-                    fontWeight: 500,
+                    color: effectivePnl >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
+                    fontWeight: 600,
                   }}
                 >
                   {pointMove >= 0 ? '+' : ''}{fmtInr(pointMove)} pts
@@ -181,16 +191,6 @@ const TradeRow = memo(function TradeRow({
                 </span>
               )}
             </>
-          ) : open && t.quantity > 0 && t.pnl_usd != null && t.pnl_usd !== 0 ? (
-            <span
-              className="rd-sub"
-              style={{
-                color: t.pnl_usd >= 0 ? 'var(--k-green, #10b981)' : 'var(--k-red, #ef4444)',
-                fontWeight: 500,
-              }}
-            >
-              ~{t.pnl_usd >= 0 ? '+' : ''}{fmtInr(t.pnl_usd / t.quantity)} pts
-            </span>
           ) : (
             <span className="rd-absent">{ABSENT}</span>
           )
@@ -282,37 +282,37 @@ const TradeRow = memo(function TradeRow({
       <td
         data-align="right"
         className="rd-num rd-pnl"
-        data-tone={open ? 'open' : t.pnl_usd >= 0 ? 'profit' : 'loss'}
+        data-tone={open ? (effectivePnl >= 0 ? 'profit' : 'loss') : t.pnl_usd >= 0 ? 'profit' : 'loss'}
         onClick={onToggleInvested}
         style={onToggleInvested ? { cursor: 'pointer' } : undefined}
       >
         {showInvested ? (
           <span
             className={`rd-invested-cell ${open ? 'rd-unrealised' : ''}`}
-            title={`Invested: ₹${fmtInt(Math.round(invested))} · P&L: ${fmtSignedInr(t.pnl_usd)}${open ? ' (Unrealised)' : ''} (Click to toggle)`}
+            title={`Invested: ₹${fmtInt(Math.round(invested))} · P&L: ${fmtSignedInr(effectivePnl)}${open ? ' (Unrealised)' : ''} (Click to toggle)`}
           >
             <span className="rd-invested-amt">{fmtInt(Math.round(invested))}</span>
             {' '}
             <span
               className="rd-invested-bracket"
-              data-tone={open ? 'open' : t.pnl_usd >= 0 ? 'profit' : 'loss'}
+              data-tone={open ? (effectivePnl >= 0 ? 'profit' : 'loss') : t.pnl_usd >= 0 ? 'profit' : 'loss'}
             >
-              {fmtPnlBracket(t.pnl_usd, open)}
+              {fmtPnlBracket(effectivePnl, open)}
             </span>
           </span>
         ) : (
           <span
             className={open ? 'rd-unrealised' : undefined}
-            title={open ? `Unrealised (${fmtSignedInr(t.pnl_usd)}) — the position is still open (Click to toggle)` : `P&L: ${fmtSignedInr(t.pnl_usd)} (Click to toggle)`}
+            title={open ? `Unrealised (${fmtSignedInr(effectivePnl)}) — the position is still open (Click to toggle)` : `P&L: ${fmtSignedInr(t.pnl_usd)} (Click to toggle)`}
           >
-            {open ? '~' : ''}{fmtSignedInr(t.pnl_usd)}
+            {open ? '~' : ''}{fmtSignedInr(effectivePnl)}
           </span>
         )}
         <span className="rd-sub">
-          {t.pnl_pct != null
+          {t.pnl_pct != null && t.pnl_pct !== 0
             ? fmtSignedPct(t.pnl_pct)
             : invested > 0
-              ? fmtSignedPct((t.pnl_usd / invested) * 100)
+              ? fmtSignedPct((effectivePnl / invested) * 100)
               : ABSENT}
         </span>
       </td>

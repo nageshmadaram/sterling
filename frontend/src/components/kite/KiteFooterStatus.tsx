@@ -84,35 +84,6 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
         />
         {brokerText}
       </button>
-
-      <span style={{ width: 1, height: 13, background: 'var(--k-border)', flexShrink: 0 }} />
-
-      {strategies.map((s) => (
-        <span
-          key={s.label}
-          title={`${s.label} — ${s.on ? 'on' : 'off'}${s.note ? ` · ${s.note}` : ''}`}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0,
-            fontSize: 8.5, fontWeight: 750, letterSpacing: '.04em',
-            color: s.on ? k.text : 'var(--k-faint-2)',
-          }}
-        >
-          <span style={{
-            width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
-            background: s.on ? k.green : 'var(--k-faint-2)',
-          }} />
-          {s.label}
-          {/* Only where the engine genuinely publishes one. */}
-          {s.note && s.on && (
-            <span style={{
-              color: k.dim, fontWeight: 500, maxWidth: 130,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {s.note}
-            </span>
-          )}
-        </span>
-      ))}
     </span>
   );
 }
