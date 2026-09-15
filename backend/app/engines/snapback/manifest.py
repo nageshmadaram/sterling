@@ -22,13 +22,15 @@ EXPECTED_RULE_HASH: str = "e03ddf75f29463a8"
 EXPECTED_CONFIG_HASH: str = "6ecbeb53e9768a91"
 EXPECTED_COST_MODEL_HASH: str = "630a4de9ad143e2c"
 
-# Immutable trial registry hash (396 historical trials evaluated from research/snapback_reality_v1/frozen_trial_registry.json)
+# Immutable trial registry metadata (396 historical trials scaffold)
 FROZEN_TRIAL_REGISTRY_HASH: str = "186d4dba8b341d66"
 FROZEN_TRIAL_REGISTRY_METADATA: Dict[str, Any] = {
     "total_historical_trials": 396,
     "registry_hash": FROZEN_TRIAL_REGISTRY_HASH,
     "provenance_commit": FROZEN_COMMIT_SHA,
-    "registry_filepath": "research/snapback_reality_v1/frozen_trial_registry.json",
+    "multiple_testing_provenance": "DECLARATIVE_SCAFFOLD_UNKNOWN",
+    "promotion_allowed": False,
+    "notes": "Trial registry is a declarative scaffold; full parameter search history is not proven from this file alone.",
 }
 
 

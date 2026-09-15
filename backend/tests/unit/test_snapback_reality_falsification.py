@@ -271,7 +271,7 @@ def test_snapback_v121_contract_registry_loader():
 
 
 def test_snapback_v121_truedata_probe_evidence_metrics():
-    """Verify TrueDataEntitlementProbe produces evidence-grade result fields."""
+    """Verify TrueDataEntitlementProbe produces evidence-grade result fields for mock objects."""
     mock_client = MagicMock()
     mock_client.get_bars.return_value = [
         MagicMock(timestamp="2024-06-03 09:15:00"),
@@ -292,5 +292,33 @@ def test_snapback_v121_truedata_probe_evidence_metrics():
     assert res.tick_count == 2
     assert res.bid_ask_coverage_pct == 100.0
     assert res.entitlement_status == "OK"
+    assert res.tick_status == "OK"
+    assert res.bar_status == "OK"
+
+
+def test_snapback_v121_truedata_probe_dict_response_and_bars_only():
+    """Verify probe extracts dict values (real client format) and bars-only reports 0% bid/ask coverage."""
+    # Real TrueData client returns list[dict]
+    mock_client = MagicMock()
+    mock_client.get_bars.return_value = [
+        {"timestamp": "2024-06-03 09:15:00", "open": 22500.0, "high": 22510.0, "low": 22490.0, "close": 22505.0, "volume": 100},
+        {"timestamp": "2024-06-03 15:30:00", "open": 22600.0, "high": 22610.0, "low": 22590.0, "close": 22605.0, "volume": 150},
+    ]
+    mock_client.get_ticks.return_value = [] # No ticks returned (bars only)
+
+    prober = TrueDataHistoricalClientProbe(client=mock_client)
+    res = prober.probe_contract_retention("NIFTY_FUT", "2024-06-03", "2024-06-03")
+
+    assert res.bars_available is True
+    assert res.ticks_available is False
+    assert res.bar_count == 2
+    assert res.tick_count == 0
+    # BARS ONLY MUST REPORT 0.0 BID/ASK COVERAGE (Bars are NOT bid/ask execution evidence)
+    assert res.bid_ask_coverage_pct == 0.0
+    assert res.bid_ask_complete_count == 0
+    assert res.entitlement_status == "BARS_ONLY"
+    assert res.bar_status == "OK"
+    assert res.tick_status == "NO_DATA"
+
 
 

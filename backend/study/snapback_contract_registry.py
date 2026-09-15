@@ -195,11 +195,15 @@ class SnapbackContractRegistry:
     def load_from_dict(self, registry_data: Dict[str, Any]) -> None:
         """Load dated historical F&O membership, lot sizes, and strike steps from external dictionary."""
         membership = registry_data.get("membership", {})
-        for symbol, window in membership.items():
-            if isinstance(window, (list, tuple)) and len(window) == 2:
-                KNOWN_FNO_MEMBERSHIP_WINDOWS[symbol.upper()] = (str(window[0]), str(window[1]))
-            elif isinstance(window, dict):
-                self._fno_membership.setdefault(symbol.upper(), set()).update(window.keys())
+        for key, val in membership.items():
+            if isinstance(val, (list, tuple)) and len(val) == 2 and isinstance(val[0], str) and isinstance(val[1], str):
+                KNOWN_FNO_MEMBERSHIP_WINDOWS[key.upper()] = (str(val[0]), str(val[1]))
+            elif isinstance(val, dict):
+                for d_str in val.keys():
+                    self._fno_membership.setdefault(str(d_str), set()).add(key.upper())
+            elif isinstance(val, (list, set)):
+                # Key is date_str mapping to list/set of symbols
+                self._fno_membership.setdefault(str(key), set()).update(s.upper() for s in val)
 
         lot_sizes = registry_data.get("lot_sizes", {})
         for symbol, schedule in lot_sizes.items():
