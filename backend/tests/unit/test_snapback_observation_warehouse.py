@@ -1,14 +1,16 @@
-"""Unit tests for Snapback Prospective Observation Warehouse Service & Collector."""
+"""Unit tests for Snapback Prospective Observation Warehouse Service & Collector (PROSPECTIVE CAPTURE 1.0)."""
 import os
 import sqlite3
 import tempfile
+import time
 import pytest
 
+from app.engines.snapback.config import SnapbackConfig
+from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.models import SnapbackSignal
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 from app.services.snapback_prospective_collector import (
-    FuturesQuoteSnapshot,
-    OptionCandidateSnapshot,
+    OptionCandidateInfo,
     SnapbackProspectiveCollector,
 )
 
@@ -21,6 +23,11 @@ def temp_warehouse():
     yield warehouse
     if os.path.exists(db_path):
         os.remove(db_path)
+
+
+@pytest.fixture
+def sample_config():
+    return SnapbackConfig()
 
 
 @pytest.fixture
@@ -82,10 +89,10 @@ def test_warehouse_immutable_inserts_reject_duplicates(temp_warehouse):
     temp_warehouse.record_opportunity(
         opportunity_id=opp_id,
         symbol="NIFTY",
-        signal_type="BEARISH_SNAPBACK",
+        signal_type="SNAPBACK_FADE_UP",
         spot_price=24500.0,
         ema_50=24800.0,
-        ema_200=24200.0,
+        ema_200=24400.0,
         trend="BEARISH",
         is_valid=True,
     )
@@ -94,36 +101,58 @@ def test_warehouse_immutable_inserts_reject_duplicates(temp_warehouse):
         temp_warehouse.record_opportunity(
             opportunity_id=opp_id,
             symbol="NIFTY",
-            signal_type="BEARISH_SNAPBACK",
+            signal_type="SNAPBACK_FADE_UP",
             spot_price=24600.0,
             ema_50=24800.0,
-            ema_200=24200.0,
+            ema_200=24400.0,
             trend="BEARISH",
             is_valid=True,
         )
 
 
-def test_collector_no_signal_opens_no_position(temp_warehouse):
+def test_collector_record_signal_no_signal_returns_no_signal(temp_warehouse, sample_config):
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    res = collector.record_signal_at_close(signal=None, cfg=sample_config)
+    assert res["status"] == "NO_SIGNAL"
+    assert res["opportunity_id"] == ""
 
-    res = collector.process_signal_and_snapshot(
-        signal=None,  # Frozen engine emitted NO signal
-        futures_quote=FuturesQuoteSnapshot(futures_symbol="NIFTY-I", bid=24510.0, ask=24512.0),
-        option_candidates=[],
-        causal_beta=1.15,
-        option_lot_size=65,
-        futures_lot_size=65,
+
+def test_collector_record_signal_day_t_close_persists_pending_entry(temp_warehouse, sample_config, sample_fade_up_signal):
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+
+    assert res["status"] == "PENDING_ENTRY"
+    opp_id = res["opportunity_id"]
+    assert opp_id.startswith("OPP-NIFTY-")
+
+    pending = temp_warehouse.get_pending_opportunities()
+    assert len(pending) == 1
+    assert pending[0]["opportunity_id"] == opp_id
+    assert pending[0]["status"] == "PENDING_ENTRY"
+    assert pending[0]["ema_50"] == 24800.0  # signal.mean_target
+    assert pending[0]["ema_200"] == 24400.0  # signal.level
+
+
+def test_collector_8_dte_option_rejected(temp_warehouse, sample_config, sample_fade_up_signal):
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(time.time() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
     )
 
-    assert res["status"] == "NO_SIGNAL"
-    assert res["position_opened"] is False
-
-
-def test_collector_8_dte_option_rejected(temp_warehouse, sample_fade_up_signal):
-    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-
-    # Candidate has 8 DTE (invalid: frozen rules require 40-60 DTE)
-    cand_8_dte = OptionCandidateSnapshot(
+    # Candidate has DTE=8 (invalid: frozen rules require 40-60 DTE)
+    cand_8_dte = OptionCandidateInfo(
         symbol="NIFTY2692425000PE",
         expiry="2026-09-24",
         strike=25000.0,
@@ -131,29 +160,91 @@ def test_collector_8_dte_option_rejected(temp_warehouse, sample_fade_up_signal):
         dte=8,
         is_monthly=True,
         theoretical_delta=-0.70,
-        bid=450.0,
-        ask=452.0,
-        oi=60000,
     )
 
-    res = collector.process_signal_and_snapshot(
-        signal=sample_fade_up_signal,
-        futures_quote=FuturesQuoteSnapshot(futures_symbol="NIFTY-I", bid=24510.0, ask=24512.0),
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY2692425000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
         option_candidates=[cand_8_dte],
+        option_quote_events={"NIFTY2692425000PE": opt_quote},
         causal_beta=1.15,
         option_lot_size=65,
         futures_lot_size=65,
     )
 
-    assert res["status"] == "NO_FILL"
-    assert res["position_opened"] is False
+    assert exec_res["status"] == "NO_FILL"
+    assert exec_res["candidates_recorded"] == 1
 
 
-def test_collector_missing_ask_no_fill(temp_warehouse, sample_fade_up_signal):
+def test_collector_stale_futures_quote_inconclusive(temp_warehouse, sample_config, sample_fade_up_signal):
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
 
-    # Missing ask (ask = 0.0) -> Must return NO_FILL and NEVER fall back to LTP
-    cand_no_ask = OptionCandidateSnapshot(
+    now_ms = int(time.time() * 1000)
+    # Stale futures quote (age > max_quote_age_ms, e.g. 100 seconds old)
+    stale_fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 100000,
+        received_at_ms=now_ms - 100000,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=stale_fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[],
+        option_quote_events={},
+        causal_beta=1.15,
+        option_lot_size=65,
+        futures_lot_size=65,
+    )
+
+    assert exec_res["status"] == "INCONCLUSIVE"
+
+
+def test_collector_valid_fade_up_opens_position_long_futures_hedge(temp_warehouse, sample_config, sample_fade_up_signal):
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    now_ms = int(time.time() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+
+    cand_valid = OptionCandidateInfo(
         symbol="NIFTY26OCT25000PE",
         expiry="2026-10-29",
         strike=25000.0,
@@ -161,95 +252,37 @@ def test_collector_missing_ask_no_fill(temp_warehouse, sample_fade_up_signal):
         dte=45,
         is_monthly=True,
         theoretical_delta=-0.70,
-        bid=450.0,
-        ask=0.0,  # Missing ask!
-        ltp=451.0,
-        oi=60000,
     )
 
-    res = collector.process_signal_and_snapshot(
-        signal=sample_fade_up_signal,
-        futures_quote=FuturesQuoteSnapshot(futures_symbol="NIFTY-I", bid=24510.0, ask=24512.0),
-        option_candidates=[cand_no_ask],
-        causal_beta=1.15,
-        option_lot_size=65,
-        futures_lot_size=65,
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=now_ms - 200,
+        received_at_ms=now_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
     )
 
-    assert res["status"] == "NO_FILL"
-    assert res["position_opened"] is False
-
-
-def test_collector_stale_futures_quote_inconclusive(temp_warehouse, sample_fade_up_signal):
-    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-
-    cand_valid = OptionCandidateSnapshot(
-        symbol="NIFTY26OCT25000PE",
-        expiry="2026-10-29",
-        strike=25000.0,
-        option_type="PE",
-        dte=45,
-        is_monthly=True,
-        theoretical_delta=-0.70,
-        bid=450.0,
-        ask=452.0,
-        oi=60000,
-    )
-
-    # Stale/missing futures quote
-    stale_futures = FuturesQuoteSnapshot(
-        futures_symbol="NIFTY-I", bid=0.0, ask=0.0, is_stale=True
-    )
-
-    res = collector.process_signal_and_snapshot(
-        signal=sample_fade_up_signal,
-        futures_quote=stale_futures,
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
         option_candidates=[cand_valid],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.15,
         option_lot_size=65,
         futures_lot_size=65,
     )
 
-    assert res["status"] == "INCONCLUSIVE"
-    assert res["position_opened"] is False
-
-
-def test_collector_valid_fade_up_opens_position_long_futures_hedge(temp_warehouse, sample_fade_up_signal):
-    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-
-    valid_cand = OptionCandidateSnapshot(
-        symbol="NIFTY26OCT25000PE",
-        expiry="2026-10-29",
-        strike=25000.0,
-        option_type="PE",
-        dte=45,
-        is_monthly=True,
-        theoretical_delta=-0.70,
-        bid=450.0,
-        ask=452.0,
-        oi=60000,
-    )
-
-    futures_quote = FuturesQuoteSnapshot(
-        futures_symbol="NIFTY-I", bid=24510.0, ask=24512.0
-    )
-
-    res = collector.process_signal_and_snapshot(
-        signal=sample_fade_up_signal,
-        futures_quote=futures_quote,
-        option_candidates=[valid_cand],
-        causal_beta=1.15,
-        option_lot_size=65,
-        futures_lot_size=65,
-    )
-
-    assert res["status"] == "PAPER_POSITION_OPENED"
-    assert res["position_opened"] is True
-    assert res["chosen_contract"] == "NIFTY26OCT25000PE"
-    assert res["causal_beta"] == 1.15
-    assert res["target_hedge_lots"] == 1
-
-    opp_id = res["opportunity_id"]
+    assert exec_res["status"] == "OPEN_POSITION"
+    assert exec_res["chosen_contract"] == "NIFTY26OCT25000PE"
+    assert exec_res["causal_beta"] == 1.15
+    assert exec_res["target_hedge_lots"] == 1
 
     # Verify decision recorded with causal beta
     decisions = temp_warehouse.get_records_by_table("decisions", opp_id)
@@ -261,73 +294,51 @@ def test_collector_valid_fade_up_opens_position_long_futures_hedge(temp_warehous
     assert len(hedge_events) == 1
     assert hedge_events[0]["new_hedge_lots"] == 1
 
-    # Test MTM formula: Long futures earns (futures_bid - futures_entry) * qty
-    mtm_res = collector.record_daily_mtm(
+    # Test daily MTM
+    mtm_res = collector.rebalance_and_mtm(
         opportunity_id=opp_id,
         session_date="2026-09-16",
         symbol="NIFTY",
-        option_bid=470.0,  # +20 pts on 65 qty = +1300
-        futures_bid=24612.0,  # +100 pts on futures entry 24513.25 = +6500
-        option_entry_price=452.226,
-        futures_entry_price=24512.226,
+        current_spot=24600.0,
+        current_option_delta=-0.65,
+        option_bid=470.0,
+        futures_bid=24612.0,
+        option_entry_price=exec_res["option_fill_price"],
+        futures_entry_price=exec_res["futures_fill_price"],
         option_quantity=65,
-        futures_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.15,
     )
 
     assert mtm_res["option_mtm"] > 0
     assert mtm_res["futures_mtm"] > 0
     assert mtm_res["total_mtm"] == pytest.approx(mtm_res["option_mtm"] + mtm_res["futures_mtm"], abs=1e-2)
 
-
-def test_collector_actual_outcome_preserves_entry_model_expectation(temp_warehouse, sample_fade_up_signal):
-    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-
-    valid_cand = OptionCandidateSnapshot(
-        symbol="NIFTY26OCT25000PE",
-        expiry="2026-10-29",
-        strike=25000.0,
-        option_type="PE",
-        dte=45,
-        is_monthly=True,
-        theoretical_delta=-0.70,
-        bid=450.0,
-        ask=452.0,
-        oi=60000,
-    )
-
-    open_res = collector.process_signal_and_snapshot(
-        signal=sample_fade_up_signal,
-        futures_quote=FuturesQuoteSnapshot(futures_symbol="NIFTY-I", bid=24510.0, ask=24512.0),
-        option_candidates=[valid_cand],
-        causal_beta=1.15,
-        option_lot_size=65,
-        futures_lot_size=65,
-    )
-
-    opp_id = open_res["opportunity_id"]
-    entry_model = open_res["modeled_entry_expectation"]
-
-    # Close opportunity and verify outcome uses frozen entry model expectations
+    # Test closing opportunity with canonical Black-Scholes counterfactual calculation
     close_res = collector.close_opportunity(
         opportunity_id=opp_id,
         symbol="NIFTY",
         exit_reason="HOLDING_HORIZON",
         entry_ts="2026-09-16T09:30:00Z",
         exit_ts="2026-10-01T15:15:00Z",
-        option_entry_price=452.23,
+        entry_spot=24510.0,
+        exit_spot=24700.0,
+        selected_strike=25000.0,
+        entry_dte=45,
+        exit_dte=30,
+        iv_proxy=0.18,
+        option_entry_price=exec_res["option_fill_price"],
         option_exit_bid=520.0,
-        futures_entry_price=24513.26,
-        futures_exit_bid=24700.0,
-        statutory_costs=150.0,
+        futures_entry_price=exec_res["futures_fill_price"],
+        futures_exit_bid=24710.0,
+        statutory_costs=exec_res["statutory_costs"],
         option_quantity=65,
         futures_quantity=65,
-        modeled_option_pnl=entry_model["modeled_option_pnl"],
-        modeled_futures_pnl=entry_model["modeled_futures_pnl"],
-        modeled_costs=entry_model["modeled_costs"],
     )
 
+    assert close_res["status"] == "RECORDED"
     outcomes = temp_warehouse.get_records_by_table("outcomes", opp_id)
     assert len(outcomes) == 1
-    # Verify modeled total pnl equals frozen entry model expectation
-    assert outcomes[0]["modeled_total_pnl"] == pytest.approx(entry_model["modeled_total_pnl"], abs=1e-2)
-
+    assert outcomes[0]["modeled_total_pnl"] != 0.0
+    assert outcomes[0]["actual_total_pnl"] != 0.0

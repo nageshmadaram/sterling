@@ -606,6 +606,13 @@ async def scan_once(uid: str) -> dict:
                         st.failures.append(f"{item.name}: no {cfg.trading_mode} candles")
                         return
                     for sig in evaluate_symbol(raw, cfg, item.name, market_gate=market_gate):
+                        try:
+                            from app.services.snapback_prospective_collector import SnapbackProspectiveCollector
+                            collector = SnapbackProspectiveCollector()
+                            collector.record_signal_at_close(sig, cfg, source="PROSPECTIVE_PAPER")
+                        except Exception as collector_exc:
+                            log.warning(f"Prospective collector record_signal_at_close failed for {item.name}: {collector_exc}")
+
                         blocked = None
                         contract = await _contract_for(
                             client, item.name, item.option_exchange, sig.entry,

@@ -72,6 +72,7 @@ class SnapbackObservationWarehouse:
                         trend             TEXT NOT NULL,
                         is_valid          INTEGER NOT NULL DEFAULT 1,
                         rejection_reason  TEXT NOT NULL DEFAULT '',
+                        status            TEXT NOT NULL DEFAULT 'PENDING_ENTRY',
                         {common_cols}
                     )
                 """)
@@ -246,6 +247,7 @@ class SnapbackObservationWarehouse:
         trend: str,
         is_valid: bool = True,
         rejection_reason: str = "",
+        status: str = "PENDING_ENTRY",
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
     ) -> None:
@@ -257,16 +259,46 @@ class SnapbackObservationWarehouse:
                 conn.execute(
                     """
                     INSERT INTO opportunities (
-                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, is_valid, rejection_reason,
+                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, is_valid, rejection_reason, status,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
                         instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
-                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, int(is_valid), rejection_reason,
+                        opportunity_id, signal_type, spot_price, ema_50, ema_200, trend, int(is_valid), rejection_reason, status,
                         now, provider_timestamp or now, now, symbol, symbol, "", 0.0, "", source,
                         FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
                     ),
+                )
+        finally:
+            conn.close()
+
+    def get_pending_opportunities(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch all opportunities that are valid and pending T+1 entry execution."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                if symbol:
+                    rows = conn.execute(
+                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status = 'PENDING_ENTRY' AND symbol = ?",
+                        (symbol,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status = 'PENDING_ENTRY'"
+                    ).fetchall()
+                return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def update_opportunity_status(self, opportunity_id: str, status: str) -> None:
+        """Update opportunity status (e.g. from PENDING_ENTRY to OPEN_POSITION or NO_FILL)."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE opportunities SET status = ? WHERE opportunity_id = ?",
+                    (status, opportunity_id)
                 )
         finally:
             conn.close()
@@ -320,6 +352,7 @@ class SnapbackObservationWarehouse:
         return {
             "outcome_id": outcome_id,
             "opportunity_id": opportunity_id,
+            "status": "RECORDED",
             "modeled_total_pnl": round(modeled_total, 2),
             "actual_total_pnl": round(actual_total, 2),
             "observed_vs_model_error": round(error, 2),
