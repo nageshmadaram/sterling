@@ -7,6 +7,7 @@ bundle inside research/snapback_reality_v1/<run_id>/.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -49,6 +50,11 @@ def generate_snapback_reconciliation_bundle(
     run_id: str,
     observed_records: List[ObservedTradeRecord],
     output_base_dir: str = "research/snapback_reality_v1",
+    manifest_dict: Optional[Dict[str, Any]] = None,
+    dataset_manifest_dict: Optional[Dict[str, Any]] = None,
+    contract_registry_dict: Optional[Dict[str, Any]] = None,
+    daily_equity_series: Optional[List[Dict[str, Any]]] = None,
+    margin_usage_series: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Generate structured research artifact directory and reconciliation report."""
     run_dir = os.path.join(output_base_dir, run_id)
@@ -67,8 +73,27 @@ def generate_snapback_reconciliation_bundle(
             top_1pct_pnl_impact=0.0,
             authoritative_gate_promoted=False,
         )
-        with open(os.path.join(run_dir, "validation_report.json"), "w") as f:
-            json.dump(summary.as_dict(), f, indent=2)
+        empty_bundle = {
+            "run_manifest.json": manifest_dict or {"run_id": run_id, "status": "EMPTY"},
+            "dataset_manifest.json": dataset_manifest_dict or {"total_quotes": 0},
+            "contract_registry.json": contract_registry_dict or {"contracts": 0},
+            "opportunities.json": [],
+            "quotes.json": [],
+            "decisions.json": [],
+            "fills.json": [],
+            "hedge_events.json": [],
+            "trades.json": [],
+            "daily_mtm_equity.json": daily_equity_series or [],
+            "margin_usage.json": margin_usage_series or [],
+            "model_vs_observed.json": summary.as_dict(),
+            "cost_stress.json": {"stress_multiplier": 2.0, "promoted": False},
+            "concentration.json": {"max_day_share": 0.0},
+            "validation_report.json": summary.as_dict(),
+            "promotion_record.json": {"promoted": False, "reason": "No filled trades in replay"},
+        }
+        for fname, content in empty_bundle.items():
+            with open(os.path.join(run_dir, fname), "w") as f:
+                json.dump(content, f, indent=2)
         return summary.as_dict()
 
     modeled_pnls = []
@@ -76,21 +101,49 @@ def generate_snapback_reconciliation_bundle(
     errors = []
     costs = []
     trades_dict_list = []
+    opportunities_list = []
+    fills_list = []
+    hedge_events_list = []
 
     for rec in observed_records:
-        modeled_pnl = rec.modeled_exit_price - rec.modeled_entry_price
-        observed_pnl = rec.total_trade_pnl
-        err = observed_pnl - modeled_pnl
-        
-        modeled_pnls.append(modeled_pnl)
-        observed_pnls.append(observed_pnl)
+        # Modeled PnL in total Rupees: (modeled_exit - modeled_entry) * quantity
+        modeled_trade_net_rupees = (rec.modeled_exit_price - rec.modeled_entry_price) * rec.quantity
+        observed_trade_net_rupees = rec.total_trade_pnl
+        err = observed_trade_net_rupees - modeled_trade_net_rupees
+
+        modeled_pnls.append(modeled_trade_net_rupees)
+        observed_pnls.append(observed_trade_net_rupees)
         errors.append(err)
         costs.append(rec.statutory_charges)
-        
+
         d = rec.as_dict()
-        d["modeled_pnl"] = round(modeled_pnl, 2)
-        d["observed_error"] = round(err, 2)
+        d["modeled_pnl_rupees"] = round(modeled_trade_net_rupees, 2)
+        d["observed_error_rupees"] = round(err, 2)
         trades_dict_list.append(d)
+
+        opportunities_list.append({
+            "trade_id": rec.trade_id,
+            "entry_date": rec.entry_date,
+            "symbol": rec.symbol,
+            "side": rec.side,
+            "strike": rec.strike,
+        })
+        if rec.fill_status == "FILLED":
+            fills_list.append({
+                "trade_id": rec.trade_id,
+                "symbol": rec.symbol,
+                "entry_ask": rec.entry_ask_price,
+                "exit_bid": rec.exit_bid_price,
+                "qty": rec.quantity,
+            })
+        if rec.hedge_symbol:
+            hedge_events_list.append({
+                "trade_id": rec.trade_id,
+                "hedge_symbol": rec.hedge_symbol,
+                "entry_price": rec.hedge_entry_price,
+                "exit_price": rec.hedge_exit_price,
+                "hedge_pnl": rec.hedge_pnl,
+            })
 
     errors_arr = np.array(errors)
     mean_err = float(np.mean(errors_arr))
@@ -128,14 +181,39 @@ def generate_snapback_reconciliation_bundle(
         authoritative_gate_promoted=verdict.promoted,
     )
 
-    # Write artifact files
-    with open(os.path.join(run_dir, "trades.json"), "w") as f:
-        json.dump(trades_dict_list, f, indent=2)
+    # Calculate concentration
+    day_pnls: Dict[str, float] = {}
+    for rec in observed_records:
+        day_pnls[rec.entry_date] = day_pnls.get(rec.entry_date, 0.0) + rec.total_trade_pnl
+    total_pnl = sum(observed_pnls)
+    max_day_share = max(day_pnls.values()) / total_pnl if total_pnl > 0 else 0.0
 
-    with open(os.path.join(run_dir, "validation_report.json"), "w") as f:
-        json.dump(verdict.as_dict(), f, indent=2)
+    # Write all 16 required research artifact JSON files
+    bundle_artifacts = {
+        "run_manifest.json": manifest_dict or {"run_id": run_id, "trade_count": len(observed_records)},
+        "dataset_manifest.json": dataset_manifest_dict or {"unique_dates": unique_dates},
+        "contract_registry.json": contract_registry_dict or {"symbols": list(set(r.symbol for r in observed_records))},
+        "opportunities.json": opportunities_list,
+        "quotes.json": [{"trade_id": r.trade_id, "ask": r.entry_ask_price, "bid": r.exit_bid_price} for r in observed_records],
+        "decisions.json": [{"trade_id": r.trade_id, "status": r.fill_status, "notes": r.notes} for r in observed_records],
+        "fills.json": fills_list,
+        "hedge_events.json": hedge_events_list,
+        "trades.json": trades_dict_list,
+        "daily_mtm_equity.json": daily_equity_series or [],
+        "margin_usage.json": margin_usage_series or [{"trade_id": r.trade_id, "margin": r.peak_margin_required} for r in observed_records],
+        "model_vs_observed.json": summary.as_dict(),
+        "cost_stress.json": {"total_charges": sum(costs), "double_charge_pnl": sum(observed_pnls) - sum(costs)},
+        "concentration.json": {"max_day_share": round(max_day_share, 4), "day_count": len(day_pnls)},
+        "validation_report.json": verdict.as_dict(),
+        "promotion_record.json": {
+            "promoted": verdict.promoted,
+            "gate_failures": verdict.reasons,
+            "timestamp": rec.exit_date if observed_records else "",
+        },
+    }
 
-    with open(os.path.join(run_dir, "model_vs_observed.json"), "w") as f:
-        json.dump(summary.as_dict(), f, indent=2)
+    for fname, content in bundle_artifacts.items():
+        with open(os.path.join(run_dir, fname), "w") as f:
+            json.dump(content, f, indent=2)
 
     return summary.as_dict()

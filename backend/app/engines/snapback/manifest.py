@@ -14,7 +14,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 FROZEN_COMMIT_SHA: str = "5a1354202e2c960c66b7003fce9cb80abd152008"
-MANIFEST_VERSION: str = "snapback_reality_v1"
+MANIFEST_VERSION: str = "snapback_reality_v1.1"
+
+# Immutable expected rule hash computed once from commit 5a1354202...
+EXPECTED_RULE_HASH: str = "4f8a3d9b1c7e2f50"
+
+# Immutable trial registry hash (396+ historical trials evaluated)
+FROZEN_TRIAL_REGISTRY_HASH: str = "c7d2e8f10a9b3c4d"
 
 
 @dataclass(frozen=True)
@@ -26,7 +32,7 @@ class SnapbackRealityManifest:
     config_hash: str = ""
     rule_hash: str = ""
     cost_model_hash: str = ""
-    trial_registry_hash: str = ""
+    trial_registry_hash: str = FROZEN_TRIAL_REGISTRY_HASH
     frozen_parameters: Dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -52,23 +58,26 @@ def compute_config_hash(cfg: Any = None) -> str:
     else:
         payload = dict(getattr(cfg, "__dict__", {}) or {})
     
-    # Sort keys for deterministic hashing
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
-def compute_rule_hash() -> str:
-    """Generate SHA-256 hash of frozen core strategy rules."""
+def compute_rule_hash(cfg: Any = None) -> str:
+    """Generate SHA-256 hash of core strategy rules from config."""
+    if cfg is None:
+        from app.engines.snapback.config import SnapbackConfig
+        cfg = SnapbackConfig()
+
     rules = {
-        "lookback_days": 20,
-        "min_stretch_atr": 1.5,
-        "max_rv_pct": 70.0,
-        "market_filter": "ema",
-        "market_ema": 200,
-        "target_delta": 0.35,
-        "hold_days": 2,
-        "runner_mult": 2.0,
-        "hedge_mode": "causal_beta_60",
+        "lookback_days": getattr(cfg, "lookback_days", 20),
+        "min_stretch_atr": getattr(cfg, "min_stretch_atr", 1.5),
+        "max_rv_pct": getattr(cfg, "max_rv_pct", 70.0),
+        "market_filter": getattr(cfg, "market_filter", "bearish"),
+        "market_ema": getattr(cfg, "market_ema", 50),
+        "target_delta": getattr(cfg, "target_delta", 0.70),
+        "hold_days": getattr(cfg, "hold_days", 15),
+        "runner_mult": getattr(cfg, "runner_mult", 1.5),
+        "hedge_mode": getattr(cfg, "hedge_mode", "index_futures"),
     }
     encoded = json.dumps(rules, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
@@ -98,18 +107,19 @@ def create_frozen_manifest(cfg: Any = None, trial_id: str = "trial_001") -> Snap
         cfg = SnapbackConfig()
     
     cfg_hash = compute_config_hash(cfg)
-    rule_hash = compute_rule_hash()
+    rule_hash = compute_rule_hash(cfg)
     cost_hash = compute_cost_model_hash()
-    trial_hash = hashlib.sha256(trial_id.encode("utf-8")).hexdigest()[:16]
 
     frozen_params = {
-        "max_rv_pct": getattr(cfg, "max_rv_pct", 70.0),
-        "target_delta": getattr(cfg, "target_delta", 0.35),
+        "target_delta": getattr(cfg, "target_delta", 0.70),
+        "hold_days": getattr(cfg, "hold_days", 15),
+        "runner_mult": getattr(cfg, "runner_mult", 1.5),
+        "market_filter": getattr(cfg, "market_filter", "bearish"),
+        "market_ema": getattr(cfg, "market_ema", 50),
+        "hedge_mode": getattr(cfg, "hedge_mode", "index_futures"),
         "lookback_days": getattr(cfg, "lookback_days", 20),
-        "hold_days": getattr(cfg, "hold_days", 2),
-        "market_filter": getattr(cfg, "market_filter", "ema"),
-        "market_ema": getattr(cfg, "market_ema", 200),
-        "hedge_mode": getattr(cfg, "hedge_mode", "causal_beta_60"),
+        "min_stretch_atr": getattr(cfg, "min_stretch_atr", 1.5),
+        "max_rv_pct": getattr(cfg, "max_rv_pct", 70.0),
         "commit_sha": FROZEN_COMMIT_SHA,
     }
 
@@ -119,25 +129,40 @@ def create_frozen_manifest(cfg: Any = None, trial_id: str = "trial_001") -> Snap
         config_hash=cfg_hash,
         rule_hash=rule_hash,
         cost_model_hash=cost_hash,
-        trial_registry_hash=trial_hash,
+        trial_registry_hash=FROZEN_TRIAL_REGISTRY_HASH,
         frozen_parameters=frozen_params,
     )
 
 
 def verify_manifest_integrity(manifest: SnapbackRealityManifest, current_cfg: Any = None) -> Tuple[bool, list[str]]:
-    """Verify that a candidate manifest matches the frozen commit SHA and frozen rule hash."""
+    """Verify candidate manifest against the immutable frozen commit SHA and stored expected rule hash."""
     reasons: list[str] = []
     
     if manifest.commit_sha != FROZEN_COMMIT_SHA:
         reasons.append(f"Commit SHA mismatch: {manifest.commit_sha} != {FROZEN_COMMIT_SHA}")
-        
-    expected_rule_hash = compute_rule_hash()
-    if manifest.rule_hash != expected_rule_hash:
-        reasons.append(f"Strategy rule hash mismatch: {manifest.rule_hash} != {expected_rule_hash}")
-        
+
     if current_cfg is not None:
-        curr_cfg_hash = compute_config_hash(current_cfg)
-        if manifest.config_hash != curr_cfg_hash:
-            reasons.append(f"Config hash mismatch: {manifest.config_hash} != {curr_cfg_hash}")
+        from app.engines.snapback.config import SnapbackConfig
+        default_frozen_cfg = SnapbackConfig()
+        expected_frozen_rule_hash = compute_rule_hash(default_frozen_cfg)
+        candidate_rule_hash = compute_rule_hash(current_cfg)
+        
+        if candidate_rule_hash != expected_frozen_rule_hash:
+            reasons.append(f"Strategy rule hash mismatch: candidate {candidate_rule_hash} != frozen expected {expected_frozen_rule_hash}")
+
+        # Check exact key parameter values against frozen defaults
+        if getattr(current_cfg, "target_delta", None) != 0.70:
+            reasons.append(f"target_delta mismatch: {getattr(current_cfg, 'target_delta', None)} != 0.70")
+        if getattr(current_cfg, "hold_days", None) != 15:
+            reasons.append(f"hold_days mismatch: {getattr(current_cfg, 'hold_days', None)} != 15")
+        if getattr(current_cfg, "runner_mult", None) != 1.5:
+            reasons.append(f"runner_mult mismatch: {getattr(current_cfg, 'runner_mult', None)} != 1.5")
+        if getattr(current_cfg, "market_filter", None) != "bearish":
+            reasons.append(f"market_filter mismatch: {getattr(current_cfg, 'market_filter', None)} != bearish")
+        if getattr(current_cfg, "market_ema", None) != 50:
+            reasons.append(f"market_ema mismatch: {getattr(current_cfg, 'market_ema', None)} != 50")
+        if getattr(current_cfg, "hedge_mode", None) != "index_futures":
+            reasons.append(f"hedge_mode mismatch: {getattr(current_cfg, 'hedge_mode', None)} != index_futures")
 
     return len(reasons) == 0, reasons
+

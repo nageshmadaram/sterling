@@ -42,9 +42,29 @@ class ProbeResult:
 class TrueDataEntitlementProbe:
     """Historical data retention & entitlement probe wrapper."""
 
-    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
+    def __init__(self, username: Optional[str] = None, password: Optional[str] = None, client: Optional[Any] = None):
         self.username = username
         self.password = password
+        self.client = client
+
+    def probe_contract_retention(self, symbol: str, start_date: str, end_date: str) -> ProbeResult:
+        """Synchronous probe helper for contract retention testing."""
+        if self.client:
+            bars = self.client.get_bars(symbol, start=start_date, end=end_date, interval="1min")
+            ticks = self.client.get_ticks(symbol, start=start_date, end=end_date, bidask=1)
+            has_bars = bool(bars)
+            has_ticks = bool(ticks)
+            return ProbeResult(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                ticks_available=has_ticks,
+                bars_available=has_bars,
+                min_available_date=start_date if (has_bars or has_ticks) else None,
+                max_available_date=end_date if (has_bars or has_ticks) else None,
+            )
+        return asyncio.run(self.probe_symbol(symbol, start_date, end_date))
+
 
     async def probe_symbol(self, symbol: str, start_date: str, end_date: str) -> ProbeResult:
         """Probe historical tick and bar depth for a given symbol."""
@@ -69,14 +89,14 @@ class TrueDataEntitlementProbe:
                 )
 
             client = TrueDataHistoricalClient(self.username, self.password)
-            # Fetch sample bar data to check availability
-            bars = await client.get_bars(symbol, interval="1min", start_time=start_date, end_time=end_date)
+            # Fetch sample bar data to check availability using correct start and end parameters
+            bars = await client.get_bars(symbol, start=start_date, end=end_date, interval="1min")
             has_bars = bool(bars and len(bars) > 0)
 
-            # Probe tick availability
+            # Probe tick availability using correct start and end parameters
             has_ticks = False
             try:
-                ticks = await client.get_ticks(symbol, start_time=start_date, end_time=end_date, bidask=1)
+                ticks = await client.get_ticks(symbol, start=start_date, end=end_date, bidask=1)
                 has_ticks = bool(ticks and len(ticks) > 0)
             except Exception as tick_err:
                 log.debug("Tick probe for %s failed: %s", symbol, tick_err)
@@ -95,10 +115,10 @@ class TrueDataEntitlementProbe:
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
-                ticks_available=False,
-                bars_available=False,
-                error_message=str(exc),
             )
+
+
+TrueDataHistoricalClientProbe = TrueDataEntitlementProbe
 
 
 async def run_truedata_retention_probe(symbols: List[str], start_date: str, end_date: str) -> Dict[str, Any]:

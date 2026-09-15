@@ -131,6 +131,9 @@ def calculate_span_exposure_margin(
     return option_margin + futures_margin
 
 
+ObservedMarketQuoteStore = Dict[str, Dict[str, float]]
+
+
 class SnapbackObservedReplayEngine:
     """Observed Replay Engine executing frozen daily Snapback rules against actual quotes."""
 
@@ -188,47 +191,86 @@ class SnapbackObservedReplayEngine:
                 notes="Underlying not F&O eligible on entry date",
             )
 
-        # Determine target strike based on 0.35 delta approximation
+        # 0.70 Delta ITM Contract Selection
         strike_step = spec.strike_step
         if side == "fade_up":
-            # Put option below spot
-            strike = math.floor((spot_at_entry * 0.97) / strike_step) * strike_step
+            # 0.70 Delta Put option is ITM (strike above spot)
+            raw_strike = spot_at_entry * 1.05
+            strike = math.ceil(raw_strike / strike_step) * strike_step
             option_type = "PE"
         else:
-            # Call option above spot
-            strike = math.ceil((spot_at_entry * 1.03) / strike_step) * strike_step
+            # 0.70 Delta Call option is ITM (strike below spot)
+            raw_strike = spot_at_entry * 0.95
+            strike = math.floor(raw_strike / strike_step) * strike_step
             option_type = "CE"
 
-        # Lookup quotes from store if present, else flag as missing
+        # Monthly expiry resolution (approx 45 DTE)
+        expiry_date = f"{entry_date[:7]}-28"
+
+        # Lookup quotes from store - NO MODELED FALLBACK MULTIPLICATION ALLOWED!
         quote_key_entry = f"{symbol}_{entry_date}_{strike}_{option_type}_ASK"
         quote_key_exit = f"{symbol}_{exit_date}_{strike}_{option_type}_BID"
         
         entry_ask = self.quote_store.get(quote_key_entry, {}).get("price", 0.0)
         exit_bid = self.quote_store.get(quote_key_exit, {}).get("price", 0.0)
 
-        # Fallback to realistic spread over modeled if observed quote store is unpopulated for testing
-        if entry_ask <= 0:
-            entry_ask = modeled_entry_premium * 1.002  # 20 bps ask spread
-        if exit_bid <= 0:
-            exit_bid = modeled_exit_premium * 0.998    # 20 bps bid spread
+        # STRICT INVARIANT: Missing or unpopulated quotes MUST yield INCONCLUSIVE / NO_FILL (never modeled fallback)
+        if entry_ask <= 0 or exit_bid <= 0:
+            return ObservedTradeRecord(
+                trade_id=opportunity_id,
+                entry_date=entry_date,
+                exit_date=exit_date,
+                symbol=symbol,
+                side=side,
+                strike=strike,
+                option_type=option_type,
+                expiry_date=expiry_date,
+                lot_size=spec.lot_size,
+                quantity=0,
+                entry_ask_price=0.0,
+                exit_bid_price=0.0,
+                modeled_entry_price=modeled_entry_premium,
+                modeled_exit_price=modeled_exit_premium,
+                gross_option_pnl=0.0,
+                statutory_charges=0.0,
+                net_option_pnl=0.0,
+                hedge_symbol=f"{symbol}_FUT",
+                hedge_entry_price=0.0,
+                hedge_exit_price=0.0,
+                hedge_pnl=0.0,
+                total_trade_pnl=0.0,
+                peak_margin_required=0.0,
+                fill_status="INCONCLUSIVE",
+                notes="Missing observed bid/ask quote in store (modeled fallback strictly forbidden)",
+            )
 
         qty = spec.lot_size
 
-        # Option PnL
+        # Option PnL & Statutory Charges
         gross_opt_pnl = (exit_bid - entry_ask) * qty
-        entry_charges = calculate_statutory_charges("BUY", "OPTION", entry_ask, qty)
-        exit_charges = calculate_statutory_charges("SELL", "OPTION", exit_bid, qty)
-        total_charges = entry_charges + exit_charges
-        net_opt_pnl = gross_opt_pnl - total_charges
+        opt_entry_charges = calculate_statutory_charges("BUY", "OPTION", entry_ask, qty)
+        opt_exit_charges = calculate_statutory_charges("SELL", "OPTION", exit_bid, qty)
+        net_opt_pnl = gross_opt_pnl - (opt_entry_charges + opt_exit_charges)
 
-        # Futures hedge PnL
+        # Futures Hedge PnL & Statutory Charges (Index futures hedge using 0.70 delta sizing)
+        hedge_symbol = f"NIFTY_FUT_{entry_date[:7]}"
         hedge_entry = spot_at_entry
         hedge_exit = spot_at_exit
-        # Beta-hedged short/long index futures
-        hedge_qty = qty
-        hedge_pnl = (hedge_exit - hedge_entry) * hedge_qty if side == "fade_down" else (hedge_entry - hedge_exit) * hedge_qty
+        hedge_qty = int(qty * 0.70)
+        
+        if side == "fade_down":
+            hedge_pnl = (hedge_exit - hedge_entry) * hedge_qty
+            fut_entry_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_entry, hedge_qty)
+            fut_exit_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_exit, hedge_qty)
+        else:
+            hedge_pnl = (hedge_entry - hedge_exit) * hedge_qty
+            fut_entry_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_entry, hedge_qty)
+            fut_exit_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_exit, hedge_qty)
 
-        total_trade_pnl = net_opt_pnl + hedge_pnl
+        net_hedge_pnl = hedge_pnl - (fut_entry_charges + fut_exit_charges)
+        total_statutory_charges = opt_entry_charges + opt_exit_charges + fut_entry_charges + fut_exit_charges
+
+        total_trade_pnl = net_opt_pnl + net_hedge_pnl
         margin_req = calculate_span_exposure_margin(spot_at_entry, strike, qty, option_type, hedge_qty)
 
         return ObservedTradeRecord(
@@ -239,7 +281,7 @@ class SnapbackObservedReplayEngine:
             side=side,
             strike=strike,
             option_type=option_type,
-            expiry_date=entry_date,
+            expiry_date=expiry_date,
             lot_size=spec.lot_size,
             quantity=qty,
             entry_ask_price=entry_ask,
@@ -247,14 +289,42 @@ class SnapbackObservedReplayEngine:
             modeled_entry_price=modeled_entry_premium,
             modeled_exit_price=modeled_exit_premium,
             gross_option_pnl=gross_opt_pnl,
-            statutory_charges=total_charges,
+            statutory_charges=total_statutory_charges,
             net_option_pnl=net_opt_pnl,
-            hedge_symbol=f"{symbol}_FUT",
+            hedge_symbol=hedge_symbol,
             hedge_entry_price=hedge_entry,
             hedge_exit_price=hedge_exit,
-            hedge_pnl=hedge_pnl,
+            hedge_pnl=net_hedge_pnl,
             total_trade_pnl=total_trade_pnl,
             peak_margin_required=margin_req,
             fill_status="FILLED",
-            notes="Observed market data replay executed",
+            notes="Observed market data replay executed with 0.70 delta ITM contract and index futures hedge",
         )
+
+
+def replay_snapback_observed_trade(
+    trade_id: str,
+    entry_date: str,
+    symbol: str,
+    side: str,
+    spot_at_entry: float,
+    quote_store: Optional[Dict[str, Dict[str, float]]] = None,
+    exit_date: str = "",
+    spot_at_exit: float = 0.0,
+    modeled_entry_premium: float = 0.0,
+    modeled_exit_premium: float = 0.0,
+) -> ObservedTradeRecord:
+    """Helper function to replay a single trade using SnapbackObservedReplayEngine."""
+    engine = SnapbackObservedReplayEngine(quote_store=quote_store)
+    return engine.replay_opportunity(
+        opportunity_id=trade_id,
+        symbol=symbol,
+        entry_date=entry_date,
+        exit_date=exit_date or entry_date,
+        side=side,
+        spot_at_entry=spot_at_entry,
+        spot_at_exit=spot_at_exit or spot_at_entry,
+        modeled_entry_premium=modeled_entry_premium,
+        modeled_exit_premium=modeled_exit_premium,
+    )
+

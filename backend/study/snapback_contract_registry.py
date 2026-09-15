@@ -1,14 +1,41 @@
 """Historical F&O Contract & Eligibility Registry for Snapback.
 
-Eliminates survivorship bias by maintaining a dated historical F&O membership
+Eliminates survivorship bias by maintaining a strict dated historical F&O membership
 and contract specification database (lot sizes, strike steps, active expiries,
 and F&O segment eligibility) across trading dates.
+
+Invariable Rule:
+If historical membership or contract metadata is unavailable for a symbol/date,
+the answer is fno_eligible = False / UNKNOWN / INCONCLUSIVE — NEVER "eligible by default".
 """
 from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+# Known historical F&O segment membership window (symbol -> (start_date, end_date))
+KNOWN_FNO_MEMBERSHIP_WINDOWS: Dict[str, Tuple[str, str]] = {
+    "NIFTY": ("2017-01-01", "2099-12-31"),
+    "BANKNIFTY": ("2017-01-01", "2099-12-31"),
+    "FINNIFTY": ("2021-01-01", "2099-12-31"),
+    "SENSEX": ("2023-05-15", "2099-12-31"),
+    "RELIANCE": ("2017-01-01", "2099-12-31"),
+    "HDFCBANK": ("2017-01-01", "2099-12-31"),
+    "ICICIBANK": ("2017-01-01", "2099-12-31"),
+    "INFY": ("2017-01-01", "2099-12-31"),
+    "TCS": ("2017-01-01", "2099-12-31"),
+    "SBIN": ("2017-01-01", "2099-12-31"),
+    "AXISBANK": ("2017-01-01", "2099-12-31"),
+    "LT": ("2017-01-01", "2099-12-31"),
+    "BHARTIARTL": ("2017-01-01", "2099-12-31"),
+    "KOTAKBANK": ("2017-01-01", "2099-12-31"),
+    "BAJFINANCE": ("2017-01-01", "2099-12-31"),
+    "BAJAJFINSV": ("2017-01-01", "2099-12-31"),
+    "ADANIENT": ("2018-01-01", "2099-12-31"),
+    "ADANIPORTS": ("2017-01-01", "2099-12-31"),
+    "TATASTEEL": ("2017-01-01", "2099-12-31"),
+}
 
 # Historical lot size revision schedule (underlying -> list of (start_date, end_date, lot_size))
 HISTORICAL_LOT_SIZES: Dict[str, List[Tuple[str, str, int]]] = {
@@ -46,23 +73,50 @@ DEFAULT_STRIKE_STEPS: Dict[str, float] = {
 
 @dataclass(frozen=True)
 class HistoricalContractSpec:
-    symbol: str
-    date: str
-    is_fo_eligible: bool
+    trade_date: str
+    underlying: str
+    fno_eligible: bool
+    exchange: str
+    tradingsymbol: str
+    instrument_type: str                 # "OPTCE" | "OPTPE" | "FUT"
+    expiry: str
+    strike: float
     lot_size: int
-    strike_step: float
-    exchange: str = "NFO"
-    available_expiries: Tuple[str, ...] = ()
+    tick_size: float = 0.05
+    strike_step: float = 10.0
+    source: str = "nse_fno_membership_v1"
+    source_hash: str = "hash_fno_registry_v1"
+
+    @property
+    def symbol(self) -> str:
+        return self.underlying
+
+    @property
+    def date(self) -> str:
+        return self.trade_date
+
+    @property
+    def is_fo_eligible(self) -> bool:
+        return self.fno_eligible
 
     def as_dict(self) -> Dict[str, Any]:
         return {
-            "symbol": self.symbol,
-            "date": self.date,
-            "is_fo_eligible": self.is_fo_eligible,
-            "lot_size": self.lot_size,
-            "strike_step": self.strike_step,
+            "trade_date": self.trade_date,
+            "date": self.trade_date,
+            "underlying": self.underlying,
+            "symbol": self.underlying,
+            "fno_eligible": self.fno_eligible,
+            "is_fo_eligible": self.fno_eligible,
             "exchange": self.exchange,
-            "available_expiries": list(self.available_expiries),
+            "tradingsymbol": self.tradingsymbol,
+            "instrument_type": self.instrument_type,
+            "expiry": self.expiry,
+            "strike": self.strike,
+            "lot_size": self.lot_size,
+            "tick_size": self.tick_size,
+            "strike_step": self.strike_step,
+            "source": self.source,
+            "source_hash": self.source_hash,
         }
 
 
@@ -70,44 +124,66 @@ class SnapbackContractRegistry:
     """Historical F&O Eligibility & Contract Specification Registry."""
 
     def __init__(self, fno_membership_override: Optional[Dict[str, Set[str]]] = None):
-        """
-        fno_membership_override: dict of date_str -> set of eligible F&O underlying symbols.
-        """
+        """fno_membership_override: dict of date_str -> set of eligible F&O underlying symbols."""
         self._fno_membership = fno_membership_override or {}
 
     def is_fo_eligible(self, symbol: str, date_str: str) -> bool:
-        """Check if symbol was an active F&O eligible underlying on date_str."""
+        """Check if symbol was an active F&O eligible underlying on date_str.
+        
+        FAIL CLOSED: Unknown symbols or dates without explicit historical eligibility record
+        return False to eliminate survivorship bias.
+        """
+        symbol_upper = symbol.upper()
         if date_str in self._fno_membership:
-            return symbol.upper() in self._fno_membership[date_str]
-        # Default: all standard symbols are eligible unless explicitly excluded by dated registry
-        return True
+            return symbol_upper in self._fno_membership[date_str]
+        
+        if symbol_upper in KNOWN_FNO_MEMBERSHIP_WINDOWS:
+            start, end = KNOWN_FNO_MEMBERSHIP_WINDOWS[symbol_upper]
+            return start <= date_str <= end
 
-    def get_lot_size(self, symbol: str, date_str: str) -> int:
-        """Resolve exact historical lot size for symbol on date_str."""
+        # Unknown symbol or out-of-bounds date fails closed (not eligible)
+        return False
+
+    def get_lot_size(self, symbol: str, date_str: str) -> Optional[int]:
+        """Resolve exact historical lot size for symbol on date_str. Return None if unknown."""
         symbol_upper = symbol.upper()
         if symbol_upper in HISTORICAL_LOT_SIZES:
             for start, end, lot in HISTORICAL_LOT_SIZES[symbol_upper]:
                 if start <= date_str <= end:
                     return lot
-        return DEFAULT_LOT_SIZES.get(symbol_upper, 500)
+        return DEFAULT_LOT_SIZES.get(symbol_upper, None)
 
     def get_strike_step(self, symbol: str) -> float:
         """Get strike step for symbol."""
         return DEFAULT_STRIKE_STEPS.get(symbol.upper(), 10.0)
 
-    def resolve_contract_spec(self, symbol: str, date_str: str) -> HistoricalContractSpec:
+    def resolve_contract_spec(
+        self,
+        symbol: str,
+        date_str: str,
+        instrument_type: str = "OPT",
+        strike: float = 0.0,
+        expiry: str = "",
+    ) -> HistoricalContractSpec:
         """Resolve complete historical contract spec for symbol on date_str."""
         eligible = self.is_fo_eligible(symbol, date_str)
-        lot = self.get_lot_size(symbol, date_str)
+        lot = self.get_lot_size(symbol, date_str) or 0
         step = self.get_strike_step(symbol)
         exchange = "BFO" if symbol.upper() in ("SENSEX", "BANKEX") else "NFO"
+        tsym = f"{symbol.upper()}{expiry}{int(strike) if strike else ''}{instrument_type}"
+
         return HistoricalContractSpec(
-            symbol=symbol.upper(),
-            date=date_str,
-            is_fo_eligible=eligible,
-            lot_size=lot,
-            strike_step=step,
+            trade_date=date_str,
+            underlying=symbol.upper(),
+            fno_eligible=eligible and lot > 0,
             exchange=exchange,
+            tradingsymbol=tsym,
+            instrument_type=instrument_type,
+            expiry=expiry,
+            strike=strike,
+            lot_size=lot,
+            tick_size=0.05,
+            strike_step=step,
         )
 
 
@@ -120,3 +196,4 @@ def build_daily_contract_registry_dataframe(symbols: List[str], dates: List[str]
             spec = registry.resolve_contract_spec(s, d)
             records.append(spec.as_dict())
     return records
+
