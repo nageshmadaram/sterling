@@ -11,8 +11,12 @@ def setup_db_for_test(tmp_path, monkeypatch):
     monkeypatch.setenv("STERLING_DB_PATH", db_file)
     monkeypatch.setattr(db, "_DB_PATH", db_file)
     monkeypatch.setattr(db, "_available", True)
+    live_safety.reset_all_for_tests()
     db.init()
+    with db._conn() as conn:
+        conn.execute("DELETE FROM execution_control")
     yield
+    live_safety.reset_all_for_tests()
 
 
 def test_execution_control_default_state():
@@ -150,6 +154,10 @@ async def test_canonical_execution_service_exposure_policy():
         exposure_effect=ExposureEffect.CLOSE_POSITION,
     )
 
-    res_close = await service.submit_order(req_close)
+    class MockBroker:
+        async def place_order(self, **kwargs):
+            return {"order_id": "ORD_CLOSE_123"}
+
+    res_close = await service.submit_order(req_close, broker_client=MockBroker())
     assert res_close.success
     assert res_close.status == "ACKNOWLEDGED"

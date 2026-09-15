@@ -14,7 +14,7 @@ def set_kill_switch(enabled: bool, reason: str = "", uid: str = "default", reaso
     try:
         from app.services import db
         if db._available:
-            db.set_execution_control(
+            db.set_operator_state(
                 operator_state="HALTED" if enabled else "RUNNING",
                 reason=reason or ("manual halt" if enabled else ""),
                 reason_code=reason_code,
@@ -176,21 +176,35 @@ class SafetyDecision:
     allowed:bool; reason:str=""; code:str=""
     def to_dict(self):return {"allowed":self.allowed,"reason":self.reason,"code":self.code}
 
-def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=True, uid: str | None = None, exposure_effect: str = "INCREASE_EXPOSURE"):
+def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=True, uid: str | None = None, account_id: str | None = None, exposure_effect: str = "INCREASE_EXPOSURE"):
     try:
         from app.services import db
-        ctrl = db.get_execution_control(uid=uid or "default")
-        op_state = ctrl.get("operator_state") or ctrl.get("state", "HALTED")
-        rec_state = ctrl.get("recovery_state", "CLEAN")
-
+        u = uid or "default"
+        acct = account_id or "default"
         is_exposure_increasing = exposure_effect == "INCREASE_EXPOSURE"
 
+        scopes_to_check = [
+            ("global", "default", "default"),
+        ]
+        if u != "default":
+            scopes_to_check.append(("global", u, "default"))
+            scopes_to_check.append(("user", u, "default"))
+        if acct != "default":
+            scopes_to_check.append(("global", u, acct))
+            scopes_to_check.append(("account", u, acct))
+
         if is_exposure_increasing:
-            if rec_state == "RECOVERY_REQUIRED":
-                return SafetyDecision(False, "Durable control plane RECOVERY_REQUIRED (broker reconciliation pending)", "recovery_required")
-            if op_state == "HALTED":
-                code = ctrl.get("reason_code") or "durable_halt"
-                return SafetyDecision(False, f"Durable control plane HALTED: {ctrl.get('reason') or 'Halted'}", code)
+            for scope, tgt_uid, tgt_acct in scopes_to_check:
+                ctrl = db.get_execution_control(scope=scope, uid=tgt_uid, account_id=tgt_acct)
+                op_state = ctrl.get("operator_state") or ctrl.get("state", "RUNNING")
+                rec_state = ctrl.get("recovery_state", "CLEAN")
+
+                if rec_state == "RECOVERY_REQUIRED":
+                    return SafetyDecision(False, f"Durable control plane RECOVERY_REQUIRED at {scope} scope (broker reconciliation pending)", "recovery_required")
+                if op_state == "HALTED":
+                    code = ctrl.get("reason_code") or "durable_halt"
+                    return SafetyDecision(False, f"Durable control plane HALTED at {scope} scope: {ctrl.get('reason') or 'Halted'}", code)
+
             if kill_switch_state().get("enabled"):
                 return SafetyDecision(False, f"Kill switch active: {kill_switch_state().get('reason') or 'manual halt'}", "kill_switch")
             if check_daily_loss:

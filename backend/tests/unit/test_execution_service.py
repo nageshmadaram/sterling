@@ -5,13 +5,17 @@ from app.services import db
 
 @pytest.fixture(autouse=True)
 def setup_db_for_test(tmp_path, monkeypatch):
+    from app.services import live_safety
     db_file = str(tmp_path / "test_exec.db")
     monkeypatch.setenv("STERLING_DB_PATH", db_file)
     monkeypatch.setattr(db, "_DB_PATH", db_file)
     monkeypatch.setattr(db, "_available", True)
+    live_safety.reset_all_for_tests()
+    db.init()
     with db._conn() as conn:
-        db._create_tables(conn)
+        conn.execute("DELETE FROM execution_control")
     yield
+    live_safety.reset_all_for_tests()
 
 
 def test_execution_service_halted_rejection():

@@ -427,7 +427,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     if "last_reconciled_ms" not in cols:
         conn.execute("ALTER TABLE execution_control ADD COLUMN last_reconciled_ms INTEGER NOT NULL DEFAULT 0")
     if "state" in cols:
-        conn.execute("UPDATE execution_control SET operator_state = state WHERE operator_state = 'RUNNING' AND state IS NOT NULL")
+        conn.execute("UPDATE execution_control SET operator_state = 'HALTED', recovery_state = 'CLEAN' WHERE state = 'HALTED'")
+        conn.execute("UPDATE execution_control SET operator_state = 'RUNNING', recovery_state = 'RECOVERY_REQUIRED' WHERE state = 'RECOVERY_REQUIRED'")
+        conn.execute("UPDATE execution_control SET operator_state = 'RUNNING', recovery_state = 'CLEAN' WHERE state = 'RUNNING'")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS atm_trades (
@@ -1113,12 +1115,15 @@ def get_execution_control(
                 "updated_ms": 0,
             }
         d = dict(row)
-        if "state" not in d:
-            d["state"] = d.get("operator_state", "RUNNING")
-        if "operator_state" not in d:
-            d["operator_state"] = d.get("state", "RUNNING")
-        if "recovery_state" not in d:
-            d["recovery_state"] = "CLEAN"
+        op = d.get("operator_state") or d.get("state", "RUNNING")
+        rec = d.get("recovery_state", "CLEAN")
+        if op not in ("RUNNING", "HALTED"):
+            op = "HALTED" if op in ("RECOVERY_REQUIRED", "HALTED") else "RUNNING"
+        if rec not in ("CLEAN", "RECOVERY_REQUIRED"):
+            rec = "CLEAN"
+        d["operator_state"] = op
+        d["state"] = op
+        d["recovery_state"] = rec
         return d
     except Exception as exc:
         if isinstance(exc, ControlPlaneUnavailableError):
@@ -1127,8 +1132,8 @@ def get_execution_control(
 
 
 def set_execution_control(
-    operator_state: str = "RUNNING",
-    recovery_state: str = "CLEAN",
+    operator_state: str | None = None,
+    recovery_state: str | None = None,
     reason_code: str = "",
     reason: str = "",
     actor: str = "system",
@@ -1142,18 +1147,14 @@ def set_execution_control(
     if state is not None:
         operator_state = state
 
-    if operator_state not in ("RUNNING", "HALTED"):
-        raise ValueError(f"Invalid operator_state: '{operator_state}'. Must be 'RUNNING' or 'HALTED'.")
-    if recovery_state not in ("CLEAN", "RECOVERY_REQUIRED"):
-        raise ValueError(f"Invalid recovery_state: '{recovery_state}'. Must be 'CLEAN' or 'RECOVERY_REQUIRED'.")
-
     if not _available:
         raise ControlPlaneUnavailableError("Cannot write execution control: Database unavailable")
 
     now_ms = int(time.time() * 1000)
     with _conn() as c:
+        c.execute("BEGIN IMMEDIATE")
         row = c.execute(
-            "SELECT revision, last_reconciled_ms, created_ms FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
+            "SELECT revision, operator_state, recovery_state, last_reconciled_ms, created_ms FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
             (scope, uid, account_id),
         ).fetchone()
 
@@ -1163,6 +1164,16 @@ def set_execution_control(
                 raise ExecutionControlCASConflictError(
                     f"CAS conflict in set_execution_control: expected revision {expected_revision}, current revision is {curr_rev}"
                 )
+
+        if operator_state is None:
+            operator_state = row["operator_state"] if row else "RUNNING"
+        if recovery_state is None:
+            recovery_state = row["recovery_state"] if row else "CLEAN"
+
+        if operator_state not in ("RUNNING", "HALTED"):
+            raise ValueError(f"Invalid operator_state: '{operator_state}'. Must be 'RUNNING' or 'HALTED'.")
+        if recovery_state not in ("CLEAN", "RECOVERY_REQUIRED"):
+            raise ValueError(f"Invalid recovery_state: '{recovery_state}'. Must be 'CLEAN' or 'RECOVERY_REQUIRED'.")
 
         next_rev = (row["revision"] + 1) if row else 1
         created_ms = row["created_ms"] if row else now_ms
@@ -1194,6 +1205,60 @@ def set_execution_control(
         "created_ms": created_ms,
         "updated_ms": now_ms,
     }
+
+
+def set_operator_state(
+    operator_state: str,
+    reason_code: str = "",
+    reason: str = "",
+    actor: str = "system",
+    scope: str = "global",
+    uid: str = "default",
+    account_id: str = "default",
+    expected_revision: int | None = None,
+) -> dict:
+    """Set operator permission state (RUNNING | HALTED), preserving orthogonal recovery_state."""
+    ctrl = get_execution_control(scope=scope, uid=uid, account_id=account_id)
+    recovery_state = ctrl.get("recovery_state", "CLEAN")
+    return set_execution_control(
+        operator_state=operator_state,
+        recovery_state=recovery_state,
+        reason_code=reason_code,
+        reason=reason,
+        actor=actor,
+        scope=scope,
+        uid=uid,
+        account_id=account_id,
+        expected_revision=expected_revision,
+    )
+
+
+def set_recovery_state(
+    recovery_state: str,
+    reason_code: str = "",
+    reason: str = "",
+    actor: str = "system",
+    scope: str = "global",
+    uid: str = "default",
+    account_id: str = "default",
+    expected_revision: int | None = None,
+    last_reconciled_ms: int | None = None,
+) -> dict:
+    """Set reconciliation recovery state (CLEAN | RECOVERY_REQUIRED), preserving orthogonal operator_state."""
+    ctrl = get_execution_control(scope=scope, uid=uid, account_id=account_id)
+    operator_state = ctrl.get("operator_state", "RUNNING")
+    return set_execution_control(
+        operator_state=operator_state,
+        recovery_state=recovery_state,
+        reason_code=reason_code,
+        reason=reason,
+        actor=actor,
+        scope=scope,
+        uid=uid,
+        account_id=account_id,
+        expected_revision=expected_revision,
+        last_reconciled_ms=last_reconciled_ms,
+    )
 
 
 def record_calibration_trade(source_trade_id: str, pnl_pct: float, regime: str = "default") -> bool:

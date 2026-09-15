@@ -1,7 +1,7 @@
 # Sterling System Audit Baseline — 15 September 2026
 
 **Audit Baseline Commit:** `68537029ee31126bbde68298677e08d10d169aeb`  
-**Current Synchronized Commit:** `6c8d59d43ea67eaba2a9d598e1314a409cf32f29`  
+**Current Synchronized Commit:** `ccfd238696bac74ca73159b410cb4c96df03bd45`  
 **Audit Date:** 15 September 2026  
 **Scope:** Repository architecture, release governance, market-data path, signal generation, replay, risk, execution, persistence, broker reconciliation, frontend contracts, security, observability and production-readiness evidence.
 
@@ -28,12 +28,12 @@
 | Item | Status | Notes |
 |---|---|---|
 | **EXEC-CTRL-SPEC** | **ACCEPTED WITH STATE-MODEL AMENDMENT** | Orthogonal 2D control states (`operator_state` + `recovery_state`), CAS revision control |
-| **EXEC-CTRL-IMPL** | **P0 OPEN** | Implementation underway for durable control authority |
+| **EXEC-CTRL-IMPL** | **PARTIAL, P0 OPEN** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, and legacy state migration implemented |
 | **EXEC-SVC-SPEC** | **ACCEPTED WITH EXPOSURE-EFFECT AMENDMENT** | Exposure effect classification (`INCREASE_EXPOSURE`, `REDUCE_EXPOSURE`, etc.) |
-| **EXEC-SVC-IMPL** | **P0 OPEN / SCAFFOLD ONLY** | `CanonicalExecutionService` pipeline implementation underway |
+| **EXEC-SVC-IMPL** | **PARTIAL, P0 OPEN** | Real KiteClient adapter contract, canonical intent tag, fail-closed broker check, and observe-only recovery implemented |
 | **MANUAL-KITE-MIGRATION** | **OPEN** | Not migrated yet |
 | **KITE-JOURNAL/LIFECYCLE** | **VERIFIED REFERENCE IMPLEMENTATION** | Durable journal and execution recovery primitives |
-| **RELEASE-GATE** | **VERIFIED GREEN on `049941759...`** | Verified green pipeline release gate |
+| **RELEASE-GATE** | **VERIFIED GREEN on `ccfd23869...`** | Verified green pipeline release gate |
 | **SEC-01** | **VERIFIED IMPLEMENTED** | Fail-closed ordering, DB secret inspection, 32+ char entropy, Fernet backend |
 | **CI-01** | **VERIFIED IMPLEMENTED** | `release-gate` with `always()` and explicit upstream status evaluation |
 | **BUILD-01** | **VERIFIED RESOLVED** | Frontend `tsc --noEmit` returns 0 errors |
