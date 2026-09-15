@@ -283,21 +283,20 @@ def build_validation_report_for_run(
     drawdowns = (peak - cum_equity)
     max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
 
-    # Economic gates
-    promotable = (
-        completed >= 50
-        and lower_95_ci > 0.0
-        and net_expectancy > 0.0
-        and max_dd <= 1000.0
+    # DEPRECATED & QUARANTINED: Authoritative promotion gate lives strictly in study/snapback_authoritative_gate.py
+    # and 04_VALIDATION_AND_DELIVERY.md. This legacy helper MUST NOT grant is_promotable = True.
+    log.warning(
+        "build_validation_report_for_run is DEPRECATED & QUARANTINED. "
+        "Authoritative promotion authority resides exclusively in study/snapback_authoritative_gate.py."
     )
+    promotable = False
 
-    limitations: list[str] = []
+    limitations: list[str] = ["quarantined_legacy_report_builder"]
     if completed < 50:
         limitations.append("sample_size_below_50_trades")
     if lower_95_ci <= 0.0:
         limitations.append("lower_95_ci_expectancy_not_positive")
-    if not promotable:
-        limitations.append("economic_gates_not_cleared")
+    limitations.append("economic_gates_not_cleared")
 
     return ValidationReport(
         run_id=f"run_{hashlib.sha256(str(net_pnls).encode()).hexdigest()[:12]}",
