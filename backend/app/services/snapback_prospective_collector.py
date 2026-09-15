@@ -142,6 +142,7 @@ class SnapbackProspectiveCollector:
         available_capital: float = 1_000_000.0,
         slippage_pct: float = 0.0005,
         execution_timestamp_ms: Optional[int] = None,
+        entry_iv: float = 0.20,
     ) -> Dict[str, Any]:
         """Day T+1 First Executable Session: Execute entry observation on fresh market quotes."""
         now_ms = execution_timestamp_ms or int(time.time() * 1000)
@@ -356,7 +357,7 @@ class SnapbackProspectiveCollector:
                     askqty=q_event.ask_quantity,
                     ltp=q_event.last_price,
                     oi=q_event.open_interest,
-                    iv=0.0,
+                    iv=entry_iv,
                     delta=cand.theoretical_delta,
                     quote_age_ms=float(now_ms - q_event.exchange_timestamp_ms),
                     is_stale=False,
@@ -540,7 +541,7 @@ class SnapbackProspectiveCollector:
             entry_spot=t1_spot_price,
             entry_timestamp=provider_ts,
             entry_dte=chosen_cand.dte,
-            entry_iv=0.0,
+            entry_iv=entry_iv,
             causal_beta=causal_beta,
             status="OPEN",
         )
@@ -712,18 +713,32 @@ class SnapbackProspectiveCollector:
         futures_quantity: int,
         nifty_futures_entry: Optional[float] = None,
         nifty_futures_exit: Optional[float] = None,
+        option_type: str = "PE",
     ) -> Dict[str, Any]:
         """Close paper position and calculate canonical Black-Scholes counterfactual model P&L over realized path."""
         actual_opt_pnl = (option_exit_bid - option_entry_price) * option_quantity
-        actual_fut_pnl = (futures_exit_bid - futures_entry_price) * futures_quantity
+
+        # Rebalanced Futures Ledger: Realized P&L + Open Futures Liquidation P&L
+        pos = self.warehouse.get_paper_position(opportunity_id)
+        if pos:
+            realized_pnl = float(pos.get("realized_futures_pnl") or 0.0)
+            open_lots = int(pos.get("current_futures_lots") or 0)
+            avg_entry = float(pos.get("avg_futures_entry_price") or futures_entry_price)
+            open_qty = open_lots * (pos.get("futures_lot_size") or 65)
+            open_fut_pnl = (futures_exit_bid - avg_entry) * open_qty if open_lots > 0 else 0.0
+            actual_fut_pnl = realized_pnl + open_fut_pnl
+        else:
+            actual_fut_pnl = (futures_exit_bid - futures_entry_price) * futures_quantity
+
         actual_total = actual_opt_pnl + actual_fut_pnl - statutory_costs
 
         t_entry = max(0.001, entry_dte / 365.0)
         t_exit = max(0.001, exit_dte / 365.0)
 
-        # Canonical Black-Scholes counterfactual calculation using RISK_FREE = 0.065
-        bs_entry = bs_price(entry_spot, selected_strike, t_entry, iv_proxy, call=False, rate=RISK_FREE)
-        bs_exit = bs_price(exit_spot, selected_strike, t_exit, iv_proxy, call=False, rate=RISK_FREE)
+        # Canonical Black-Scholes counterfactual calculation using RISK_FREE = 0.065 and correct call/put flag
+        is_call = (option_type == "CE") or ("CE" in symbol)
+        bs_entry = bs_price(entry_spot, selected_strike, t_entry, iv_proxy, call=is_call, rate=RISK_FREE)
+        bs_exit = bs_price(exit_spot, selected_strike, t_exit, iv_proxy, call=is_call, rate=RISK_FREE)
 
         modeled_opt_pnl = (bs_exit - bs_entry) * option_quantity
 
