@@ -14,7 +14,7 @@ Enforces:
 7. Real broker protocol arguments (symbol/tradingsymbol, side/transaction_type, size/quantity, exchange, product=NRML, allow_amo=False, trigger_price).
 8. Inventory verification of declared exposure effects.
 9. Protection lease & pending persistence for protection commands.
-10. Complete startup recovery (journal intents + inventory reconciliation).
+10. Complete startup recovery (journal intents + inventory reconciliation + protection pending state).
 """
 from dataclasses import dataclass
 from enum import Enum
@@ -61,6 +61,8 @@ class RiskApproval:
     approved: bool = True
     reason: str = "Risk decision approved"
     timestamp_ms: int = 0
+    available_capital: Optional[float] = None
+    capital_required: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,23 @@ class CanonicalExecutionService:
         risk_approved: bool = False,
     ) -> ExecutionResult:
         """Submit an order through the canonical execution pipeline."""
-        if risk_approval is not None:
+        # Verify declared exposure effect against inventory & quantity overshoot
+        effective_effect = self.verify_exposure_effect(
+            uid=request.uid,
+            account_id=request.account_id,
+            symbol=request.symbol,
+            side=request.side,
+            quantity=request.quantity,
+            declared_effect=request.exposure_effect,
+        )
+
+        is_exposure_increasing = effective_effect == ExposureEffect.INCREASE_EXPOSURE
+
+        # Require a request-bound RiskApproval for all exposure-increasing submissions.
+        # Boolean risk_approved=True without a RiskApproval object is strictly forbidden for INCREASE_EXPOSURE.
+        if is_exposure_increasing:
+            if risk_approval is None:
+                return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected or missing risk approval proof")
             valid_approval = (
                 risk_approval.approved is True
                 and risk_approval.uid == request.uid
@@ -176,18 +194,8 @@ class CanonicalExecutionService:
             )
             if not valid_approval:
                 return ExecutionResult(success=False, status="REJECTED", error="Risk approval proof mismatch or invalid")
-        elif not risk_approved:
-            return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected or missing risk approval proof")
-
-        # Verify declared exposure effect against inventory & quantity overshoot
-        effective_effect = self.verify_exposure_effect(
-            uid=request.uid,
-            account_id=request.account_id,
-            symbol=request.symbol,
-            side=request.side,
-            quantity=request.quantity,
-            declared_effect=request.exposure_effect,
-        )
+        elif risk_approval is not None and not risk_approval.approved:
+            return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected")
 
         allowed, reason = self.is_trading_allowed(
             uid=request.uid,
@@ -205,6 +213,29 @@ class CanonicalExecutionService:
         if request.tag:
             payload["user_tag"] = request.tag
 
+        # Capital evidence: prefer verified RiskApproval capital or broker fetch over arbitrary request input
+        avail_cap = None
+        if risk_approval and risk_approval.available_capital is not None:
+            avail_cap = risk_approval.available_capital
+        elif broker_client and hasattr(broker_client, "get_margins"):
+            try:
+                m_fn = getattr(broker_client, "get_margins")
+                if callable(m_fn):
+                    if inspect.iscoroutinefunction(m_fn):
+                        m = await m_fn()
+                    else:
+                        m = m_fn()
+                    if isinstance(m, dict):
+                        avail_cap = float(m.get("equity", {}).get("available", {}).get("live_balance", 0.0) or m.get("available_capital", 0.0))
+            except Exception:
+                pass
+        if avail_cap is None and (risk_approval or not is_exposure_increasing):
+            avail_cap = request.available_capital
+
+        cap_req = request.capital_required
+        if risk_approval and risk_approval.capital_required is not None:
+            cap_req = risk_approval.capital_required
+
         try:
             intent = order_journal.reserve(
                 uid=request.uid,
@@ -216,8 +247,8 @@ class CanonicalExecutionService:
                 symbol=request.symbol,
                 side=request.side,
                 quantity=request.quantity,
-                capital_required=request.capital_required,
-                available_capital=request.available_capital,
+                capital_required=cap_req,
+                available_capital=avail_cap,
                 payload=payload,
             )
         except Exception as reserve_err:
@@ -328,8 +359,10 @@ class CanonicalExecutionService:
         except Exception as exc:
             is_kite_rejection = False
             try:
-                from app.services.exchanges.kite.exceptions import KiteOrderError, KiteInputError, KiteMarginError
-                if isinstance(exc, (KiteOrderError, KiteInputError, KiteMarginError)):
+                from app.services.exchanges.kite.errors import (
+                    KiteOrderError, KiteInputError, KiteMarginError, KitePermissionError, KiteTokenError
+                )
+                if isinstance(exc, (KiteOrderError, KiteInputError, KiteMarginError, KitePermissionError, KiteTokenError)):
                     is_kite_rejection = True
             except ImportError:
                 pass
@@ -383,9 +416,28 @@ class CanonicalExecutionService:
         changes: Dict[str, Any],
         broker_client: Any = None,
     ) -> ExecutionResult:
-        """Modify an existing broker order, checking exposure-increasing risk."""
+        """Modify an existing broker order, checking exposure-increasing risk and control state."""
         req_qty = int(changes.get("quantity") or changes.get("size") or 0)
-        effect = ExposureEffect.INCREASE_EXPOSURE if req_qty > 0 else ExposureEffect.MODIFY_ORDER
+        new_price = float(changes.get("price") or changes.get("limit_price") or changes.get("trigger_price") or 0.0)
+        is_exposure_increasing = req_qty > 0 or new_price > 0
+        if changes.get("risk_reducing"):
+            effect = ExposureEffect.REDUCE_EXPOSURE
+        else:
+            effect = ExposureEffect.INCREASE_EXPOSURE if is_exposure_increasing else ExposureEffect.MODIFY_ORDER
+
+        # During HALTED or RECOVERY_REQUIRED, generic modifications are blocked unless explicitly risk-reducing
+        try:
+            ctrl = db.get_execution_control(uid=uid, account_id=account_id)
+            op_state = ctrl.get("operator_state", "RUNNING")
+            rec_state = ctrl.get("recovery_state", "CLEAN")
+            if (op_state == "HALTED" or rec_state == "RECOVERY_REQUIRED") and not changes.get("risk_reducing"):
+                return ExecutionResult(
+                    success=False,
+                    status="HALTED",
+                    error=f"Order modification blocked during control state {op_state}/{rec_state} unless explicitly proven risk-reducing",
+                )
+        except Exception as exc:
+            log.warning("Control plane state check failed in modify_order: %s", exc)
 
         allowed, reason = self.is_trading_allowed(
             uid=uid, account_id=account_id, exposure_effect=effect
@@ -471,47 +523,120 @@ class CanonicalExecutionService:
         if not client_acct or str(client_acct).strip() != str(account_id).strip():
             return ExecutionResult(success=False, status="REJECTED", error=f"Broker account identity missing or mismatch: {client_acct} != {account_id}")
 
-        prot_id = f"GTT_{position_id[:12]}"
-        symbol = protection_params.get("symbol", protection_params.get("tradingsymbol", "default"))
+        symbol = protection_params.get("symbol", protection_params.get("tradingsymbol", ""))
 
         from app.services.kite_engine import execution_lease, positions
-        p = positions.get(uid, symbol)
-        if p and p.protection_pending:
+        p = positions.get(uid, symbol) if symbol else None
+        if not p and position_id:
+            for open_p in positions.open_positions(uid):
+                if open_p.order_id == position_id or open_p.symbol == position_id:
+                    p = open_p
+                    symbol = p.symbol
+                    break
+
+        # Require confirmed OPEN position + exact account ownership before any GTT
+        if p is None or p.status != positions.OPEN or p.qty <= 0:
+            return ExecutionResult(
+                success=False,
+                status="REJECTED",
+                error=f"No confirmed OPEN position found for symbol='{symbol}' / position_id='{position_id}'",
+            )
+
+        if p.account_id and str(p.account_id).strip() != str(account_id).strip():
+            return ExecutionResult(
+                success=False,
+                status="REJECTED",
+                error=f"Position account ownership mismatch: position account {p.account_id} != request account {account_id}",
+            )
+
+        if position_id and position_id not in (p.order_id, p.symbol, f"POS_{p.order_id}", f"POS_{p.symbol}") and str(p.order_id) != str(position_id) and p.symbol != str(position_id):
+            return ExecutionResult(
+                success=False,
+                status="REJECTED",
+                error=f"position_id '{position_id}' does not match position order_id '{p.order_id}' or symbol '{p.symbol}'",
+            )
+
+        if p.protection_pending:
             return ExecutionResult(success=False, status="REJECTED", error=f"Protection placement pending/uncertain for {symbol}; reconcile before retry")
+
+        prot_id = f"GTT_{position_id[:12]}" if position_id else f"GTT_{p.order_id[:12]}"
 
         with execution_lease.guard(execution_lease.PROTECTION, account_id=account_id, uid=uid, symbol=symbol) as token:
             if token is None:
                 return ExecutionResult(success=False, status="REJECTED", error=f"Protection lease busy for {symbol}")
 
-            if p:
-                p.protection_pending = True
-                positions.persist_strict(uid)
+            # Derive GTT parameters strictly from persisted confirmed OpenPosition
+            stop_prem = float(protection_params.get("trigger_price") or protection_params.get("trigger_premium") or protection_params.get("stop_premium") or p.stop_premium or 0.0)
+            target_prem = float(protection_params.get("target_premium") or p.target_premium or 0.0)
+
+            ref_last = float(getattr(p, "current_price", None) or p.fill_price or 0.0)
+            if p.direction == "long" and stop_prem > 0:
+                ref_last = max(ref_last, stop_prem + 0.05)
+            elif p.direction == "short" and stop_prem > 0:
+                ref_last = min(ref_last, max(0.05, stop_prem - 0.05)) if ref_last > 0 else max(0.05, stop_prem - 0.05)
+
+            derived_gtt_params = {
+                "tradingsymbol": p.symbol,
+                "symbol": p.symbol,
+                "exchange": p.exchange or "NFO",
+                "qty": p.qty,
+                "quantity": p.qty,
+                "direction": p.direction,
+                "trigger_premium": stop_prem,
+                "stop_loss": stop_prem,
+                "trigger_price": stop_prem,
+                "last_price": ref_last,
+                "target_premium": target_prem,
+            }
+
+            p.protection_pending = True
+            positions.persist_strict(uid)
 
             try:
                 place_gtt_fn = getattr(broker_client, "place_gtt", None)
                 if callable(place_gtt_fn):
+                    sig = inspect.signature(place_gtt_fn)
+                    params = sig.parameters
+                    has_var_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+                    call_kwargs = derived_gtt_params if has_var_kwargs else {k: v for k, v in derived_gtt_params.items() if k in params}
+
                     if inspect.iscoroutinefunction(place_gtt_fn):
-                        res = await place_gtt_fn(**protection_params)
+                        res = await place_gtt_fn(**call_kwargs)
                     else:
-                        res = place_gtt_fn(**protection_params)
+                        res = place_gtt_fn(**call_kwargs)
+
                     if isinstance(res, dict):
                         prot_id = str(res.get("trigger_id", prot_id))
+                    elif res:
+                        prot_id = str(res)
 
-                    if p:
-                        try:
-                            p.gtt_id = int(prot_id) if str(prot_id).isdigit() else 0
-                        except ValueError:
-                            pass
-                        p.protection_pending = False
-                        positions.persist_strict(uid)
+                    try:
+                        p.gtt_id = int(prot_id) if str(prot_id).isdigit() else p.gtt_id
+                    except ValueError:
+                        pass
+                    if stop_prem > 0:
+                        p.stop_premium = stop_prem
+                    p.protection_pending = False
+                    positions.persist_strict(uid)
 
                     return ExecutionResult(success=True, status="ACKNOWLEDGED", order_id=prot_id)
                 else:
+                    p.protection_pending = False
+                    positions.persist_strict(uid)
                     return ExecutionResult(success=False, status="REJECTED", error="Broker client does not support place_gtt")
             except Exception as exc:
-                if p:
-                    p.protection_pending = True
-                    positions.persist_strict(uid)
+                p.protection_pending = True
+                positions.persist_strict(uid)
+                try:
+                    db.set_recovery_state(
+                        recovery_state="RECOVERY_REQUIRED",
+                        reason_code="PROTECTION_UNCERTAINTY",
+                        reason=f"Protection placement uncertain for {symbol}: {exc}",
+                        uid=uid,
+                        account_id=account_id,
+                    )
+                except Exception as db_err:
+                    log.warning("Failed to set RECOVERY_REQUIRED in DB during protection uncertainty: %s", db_err)
                 return ExecutionResult(success=False, status="UNKNOWN", error=f"Protection outcome uncertain: {exc}")
 
     async def startup_recovery(
@@ -520,7 +645,7 @@ class CanonicalExecutionService:
         account_id: str = "default",
         broker_client: Any = None,
     ) -> Dict[str, Any]:
-        """Perform startup recovery workflow: inspect unresolved journal + pending projections + inventory reconciliation, observe broker, update recovery_state via CAS."""
+        """Perform startup recovery workflow: inspect unresolved journal + pending projections + inventory reconciliation + protection pending state, observe broker, update recovery_state via CAS."""
         db.init()
 
         try:
@@ -536,7 +661,8 @@ class CanonicalExecutionService:
             if i.state == "RESERVED":
                 order_journal.transition(i.intent_key, "CANCELLED", error="Startup recovery expired orphaned reservation")
 
-        # 2. Inspect remaining unresolved journal items, pending projections & strict inventory reconciliation state
+        # 2. Inspect remaining unresolved journal items, pending projections, protection pending & strict inventory reconciliation state
+        from app.services.kite_engine import positions
         unresolved_intents = order_journal.unresolved(uid, account_id=account_id)
         pending_projections = order_journal.pending_projection(uid, account_id) if hasattr(order_journal, "pending_projection") else []
         inventory_reconciliation_required = False
@@ -547,14 +673,21 @@ class CanonicalExecutionService:
             log.warning("Strict inventory read failed in startup_recovery: %s", inv_err)
             inventory_reconciliation_required = True
 
-        uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required
+        protection_pending_present = False
+        try:
+            all_positions = positions.open_positions(uid) if hasattr(positions, "open_positions") else []
+            protection_pending_present = any(getattr(p, "protection_pending", False) for p in all_positions)
+        except Exception as pos_err:
+            log.warning("Positions read failed in startup_recovery: %s", pos_err)
+
+        uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required or protection_pending_present
 
         if uncertain:
             try:
                 ctrl = db.set_recovery_state(
                     recovery_state="RECOVERY_REQUIRED",
                     reason_code="UNRESOLVED_JOURNAL_INTENTS",
-                    reason=f"Startup found unresolved state: {len(unresolved_intents)} journal intent(s), {len(pending_projections)} pending projection(s)",
+                    reason=f"Startup found unresolved state: {len(unresolved_intents)} journal intent(s), {len(pending_projections)} pending projection(s), protection_pending={protection_pending_present}",
                     uid=uid,
                     account_id=account_id,
                 )
@@ -565,11 +698,26 @@ class CanonicalExecutionService:
         # 3. Broker Reconciliation: OBSERVE ONLY, NEVER RESUBMIT
         if broker_client is not None:
             await recover(broker_client, uid=uid)
-            unresolved_intents = order_journal.unresolved(uid, account_id=account_id)
-            pending_projections = order_journal.pending_projection(uid, account_id) if hasattr(order_journal, "pending_projection") else []
 
-        # 4. If clean (no remaining unresolved intents, pending projections, or inventory errors), transition recovery_state to CLEAN via CAS
-        remaining_uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required
+        # 4. Re-read strict state after broker recovery (Item 10)
+        unresolved_intents = order_journal.unresolved(uid, account_id=account_id)
+        pending_projections = order_journal.pending_projection(uid, account_id) if hasattr(order_journal, "pending_projection") else []
+        inventory_reconciliation_required = False
+        try:
+            invs = db.get_inventory_all_strict(account_id, uid)
+            inventory_reconciliation_required = any(inv.get("reconciliation_required") for inv in invs)
+        except Exception as inv_err:
+            log.warning("Strict inventory read after recover failed in startup_recovery: %s", inv_err)
+            inventory_reconciliation_required = True
+
+        protection_pending_present = False
+        try:
+            all_positions = positions.open_positions(uid) if hasattr(positions, "open_positions") else []
+            protection_pending_present = any(getattr(p, "protection_pending", False) for p in all_positions)
+        except Exception as pos_err:
+            log.warning("Positions read after recover failed in startup_recovery: %s", pos_err)
+
+        remaining_uncertain = len(unresolved_intents) > 0 or len(pending_projections) > 0 or inventory_reconciliation_required or protection_pending_present
         if not remaining_uncertain:
             try:
                 db.set_recovery_state(
@@ -590,6 +738,7 @@ class CanonicalExecutionService:
             "recovery_state": "CLEAN" if not remaining_uncertain else "RECOVERY_REQUIRED",
             "unresolved_count": len(unresolved_intents),
             "pending_projections_count": len(pending_projections),
+            "protection_pending": protection_pending_present,
         }
 
     async def recover_unresolved(self, uid: str, account_id: str, client: Any = None) -> Dict[str, Any]:

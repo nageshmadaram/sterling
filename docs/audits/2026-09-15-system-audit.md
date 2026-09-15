@@ -28,12 +28,12 @@
 | Item | Status | Notes |
 |---|---|---|
 | **EXEC-CTRL-SPEC** | **ACCEPTED WITH STATE-MODEL AMENDMENT** | Orthogonal 2D control states (`operator_state` + `recovery_state`), CAS revision control |
-| **EXEC-CTRL-IMPL** | **MOSTLY IMPLEMENTED, P0 STILL OPEN** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, 1-time legacy state migration, and durable kill persistence |
+| **EXEC-CTRL-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | 2D schema, fail-closed DB reads, atomic CAS, hierarchical control, 1-time legacy state migration, durable kill persistence & Slice 2.2 degraded halt handling |
 | **EXEC-SVC-SPEC** | **ACCEPTED WITH EXPOSURE-EFFECT AMENDMENT** | Exposure effect classification (`INCREASE_EXPOSURE`, `REDUCE_EXPOSURE`, etc.) |
-| **EXEC-SVC-IMPL** | **PARTIAL, P0 OPEN** | Real KiteClient protocol params, RiskApproval proof, identity strictness, protection fences, exit semantics, typed broker errors, and UNKNOWN recovery latch |
+| **EXEC-SVC-IMPL** | **VERIFIED IMPLEMENTED & HARDENED** | Real KiteClient protocol params, RiskApproval proof requirement, identity strictness, protection fences, GTT derivation, net-qty exit semantics, typed broker errors, and UNKNOWN recovery latch (Slice 2.2 complete — Execution Contracts Frozen) |
 | **MANUAL-KITE-MIGRATION** | **OPEN** | Not migrated yet |
 | **KITE-JOURNAL/LIFECYCLE** | **VERIFIED REFERENCE IMPLEMENTATION** | Durable journal and execution recovery primitives |
-| **RELEASE-GATE** | **VERIFIED GREEN on `d47b8e414...`** | Verified green pipeline release gate |
+| **RELEASE-GATE** | **VERIFIED GREEN on `d736d1d7c...`** | Verified green pipeline release gate |
 | **SEC-01** | **VERIFIED IMPLEMENTED** | Fail-closed ordering, DB secret inspection, 32+ char entropy, Fernet backend |
 | **CI-01** | **VERIFIED IMPLEMENTED** | `release-gate` with `always()` and explicit upstream status evaluation |
 | **BUILD-01** | **VERIFIED RESOLVED** | Frontend `tsc --noEmit` returns 0 errors |

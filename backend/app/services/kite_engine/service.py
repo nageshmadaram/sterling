@@ -2484,16 +2484,25 @@ async def emergency_square_off_all(client, uid: str) -> dict:
 
 async def emergency_halt(client, uid: str, reason: str = "Operator Emergency Halt") -> dict:
     """Simultaneously engage the global kill switch and square off all open positions."""
-    live_safety.set_kill_switch(True, reason=reason, uid=uid, reason_code="EMERGENCY_HALT")
+    import time
+    degraded = False
+    try:
+        live_safety.set_kill_switch(True, reason=reason, uid=uid, reason_code="EMERGENCY_HALT")
+    except Exception as exc:
+        log.warning("Kill switch persistence failed during emergency halt: %s; retaining in-memory halt and proceeding to square-off", exc)
+        live_safety._KILL_SWITCH.update({"enabled": True, "reason": reason, "set_ts_ms": int(time.time() * 1000)})
+        degraded = True
+
     cfg = state.get_config(uid)
     if cfg.auto_execute:
         state.set_config(uid, cfg.model_copy(update={"auto_execute": False}))
     square_off_res = await emergency_square_off_all(client, uid)
     state.log(uid, "kill_switch", f"🚨 EMERGENCY HALT engaged: {reason}. Auto-execute disabled. All positions squared off.")
     return {
-        "status": "ok",
-        "message": f"Emergency halt engaged: Kill switch ON, auto-execute disabled. {square_off_res.get('squared_off', 0)} position(s) squared off.",
+        "status": "DEGRADED_EMERGENCY_HALT" if degraded else "ok",
+        "message": f"Emergency halt engaged (degraded={degraded}): Kill switch ON, auto-execute disabled. {square_off_res.get('squared_off', 0)} position(s) squared off.",
         "kill_switch": live_safety.kill_switch_state(),
         "square_off": square_off_res,
+        "degraded": degraded,
     }
 

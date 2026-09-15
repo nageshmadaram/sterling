@@ -143,6 +143,8 @@ Broker Send → ACK / UNKNOWN (RECOVERY_REQUIRED on transport error)
 
 ---
 
+---
+
 ## 5. Domain Separation Framework
 
 ```text
@@ -153,3 +155,21 @@ Accounting Authority: "What did the broker actually fill and what exposure exist
 ```
 
 These four domains are strictly decoupled across the system architecture.
+
+---
+
+## 6. Execution Slice 2.2 Hardening & Interface Freeze
+
+With the completion of Execution Slice 2.2, all core execution contracts are formally **FROZEN**:
+
+1. **Protection Position & Ownership Fence**: `place_protection()` requires a confirmed `OPEN` position (`qty > 0`, `status == OPEN`) and exact account identity match (`p.account_id == account_id`) prior to sending GTT requests.
+2. **GTT Parameter Derivation**: GTT parameters (`qty`, `direction`, `symbol`, `exchange`) are strictly derived from persisted confirmed `OpenPosition` inventory under `execution_lease.guard` with `protection_pending=True` persisted first.
+3. **Universal Recovery Predicate**: `startup_recovery()` includes `protection_pending` positions in its `CLEAN` predicate and latches `RECOVERY_REQUIRED` on any active protection uncertainty.
+4. **Accounting Net Quantity Sync**: Exit position projection derives remaining `p.qty` from signed fill ledger `net_quantity` rather than unverified `entry_requested_qty - filled`.
+5. **Mandatory RiskApproval Proof**: `submit_order()` enforces request-bound `RiskApproval` proof objects for all exposure increases (`INCREASE_EXPOSURE`). Legacy boolean `risk_approved=True` bypasses are removed.
+6. **Verified Capital Evidence**: `available_capital` and `capital_required` are derived from verified `RiskApproval` proof or broker margin calls, not unverified strategy payloads.
+7. **Degraded Emergency Halt**: `emergency_halt()` catches DB persistence failures, retains in-memory halt state, disables admissions, attempts emergency square-off, and returns `DEGRADED_EMERGENCY_HALT`.
+8. **Strict Modification Control**: Order modifications during `HALTED` / `RECOVERY_REQUIRED` are blocked unless explicitly proven risk-reducing. Price-increasing BUY modifications are classified as exposure-increasing.
+9. **Kite Error Taxonomy Integration**: Typed Kite exceptions (`KiteOrderError`, `KiteMarginError`, `KiteInputError`, `KitePermissionError`) are imported from `app.services.exchanges.kite.errors` and mapped to `REJECTED` state without false `RECOVERY_REQUIRED` latches.
+10. **Post-Recovery Strict Re-computation**: Inventory reconciliation status is re-queried directly from the database after broker recovery before clearing `recovery_state` to `CLEAN`.
+

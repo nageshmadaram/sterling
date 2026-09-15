@@ -2,7 +2,7 @@
 import pytest
 from app.services import db
 from app.services import live_safety
-from app.services.execution_service import CanonicalExecutionService, ExecutionRequest, ExposureEffect
+from app.services.execution_service import CanonicalExecutionService, ExecutionRequest, ExposureEffect, RiskApproval
 
 
 @pytest.fixture(autouse=True)
@@ -136,7 +136,17 @@ async def test_canonical_execution_service_exposure_policy():
         exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
     )
 
-    res_inc = await service.submit_order(req_increase, risk_approved=True)
+    approval = RiskApproval(
+        approval_id="app1",
+        uid="user1",
+        account_id="acc1",
+        symbol="SBIN",
+        side="BUY",
+        quantity=10,
+        generation_id="gen1",
+    )
+
+    res_inc = await service.submit_order(req_increase, risk_approval=approval)
     assert not res_inc.success
     assert res_inc.status == "HALTED"
 

@@ -264,13 +264,19 @@ async def consume_order(client, uid: str, order: dict) -> bool:
             p = positions.get(uid, symbol)
             latest = observed.intent
             filled = latest.filled_quantity
+            booked_ok = _book_exit(uid, aid, latest, order)
             if p:
-                if filled > 0:
-                    p.qty = max(0, p.entry_requested_qty - filled)
-                    if p.qty == 0 and latest.state in journal.TERMINAL:
-                        p.status = positions.CLOSED
-                    positions.persist_strict(uid)
-            if not _book_exit(uid, aid, latest, order):
+                from app.services import db
+                inv = db.get_inventory_strict(aid, uid, symbol) if hasattr(db, "get_inventory_strict") else None
+                if inv and "net_quantity" in inv:
+                    p.qty = abs(inv["net_quantity"])
+                elif filled > 0:
+                    p.qty = max(0, p.qty - filled) if p.qty > 0 else 0
+
+                if p.qty == 0 and latest.state in journal.TERMINAL:
+                    p.status = positions.CLOSED
+                positions.persist_strict(uid)
+            if not booked_ok:
                 if p:
                     p.pnl_reconciliation_required = True
                     positions.persist_strict(uid)

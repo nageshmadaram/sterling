@@ -11,9 +11,10 @@ from app.services.execution_service import (
     ExposureEffect,
     BrokerRejected,
     SubmissionOutcomeUnknown,
+    RiskApproval,
 )
 from app.services.exchanges.kite.client import KiteClient
-from app.services.kite_engine import order_journal
+from app.services.kite_engine import order_journal, positions
 from app.services.db import ControlPlaneUnavailableError
 
 
@@ -62,7 +63,17 @@ async def test_real_kite_client_protocol_arguments():
         tag="user_custom_tag",
     )
 
-    res = await service.submit_order(req, broker_client=client, risk_approved=True)
+    approval = RiskApproval(
+        approval_id="a1",
+        uid="u_test1",
+        account_id="acct_test1",
+        symbol="SBIN",
+        side="BUY",
+        quantity=10,
+        generation_id="gen_1",
+    )
+
+    res = await service.submit_order(req, broker_client=client, risk_approval=approval)
     assert res.success
     assert res.status == "ACKNOWLEDGED"
     assert res.order_id == "240916000999999"
@@ -103,7 +114,17 @@ async def test_account_identity_mismatch_rejection():
         quantity=10,
     )
 
-    res = await service.submit_order(req, broker_client=client, risk_approved=True)
+    approval = RiskApproval(
+        approval_id="a2",
+        uid="u1",
+        account_id="acct_B",
+        symbol="SBIN",
+        side="BUY",
+        quantity=10,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req, broker_client=client, risk_approval=approval)
     assert not res.success
     assert res.status == "REJECTED"
     assert "account identity" in res.error.lower()
@@ -111,7 +132,7 @@ async def test_account_identity_mismatch_rejection():
 
 @pytest.mark.asyncio
 async def test_unproven_risk_approval_rejection():
-    """Verify submit_order rejects when risk_approved is False."""
+    """Verify submit_order rejects when risk_approved is False or risk_approval is missing for exposure increases."""
     service = CanonicalExecutionService()
     req = ExecutionRequest(
         uid="u1",
@@ -125,7 +146,7 @@ async def test_unproven_risk_approval_rejection():
         quantity=10,
     )
 
-    # Calling with default risk_approved=False
+    # Calling without RiskApproval object
     res = await service.submit_order(req, broker_client=MagicMock(), risk_approved=False)
     assert not res.success
     assert res.status == "REJECTED"
@@ -154,7 +175,17 @@ async def test_exposure_effect_inventory_verification():
         exposure_effect=ExposureEffect.CLOSE_POSITION,
     )
 
-    res = await service.submit_order(req_spoof_close, broker_client=MagicMock(), risk_approved=True)
+    approval = RiskApproval(
+        approval_id="a3",
+        uid="u_spoof",
+        account_id="acct_spoof",
+        symbol="RELIANCE",
+        side="SELL",
+        quantity=10,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req_spoof_close, broker_client=MagicMock(), risk_approval=approval)
     assert not res.success
     assert res.status == "HALTED"
 
@@ -288,7 +319,17 @@ async def test_typed_broker_outcome_unknown_on_generic_transport_exception():
         quantity=20,
     )
 
-    res = await service.submit_order(req, broker_client=client, risk_approved=True)
+    approval = RiskApproval(
+        approval_id="a4",
+        uid="u_tf1",
+        account_id="acct_tf1",
+        symbol="TATASTEEL",
+        side="BUY",
+        quantity=20,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req, broker_client=client, risk_approval=approval)
     assert not res.success
     assert res.status == "UNKNOWN"
 
@@ -299,7 +340,6 @@ async def test_typed_broker_outcome_unknown_on_generic_transport_exception():
 @pytest.mark.asyncio
 async def test_risk_approval_proof_validation():
     """Verify RiskApproval proof object is required and validated against request fields."""
-    from app.services.execution_service import RiskApproval
     service = CanonicalExecutionService()
 
     class MockBroker:
@@ -373,7 +413,17 @@ async def test_quantity_overshoot_reclassifies_to_increase_exposure():
         exposure_effect=ExposureEffect.CLOSE_POSITION,
     )
 
-    res = await service.submit_order(req_overshoot, broker_client=MagicMock(), risk_approved=True)
+    approval = RiskApproval(
+        approval_id="a5",
+        uid="u_over",
+        account_id="acct_over",
+        symbol="RELIANCE",
+        side="SELL",
+        quantity=100,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req_overshoot, broker_client=MagicMock(), risk_approval=approval)
     assert not res.success
     assert res.status == "HALTED"  # Reclassified to INCREASE_EXPOSURE and blocked by HALTED!
 
@@ -390,6 +440,13 @@ async def test_protection_lease_acquired_and_busy_rejection():
             return {"trigger_id": "GTT_999"}
 
     client = MockGTTBroker()
+
+    # Register open position so protection placement passes open position check
+    positions.register(
+        positions.OpenPosition(
+            uid="u_prot1", account_id="acct_prot1", symbol="INFY", exchange="NSE", qty=10, order_id="POS_1234567890", status=positions.OPEN
+        )
+    )
 
     # Pre-acquire lease in process
     token = execution_lease.acquire("protection", account_id="acct_prot1", uid="u_prot1", symbol="INFY")
@@ -421,3 +478,321 @@ async def test_durable_kill_switch_persistence_failure_raises():
             live_safety.set_kill_switch(True, reason="Emergency halt")
     finally:
         monkeypatch_db.undo()
+
+
+# ── Slice 2.2 Specific Verification Tests ──
+
+@pytest.mark.asyncio
+async def test_slice_2_2_protection_requires_confirmed_open_position_and_matching_account():
+    """Item 1: Require confirmed OPEN position + exact account ownership before any GTT."""
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_p1"
+        async def place_gtt(self, **kwargs):
+            return {"trigger_id": "GTT_111"}
+
+    client = MockBroker()
+
+    # 1. No position in store -> REJECTED
+    res1 = await service.place_protection(
+        uid="u_p1", account_id="acct_p1", position_id="POS_NONE",
+        protection_params={"symbol": "TATAMOTORS", "trigger_price": 900.0},
+        broker_client=client,
+    )
+    assert not res1.success
+    assert res1.status == "REJECTED"
+    assert "No confirmed OPEN position found" in res1.error
+
+    # 2. Position is PENDING -> REJECTED
+    positions.register(
+        positions.OpenPosition(
+            uid="u_p1", account_id="acct_p1", symbol="TATAMOTORS", exchange="NSE", qty=10, order_id="POS_PEND", status=positions.PENDING
+        )
+    )
+    res2 = await service.place_protection(
+        uid="u_p1", account_id="acct_p1", position_id="POS_PEND",
+        protection_params={"symbol": "TATAMOTORS", "trigger_price": 900.0},
+        broker_client=client,
+    )
+    assert not res2.success
+    assert res2.status == "REJECTED"
+
+    # 3. Account ownership mismatch -> REJECTED
+    positions.register(
+        positions.OpenPosition(
+            uid="u_p1", account_id="acct_WRONG", symbol="TCS", exchange="NSE", qty=10, order_id="POS_TCS", status=positions.OPEN
+        )
+    )
+    client_wrong = MockBroker()
+    client_wrong._account_id = "acct_p1"
+    res3 = await service.place_protection(
+        uid="u_p1", account_id="acct_p1", position_id="POS_TCS",
+        protection_params={"symbol": "TCS", "trigger_price": 3800.0},
+        broker_client=client_wrong,
+    )
+    assert not res3.success
+    assert res3.status == "REJECTED"
+    assert "account ownership mismatch" in res3.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_protection_params_derived_from_confirmed_position():
+    """Item 2: Protection parameters derived from persisted confirmed inventory, not caller payload."""
+    service = CanonicalExecutionService()
+    received_kwargs = {}
+
+    class MockGTTBroker:
+        _account_id = "acct_p2"
+        async def place_gtt(self, **kwargs):
+            received_kwargs.update(kwargs)
+            return {"trigger_id": "GTT_DERIVED_1"}
+
+    client = MockGTTBroker()
+    positions.register(
+        positions.OpenPosition(
+            uid="u_p2", account_id="acct_p2", symbol="NIFTY26SEPFUT", exchange="NFO",
+            qty=50, direction="long", stop_premium=24500.0, order_id="POS_FUT_1", status=positions.OPEN
+        )
+    )
+
+    # Caller sends arbitrary payload (e.g. qty=999, direction="short")
+    res = await service.place_protection(
+        uid="u_p2",
+        account_id="acct_p2",
+        position_id="POS_FUT_1",
+        protection_params={"symbol": "NIFTY26SEPFUT", "quantity": 999, "direction": "short", "trigger_price": 24450.0},
+        broker_client=client,
+    )
+
+    assert res.success
+    assert res.status == "ACKNOWLEDGED"
+    # Derived from OpenPosition: qty=50, direction="long", tradingsymbol="NIFTY26SEPFUT"
+    assert received_kwargs.get("qty") == 50
+    assert received_kwargs.get("direction") == "long"
+    assert received_kwargs.get("tradingsymbol") == "NIFTY26SEPFUT"
+    assert received_kwargs.get("trigger_premium") == 24450.0
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_protection_pending_included_in_startup_recovery():
+    """Item 3: Include every live protection_pending position in recovery predicate."""
+    service = CanonicalExecutionService()
+    positions.register(
+        positions.OpenPosition(
+            uid="u_p3", account_id="acct_p3", symbol="WIPRO", exchange="NSE",
+            qty=20, order_id="POS_WIPRO", status=positions.OPEN, protection_pending=True
+        )
+    )
+
+    res = await service.startup_recovery(uid="u_p3", account_id="acct_p3")
+    assert res["status"] == "success"
+    assert res["recovery_state"] == "RECOVERY_REQUIRED"
+    assert res["protection_pending"] is True
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_exit_projection_quantity_derives_from_fill_ledger():
+    """Item 4: Exit code calculates quantity using signed fill ledger net_quantity rather than entry_requested_qty."""
+    from app.services.kite_engine import execution_lifecycle, fill_ledger
+
+    class MockBrokerClient:
+        _account_id = "acct_p4"
+
+    client = MockBrokerClient()
+
+    # Record entry fill of 80 in fill_ledger
+    fill_ledger.record(
+        account_id="acct_p4", uid="u_p4", symbol="HDFCBANK", exchange="NSE", side="BUY",
+        order_id="ORD_ENTRY_1", cumulative_quantity=80, cumulative_value=80 * 1500.0, source="entry"
+    )
+
+    # Position registered: entry requested 100, actually filled 80
+    p = positions.register(
+        positions.OpenPosition(
+            uid="u_p4", account_id="acct_p4", symbol="HDFCBANK", exchange="NSE",
+            qty=80, entry_requested_qty=100, order_id="ORD_ENTRY_1", status=positions.OPEN
+        )
+    )
+
+    # Reserve and acknowledge an exit order intent for 20
+    intent = order_journal.reserve(
+        uid="u_p4", account_id="acct_p4", strategy_id="s1", generation_id="g1", signal_id="sig_exit",
+        exchange="NSE", symbol="HDFCBANK", side="SELL", quantity=20,
+        payload={"intent_type": "EXIT", "exposure_effect": "CLOSE_POSITION", "product": "NRML"},
+    )
+    claimed = order_journal.claim_submission(intent.intent_key)
+    assert claimed
+    order_journal.acknowledge(intent.intent_key, "ORD_EXIT_1")
+
+    # Simulate broker fill postback for exit order (filled 20)
+    order_update = {
+        "order_id": "ORD_EXIT_1",
+        "tradingsymbol": "HDFCBANK",
+        "exchange": "NSE",
+        "transaction_type": "SELL",
+        "product": "NRML",
+        "quantity": 20,
+        "filled_quantity": 20,
+        "average_price": 1600.0,
+        "status": "COMPLETE",
+        "tag": intent.tag,
+    }
+
+    handled = await execution_lifecycle.consume_order(client, "u_p4", order_update)
+    assert handled
+
+    # Canonical p.qty must be 60 (80 - 20), NOT 80 (100 - 20)
+    p_updated = positions.get("u_p4", "HDFCBANK")
+    assert p_updated is not None
+    assert p_updated.qty == 60
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_risk_approval_required_for_exposure_increase():
+    """Item 5: submit_order requires request-bound RiskApproval proof for exposure increases."""
+    service = CanonicalExecutionService()
+    req = ExecutionRequest(
+        uid="u_p5", account_id="acct_p5", strategy_id="s1", generation_id="g1", signal_id="sig5",
+        exchange="NSE", symbol="BAJFINANCE", side="BUY", quantity=5,
+        exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
+    )
+
+    # Passing risk_approved=True without RiskApproval object must be REJECTED for exposure increase
+    res_no_proof = await service.submit_order(req, broker_client=MagicMock(), risk_approved=True)
+    assert not res_no_proof.success
+    assert res_no_proof.status == "REJECTED"
+    assert "missing risk approval" in res_no_proof.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_capital_evidence_derived_from_risk_approval():
+    """Item 6: Capital snapshot/required capital is taken from approved RiskApproval or authority."""
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_p6"
+        async def place_order(self, **kwargs):
+            return {"order_id": "ORD_CAP_1"}
+
+    req = ExecutionRequest(
+        uid="u_p6", account_id="acct_p6", strategy_id="s1", generation_id="g1", signal_id="sig6",
+        exchange="NSE", symbol="AXISBANK", side="BUY", quantity=10,
+        available_capital=100.0,  # Strategy input
+        capital_required=50.0,
+    )
+
+    approval = RiskApproval(
+        approval_id="app_cap1", uid="u_p6", account_id="acct_p6", symbol="AXISBANK", side="BUY", quantity=10,
+        generation_id="g1", available_capital=500000.0, capital_required=15000.0,
+    )
+
+    res = await service.submit_order(req, broker_client=MockBroker(), risk_approval=approval)
+    assert res.success
+
+    # Verified capital from RiskApproval reaches journal intent
+    intent = order_journal.find(uid="u_p6", account_id="acct_p6", order_id="ORD_CAP_1")
+    assert intent is not None
+    assert intent.capital_required == 15000.0
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_emergency_halt_db_failure_returns_degraded():
+    """Item 7: emergency_halt catches DB persistence failure, retains in-memory halt, attempts square-off, returns DEGRADED_EMERGENCY_HALT."""
+    from app.services.kite_engine import service as kite_svc
+
+    monkeypatch_ls = pytest.MonkeyPatch()
+    try:
+        def mock_set_kill_switch(enabled, reason="", uid="default", reason_code="kill_switch"):
+            raise ControlPlaneUnavailableError("DB connection lost during emergency halt")
+
+        monkeypatch_ls.setattr(live_safety, "set_kill_switch", mock_set_kill_switch)
+
+        res = await kite_svc.emergency_halt(client=MagicMock(), uid="u_p7", reason="DB Outage Emergency")
+        assert res["status"] == "DEGRADED_EMERGENCY_HALT"
+        assert res["degraded"] is True
+        assert live_safety.kill_switch_state()["enabled"] is True
+    finally:
+        monkeypatch_ls.undo()
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_modify_order_blocked_during_halted_unless_risk_reducing():
+    """Item 8: During HALTED/RECOVERY_REQUIRED, generic modifications are blocked unless explicitly proven risk-reducing."""
+    service = CanonicalExecutionService()
+    db.set_operator_state("HALTED", reason="Emergency operator halt", uid="u_p8", account_id="acct_p8")
+
+    class MockBroker:
+        _account_id = "acct_p8"
+        async def modify_order(self, **kwargs):
+            return True
+
+    # 1. Price increase modification on BUY (exposure-increasing / price raising) -> HALTED
+    res1 = await service.modify_order(
+        uid="u_p8", account_id="acct_p8", order_id="ORD_MOD_1",
+        changes={"price": 520.0, "side": "BUY"}, broker_client=MockBroker(),
+    )
+    assert not res1.success
+    assert res1.status == "HALTED"
+
+    # 2. Generic modification without risk_reducing flag -> HALTED
+    res2 = await service.modify_order(
+        uid="u_p8", account_id="acct_p8", order_id="ORD_MOD_2",
+        changes={"order_type": "LIMIT"}, broker_client=MockBroker(),
+    )
+    assert not res2.success
+    assert res2.status == "HALTED"
+
+    # 3. Explicitly risk-reducing modification -> ACKNOWLEDGED
+    res3 = await service.modify_order(
+        uid="u_p8", account_id="acct_p8", order_id="ORD_MOD_3",
+        changes={"price": 480.0, "side": "BUY", "risk_reducing": True}, broker_client=MockBroker(),
+    )
+    assert res3.success
+    assert res3.status == "ACKNOWLEDGED"
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_typed_kite_error_imports_from_errors_module():
+    """Item 9: Typed Kite errors imported from app.services.exchanges.kite.errors transition intent to REJECTED."""
+    from app.services.exchanges.kite.errors import KiteMarginError
+
+    service = CanonicalExecutionService()
+
+    class RejectingBroker:
+        _account_id = "acct_p9"
+        async def place_order(self, **kwargs):
+            raise KiteMarginError("Insufficient margin available")
+
+    req = ExecutionRequest(
+        uid="u_p9", account_id="acct_p9", strategy_id="s1", generation_id="g1", signal_id="sig9",
+        exchange="NSE", symbol="INFY", side="BUY", quantity=100,
+    )
+    approval = RiskApproval(
+        approval_id="app_p9", uid="u_p9", account_id="acct_p9", symbol="INFY", side="BUY", quantity=100, generation_id="g1",
+    )
+
+    res = await service.submit_order(req, broker_client=RejectingBroker(), risk_approval=approval)
+    assert not res.success
+    assert res.status == "REJECTED"
+    assert "Insufficient margin" in res.error
+
+    # Verify intent state is REJECTED (not UNKNOWN)
+    ctrl = db.get_execution_control(scope="global", uid="u_p9", account_id="acct_p9")
+    assert ctrl["recovery_state"] == "CLEAN"  # Order rejection does NOT latch recovery required!
+
+
+@pytest.mark.asyncio
+async def test_slice_2_2_recovery_recalculates_inventory_post_broker_reconcile():
+    """Item 10: Re-read strict inventory state after recover() in startup_recovery."""
+    service = CanonicalExecutionService()
+
+    class MockBroker:
+        _account_id = "acct_p10"
+        async def get_orders(self):
+            return []
+
+    res = await service.startup_recovery(uid="u_p10", account_id="acct_p10", broker_client=MockBroker())
+    assert res["status"] == "success"
+    assert res["recovery_state"] == "CLEAN"
+

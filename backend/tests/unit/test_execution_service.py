@@ -1,6 +1,7 @@
 import pytest
-from app.services.execution_service import CanonicalExecutionService, ExecutionRequest, ExposureEffect
+from app.services.execution_service import CanonicalExecutionService, ExecutionRequest, ExposureEffect, RiskApproval
 from app.services import db
+from app.services.kite_engine import positions
 
 
 @pytest.fixture(autouse=True)
@@ -75,7 +76,17 @@ async def test_execution_service_broker_send_ack():
         tag="st_1002",
     )
 
-    res = await service.submit_order(req, broker_client=MockBrokerClient(), risk_approved=True)
+    approval = RiskApproval(
+        approval_id="app1",
+        uid="u1",
+        account_id="acc1",
+        symbol="RELIANCE",
+        side="BUY",
+        quantity=10,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req, broker_client=MockBrokerClient(), risk_approval=approval)
     assert res.success is True
     assert res.status == "ACKNOWLEDGED"
     assert res.order_id == "ORD_12345"
@@ -102,7 +113,17 @@ async def test_execution_service_transport_uncertainty():
         tag="st_1003",
     )
 
-    res = await service.submit_order(req, broker_client=TimeoutBrokerClient(), risk_approved=True)
+    approval = RiskApproval(
+        approval_id="app2",
+        uid="u1",
+        account_id="acc1",
+        symbol="INFY",
+        side="BUY",
+        quantity=5,
+        generation_id="gen1",
+    )
+
+    res = await service.submit_order(req, broker_client=TimeoutBrokerClient(), risk_approval=approval)
     assert res.success is False
     assert res.status == "UNKNOWN"
 
@@ -129,6 +150,13 @@ async def test_execution_service_cancel_and_protection():
     )
     assert cancel_res.success is True
     assert cancel_res.status == "ACKNOWLEDGED"
+
+    # Register open position for protection placement
+    positions.register(
+        positions.OpenPosition(
+            uid="u1", account_id="acc1", symbol="SBIN", exchange="NSE", qty=10, order_id="ORD_12345", status=positions.OPEN
+        )
+    )
 
     # Protection permitted even when HALTED
     prot_res = await service.place_protection(
