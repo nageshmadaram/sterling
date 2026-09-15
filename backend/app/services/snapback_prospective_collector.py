@@ -28,7 +28,7 @@ from app.engines.snapback.intraday_models import QualityDecision, RawQuoteEvent
 from app.engines.snapback.manifest import create_frozen_manifest, verify_manifest_integrity
 from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
-from app.services.navigator.calendar import entry_delay_cutoff_ist, is_trading_day, next_trading_day
+from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trading_day, next_trading_day, session_bounds_ist
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
@@ -36,6 +36,19 @@ log = get_logger(__name__)
 
 FROZEN_COMMIT_SHA = "5a1354202e2c960c66b7003fce9cb80abd152008"
 FROZEN_MANIFEST_HASH = "602d28f804e840d046e7b51d020d5718dfd38a08d27d5324ec9d81bfbc4e53e4"
+
+
+def count_trading_sessions(start_date: date, end_date: date) -> int:
+    """Count NSE trading sessions inclusively between start_date and end_date."""
+    if end_date < start_date:
+        return 1
+    count = 0
+    curr = start_date
+    while curr <= end_date:
+        if is_trading_day(curr):
+            count += 1
+        curr += timedelta(days=1)
+    return max(1, count)
 
 
 def verify_frozen_config(cfg: SnapbackConfig) -> bool:
@@ -239,22 +252,23 @@ class SnapbackProspectiveCollector:
                     "reason": f"Missed T+1 entry window (expected next session {expected_t1_date}, attempted on {exec_date})",
                 }
 
-            exec_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc)
+            exec_dt = datetime.fromtimestamp(now_ms / 1000.0, tz=IST)
+            open_dt, _ = session_bounds_ist(expected_t1_date)
             cutoff_dt = entry_delay_cutoff_ist(expected_t1_date, delay_minutes=getattr(cfg, "entry_delay_after_open_minutes", 30) or 30)
-            if exec_dt > cutoff_dt:
+            if not (open_dt <= exec_dt <= cutoff_dt):
                 self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
                 self.warehouse.record_decision(
                     decision_id=f"DECISION-{opportunity_id}",
                     opportunity_id=opportunity_id,
                     symbol=opp.get("symbol", "UNKNOWN"),
                     decision="INCONCLUSIVE",
-                    reason=f"Missed T+1 entry window (attempted at {exec_dt}, past cutoff {cutoff_dt})",
+                    reason=f"Missed T+1 entry window (attempted at {exec_dt}, outside valid window {open_dt} to {cutoff_dt})",
                     provider_timestamp=provider_ts,
                 )
                 return {
                     "opportunity_id": opportunity_id,
                     "status": "INCONCLUSIVE",
-                    "reason": f"Missed T+1 entry window (attempted at {exec_dt}, past cutoff {cutoff_dt})",
+                    "reason": f"Missed T+1 entry window (attempted at {exec_dt}, outside valid window {open_dt} to {cutoff_dt})",
                 }
 
         # 4. Check Quote Quality for Index Futures Event on T+1
@@ -624,10 +638,25 @@ class SnapbackProspectiveCollector:
         causal_beta: float,
         prior_realized_futures_pnl: float = 0.0,
         prior_avg_futures_entry_price: float = 0.0,
+        option_quote_event: Optional[RawQuoteEvent] = None,
+        cfg: Optional[SnapbackConfig] = None,
     ) -> Dict[str, Any]:
         """Bid/Ask-aware futures rebalancing and MTM calculation with realized P&L ledger."""
-        now_ms = int(time.time() * 1000)
+        now_ms = futures_quote_event.exchange_timestamp_ms if (futures_quote_event and futures_quote_event.exchange_timestamp_ms > 0) else int(time.time() * 1000)
         provider_ts = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
+
+        # Re-run quote quality gate before MTM, rebalancing, or exit decisions
+        if cfg:
+            if option_quote_event:
+                opt_q = evaluate_quote_quality(option_quote_event, cfg, now_ms=now_ms)
+                if not opt_q.accepted_for_execution or option_quote_event.best_bid <= 0:
+                    log.warning("Skipping MTM/rebalance for %s: option quote quality rejected", opportunity_id)
+                    return {"opportunity_id": opportunity_id, "status": "SKIPPED_QUOTE_QUALITY", "reason": "Option quote quality rejected"}
+            if futures_quote_event:
+                fut_q = evaluate_quote_quality(futures_quote_event, cfg, now_ms=now_ms)
+                if not fut_q.accepted_for_execution or futures_quote_event.best_bid <= 0 or futures_quote_event.best_ask <= 0:
+                    log.warning("Skipping MTM/rebalance for %s: futures quote quality rejected", opportunity_id)
+                    return {"opportunity_id": opportunity_id, "status": "SKIPPED_QUOTE_QUALITY", "reason": "Futures quote quality rejected"}
 
         # Load persisted position state from warehouse if available
         pos = self.warehouse.get_paper_position(opportunity_id)
@@ -711,18 +740,36 @@ class SnapbackProspectiveCollector:
                 provider_timestamp=provider_ts,
             )
 
-        # Update position state ledger in warehouse
+        accumulated_costs = round(accumulated_costs, 2)
+
+        # Update position state ledger in warehouse (including accumulated_costs)
         if pos:
             self.warehouse.update_paper_position_hedge(
                 opportunity_id=opportunity_id,
                 new_futures_lots=new_hedge_lots,
                 avg_futures_entry_price=avg_entry_price,
                 realized_futures_pnl=realized_pnl,
+                accumulated_costs=accumulated_costs,
             )
+
+        # Compute sessions_held strictly from verified NSE trading calendar
+        pos_sessions = int(pos.get("sessions_held") or 1) if pos else 1
+        if pos and pos.get("entry_timestamp"):
+            try:
+                entry_date_val = datetime.fromisoformat(str(pos["entry_timestamp"]).replace("Z", "+00:00")).date()
+                curr_date_val = datetime.strptime(session_date[:10], "%Y-%m-%d").date()
+                calc_sessions = count_trading_sessions(entry_date_val, curr_date_val)
+                sessions_held = max(calc_sessions, pos_sessions)
+            except Exception:
+                sessions_held = pos_sessions
+        else:
+            sessions_held = pos_sessions
+
+        if pos:
+            self.warehouse.update_paper_position_sessions(opportunity_id, sessions_held)
 
         # Frozen Exit Rules Evaluation
         exit_reason = None
-        sessions_held = int(pos.get("sessions_held") or 1) if pos else 1
         peak_option_bid = float(pos.get("peak_option_bid") or option_entry_price) if pos else option_entry_price
         is_runner = int(pos.get("is_runner") or 0) if pos else 0
         hold_days = 15

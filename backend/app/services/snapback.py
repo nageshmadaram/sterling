@@ -862,17 +862,8 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                         if q_ev:
                             opt_quote_events[sym_short] = q_ev
 
-                    spec = spec_for(symbol)
-                    if not spec:
-                        log.warning("Skipping T+1 fill for %s: missing instrument spec", symbol)
-                        continue
-                    opt_lot_size = spec.lot_size
-
-                    fut_spec = spec_for("NIFTY")
-                    if not fut_spec:
-                        log.warning("Skipping T+1 fill for %s: missing NIFTY futures spec", symbol)
-                        continue
-                    fut_lot_size = fut_spec.lot_size
+                    # Lot sizes from actual selected option and futures contracts
+                    fut_lot_size = int(getattr(fut_pick, "lot_size", 0) or 0)
 
                     # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
                     _INDEX_CANONICAL_BETA = 1.0
@@ -909,7 +900,7 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                         option_candidates=cand_infos,
                         option_quote_events=opt_quote_events,
                         causal_beta=causal_beta,
-                        option_lot_size=opt_lot_size,
+                        option_lot_size=0,  # Will be resolved per selected candidate in execute_pending_entry
                         futures_lot_size=fut_lot_size,
                         execution_timestamp_ms=int(time.time() * 1000),
                         entry_iv=iv_proxy,
@@ -917,7 +908,7 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                 except Exception as opp_exc:
                     log.debug("Pending prospective entry processing failed for %s: %s", opp_id, opp_exc)
 
-        # 2. Process Active Open Position MTM & Rebalances from Persisted State Ledger
+        # 2. Process Active Open Position MTM, Rebalances & Exit Lifecycle from Persisted State Ledger
         active_positions = collector.warehouse.get_active_paper_positions()
         if active_positions and client:
             now_ms = int(time.time() * 1000)
@@ -936,117 +927,88 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                     q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
                     fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
 
-                    if opt_ev and fut_ev and opt_ev.best_bid > 0:
-                        spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                        q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
-                        curr_spot = float(q_spot_raw.get("last_price") or 0.0)
-                        if curr_spot <= 0 or not math.isfinite(curr_spot):
-                            log.debug("Skipping daily MTM for %s: missing current spot price", opp_id)
-                            continue
+                    spot_quotes = await client.get_quote([f"NSE:{symbol}"])
+                    q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                    curr_spot = float(q_spot_raw.get("last_price") or 0.0)
 
-                        opt_type_str = "PE" if "PE" in opt_sym else "CE"
-                        opt_strike_val = float(pos.get("option_strike") or 0.0)
-                        entry_dte_val = int(pos.get("entry_dte") or 45)
-                        entry_ts_str = str(pos.get("entry_timestamp") or "")
-                        try:
-                            entry_date_val = datetime.fromisoformat(entry_ts_str.replace("Z", "+00:00")).date()
-                            days_elapsed = max(0, (datetime.now(_IST).date() - entry_date_val).days)
-                        except Exception:
-                            days_elapsed = 1
-                        rem_dte = max(1, entry_dte_val - days_elapsed)
-                        curr_iv = float(pos.get("entry_iv") or 0.20)
-                        curr_d_raw = float(bs_delta(curr_spot, opt_strike_val, rem_dte / 365.0, curr_iv, call=(opt_type_str == "CE")))
-                        curr_opt_delta = -abs(curr_d_raw) if opt_type_str == "PE" else abs(curr_d_raw)
+                    if not opt_ev or not fut_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
+                        log.debug("Skipping daily MTM/exit cycle for %s: missing quotes or spot price", opp_id)
+                        continue
 
-                        collector.rebalance_and_mtm(
+                    # Revalidate quote quality before MTM, hedge rebalance, or exit
+                    from app.services.snapback_market_data import evaluate_quote_quality
+                    q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=now_ms)
+                    q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=now_ms)
+                    if not q_opt_eval.accepted_for_execution or not q_fut_eval.accepted_for_execution:
+                        log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
+                        continue
+
+                    opt_type_str = "PE" if "PE" in opt_sym else "CE"
+                    opt_strike_val = float(pos.get("option_strike") or 0.0)
+                    entry_dte_val = int(pos.get("entry_dte") or 45)
+                    entry_ts_str = str(pos.get("entry_timestamp") or "")
+                    try:
+                        entry_date_val = datetime.fromisoformat(entry_ts_str.replace("Z", "+00:00")).date()
+                        days_elapsed = max(0, (datetime.now(_IST).date() - entry_date_val).days)
+                    except Exception:
+                        days_elapsed = 1
+                    rem_dte = max(1, entry_dte_val - days_elapsed)
+                    curr_iv = float(pos.get("entry_iv") or 0.20)
+                    curr_d_raw = float(bs_delta(curr_spot, opt_strike_val, rem_dte / 365.0, curr_iv, call=(opt_type_str == "CE")))
+                    curr_opt_delta = -abs(curr_d_raw) if opt_type_str == "PE" else abs(curr_d_raw)
+
+                    # Execute MTM, hedge rebalancing, and frozen exit rule evaluation
+                    mtm_res = collector.rebalance_and_mtm(
+                        opportunity_id=opp_id,
+                        session_date=session_date,
+                        symbol=symbol,
+                        current_spot=curr_spot,
+                        current_option_delta=curr_opt_delta,
+                        option_bid=opt_ev.best_bid,
+                        futures_quote_event=fut_ev,
+                        option_entry_price=float(pos["option_entry_price"]),
+                        option_quantity=int(pos["option_qty"]),
+                        current_futures_lots=int(pos["current_futures_lots"]),
+                        futures_lot_size=int(pos["futures_lot_size"]),
+                        causal_beta=float(pos["causal_beta"]),
+                        prior_realized_futures_pnl=float(pos["realized_futures_pnl"]),
+                        prior_avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
+                        option_quote_event=opt_ev,
+                        cfg=cfg,
+                    )
+
+                    exit_reason = mtm_res.get("exit_reason")
+                    should_close = bool(exit_reason)
+                    if not should_close and rem_dte <= 1:
+                        should_close = True
+                        exit_reason = "EXPIRY_APPROACHING"
+
+                    if should_close:
+                        collector.close_opportunity(
                             opportunity_id=opp_id,
-                            session_date=session_date,
                             symbol=symbol,
-                            current_spot=curr_spot,
-                            current_option_delta=curr_opt_delta,
-                            option_bid=opt_ev.best_bid,
-                            futures_quote_event=fut_ev,
+                            exit_reason=exit_reason,
+                            entry_ts=entry_ts_str,
+                            exit_ts=datetime.now(timezone.utc).isoformat(),
+                            entry_spot=float(pos.get("entry_spot") or curr_spot),
+                            exit_spot=curr_spot,
+                            selected_strike=opt_strike_val,
+                            entry_dte=entry_dte_val,
+                            exit_dte=rem_dte,
+                            iv_proxy=curr_iv,
                             option_entry_price=float(pos["option_entry_price"]),
+                            option_exit_bid=opt_ev.best_bid,
+                            futures_entry_price=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
+                            futures_exit_bid=fut_ev.best_bid,
                             option_quantity=int(pos["option_qty"]),
-                            current_futures_lots=int(pos["current_futures_lots"]),
-                            futures_lot_size=int(pos["futures_lot_size"]),
-                            causal_beta=float(pos["causal_beta"]),
-                            prior_realized_futures_pnl=float(pos["realized_futures_pnl"]),
-                            prior_avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
+                            futures_quantity=int(pos["current_futures_lots"]) * int(pos.get("futures_lot_size") or 65),
+                            nifty_futures_entry=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
+                            nifty_futures_exit=fut_ev.best_bid,
+                            option_type=opt_type_str,
+                            accumulated_costs=float(mtm_res.get("accumulated_costs") or pos.get("accumulated_costs") or 0.0),
                         )
                 except Exception as mtm_exc:
                     log.debug("Prospective MTM update failed for %s: %s", opp_id, mtm_exc)
-
-        # 3. Process Exit Lifecycle for Active Open Positions
-        if active_positions and client:
-            for pos in active_positions:
-                opp_id = pos["opportunity_id"]
-                symbol = pos["symbol"]
-                opt_sym = pos["option_symbol"]
-                fut_sym = pos["futures_symbol"]
-
-                entry_ts_str = str(pos.get("entry_timestamp") or "")
-                try:
-                    entry_date_val = datetime.fromisoformat(entry_ts_str.replace("Z", "+00:00")).date()
-                    days_elapsed = max(0, (datetime.now(_IST).date() - entry_date_val).days)
-                except Exception:
-                    days_elapsed = 0
-
-                opt_type_str = "PE" if "PE" in opt_sym else "CE"
-                opt_strike_val = float(pos.get("option_strike") or 0.0)
-                entry_dte_val = int(pos.get("entry_dte") or 45)
-                exit_dte_val = max(0, entry_dte_val - days_elapsed)
-
-                should_close = False
-                exit_reason = ""
-
-                if days_elapsed >= cfg.hold_days:
-                    should_close = True
-                    exit_reason = f"HOLDING_HORIZON_EXPIRED ({days_elapsed} >= {cfg.hold_days} days)"
-                elif exit_dte_val <= 1:
-                    should_close = True
-                    exit_reason = "EXPIRY_APPROACHING"
-
-                if should_close:
-                    try:
-                        opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
-                        q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
-                        opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
-
-                        fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
-                        q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
-                        fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
-
-                        spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                        q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
-                        exit_spot = float(q_spot_raw.get("last_price") or 0.0)
-
-                        if opt_ev and fut_ev and exit_spot > 0 and opt_ev.best_bid > 0 and fut_ev.best_bid > 0:
-                            collector.close_opportunity(
-                                opportunity_id=opp_id,
-                                symbol=symbol,
-                                exit_reason=exit_reason,
-                                entry_ts=entry_ts_str,
-                                exit_ts=datetime.now(timezone.utc).isoformat(),
-                                entry_spot=float(pos.get("entry_spot") or exit_spot),
-                                exit_spot=exit_spot,
-                                selected_strike=opt_strike_val,
-                                entry_dte=entry_dte_val,
-                                exit_dte=exit_dte_val,
-                                iv_proxy=float(pos.get("entry_iv") or 0.20),
-                                option_entry_price=float(pos["option_entry_price"]),
-                                option_exit_bid=opt_ev.best_bid,
-                                futures_entry_price=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
-                                futures_exit_bid=fut_ev.best_bid,
-                                statutory_costs=40.0,
-                                option_quantity=int(pos["option_qty"]),
-                                futures_quantity=int(pos["current_futures_lots"]) * int(pos.get("futures_lot_size") or 65),
-                                nifty_futures_entry=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
-                                nifty_futures_exit=fut_ev.best_bid,
-                                option_type=opt_type_str,
-                            )
-                    except Exception as close_exc:
-                        log.warning("Failed to close opportunity %s: %s", opp_id, close_exc)
 
     except Exception as exc:
         log.warning("Prospective collector cycle skipped: %s", exc)

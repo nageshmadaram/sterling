@@ -1147,4 +1147,324 @@ def test_stale_exit_quote_cannot_close_trade(sample_config):
     assert res_bad.accepted_for_execution is False
 
 
+def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
+    """Proves: Attempted entry before session open (e.g. 08:30 IST) is rejected as INCONCLUSIVE."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000),
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    # 08:30 IST on 2026-09-16 (03:00 UTC) is before 09:15 IST open
+    early_dt = datetime(2026, 9, 16, 3, 0, 0, tzinfo=timezone.utc)
+    early_ms = int(early_dt.timestamp() * 1000)
+
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=early_ms - 200,
+        received_at_ms=early_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    cand = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=early_ms - 200,
+        received_at_ms=early_ms - 100,
+        best_bid=450.0,
+        best_ask=452.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=451.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=early_ms,
+    )
+    assert exec_res["status"] == "INCONCLUSIVE"
+    assert "Missed T+1" in exec_res["reason"] or "Outside T+1" in exec_res["reason"]
+
+
+def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
+    """End-to-End Test: Signal -> Entry -> Calendar progress -> Hedge rebalance -> Cost persistence -> Session 15 Runner -> 25% Give-back exit."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    # 1. Day T signal (2026-09-15 close)
+    dt_t = datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000) + 100,
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    # 2. T+1 entry at 09:20 IST on 2026-09-16 (03:50 UTC)
+    t1_ms = int(datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=t1_ms - 200,
+        received_at_ms=t1_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    cand = OptionCandidateInfo(
+        symbol="NIFTY26OCT25000PE",
+        expiry="2026-10-29",
+        strike=25000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=65,
+    )
+    opt_quote = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=t1_ms - 200,
+        received_at_ms=t1_ms - 100,
+        best_bid=100.0,
+        best_ask=102.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=101.0,
+        open_interest=60000,
+    )
+
+    exec_res = collector.execute_pending_entry(
+        opportunity_id=opp_id,
+        cfg=sample_config,
+        t1_spot_price=24510.0,
+        futures_quote_event=fut_event,
+        futures_symbol="NIFTY-I",
+        option_candidates=[cand],
+        option_quote_events={"NIFTY26OCT25000PE": opt_quote},
+        causal_beta=1.0,
+        option_lot_size=65,
+        futures_lot_size=65,
+        execution_timestamp_ms=t1_ms,
+    )
+    assert exec_res["status"] == "OPEN_POSITION"
+    entry_costs = exec_res["accumulated_costs"]
+    assert entry_costs > 0.0
+
+    # 3. Session 2 (2026-09-17) MTM & Hedge Rebalance (delta shifts to -1.6 -> 2 lots)
+    s2_ms = int(datetime(2026, 9, 17, 3, 50, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event_s2 = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=s2_ms - 200,
+        received_at_ms=s2_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    opt_quote_s2 = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=s2_ms - 200,
+        received_at_ms=s2_ms - 100,
+        best_bid=110.0,
+        best_ask=112.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=111.0,
+        open_interest=60000,
+    )
+
+    reb_res = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-09-17",
+        symbol="NIFTY",
+        current_spot=24600.0,
+        current_option_delta=-1.6,
+        option_bid=110.0,
+        futures_quote_event=fut_event_s2,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=1,
+        futures_lot_size=65,
+        causal_beta=1.0,
+        option_quote_event=opt_quote_s2,
+        cfg=sample_config,
+    )
+    accumulated_costs_after_reb = reb_res["accumulated_costs"]
+    assert accumulated_costs_after_reb > entry_costs
+    assert reb_res["sessions_held"] == 2
+
+    # Verify accumulated_costs was persisted to DB position ledger
+    pos_db = temp_warehouse.get_paper_position(opp_id)
+    assert float(pos_db["accumulated_costs"]) == accumulated_costs_after_reb
+
+    # 4. Session 15 (2026-10-07) - Option Bid = 160.0 (1.6x entry price 100.0 >= 1.5x) -> Transitions to RUNNER
+    s15_ms = int(datetime(2026, 10, 7, 3, 50, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event_s15 = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=s15_ms - 200,
+        received_at_ms=s15_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    opt_quote_s15 = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=s15_ms - 200,
+        received_at_ms=s15_ms - 100,
+        best_bid=160.0,
+        best_ask=162.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=161.0,
+        open_interest=60000,
+    )
+
+    reb_15 = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-10-07",
+        symbol="NIFTY",
+        current_spot=24400.0,
+        current_option_delta=-0.80,
+        option_bid=160.0,
+        futures_quote_event=fut_event_s15,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=2,
+        futures_lot_size=65,
+        causal_beta=1.0,
+        option_quote_event=opt_quote_s15,
+        cfg=sample_config,
+    )
+    assert reb_15["sessions_held"] == 15
+    assert reb_15["is_runner"] is True
+    assert reb_15["exit_reason"] is None
+
+    # 5. Session 16 (2026-10-08) - Option Bid drops to 110.0 (110.0 <= 160.0 * 0.75 = 120.0) -> RUNNER_TRAIL_STOP
+    s16_ms = int(datetime(2026, 10, 8, 3, 50, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    fut_event_s16 = RawQuoteEvent(
+        contract_id="NIFTY-I",
+        exchange_timestamp_ms=s16_ms - 200,
+        received_at_ms=s16_ms - 100,
+        best_bid=24510.0,
+        best_ask=24512.0,
+        bid_quantity=100,
+        ask_quantity=100,
+        last_price=24511.0,
+        open_interest=500000,
+    )
+    opt_quote_s16 = RawQuoteEvent(
+        contract_id="NIFTY26OCT25000PE",
+        exchange_timestamp_ms=s16_ms - 200,
+        received_at_ms=s16_ms - 100,
+        best_bid=110.0,
+        best_ask=112.0,
+        bid_quantity=50,
+        ask_quantity=50,
+        last_price=111.0,
+        open_interest=60000,
+    )
+
+    reb_16 = collector.rebalance_and_mtm(
+        opportunity_id=opp_id,
+        session_date="2026-10-08",
+        symbol="NIFTY",
+        current_spot=24500.0,
+        current_option_delta=-0.70,
+        option_bid=110.0,
+        futures_quote_event=fut_event_s16,
+        option_entry_price=102.0,
+        option_quantity=65,
+        current_futures_lots=2,
+        futures_lot_size=65,
+        causal_beta=1.0,
+        option_quote_event=opt_quote_s16,
+        cfg=sample_config,
+    )
+    assert reb_16["exit_reason"] == "RUNNER_TRAIL_STOP"
+
+    # 6. Production close_opportunity with RUNNER_TRAIL_STOP
+    close_res = collector.close_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        exit_reason=reb_16["exit_reason"],
+        entry_ts="2026-09-16T09:20:00Z",
+        exit_ts="2026-10-08T15:15:00Z",
+        entry_spot=24510.0,
+        exit_spot=24500.0,
+        selected_strike=25000.0,
+        entry_dte=45,
+        exit_dte=23,
+        iv_proxy=0.18,
+        option_entry_price=102.0,
+        option_exit_bid=110.0,
+        futures_entry_price=24512.0,
+        futures_exit_bid=24510.0,
+        option_quantity=65,
+        futures_quantity=130,
+        accumulated_costs=reb_16["accumulated_costs"],
+    )
+
+    # Verify actual_costs includes entry costs + rebalance costs + liquidation costs
+    assert close_res["actual_costs"] > reb_16["accumulated_costs"]
+
+    # Verify paper position status in DB is now CLOSED
+    pos_closed = temp_warehouse.get_paper_position(opp_id)
+    assert pos_closed["status"] == "CLOSED"
+
+
+
 

@@ -463,19 +463,30 @@ class SnapbackObservationWarehouse:
         new_futures_lots: int,
         avg_futures_entry_price: float,
         realized_futures_pnl: float,
+        accumulated_costs: Optional[float] = None,
     ) -> None:
-        """Update open futures lots, weighted average entry price, and realized futures PnL in ledger."""
+        """Update open futures lots, weighted average entry price, realized futures PnL, and accumulated costs in ledger."""
         conn = self._get_connection()
         try:
             with conn:
-                conn.execute(
-                    """
-                    UPDATE paper_positions
-                    SET current_futures_lots = ?, avg_futures_entry_price = ?, realized_futures_pnl = ?
-                    WHERE opportunity_id = ?
-                """,
-                    (new_futures_lots, avg_futures_entry_price, realized_futures_pnl, opportunity_id),
-                )
+                if accumulated_costs is not None:
+                    conn.execute(
+                        """
+                        UPDATE paper_positions
+                        SET current_futures_lots = ?, avg_futures_entry_price = ?, realized_futures_pnl = ?, accumulated_costs = ?
+                        WHERE opportunity_id = ?
+                    """,
+                        (new_futures_lots, avg_futures_entry_price, realized_futures_pnl, accumulated_costs, opportunity_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE paper_positions
+                        SET current_futures_lots = ?, avg_futures_entry_price = ?, realized_futures_pnl = ?
+                        WHERE opportunity_id = ?
+                    """,
+                        (new_futures_lots, avg_futures_entry_price, realized_futures_pnl, opportunity_id),
+                    )
         finally:
             conn.close()
 
