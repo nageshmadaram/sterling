@@ -44,8 +44,8 @@ class ProbeResult:
     max_available_date: Optional[str] = None
     ticks_available: bool = False
     bars_available: bool = False
-    tick_status: str = "UNKNOWN"              # "OK" | "NO_TICKS" | "NOT_ENTITLED" | "ERROR"
-    bar_status: str = "UNKNOWN"               # "OK" | "NO_BARS" | "NOT_ENTITLED" | "ERROR"
+    tick_status: str = "UNKNOWN"              # "OK" | "NO_TICKS" | "NOT_ENTITLED" | "CONFIG_MISSING" | "ERROR"
+    bar_status: str = "UNKNOWN"               # "OK" | "NO_BARS" | "NOT_ENTITLED" | "CONFIG_MISSING" | "ERROR"
     tick_count: int = 0
     bid_ask_complete_count: int = 0
     bid_ask_coverage_pct: float = 0.0
@@ -57,7 +57,7 @@ class ProbeResult:
     provider_tick_error: str = ""
     provider_bar_error: str = ""
     error_message: str = ""
-    entitlement_status: str = "UNKNOWN"       # "OK" | "BARS_ONLY" | "NO_DATA" | "NOT_ENTITLED" | "ERROR"
+    entitlement_status: str = "UNKNOWN"       # "OK" | "BARS_ONLY" | "NO_DATA" | "NOT_ENTITLED" | "CONFIG_MISSING" | "ERROR"
 
     def __post_init__(self):
         if not self.symbol:
@@ -118,13 +118,72 @@ class ProbeResult:
         }
 
 
-class TrueDataEntitlementProbe:
-    """Historical data retention & entitlement probe wrapper."""
+def resolve_truedata_credentials(user_id: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve active TrueData username and password across multi-tenant DB and env fallbacks."""
+    # 1. Try truedata_service from app.services.providers.truedata
+    try:
+        from app.services import db
+        db.init()
+        from app.services.providers import truedata as truedata_service
+        truedata_service.bootstrap()
+        if user_id:
+            acct = truedata_service.get_active(user_id)
+            if not acct:
+                accts = truedata_service.list_credentials(user_id)
+                if accts:
+                    acct = accts[0]
+            if acct and acct.username and acct.password:
+                return acct.username, acct.password
+        from app.services.providers.truedata import credentials
+        for a in credentials._credentials.values():
+            if a.username and a.password:
+                return a.username, a.password
+    except Exception as exc:
+        log.debug("truedata_service credential resolution notice: %s", exc)
 
-    def __init__(self, username: Optional[str] = None, password: Optional[str] = None, client: Optional[Any] = None):
+    # 2. Direct read-only query from SQLite database file if DB service is degraded or locked
+    for db_path in ["backend/sterling_paper.db", "sterling_paper.db"]:
+        try:
+            import sqlite3
+            from app.core.security import decrypt
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            cur = conn.cursor()
+            if user_id:
+                cur.execute("SELECT username, password_enc FROM truedata_credentials WHERE user_id = ? AND username != '' LIMIT 1", (user_id,))
+            else:
+                cur.execute("SELECT username, password_enc FROM truedata_credentials WHERE username != '' ORDER BY is_active DESC LIMIT 1")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] and row[1]:
+                return row[0], decrypt(row[1])
+        except Exception:
+            pass
+
+    # 3. Environment variables / Settings fallback
+    import os
+    try:
+        from app.core.config import settings
+        if settings.truedata_username and settings.truedata_password:
+            return settings.truedata_username, settings.truedata_password
+    except Exception:
+        pass
+
+    u = os.environ.get("TRUEDATA_USERNAME", "")
+    p = os.environ.get("TRUEDATA_PASSWORD", "")
+    if u and p:
+        return u, p
+
+    return None, None
+
+
+class TrueDataEntitlementProbe:
+    """Historical data retention & entitlement probe wrapper (Runner 1.1)."""
+
+    def __init__(self, username: Optional[str] = None, password: Optional[str] = None, client: Optional[Any] = None, user_id: Optional[str] = None):
         self.username = username
         self.password = password
         self.client = client
+        self.user_id = user_id
 
     def probe_contract_retention(self, symbol: str, start_date: str, end_date: str) -> ProbeResult:
         """Synchronous probe helper handling both sync and async client objects."""
@@ -174,7 +233,48 @@ class TrueDataEntitlementProbe:
                     error_message=str(exc),
                     entitlement_status="ERROR",
                 )
-        return asyncio.run(self.probe_symbol(symbol, start_date, end_date))
+        return asyncio.run(self.probe_symbol(symbol, start_date, end_date, user_id=self.user_id))
+
+    async def resolve_provider_symbols(self, search_term: str, segment: str = "fo", allexpiry: bool = True) -> List[str]:
+        """Discover exact provider-recognized symbol names via get_all_symbols API."""
+        if not self.username or not self.password:
+            u, p = resolve_truedata_credentials(self.user_id)
+            self.username = u
+            self.password = p
+
+        if not self.username or not self.password:
+            log.warning("Cannot resolve symbols: TrueData credentials unavailable")
+            return []
+
+        try:
+            from app.services.market_data.truedata import TrueDataHistoricalClient
+            client = self.client or TrueDataHistoricalClient(self.username, self.password)
+            res = await client.get_all_symbols(segment=segment, search=search_term, allexpiry=allexpiry)
+            records = []
+            if isinstance(res, dict):
+                if "Records" in res and isinstance(res["Records"], list):
+                    records = res["Records"]
+                elif "records" in res and isinstance(res["records"], list):
+                    records = res["records"]
+            elif isinstance(res, list):
+                records = res
+
+            symbols = []
+            for r in records:
+                if isinstance(r, dict):
+                    sym = r.get("symbol") or r.get("Symbol") or r.get("tradingsymbol")
+                elif isinstance(r, (list, tuple)) and len(r) > 0:
+                    sym = r[0]
+                elif isinstance(r, str):
+                    sym = r
+                else:
+                    sym = None
+                if sym and str(sym) not in symbols:
+                    symbols.append(str(sym))
+            return symbols
+        except Exception as exc:
+            log.warning("Symbol resolution for '%s' failed: %s", search_term, exc)
+            return []
 
     def _analyze_raw_data(
         self,
@@ -185,6 +285,8 @@ class TrueDataEntitlementProbe:
         ticks: Optional[List[Any]] = None,
         provider_tick_error: str = "",
         provider_bar_error: str = "",
+        decision_timestamp: Optional[str] = None,
+        max_allowed_quote_age_ms: float = 5000.0,
     ) -> ProbeResult:
         """Analyze returned tick and bar records to calculate evidence-grade metrics."""
         bar_list = bars if isinstance(bars, list) else []
@@ -200,8 +302,19 @@ class TrueDataEntitlementProbe:
         # Parse ticks
         bid_ask_complete = 0
         stale_count = 0
+        
+        # Parse decision datetime if supplied
+        decision_dt = None
+        if decision_timestamp:
+            try:
+                cleaned_dec = decision_timestamp.replace("T", " ").split("+")[0].split("Z")[0]
+                decision_dt = datetime.strptime(cleaned_dec, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+
         for t in tick_list:
             ts_val = _extract_val(t, ("timestamp", "time", "date", "datetime"))
+            dt = None
             if ts_val:
                 ts_str = str(ts_val)
                 if not first_ts:
@@ -223,7 +336,13 @@ class TrueDataEntitlementProbe:
             ask = float(_extract_val(t, ("ask", "ask_price", "askprice"), 0.0) or 0.0)
             if bid > 0 and ask > 0:
                 bid_ask_complete += 1
-            if bid > 0 and ask > 0 and bid == ask:
+
+            # Quote staleness: age relative to decision time or previous tick timestamp gap
+            if dt and decision_dt:
+                quote_age_ms = (decision_dt - dt).total_seconds() * 1000.0
+                if quote_age_ms > max_allowed_quote_age_ms:
+                    stale_count += 1
+            elif bid > 0 and ask > 0 and bid == ask:
                 stale_count += 1
 
         # Parse bars if ticks missing
@@ -268,20 +387,25 @@ class TrueDataEntitlementProbe:
             bid_ask_pct = 0.0
             bid_ask_complete = 0
 
-        # Status resolution
-        tick_status = "OK" if has_ticks else ("NOT_ENTITLED" if "403" in provider_tick_error or "Forbidden" in provider_tick_error or "401" in provider_tick_error else ("ERROR" if provider_tick_error else "NO_DATA"))
-        bar_status = "OK" if has_bars else ("NOT_ENTITLED" if "403" in provider_bar_error or "Forbidden" in provider_bar_error or "401" in provider_bar_error else ("ERROR" if provider_bar_error else "NO_DATA"))
-
-        if has_ticks:
-            entitlement_status = "OK"
-        elif has_bars:
-            entitlement_status = "BARS_ONLY"
-        elif tick_status == "NOT_ENTITLED" or bar_status == "NOT_ENTITLED":
-            entitlement_status = "NOT_ENTITLED"
-        elif provider_tick_error or provider_bar_error:
-            entitlement_status = "ERROR"
+        # Status resolution: distinguish CONFIG_MISSING from NOT_ENTITLED
+        if "credentials unavailable" in provider_tick_error.lower() or "credentials unavailable" in provider_bar_error.lower():
+            tick_status = "CONFIG_MISSING"
+            bar_status = "CONFIG_MISSING"
+            entitlement_status = "CONFIG_MISSING"
         else:
-            entitlement_status = "NO_DATA"
+            tick_status = "OK" if has_ticks else ("NOT_ENTITLED" if "403" in provider_tick_error or "Forbidden" in provider_tick_error or "401" in provider_tick_error else ("ERROR" if provider_tick_error else "NO_DATA"))
+            bar_status = "OK" if has_bars else ("NOT_ENTITLED" if "403" in provider_bar_error or "Forbidden" in provider_bar_error or "401" in provider_bar_error else ("ERROR" if provider_bar_error else "NO_DATA"))
+
+            if has_ticks:
+                entitlement_status = "OK"
+            elif has_bars:
+                entitlement_status = "BARS_ONLY"
+            elif tick_status == "NOT_ENTITLED" or bar_status == "NOT_ENTITLED":
+                entitlement_status = "NOT_ENTITLED"
+            elif provider_tick_error or provider_bar_error:
+                entitlement_status = "ERROR"
+            else:
+                entitlement_status = "NO_DATA"
 
         return ProbeResult(
             contract=symbol,
@@ -306,29 +430,14 @@ class TrueDataEntitlementProbe:
             entitlement_status=entitlement_status,
         )
 
-    async def probe_symbol(self, symbol: str, start_date: str, end_date: str) -> ProbeResult:
+    async def probe_symbol(self, symbol: str, start_date: str, end_date: str, user_id: Optional[str] = None) -> ProbeResult:
         """Probe historical tick and bar depth for a given symbol."""
         try:
             from app.services.market_data.truedata import TrueDataHistoricalClient
             if not self.username or not self.password:
-                try:
-                    from app.services.providers import truedata as truedata_service
-                    acct = truedata_service.get_active("default")
-                    if not acct:
-                        all_accts = truedata_service.list_credentials("default")
-                        if all_accts:
-                            acct = all_accts[0]
-                    if acct:
-                        self.username = acct.username
-                        self.password = acct.password
-                except Exception as c_err:
-                    log.debug("Failed to retrieve credentials via truedata_service: %s", c_err)
-
-            if not self.username or not self.password:
-                import os
-                from app.core.config import settings
-                self.username = settings.truedata_username or os.environ.get("TRUEDATA_USERNAME", "")
-                self.password = settings.truedata_password or os.environ.get("TRUEDATA_PASSWORD", "")
+                u, p = resolve_truedata_credentials(user_id or self.user_id)
+                self.username = u
+                self.password = p
 
             if not self.username or not self.password:
                 return ProbeResult(
@@ -337,15 +446,15 @@ class TrueDataEntitlementProbe:
                     requested_end=end_date,
                     ticks_available=False,
                     bars_available=False,
-                    tick_status="NOT_ENTITLED",
-                    bar_status="NOT_ENTITLED",
+                    tick_status="CONFIG_MISSING",
+                    bar_status="CONFIG_MISSING",
                     provider_tick_error="TrueData credentials unavailable",
                     provider_bar_error="TrueData credentials unavailable",
-                    error_message="TrueData credentials unavailable",
-                    entitlement_status="NOT_ENTITLED",
+                    error_message="TrueData credentials unavailable (CONFIG_MISSING)",
+                    entitlement_status="CONFIG_MISSING",
                 )
 
-            client = TrueDataHistoricalClient(self.username, self.password)
+            client = self.client or TrueDataHistoricalClient(self.username, self.password)
             bars = []
             bar_err_msg = ""
             try:
@@ -390,9 +499,9 @@ class TrueDataEntitlementProbe:
 TrueDataHistoricalClientProbe = TrueDataEntitlementProbe
 
 
-async def run_truedata_retention_probe(symbols: List[str], start_date: str, end_date: str) -> Dict[str, Any]:
+async def run_truedata_retention_probe(symbols: List[str], start_date: str, end_date: str, user_id: Optional[str] = None) -> Dict[str, Any]:
     """Probe historical data retention across multiple target symbols."""
-    prober = TrueDataEntitlementProbe()
+    prober = TrueDataEntitlementProbe(user_id=user_id)
     results = []
     for sym in symbols:
         res = await prober.probe_symbol(sym, start_date, end_date)
@@ -411,6 +520,6 @@ async def run_truedata_retention_probe(symbols: List[str], start_date: str, end_
 
 
 if __name__ == "__main__":
-    sample_symbols = ["NIFTY", "BANKNIFTY", "RELIANCE"]
+    sample_symbols = ["NIFTY-I", "BANKNIFTY-I", "RELIANCE-I"]
     probe_output = asyncio.run(run_truedata_retention_probe(sample_symbols, "2026-08-01", "2026-09-01"))
     print(json.dumps(probe_output, indent=2))
