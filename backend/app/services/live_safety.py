@@ -189,9 +189,7 @@ def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=Tr
             if rec_state == "RECOVERY_REQUIRED":
                 return SafetyDecision(False, "Durable control plane RECOVERY_REQUIRED (broker reconciliation pending)", "recovery_required")
             if op_state == "HALTED":
-                code = ctrl.get("reason_code") or "kill_switch"
-                if not code or code in ("MANUAL_HALT", "EMERGENCY_HALT", "durable_halt"):
-                    code = "kill_switch"
+                code = ctrl.get("reason_code") or "durable_halt"
                 return SafetyDecision(False, f"Durable control plane HALTED: {ctrl.get('reason') or 'Halted'}", code)
             if kill_switch_state().get("enabled"):
                 return SafetyDecision(False, f"Kill switch active: {kill_switch_state().get('reason') or 'manual halt'}", "kill_switch")
