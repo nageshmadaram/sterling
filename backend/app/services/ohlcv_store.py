@@ -393,3 +393,87 @@ def get_status() -> List[Dict]:
     finally:
         if conn:
             conn.close()
+
+
+def get_candles_bulk(
+    symbols: List[str],
+    resolution: str,
+    limit_per_symbol: int = 5000,
+    since: Optional[int] = None,
+    until: Optional[int] = None,
+) -> Dict[str, List[Dict]]:
+    """Return stored candles for multiple symbols in ONE batch SQL query.
+
+    Maps requested symbol (upper) -> list of candle dicts in chronological order.
+    """
+    if not symbols:
+        return {}
+
+    sym_u_list = [s.upper() for s in symbols]
+    symbol_to_targets: Dict[str, List[str]] = {}
+    for su in sym_u_list:
+        symbol_to_targets.setdefault(su, []).append(su)
+        if su in INDEX_ALIASES:
+            alias = INDEX_ALIASES[su]
+            symbol_to_targets.setdefault(alias, []).append(su)
+
+    db_syms = list(symbol_to_targets.keys())
+    placeholders = ",".join("?" for _ in db_syms)
+    conn = None
+    res_dict: Dict[str, List[Dict]] = {su: [] for su in sym_u_list}
+
+    try:
+        conn = _get_connection()
+        conn.row_factory = sqlite3.Row
+        sql = (
+            "SELECT symbol, time, open, high, low, close, volume "
+            f"FROM ohlcv WHERE symbol IN ({placeholders}) AND resolution = ?"
+        )
+        params: list = list(db_syms) + [resolution]
+
+        if since is not None and until is not None:
+            sql += " AND time >= ? AND time < ?"
+            params.extend([since, until])
+        elif until is not None:
+            sql += " AND time < ?"
+            params.append(until)
+        elif since is not None:
+            sql += " AND time >= ?"
+            params.append(since)
+
+        sql += " ORDER BY symbol, time ASC"
+        rows = conn.execute(sql, params).fetchall()
+
+        grouped: Dict[str, List[Dict]] = {}
+        for r in rows:
+            raw_sym = r[0].upper()
+            c = {
+                "time": int(r[1]),
+                "open": float(r[2]),
+                "high": float(r[3]),
+                "low": float(r[4]),
+                "close": float(r[5]),
+                "volume": float(r[6]),
+            }
+            targets = symbol_to_targets.get(raw_sym, [raw_sym])
+            for target in targets:
+                grouped.setdefault(target, []).append(c)
+
+        for su in sym_u_list:
+            c_list = grouped.get(su, [])
+            if limit_per_symbol and len(c_list) > limit_per_symbol:
+                res_dict[su] = c_list[-limit_per_symbol:]
+            else:
+                res_dict[su] = c_list
+    except Exception as exc:
+        log.warning("get_candles_bulk query failed: %s", exc)
+    finally:
+        if conn:
+            conn.close()
+
+    for su in sym_u_list:
+        if not res_dict.get(su):
+            res_dict[su] = get_candles(su, resolution, limit=limit_per_symbol or 500, since=since, until=until) or []
+
+    return res_dict
+

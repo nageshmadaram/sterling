@@ -117,8 +117,9 @@ export function ensureSeconds(time: string | null | undefined, fallback = '09:00
 }
 
 /** `47m`, `1h 12m`, `< 1m`. */
-export function fmtDuration(mins: number | null | undefined): string {
+export function fmtDuration(mins: number | null | undefined, status?: string): string {
   if (!isNum(mins)) return ABSENT;
+  if (mins <= 0) return status === 'OPEN' ? '0m' : '< 1m';
   if (mins < 1) return '< 1m';
   const h = Math.floor(mins / 60);
   const m = Math.round(mins % 60);

@@ -16,8 +16,9 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
 
   const unknown = !!status?.transient;
   const connected = !!status?.connected;
-  const brokerTone = connected ? k.green : unknown ? k.dim : k.red;
+  const brokerTone = connected ? k.green : unknown ? k.orange : k.red;
   const brokerText = connected ? 'KITE' : unknown ? 'KITE ?' : 'KITE OFF';
+
   const brokerHint = connected
     ? `Connected${status?.user_name ? ` · ${status.user_name}` : ''}${
         status?.token_expires_at_ms
@@ -45,21 +46,42 @@ export function KiteFooterStatus({ onOpenSession }: { onOpenSession: () => void 
   ];
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0 }}>
       <button
         type="button"
         onClick={onOpenSession}
         title={brokerHint}
         className="sb-tool"
         style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4, height: 20, padding: '0 6px',
-          border: `1px solid ${tint(brokerTone, 40)}`, borderRadius: 4,
-          background: tint(brokerTone, 10), color: brokerTone,
-          fontFamily: 'inherit', fontSize: 8.5, fontWeight: 800, letterSpacing: '.05em',
-          cursor: 'pointer', whiteSpace: 'nowrap',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          height: 22,
+          padding: '0 8px',
+          border: `1px solid ${connected ? 'rgba(34, 197, 94, 0.45)' : unknown ? 'rgba(245, 158, 11, 0.45)' : 'rgba(239, 68, 68, 0.45)'}`,
+          borderRadius: 6,
+          background: connected ? 'rgba(34, 197, 94, 0.12)' : unknown ? 'rgba(245, 158, 11, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+          boxShadow: connected ? '0 0 10px rgba(34, 197, 94, 0.22)' : 'none',
+          color: brokerTone,
+          fontFamily: 'inherit',
+          fontSize: 9.5,
+          fontWeight: 850,
+          letterSpacing: '.04em',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          transition: 'all 0.15s ease-in-out',
         }}
       >
-        <span style={{ width: 5, height: 5, borderRadius: '50%', background: brokerTone, flexShrink: 0 }} />
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: brokerTone,
+            boxShadow: connected ? '0 0 6px #22c55e' : 'none',
+            flexShrink: 0,
+          }}
+        />
         {brokerText}
       </button>
 

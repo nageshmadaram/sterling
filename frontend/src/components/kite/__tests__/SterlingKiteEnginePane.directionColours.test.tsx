@@ -142,7 +142,7 @@ describe('direction colours', () => {
     mockPane({ [QUOTE_KEY]: { last_price: 1100, ohlc: { close: 1000, open: 1000 } } });
     await renderPane();
 
-    fireEvent.click(screen.getByRole('button', { name: /Columns/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Columns/i })[0]);
     const item = screen.getByText('Direction colours');
     expect(item, 'the switch is reachable at all').toBeInTheDocument();
 

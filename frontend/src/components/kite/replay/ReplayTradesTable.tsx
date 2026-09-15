@@ -102,7 +102,7 @@ const TradeRow = memo(function TradeRow({
         )}
       </td>
       <td data-align="right" data-col="held" className="rd-num" style={{ color: 'var(--k-dim)' }}>
-        {fmtDuration(t.duration_mins)}
+        {fmtDuration(t.duration_mins, t.status)}
       </td>
       <td>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: strategyTone(t.strategy) }}>
@@ -144,6 +144,11 @@ const TradeRow = memo(function TradeRow({
       </td>
       <td data-align="right" className="rd-num">
         {fmtInr(t.entry_price)}
+        {t.leg_delta != null && (
+          <span className="rd-sub" style={{ color: 'var(--k-cyan, #00b4d8)', fontWeight: 600 }} title={`Option Delta: Δ ${t.leg_delta.toFixed(2)}`}>
+            Δ {t.leg_delta.toFixed(2)}
+          </span>
+        )}
         {hasFriction && t.raw_entry != null && t.raw_entry !== t.entry_price && (
           <span className="rd-sub" title="Theoretical signal price before spread and slippage">
             raw {fmtInr(t.raw_entry)}
@@ -544,7 +549,7 @@ export const ReplayTradesTable = memo(function ReplayTradesTable() {
               <th>Contract</th>
               <th data-align="right" data-col="size">Size</th>
               <th data-align="right">Entry</th>
-              <th data-align="right">Exit / Mark</th>
+              <th data-align="right">Exit / LTP</th>
               <th data-align="right" data-col="sltgt">SL / Target</th>
               {hasFriction && <th data-align="right" data-col="slip">Slippage</th>}
               <th data-align="center">Status</th>

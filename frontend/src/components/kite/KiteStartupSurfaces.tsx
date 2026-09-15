@@ -30,21 +30,29 @@ interface StartupBoundaryProps extends BoundaryProps {
  * has a hard ceiling so a slow endpoint never hides the usable application.
  * Once dismissed it never reappears during normal background refetches.
  */
-function useInitialBusy(active: boolean, minVisibleMs = 280, maxVisibleMs = 1500): boolean {
+function useInitialBusy(active: boolean, minVisibleMs = 0, maxVisibleMs = 300): boolean {
   const startedAt = React.useRef(Date.now());
   const [visible, setVisible] = React.useState(active);
 
   React.useEffect(() => {
-    if (!visible) return;
-    const elapsed = Date.now() - startedAt.current;
-    const delay = active
-      ? Math.max(0, maxVisibleMs - elapsed)
-      : Math.max(0, minVisibleMs - elapsed);
-    const timer = window.setTimeout(() => setVisible(false), delay);
-    return () => window.clearTimeout(timer);
-  }, [active, maxVisibleMs, minVisibleMs, visible]);
+    if (!active) {
+      const elapsed = Date.now() - startedAt.current;
+      const delay = Math.max(0, minVisibleMs - elapsed);
+      if (delay === 0) {
+        setVisible(false);
+        return;
+      }
+      const timer = window.setTimeout(() => setVisible(false), delay);
+      return () => window.clearTimeout(timer);
+    } else {
+      const elapsed = Date.now() - startedAt.current;
+      const delay = Math.max(0, maxVisibleMs - elapsed);
+      const timer = window.setTimeout(() => setVisible(false), delay);
+      return () => window.clearTimeout(timer);
+    }
+  }, [active, minVisibleMs, maxVisibleMs]);
 
-  return visible;
+  return active && visible;
 }
 
 function StartupBoundary({
@@ -53,8 +61,8 @@ function StartupBoundary({
   testId,
   fallback,
   minHeight,
-  minVisibleMs = 260,
-  maxVisibleMs = 1400,
+  minVisibleMs = 0,
+  maxVisibleMs = 300,
 }: StartupBoundaryProps) {
   const visible = useInitialBusy(busy, minVisibleMs, maxVisibleMs);
 
@@ -185,7 +193,7 @@ function TickerSkeleton({ count }: { count: number }) {
 }
 
 export function KiteStartupCoordinator({ statusLoading, hasStatus }: StartupCoordinatorProps) {
-  const visible = useInitialBusy(statusLoading && !hasStatus, 420, 1600);
+  const visible = useInitialBusy(statusLoading && !hasStatus, 0, 300);
   const [phase, setPhase] = React.useState(0);
 
   React.useEffect(() => {

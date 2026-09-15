@@ -22,7 +22,7 @@ const MAC_LOADING_CSS = `
 `;
 
 let loadingStylesInstalled = false;
-function ensureMacLoadingStyles() {
+export function ensureMacLoadingStyles() {
   if (loadingStylesInstalled || typeof document === 'undefined') return;
   const existing = document.getElementById('sterling-mac-loading-styles');
   if (existing) { loadingStylesInstalled = true; return; }

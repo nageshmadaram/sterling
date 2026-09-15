@@ -14,12 +14,13 @@ const API = '/api/v1/simulation';
 /** How long a single POST to the engine may take before we give up. Generous
  *  enough for a cold `/start` that hydrates candles; short enough that a stuck
  *  backend does not look like a button that does nothing. */
-const CALL_TIMEOUT_MS = 15_000;
+const CALL_TIMEOUT_MS = 60_000;
+const START_TIMEOUT_MS = 180_000;
 
 type ApiError = { code: string; message: string };
 
 /** How long a freshly started replay may stay in `loading` before we say so. */
-const START_CONFIRM_MS = 120000;
+const START_CONFIRM_MS = 300_000;
 const START_CONFIRM_STEP_MS = 700;
 
 /**
@@ -41,6 +42,7 @@ async function confirmStarted(): Promise<boolean> {
     const status = await syncReplayStatus();
     if (!status) continue;
     if (status.state === 'running' || status.state === 'paused') return true;
+    if (status.state === 'loading') continue;
     if (status.state === 'idle') {
       if (
         (status.bars_played ?? 0) > 0 ||
@@ -53,12 +55,16 @@ async function confirmStarted(): Promise<boolean> {
       return false;
     }
   }
+  const finalStatus = await syncReplayStatus();
+  if (finalStatus && (finalStatus.state === 'running' || finalStatus.state === 'paused' || finalStatus.state === 'loading')) {
+    return true;
+  }
   return false;
 }
 
-async function call(path: string, body?: unknown): Promise<ReplayStatus> {
+async function call(path: string, body?: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<ReplayStatus> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API}${path}`, {
       method: 'POST',
@@ -75,6 +81,15 @@ async function call(path: string, body?: unknown): Promise<ReplayStatus> {
     return res.json();
   } catch (err: any) {
     if (err?.name === 'AbortError') {
+      try {
+        const liveStatus = await syncReplayStatus();
+        if (
+          liveStatus &&
+          (liveStatus.state === 'loading' || liveStatus.state === 'running' || liveStatus.state === 'paused')
+        ) {
+          return liveStatus;
+        }
+      } catch {}
       throw Object.assign(new Error(`replay ${path} timed out`), {
         status: 0,
         api: { code: 'timeout', message: 'The replay engine did not respond in time. It may be overloaded or not running.' },
@@ -215,22 +230,25 @@ export function useReplayTransport(): ReplayTransport {
     }
     const config = draftToConfig(store.draft);
 
-    const existingEvents = store.status.stats?.events || [];
-    const existingTrades = store.status.stats?.trades || [];
-    const isRetry = store.error !== null || store.status.state === 'loading';
-    const hasSimulatedRows = existingEvents.length > 0 || existingTrades.length > 0;
+    const isRetry = store.error !== null && store.status.state === 'loading';
+    const isFreshStart = !isRetry || store.status.session_complete || store.status.state === 'idle';
+
+    const existingEvents = isFreshStart ? [] : (store.status.stats?.events || []);
+    const existingTrades = isFreshStart ? [] : (store.status.stats?.trades || []);
 
     store.setError(null);
-    if (!hasSimulatedRows && !isRetry) {
+    if (isFreshStart) {
       store.reset();
       clearFeedCache();
     }
 
-    // Show spinner IMMEDIATELY so the user knows the click registered, preserving simulated rows
+    // Show spinner IMMEDIATELY so the user knows the click registered
     store.setStatus({
       ...store.status,
       state: 'loading',
       status_message: 'Starting replay…',
+      bars_played: isFreshStart ? 0 : store.status.bars_played,
+      session_complete: false,
       stats: {
         ...store.status.stats,
         events: existingEvents,
@@ -240,12 +258,14 @@ export function useReplayTransport(): ReplayTransport {
     store.setTab(store.tab === 'signals' ? 'signals' : 'trades');
 
     try {
-      const status = await call('/start', config);
-      const mergedStats = {
-        ...status.stats,
-        events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
-        trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
-      };
+      const status = await call('/start', config, START_TIMEOUT_MS);
+      const mergedStats = isFreshStart
+        ? status.stats
+        : {
+            ...status.stats,
+            events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
+            trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
+          };
       store.setStatus({ ...status, stats: mergedStats });
       invalidateSimRelatedQueries(queryClient);
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
@@ -273,11 +293,13 @@ export function useReplayTransport(): ReplayTransport {
         try {
           await call('/stop');
           const status = await call('/start', { ...config });
-          const mergedStats = {
-            ...status.stats,
-            events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
-            trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
-          };
+          const mergedStats = isFreshStart
+            ? status.stats
+            : {
+                ...status.stats,
+                events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
+                trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
+              };
           store.setStatus({ ...status, stats: mergedStats });
           invalidateSimRelatedQueries(queryClient);
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));

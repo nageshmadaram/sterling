@@ -150,14 +150,19 @@ export function useGenerateKiteSession() {
   const qc = useQueryClient();
   return useMutation<KiteSessionResult, Error, { request_token: string; account_id?: string }>({
     mutationFn: (body) => api.post<KiteSessionResult>(`${K}/session`, body),
-    // Drive the global auth overlay (mac-style spinner). The success toast +
-    // checkmark are owned by KiteSessionGuard's connection watcher so a single
-    // path covers manual paste, auto-callback redirect, AND silent refresh.
     onMutate: () => { authConnecting('Connecting to Kite…'); },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      qc.setQueryData<KiteStatus>(['kite-status'], (prev) => prev ? {
+        ...prev,
+        connected: true,
+        account_id: data.account_id || prev.account_id,
+        user_name: data.user_name || prev.user_name,
+        kite_user_id: data.user_id || prev.kite_user_id,
+      } : prev);
       qc.invalidateQueries({ queryKey: ['kite-status'] });
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });
       qc.invalidateQueries({ queryKey: ['kite-diagnostics-summary'] });
+      authIdle();
     },
     onError: (err) => {
       authIdle();
@@ -171,10 +176,18 @@ export function useRefreshKiteSession() {
   return useMutation<KiteSessionResult, Error, { refresh_token?: string; account_id?: string }>({
     mutationFn: (body) => api.post<KiteSessionResult>(`${K}/session/refresh`, body),
     onMutate: () => { authConnecting('Renewing session…'); },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      qc.setQueryData<KiteStatus>(['kite-status'], (prev) => prev ? {
+        ...prev,
+        connected: true,
+        account_id: data.account_id || prev.account_id,
+        user_name: data.user_name || prev.user_name,
+        kite_user_id: data.user_id || prev.kite_user_id,
+      } : prev);
       qc.invalidateQueries({ queryKey: ['kite-status'] });
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });
       qc.invalidateQueries({ queryKey: ['kite-diagnostics-summary'] });
+      authIdle();
     },
     onError: () => { authIdle(); },
   });
@@ -353,9 +366,11 @@ export function useKiteAuthBroadcast() {
   const qc = useQueryClient();
   useEffect(() => {
     const onConnected = () => {
+      qc.setQueryData<KiteStatus>(['kite-status'], (prev) => prev ? { ...prev, connected: true } : prev);
       qc.invalidateQueries({ queryKey: ['kite-status'] });
       qc.invalidateQueries({ queryKey: ['kite-accounts'] });
       qc.invalidateQueries({ queryKey: ['kite-diagnostics-summary'] });
+      authIdle();
     };
 
     let channel: BroadcastChannel | null = null;

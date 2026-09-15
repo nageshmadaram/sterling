@@ -32,6 +32,23 @@ def entry_ready(runner, symbol, bar, cfg):
     asof = bar['time']
     market_rows = _asof_symbol_bars(getattr(runner, '_snapback_market_bars', None)
                                    or getattr(runner, '_candles', []), 'NIFTY', asof)
+    session_nifty = getattr(runner, '_session_bars', {}).get('NIFTY') or []
+    if session_nifty:
+        m_times = {b['time'] for b in market_rows if isinstance(b, dict) and 'time' in b}
+        market_rows = list(market_rows) + [b for b in session_nifty if isinstance(b, dict) and b.get('time', 0) <= asof and b.get('time') not in m_times]
+    has_same_time = any(isinstance(b, dict) and b.get('time') == asof for b in market_rows)
+    if not has_same_time:
+        if isinstance(bar, dict) and bar.get('symbol') == 'NIFTY':
+            market_rows = list(market_rows) + [bar]
+        else:
+            from app.services.ohlcv_store import get_candles_bulk
+            res = getattr(getattr(runner, '_config', None), 'resolution', None) or '5m'
+            nifty_bulk = get_candles_bulk(['NIFTY'], res, limit_per_symbol=1, since=asof, until=asof + 300)
+            n_bars = nifty_bulk.get('NIFTY', [])
+            if n_bars:
+                nb = dict(n_bars[0])
+                nb['symbol'] = 'NIFTY'
+                market_rows = list(market_rows) + [nb]
     market = to_bars(_snapback_daily_tape('NIFTY', market_rows, asof, runner))
     stock = to_bars(_snapback_daily_tape(symbol, [bar], asof, runner))
     day = datetime.fromtimestamp(asof, IST).date().isoformat()
@@ -39,6 +56,8 @@ def entry_ready(runner, symbol, bar, cfg):
         runner._strategy_notes['snapback'] = f'{symbol}: required NIFTY history or opening observation missing; hedged entry blocked'
         return False
     return True
+
+
 
 
 def attach(runner, trade, signal, cfg, leg, at):
@@ -73,6 +92,10 @@ def attach(runner, trade, signal, cfg, leg, at):
     trade.stop_loss = trade.entry_price * (1 - cfg.premium_stop_pct / 100)
     trade.target_price = value(trade, trade.spot_target)
     trade.slippage = round((trade.entry_price - trade.raw_entry) * trade.quantity, 2)
+    trade.mark_price = trade.entry_price
+    trade.raw_mark = trade.raw_entry
+    if getattr(trade, 'leg_delta', None) is None:
+        trade.leg_delta = leg.get('delta') or 0.71
 
 
 def value(trade, spot):

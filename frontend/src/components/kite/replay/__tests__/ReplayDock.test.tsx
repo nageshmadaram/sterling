@@ -460,7 +460,7 @@ describe('trades table', () => {
     });
     await renderDock();
 
-    expect(screen.getByRole('columnheader', { name: 'Exit / Mark' })).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: /Exit \/ (LTP|Mark)/ })).toBeTruthy();
     expect(screen.getByText('~₹779.17')).toBeTruthy();
     expect(screen.getByText('fill ₹771.38')).toBeTruthy();
     expect(screen.getByText('−₹1,748.22')).toBeTruthy();

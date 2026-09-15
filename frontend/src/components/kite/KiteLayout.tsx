@@ -12,6 +12,7 @@ import { useReplayHostHidden, useReplayOpen, useReplayStore } from '../../hooks/
 import { FOOTER_HEIGHT } from './layoutConstants';
 import { useScanStatus } from '../../hooks/useScanStatus';
 import { openSettingsSection } from './config/registry';
+import { toggleKiteStatusCard } from '../../store/useKiteStatusCardStore';
 import {
   WORKSPACE_LAYOUT_KEY,
   WORKSPACE_PANES,
@@ -31,6 +32,9 @@ import {
   type WorkspacePresetId,
   type WorkspaceSlotId,
 } from './workspaceLayout';
+import { KiteActivityRail } from './KiteActivityRail';
+import { KiteCommandPalette } from './KiteCommandPalette';
+import { CustomizeLayoutModal } from './CustomizeLayoutModal';
 import { paneActionsSlotId } from './PaneHeaderActions';
 
 export type NavItem = 'dashboard' | 'astro' | 'pcr' | 'openingLeaders' | 'orders' | 'holdings' | 'positions' | 'more' | 'data' | 'adaptiveEdge' | 'backtest' | 'connect' | 'help';
@@ -313,9 +317,31 @@ export function KiteLayout({ activeNav, onNavClick, sidebar, rightSidebar, botto
   const [dropSlot, setDropSlot] = useState<WorkspaceSlotId | null>(null);
   const [resizing, setResizing] = useState<ResizeAxis | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activityRailVisible, setActivityRailVisible] = useState(() => {
+    try {
+      return localStorage.getItem('sterling_activity_rail') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [commandBarVisible, setCommandBarVisible] = useState(true);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [customizeLayoutOpen, setCustomizeLayoutOpen] = useState(false);
+
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<ResizeSession | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onCmd = () => setCommandPaletteOpen(true);
+    const onCust = () => setCustomizeLayoutOpen(true);
+    window.addEventListener('kite-open-command-palette', onCmd);
+    window.addEventListener('kite-open-customize-layout', onCust);
+    return () => {
+      window.removeEventListener('kite-open-command-palette', onCmd);
+      window.removeEventListener('kite-open-customize-layout', onCust);
+    };
+  }, []);
 
   // One boolean, published by the dock. The layout does not know its modes.
   const isSimFullHeight = useReplayHostHidden();
@@ -754,151 +780,196 @@ export function KiteLayout({ activeNav, onNavClick, sidebar, rightSidebar, botto
   const marketClosed = autoScan && activity?.market_open === false;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--k-bg)', fontFamily: k.fontFamily }}>
+    <div style={{ display: 'flex', flexDirection: 'row', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--k-bg)', fontFamily: k.fontFamily }}>
       <style>{WORKSPACE_CSS}</style>
-      <div ref={workspaceRef} data-testid="kite-workspace" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
-        {!focus && standardWorkspace}
-        {focusedWorkspace}
 
-        {!layout.locked && !focus && leftVisible && centerColumnOccupied && (
-          <div className="kw-resizer" data-active={resizing === 'left'} aria-label="Resize left dock" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuenow={layout.sizes.left} onKeyDown={(event) => resizeWithKeyboard('left', event)} onPointerDown={(event) => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ top: 0, bottom: 0, left: layout.sizes.left - 4, width: 8, cursor: 'col-resize' }} />
-        )}
-        {!layout.locked && !focus && rightVisible && (centerColumnOccupied || leftVisible) && (
-          <div className="kw-resizer" data-active={resizing === 'right'} aria-label="Resize right dock" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuenow={layout.sizes.right} onKeyDown={(event) => resizeWithKeyboard('right', event)} onPointerDown={(event) => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ top: 0, bottom: 0, right: layout.sizes.right - 4, width: 8, cursor: 'col-resize' }} />
-        )}
-        {!layout.locked && !focus && centerVisible && bottomVisible && (
-          <div className="kw-resizer" data-active={resizing === 'bottom'} aria-label="Resize bottom dock" role="separator" tabIndex={0} aria-orientation="horizontal" aria-valuenow={layout.sizes.bottom} onKeyDown={(event) => resizeWithKeyboard('bottom', event)} onPointerDown={(event) => startResize('bottom', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ left: leftVisible ? layout.sizes.left : 0, right: rightVisible ? layout.sizes.right : 0, bottom: layout.sizes.bottom - 4, height: 8, cursor: 'row-resize' }} />
-        )}
+      {/* VS Code Activity Rail */}
+      {activityRailVisible && (
+        <KiteActivityRail
+          activeNav={activeNav}
+          onNavClick={onNavClick}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          onOpenCustomizeLayout={() => setCustomizeLayoutOpen(true)}
+        />
+      )}
 
-        {draggingPane && (
-          <div aria-label="Pane drop targets" style={{ position: 'absolute', inset: 8, zIndex: 200, display: 'grid', gridTemplateColumns: '24% 1fr 24%', gridTemplateRows: '1fr 24%', gap: 8, pointerEvents: 'none' }}>
-            {WORKSPACE_SLOTS.map((slot) => {
-              const area: React.CSSProperties = slot === 'left' ? { gridColumn: 1, gridRow: '1 / 3' } : slot === 'right' ? { gridColumn: 3, gridRow: '1 / 3' } : slot === 'center' ? { gridColumn: 2, gridRow: 1 } : { gridColumn: 2, gridRow: 2 };
-              return (
-                <button key={slot} type="button" className="kw-drop-zone" data-active={dropSlot === slot} style={{ ...area, pointerEvents: 'auto', borderRadius: 9 }} onDragEnter={(event) => { event.preventDefault(); setDropSlot(slot); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={(event) => onDrop(slot, event)}>
-                  {SLOT_LABEL[slot]}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+        <div ref={workspaceRef} data-testid="kite-workspace" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
+          {!focus && standardWorkspace}
+          {focusedWorkspace}
 
-      <footer style={{ position: 'relative', height: FOOTER_HEIGHT, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px', gap: 9, borderTop: '1px solid var(--k-border-strong-4)', background: 'color-mix(in srgb, var(--k-bg) 98%, transparent)', zIndex: 150 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          {onBasketClick && (
-            <button type="button" className="kw-pane-control" onClick={onBasketClick} title="Basket" aria-label="Open basket" style={{ position: 'relative' }}>
-              <Icons.Basket />
-              {basketCount > 0 && <span style={{ position: 'absolute', top: -3, right: -4, minWidth: 14, height: 14, padding: '0 2px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: 'var(--k-brand)', color: 'var(--k-on-accent)', fontSize: 8, fontWeight: 750 }}>{basketCount}</span>}
-            </button>
+          {!layout.locked && !focus && leftVisible && centerColumnOccupied && (
+            <div className="kw-resizer" data-active={resizing === 'left'} aria-label="Resize left dock" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuenow={layout.sizes.left} onKeyDown={(event) => resizeWithKeyboard('left', event)} onPointerDown={(event) => startResize('left', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ top: 0, bottom: 0, left: layout.sizes.left - 4, width: 8, cursor: 'col-resize' }} />
           )}
-        </div>
-
-        <div aria-label="Minimized panes" style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '60%', overflow: 'hidden' }}>
-          <ReplayFooterChip />
-          {minimizedAvailable.length > 0 ? (
-            <>
-              {minimizedAvailable.length > 1 && (
-                <button type="button" className="kw-dock-chip" onClick={restoreAll} title="Restore all panes" aria-label="Restore all panes" style={{ color: 'var(--k-ink-3)', fontWeight: 700 }}>
-                  <ControlIcon kind="restore" />
-                  Restore all
-                </button>
-              )}
-              {minimizedAvailable.map((id) => (
-                <button key={id} type="button" className="kw-dock-chip" onClick={() => restore(id)} title={`Restore ${panes[id].title}`}>
-                  <span style={{ color: panes[id].accent, display: 'inline-flex' }}><PaneGlyph pane={id} size={13} /></span>
-                  {panes[id].shortTitle}
-                </button>
-              ))}
-            </>
-          ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--k-faint)', fontSize: 10.5, whiteSpace: 'nowrap' }}><span style={{ width: 5, height: 5, borderRadius: '50%', background: '#9bc7b2' }} />All panes active</span>
+          {!layout.locked && !focus && rightVisible && (centerColumnOccupied || leftVisible) && (
+            <div className="kw-resizer" data-active={resizing === 'right'} aria-label="Resize right dock" role="separator" tabIndex={0} aria-orientation="vertical" aria-valuenow={layout.sizes.right} onKeyDown={(event) => resizeWithKeyboard('right', event)} onPointerDown={(event) => startResize('right', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ top: 0, bottom: 0, right: layout.sizes.right - 4, width: 8, cursor: 'col-resize' }} />
           )}
-        </div>
+          {!layout.locked && !focus && centerVisible && bottomVisible && (
+            <div className="kw-resizer" data-active={resizing === 'bottom'} aria-label="Resize bottom dock" role="separator" tabIndex={0} aria-orientation="horizontal" aria-valuenow={layout.sizes.bottom} onKeyDown={(event) => resizeWithKeyboard('bottom', event)} onPointerDown={(event) => startResize('bottom', event)} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize} style={{ left: leftVisible ? layout.sizes.left : 0, right: rightVisible ? layout.sizes.right : 0, bottom: layout.sizes.bottom - 4, height: 8, cursor: 'row-resize' }} />
+          )}
 
-        <div aria-label="Workspace and engine status" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--k-ink-5)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-          {(
-            <div ref={menuRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', marginRight: 2 }}>
-              <button type="button" className="kw-dock-chip" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)} title="Open workspace layouts">
-                <PaneGlyph pane="dashboard" size={13} />
-                Layout
-                <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6l4 4 4-4"/></svg>
-              </button>
-
-              {menuOpen && (
-                <div role="dialog" aria-label="Workspace layout menu" style={{ position: 'absolute', right: 0, bottom: 33, width: 294, padding: 9, border: '1px solid var(--k-border-strong-3)', borderRadius: 10, background: 'var(--k-bg)', boxShadow: '0 14px 44px rgba(0,0,0,.16)', zIndex: 300 }}>
-                  <div style={{ padding: '3px 5px 7px', fontSize: 10, fontWeight: 750, color: 'var(--k-dim-2)', letterSpacing: '.08em', textTransform: 'uppercase' }}>Workspace presets</div>
-                  {PRESET_META.map((preset) => (
-                    <button key={preset.id} type="button" className="kw-menu-button" onClick={() => applyPreset(preset.id)}>
-                      <PresetDiagram preset={preset.id} />
-                      <span><strong style={{ display: 'block', fontSize: 11.5 }}>{preset.label}</strong><small style={{ color: 'var(--k-dim-2)', fontSize: 10 }}>{preset.detail}</small></span>
-                    </button>
-                  ))}
-                  <div style={{ height: 1, background: 'var(--k-border-3)', margin: '7px 3px' }} />
-                  <button type="button" className="kw-menu-button" onClick={resetArrangement}><ControlIcon kind="restore" /><span style={{ fontSize: 11.5 }}>Reset pane positions</span></button>
-                  <button type="button" className="kw-menu-button" onClick={restoreAll}><PaneGlyph pane="dashboard" /><span style={{ fontSize: 11.5 }}>Restore all panes</span></button>
-                  <button type="button" className="kw-menu-button" aria-pressed={layout.locked} onClick={() => setLayout((current) => ({ ...current, locked: !current.locked }))}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d={layout.locked ? 'M8 10V7a4 4 0 018 0v3' : 'M8 10V7a4 4 0 017.5-2'} /></svg>
-                    <span style={{ fontSize: 11.5 }}>{layout.locked ? 'Unlock pane movement' : 'Lock pane movement'}</span>
-                    <span style={{ marginLeft: 'auto', width: 28, height: 16, padding: 2, borderRadius: 10, background: layout.locked ? 'var(--k-brand)' : 'var(--k-border-strong-3)', display: 'flex', justifyContent: layout.locked ? 'flex-end' : 'flex-start' }}><i style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--k-bg)' }} /></span>
+          {draggingPane && (
+            <div aria-label="Pane drop targets" style={{ position: 'absolute', inset: 8, zIndex: 200, display: 'grid', gridTemplateColumns: '24% 1fr 24%', gridTemplateRows: '1fr 24%', gap: 8, pointerEvents: 'none' }}>
+              {WORKSPACE_SLOTS.map((slot) => {
+                const area: React.CSSProperties = slot === 'left' ? { gridColumn: 1, gridRow: '1 / 3' } : slot === 'right' ? { gridColumn: 3, gridRow: '1 / 3' } : slot === 'center' ? { gridColumn: 2, gridRow: 1 } : { gridColumn: 2, gridRow: 2 };
+                return (
+                  <button key={slot} type="button" className="kw-drop-zone" data-active={dropSlot === slot} style={{ ...area, pointerEvents: 'auto', borderRadius: 9 }} onDragEnter={(event) => { event.preventDefault(); setDropSlot(slot); }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={(event) => onDrop(slot, event)}>
+                    {SLOT_LABEL[slot]}
                   </button>
-                  <div style={{ padding: '8px 6px 3px', fontSize: 9.5, lineHeight: 1.45, color: 'var(--k-faint)' }}>Drag any pane title to dock it elsewhere. Double-click a title to maximize. Press Esc to leave focus mode.</div>
-                </div>
-              )}
+                );
+              })}
             </div>
           )}
-          {liveCount > 0 && <><span title={`${liveCount} signal${liveCount === 1 ? '' : 's'} currently running`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 650, color: k.green }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: k.green }} />{liveCount} live</span><span style={{ width: 1, height: 14, background: 'var(--k-border)' }} /></>}
-          <span className={scanning ? 'kl-scan-dot' : undefined} style={{ width: 6, height: 6, borderRadius: '50%', background: scanning ? k.orange : marketClosed ? 'var(--k-faint-2)' : autoScan ? k.orange : 'var(--k-faint-2)' }} />
-          <span className={scanning ? 'kl-scan-text' : undefined} style={{ color: scanning ? undefined : 'var(--k-ink-5)', fontWeight: scanning ? 650 : 400 }}>{scanning ? (scanStatus.engineLabel ?? 'Scanning') : autoScan ? 'AUTO' : 'MANUAL'}</span>
-          {/* The item second, and only where the engine publishes one. `capitalize`
-              had to come off the span above: it was title-casing a contract, so
-              "TCS OCT 2300 PE" arrived as "Tcs Oct 2300 Pe". */}
-          {scanning && scanStatus.detail && (
-            <span style={{ opacity: .8 }} title={scanStatus.detail}>· {scanStatus.detail}</span>
-          )}
-          {!scanning && (activity?.last_scan_ms ?? 0) > 0 && <span style={{ opacity: .7 }}>· {fmtAgo(activity?.last_scan_ms ?? 0)}</span>}
-          {!scanning && marketClosed ? <span style={{ opacity: .7 }}>· Market closed</span> : !scanning && autoScan && (activity?.next_scan_ms ?? 0) > 0 ? <span style={{ opacity: .7 }}>· Next Due {fmtNext(activity?.next_scan_ms ?? 0)}</span> : null}
-
-          {/* Total P&L when open positions exist */}
-          {hasOpenPositions && (
-            <>
-              <span style={{ width: 1, height: 14, background: 'var(--k-border)' }} />
-              <button
-                type="button"
-                onClick={() => onNavClick?.('positions')}
-                title={`Total P&L: ${totalPnl > 0 ? '+' : totalPnl < 0 ? '−' : ''}₹${Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${netPositions.length} position${netPositions.length === 1 ? '' : 's'} (${openPositions.length} open). Click to view positions.`}
-                className="sb-tool"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  height: 20,
-                  padding: '0 6px',
-                  borderRadius: 4,
-                  background: totalPnl > 0 ? 'var(--k-tint-green, rgba(34, 197, 94, 0.1))' : totalPnl < 0 ? 'var(--k-tint-red, rgba(239, 68, 68, 0.1))' : 'var(--k-surface-hover)',
-                  border: `1px solid ${totalPnl > 0 ? 'rgba(34, 197, 94, 0.3)' : totalPnl < 0 ? 'rgba(239, 68, 68, 0.3)' : 'var(--k-border)'}`,
-                  color: totalPnl > 0 ? k.green : totalPnl < 0 ? k.red : 'var(--k-dim)',
-                  fontFamily: 'inherit',
-                  fontSize: 9.5,
-                  fontWeight: 800,
-                  letterSpacing: '.03em',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{ fontSize: 8.5, color: 'var(--k-dim)', fontWeight: 700 }}>P&amp;L</span>
-                <span>{totalPnl > 0 ? '+' : totalPnl < 0 ? '−' : ''}₹{Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </button>
-            </>
-          )}
-
-          <span style={{ width: 1, height: 14, background: 'var(--k-border)' }} />
-
-          {/* Broker state and strategies (moved to right side) */}
-          <KiteFooterStatus onOpenSession={() => openSettingsSection('account')} />
         </div>
-      </footer>
+
+        <footer style={{ position: 'relative', height: FOOTER_HEIGHT, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px', gap: 9, borderTop: '1px solid var(--k-border-strong-4)', background: 'color-mix(in srgb, var(--k-bg) 98%, transparent)', zIndex: 150 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            {onBasketClick && (
+              <button type="button" className="kw-pane-control" onClick={onBasketClick} title="Basket" aria-label="Open basket" style={{ position: 'relative' }}>
+                <Icons.Basket />
+                {basketCount > 0 && <span style={{ position: 'absolute', top: -3, right: -4, minWidth: 14, height: 14, padding: '0 2px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: 'var(--k-brand)', color: 'var(--k-on-accent)', fontSize: 8, fontWeight: 750 }}>{basketCount}</span>}
+              </button>
+            )}
+          </div>
+
+          <div aria-label="Minimized panes and Kite status" style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 10, maxWidth: '70%', overflow: 'hidden' }}>
+            <KiteFooterStatus onOpenSession={() => toggleKiteStatusCard()} />
+            <span style={{ width: 1, height: 14, background: 'var(--k-border)', flexShrink: 0 }} />
+            <ReplayFooterChip />
+            {minimizedAvailable.length > 0 ? (
+              <>
+                {minimizedAvailable.length > 1 && (
+                  <button type="button" className="kw-dock-chip" onClick={restoreAll} title="Restore all panes" aria-label="Restore all panes" style={{ color: 'var(--k-ink-3)', fontWeight: 700 }}>
+                    <ControlIcon kind="restore" />
+                    Restore all
+                  </button>
+                )}
+                {minimizedAvailable.map((id) => (
+                  <button key={id} type="button" className="kw-dock-chip" onClick={() => restore(id)} title={`Restore ${panes[id].title}`}>
+                    <span style={{ color: panes[id].accent, display: 'inline-flex' }}><PaneGlyph pane={id} size={13} /></span>
+                    {panes[id].shortTitle}
+                  </button>
+                ))}
+              </>
+            ) : (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--k-faint)', fontSize: 10.5, whiteSpace: 'nowrap' }}><span style={{ width: 5, height: 5, borderRadius: '50%', background: '#9bc7b2' }} />All panes active</span>
+            )}
+          </div>
+
+          <div aria-label="Workspace and engine status" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--k-ink-5)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+            {(
+              <div ref={menuRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', marginRight: 2 }}>
+                <button type="button" className="kw-dock-chip" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)} title="Open workspace layouts">
+                  <PaneGlyph pane="dashboard" size={13} />
+                  Layout
+                  <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6l4 4 4-4"/></svg>
+                </button>
+
+                {menuOpen && (
+                  <div role="dialog" aria-label="Workspace layout menu" style={{ position: 'absolute', right: 0, bottom: 33, width: 294, padding: 9, border: '1px solid var(--k-border-strong-3)', borderRadius: 10, background: 'var(--k-bg)', boxShadow: '0 14px 44px rgba(0,0,0,.16)', zIndex: 300 }}>
+                    <div style={{ padding: '3px 5px 7px', fontSize: 10, fontWeight: 750, color: 'var(--k-dim-2)', letterSpacing: '.08em', textTransform: 'uppercase' }}>Workspace presets</div>
+                    {PRESET_META.map((preset) => (
+                      <button key={preset.id} type="button" className="kw-menu-button" onClick={() => applyPreset(preset.id)}>
+                        <PresetDiagram preset={preset.id} />
+                        <span><strong style={{ display: 'block', fontSize: 11.5 }}>{preset.label}</strong><small style={{ color: 'var(--k-dim-2)', fontSize: 10 }}>{preset.detail}</small></span>
+                      </button>
+                    ))}
+                    <div style={{ height: 1, background: 'var(--k-border-3)', margin: '7px 3px' }} />
+                    <button type="button" className="kw-menu-button" onClick={() => { setMenuOpen(false); setCustomizeLayoutOpen(true); }}>
+                      <span style={{ fontSize: 13 }}>🎨</span>
+                      <span style={{ fontSize: 11.5 }}>Customize Layout Docks...</span>
+                    </button>
+                    <button type="button" className="kw-menu-button" onClick={resetArrangement}><ControlIcon kind="restore" /><span style={{ fontSize: 11.5 }}>Reset pane positions</span></button>
+                    <button type="button" className="kw-menu-button" onClick={restoreAll}><PaneGlyph pane="dashboard" /><span style={{ fontSize: 11.5 }}>Restore all panes</span></button>
+                    <button type="button" className="kw-menu-button" aria-pressed={layout.locked} onClick={() => setLayout((current) => ({ ...current, locked: !current.locked }))}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d={layout.locked ? 'M8 10V7a4 4 0 018 0v3' : 'M8 10V7a4 4 0 017.5-2'} /></svg>
+                      <span style={{ fontSize: 11.5 }}>{layout.locked ? 'Unlock pane movement' : 'Lock pane movement'}</span>
+                      <span style={{ marginLeft: 'auto', width: 28, height: 16, padding: 2, borderRadius: 10, background: layout.locked ? 'var(--k-brand)' : 'var(--k-border-strong-3)', display: 'flex', justifyContent: layout.locked ? 'flex-end' : 'flex-start' }}><i style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--k-bg)' }} /></span>
+                    </button>
+                    <div style={{ padding: '8px 6px 3px', fontSize: 9.5, lineHeight: 1.45, color: 'var(--k-faint)' }}>Drag any pane title to dock it elsewhere. Double-click a title to maximize. Press Esc to leave focus mode.</div>
+                  </div>
+                )}
+              </div>
+            )}
+            {liveCount > 0 && <><span title={`${liveCount} signal${liveCount === 1 ? '' : 's'} currently running`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontWeight: 650, color: k.green }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: k.green }} />{liveCount} live</span><span style={{ width: 1, height: 14, background: 'var(--k-border)' }} /></>}
+            <span className={scanning ? 'kl-scan-dot' : undefined} style={{ width: 6, height: 6, borderRadius: '50%', background: scanning ? k.orange : marketClosed ? 'var(--k-faint-2)' : autoScan ? k.orange : 'var(--k-faint-2)' }} />
+            <span className={scanning ? 'kl-scan-text' : undefined} style={{ color: scanning ? undefined : 'var(--k-ink-5)', fontWeight: scanning ? 650 : 400 }}>{scanning ? (scanStatus.engineLabel ?? 'Scanning') : autoScan ? 'AUTO' : 'MANUAL'}</span>
+            {/* The item second, and only where the engine publishes one. `capitalize`
+                had to come off the span above: it was title-casing a contract, so
+                "TCS OCT 2300 PE" arrived as "Tcs Oct 2300 Pe". */}
+            {scanning && scanStatus.detail && (
+              <span style={{ opacity: .8 }} title={scanStatus.detail}>· {scanStatus.detail}</span>
+            )}
+            {!scanning && (activity?.last_scan_ms ?? 0) > 0 && <span style={{ opacity: .7 }}>· {fmtAgo(activity?.last_scan_ms ?? 0)}</span>}
+            {!scanning && marketClosed ? <span style={{ opacity: .7 }}>· Market closed</span> : !scanning && autoScan && (activity?.next_scan_ms ?? 0) > 0 ? <span style={{ opacity: .7 }}>· Next Due {fmtNext(activity?.next_scan_ms ?? 0)}</span> : null}
+
+            {/* Total P&L when open positions exist */}
+            {hasOpenPositions && (
+              <>
+                <span style={{ width: 1, height: 14, background: 'var(--k-border)' }} />
+                <button
+                  type="button"
+                  onClick={() => onNavClick?.('positions')}
+                  title={`Total P&L: ${totalPnl > 0 ? '+' : totalPnl < 0 ? '−' : ''}₹${Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} across ${netPositions.length} position${netPositions.length === 1 ? '' : 's'} (${openPositions.length} open). Click to view positions.`}
+                  className="sb-tool"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    height: 20,
+                    padding: '0 6px',
+                    borderRadius: 4,
+                    background: totalPnl > 0 ? 'var(--k-tint-green, rgba(34, 197, 94, 0.1))' : totalPnl < 0 ? 'var(--k-tint-red, rgba(239, 68, 68, 0.1))' : 'var(--k-surface-hover)',
+                    border: `1px solid ${totalPnl > 0 ? 'rgba(34, 197, 94, 0.3)' : totalPnl < 0 ? 'rgba(239, 68, 68, 0.3)' : 'var(--k-border)'}`,
+                    color: totalPnl > 0 ? k.green : totalPnl < 0 ? k.red : 'var(--k-dim)',
+                    fontFamily: 'inherit',
+                    fontSize: 9.5,
+                    fontWeight: 800,
+                    letterSpacing: '.03em',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ fontSize: 8.5, color: 'var(--k-dim)', fontWeight: 700 }}>P&amp;L</span>
+                  <span>{totalPnl > 0 ? '+' : totalPnl < 0 ? '−' : ''}₹{Math.abs(totalPnl).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </button>
+              </>
+            )}
+          </div>
+        </footer>
+      </div>
+
       {fullscreenWorkspace}
+
+      {/* Command Palette Overlay */}
+      <KiteCommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        onNavClick={onNavClick}
+        onToggleDock={(dock) => {
+          setLayout((current) => (current.minimized.includes(dock) ? restorePane(current, dock) : minimizePane(current, dock)));
+        }}
+      />
+
+      {/* Customize Layout Modal */}
+      <CustomizeLayoutModal
+        open={customizeLayoutOpen}
+        onClose={() => setCustomizeLayoutOpen(false)}
+        layout={layout}
+        onUpdateLayout={setLayout}
+        activityRailVisible={activityRailVisible}
+        onToggleActivityRail={() => {
+          setActivityRailVisible((v) => {
+            const next = !v;
+            try {
+              localStorage.setItem('sterling_activity_rail', String(next));
+            } catch {}
+            return next;
+          });
+        }}
+        commandBarVisible={commandBarVisible}
+        onToggleCommandBar={() => setCommandBarVisible((v) => !v)}
+      />
     </div>
   );
 }

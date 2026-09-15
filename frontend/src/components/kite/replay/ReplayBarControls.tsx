@@ -30,6 +30,7 @@ export function ReplaySessionDropdown() {
   const anchor = useRef<HTMLButtonElement>(null);
   const locked = state !== 'idle';
   const [now, setNow] = useState(() => Date.now());
+  const initialDraftRef = useRef<{ date: string; endDate?: string }>({ date: draft.date, endDate: draft.endDate });
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
@@ -43,8 +44,9 @@ export function ReplaySessionDropdown() {
     if (open) {
       setNow(Date.now());
       setIsRangeMode(isRange);
+      initialDraftRef.current = { date: draft.date, endDate: draft.endDate };
     }
-  }, [open, isRange]);
+  }, [open, isRange, draft.date, draft.endDate]);
 
   const presets = useMemo(() => getDynamicMarketPresets(new Date(now)), [now, open]);
 
@@ -77,7 +79,7 @@ export function ReplaySessionDropdown() {
         onOpenChange={setOpen}
         label="Select session date"
         anchorRef={anchor}
-        width={256}
+        width={264}
         align="start"
       >
         <div className="rd-drop-menu" role="listbox" aria-label="Session date presets">
@@ -137,8 +139,7 @@ export function ReplaySessionDropdown() {
                     <span className="rd-drop-check">{selected ? '✓' : ''}</span>
                     <span className="rd-drop-option-text">
                       <span className="rd-drop-option-title">{p.label}</span>
-                      <span className="rd-drop-option-hint">{fmtSmartDate(p.date)}</span>
-                      <span className="rd-drop-option-hint">{fmtSessionDate(p.date, true)}</span>
+                      <span className="rd-drop-option-hint">{fmtSessionDate(p.date)}</span>
                     </span>
                   </button>
                 );
@@ -154,9 +155,6 @@ export function ReplaySessionDropdown() {
                     data-testid="replay-session-date-input"
                     onChange={(e) => {
                       if (e.target.value) {
-                        // Snap to a day the exchange was open. A weekend or a
-                        // holiday has no candles, so it produced "No real
-                        // candles available" instead of a session.
                         const newDate = nearestOpenSession(e.target.value);
                         setDraft({ date: newDate, endDate: newDate });
                       }
@@ -199,23 +197,67 @@ export function ReplaySessionDropdown() {
                   }}
                 />
               </div>
-              {isRange && (
-                <button
-                  type="button"
-                  className="rd-btn rd-btn-sm"
-                  data-variant="ghost"
-                  style={{ fontSize: '10px', padding: '2px 6px', alignSelf: 'flex-start' }}
-                  onClick={() => {
-                    setDraft({ endDate: draft.date });
-                    setIsRangeMode(false);
-                  }}
-                  data-testid="replay-session-reset-single-day"
-                >
-                  Reset to single day
-                </button>
-              )}
             </div>
           )}
+
+          {/* Action Bar: Apply, Cancel, and Back */}
+          <div
+            className="rd-drop-actions"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justify: 'space-between',
+              gap: 8,
+              padding: '8px 10px',
+              borderTop: '1px solid var(--k-border-2)',
+              background: 'var(--k-surface-2)',
+              marginTop: 4,
+            }}
+          >
+            {isRangeMode && (
+              <button
+                type="button"
+                className="rd-btn rd-btn-sm"
+                data-variant="ghost"
+                style={{ fontSize: '10.5px', padding: '3px 8px', color: 'var(--k-dim)' }}
+                onClick={() => {
+                  setDraft({ endDate: draft.date });
+                  setIsRangeMode(false);
+                }}
+                data-testid="replay-session-back"
+                title="Back to single day selection"
+              >
+                ← Single Day
+              </button>
+            )}
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className="rd-btn rd-btn-sm"
+                data-variant="ghost"
+                style={{ fontSize: '11px', padding: '3px 10px' }}
+                onClick={() => {
+                  setDraft({ date: initialDraftRef.current.date, endDate: initialDraftRef.current.endDate });
+                  setOpen(false);
+                }}
+                data-testid="replay-session-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rd-btn rd-btn-sm"
+                data-variant="primary"
+                style={{ fontSize: '11px', padding: '3px 12px', fontWeight: 600 }}
+                onClick={() => {
+                  setOpen(false);
+                }}
+                data-testid="replay-session-apply"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
         </div>
       </ReplayPopover>
     </>

@@ -8,14 +8,14 @@ import { useViewportScale } from './hooks/useViewportScale';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 2,
+      retry: (failureCount, error: any) => {
+        const status = error?.status || error?.response?.status;
+        if (status === 401 || status === 403 || status === 409) return false;
+        return failureCount < 1;
+      },
       staleTime: 10_000,
-      // Background polling/refetches must not blank the UI. Without these,
-      // every refetchInterval tick (and every window-focus refetch) drops the
-      // panel's data to `undefined`, so the whole page flashes its loading/empty
-      // state and snaps back — indistinguishable from a full page reload.
-      placeholderData: keepPreviousData, // keep last data visible while refetching
-      refetchOnWindowFocus: false,       // don't refetch-storm every query on focus
+      placeholderData: keepPreviousData,
+      refetchOnWindowFocus: false,
     },
   },
 });

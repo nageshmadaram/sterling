@@ -1,19 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { KiteLayout, NavItem, MoreTab } from './KiteLayout';
-import { DataLakePane } from './DataLakePane';
 import { KiteDashboard } from './KiteDashboard';
 import { SterlingWatchListWithHoldingsSync } from './SterlingWatchListWithHoldingsSync';
-import { MarketDataPane } from './MarketDataPane';
-import { ConnectPane } from './ConnectPane';
-import { HelpPane } from './HelpPane';
-import { MutualFundsPane } from './MutualFundsPane';
-import { PortfolioPane } from './PortfolioPane';
-import { PositionsPane } from './PositionsPane';
-import { OrdersPane } from './OrdersPane';
-import { FundsPane } from './FundsPane';
-import { BidsPane } from './BidsPane';
-import { AlertsPane } from './AlertsPane';
-import { BacktestPane } from './BacktestPane';
 import { InstrumentPane, InstrumentTab } from './InstrumentPane';
 import { KiteNotifications } from './KiteNotifications';
 import { PendingGttProtectionWatcher } from './PendingGttProtectionWatcher';
@@ -41,12 +29,27 @@ import { KiteInteractionMotion } from './KiteInteractionMotion';
 import { k } from '../../styles/kiteUI';
 import { type SignalChartData } from '../../types/kiteEngine';
 import { hasUnsavedDraft } from './config/unsavedDraftGuard';
+import { openSettingsSection } from './config/registry';
 import { AdaptiveEdgeRightSidebar } from './AdaptiveEdgeRightSidebar';
-import { AdaptiveEdgePane } from './AdaptiveEdgePane';
-import { UnifiedBacktestPane } from '../backtest/UnifiedBacktestPane';
-import { AstroPane } from './AstroPane';
-import { PcrPane } from './PcrPane';
-import { OpeningVolumeLeadersPane } from './OpeningVolumeLeadersPane';
+
+// Lazy-loaded secondary panes for instant initial workspace mount
+const DataLakePane = lazy(() => import('./DataLakePane').then(m => ({ default: m.DataLakePane })));
+const MarketDataPane = lazy(() => import('./MarketDataPane').then(m => ({ default: m.MarketDataPane })));
+const ConnectPane = lazy(() => import('./ConnectPane').then(m => ({ default: m.ConnectPane })));
+const HelpPane = lazy(() => import('./HelpPane').then(m => ({ default: m.HelpPane })));
+const MutualFundsPane = lazy(() => import('./MutualFundsPane').then(m => ({ default: m.MutualFundsPane })));
+const PortfolioPane = lazy(() => import('./PortfolioPane').then(m => ({ default: m.PortfolioPane })));
+const PositionsPane = lazy(() => import('./PositionsPane').then(m => ({ default: m.PositionsPane })));
+const OrdersPane = lazy(() => import('./OrdersPane').then(m => ({ default: m.OrdersPane })));
+const FundsPane = lazy(() => import('./FundsPane').then(m => ({ default: m.FundsPane })));
+const BidsPane = lazy(() => import('./BidsPane').then(m => ({ default: m.BidsPane })));
+const AlertsPane = lazy(() => import('./AlertsPane').then(m => ({ default: m.AlertsPane })));
+const BacktestPane = lazy(() => import('./BacktestPane').then(m => ({ default: m.BacktestPane })));
+const AdaptiveEdgePane = lazy(() => import('./AdaptiveEdgePane').then(m => ({ default: m.AdaptiveEdgePane })));
+const UnifiedBacktestPane = lazy(() => import('../backtest/UnifiedBacktestPane').then(m => ({ default: m.UnifiedBacktestPane })));
+const AstroPane = lazy(() => import('./AstroPane').then(m => ({ default: m.AstroPane })));
+const PcrPane = lazy(() => import('./PcrPane').then(m => ({ default: m.PcrPane })));
+const OpeningVolumeLeadersPane = lazy(() => import('./OpeningVolumeLeadersPane').then(m => ({ default: m.OpeningVolumeLeadersPane })));
 
 const MORE_TABS: { id: MoreTab; label: string }[] = [
   { id: 'bids', label: 'Bids' },
@@ -81,12 +84,14 @@ function MorePane({ activeTab, onTabChange }: { activeTab: MoreTab; onTabChange:
         })}
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {activeTab === 'bids' && <BidsPane />}
-        {activeTab === 'funds' && <FundsPane />}
-        {activeTab === 'mf' && <MutualFundsPane />}
-        {activeTab === 'alerts' && <AlertsPane />}
-        {activeTab === 'backtest' && <BacktestPane />}
-        {activeTab === 'data' && <MarketDataPane />}
+        <Suspense fallback={<div style={{ padding: 20, color: 'var(--k-dim)' }}>Loading...</div>}>
+          {activeTab === 'bids' && <BidsPane />}
+          {activeTab === 'funds' && <FundsPane />}
+          {activeTab === 'mf' && <MutualFundsPane />}
+          {activeTab === 'alerts' && <AlertsPane />}
+          {activeTab === 'backtest' && <BacktestPane />}
+          {activeTab === 'data' && <MarketDataPane />}
+        </Suspense>
       </div>
     </div>
   );
@@ -239,13 +244,13 @@ export function KiteTab() {
               <KiteTicker onOpenChart={(symbol) => handleOpenInstrument(symbol, 'chart')} />
             </TickerStartupBoundary>
           )}
-          content={content}
+          content={<Suspense fallback={<div style={{ padding: 20, color: 'var(--k-dim)' }}>Loading...</div>}>{content}</Suspense>}
           onBasketClick={() => setBasketOpen(true)}
           basketCount={basketCount}
         />
         <KiteNotifications />
         <PendingGttProtectionWatcher />
-        <KiteSessionGuard />
+        <KiteSessionGuard onOpenAccountSettings={() => openSettingsSection('account')} />
         <KiteAuthOverlay />
         {isOpen && options && <OrderWindow options={options} onClose={closeOrderWindow} />}
         {basketOpen && <BasketPane onClose={() => setBasketOpen(false)} />}

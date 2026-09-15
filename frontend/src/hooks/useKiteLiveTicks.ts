@@ -12,11 +12,11 @@ import { api } from '../utils/api';
 const K = '/api/v1/kite';
 const USER_ID = 'default';
 const STREAM_WS_PATH = '/api/v1/stream/ws';
-const BASE_DELAY = 2_000;
-const MAX_DELAY = 30_000;
-const RECONCILE_DEBOUNCE = 250;
-const UI_NOTIFY_MS = 250;
-const INTERACTION_GRACE_MS = 180;
+const BASE_DELAY = 1_000;
+const MAX_DELAY = 10_000;
+const RECONCILE_DEBOUNCE = 50;
+const UI_NOTIFY_MS = 50;
+const INTERACTION_GRACE_MS = 50;
 
 type BrowserLocation = Pick<Location, 'protocol' | 'host'>;
 

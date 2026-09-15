@@ -365,13 +365,14 @@ def _trade_pnl(trade: "SimTradeEvent", mark_price: float) -> tuple[float, float]
     """Return signed P&L and percent for a trade marked at ``mark_price``.
 
     Most replay option rows are long premium (`BUY`), including Snapback PE
-    rows whose board badge says SHORT to mean bearish. True short-premium rows
-    must invert the sign: if the option mark rises after a sell, that is a loss.
+    rows whose board badge says SHORT to mean bearish underlying signal.
+    True short-premium rows (`SELL`) invert the sign: if the option mark rises
+    after a sell, that is a loss.
     """
     qty = float(trade.quantity or 0)
     entry = float(trade.entry_price or 0)
     mark = float(mark_price or 0)
-    mult = -1.0 if str(trade.direction or "").upper() in {"SELL", "SHORT"} else 1.0
+    mult = -1.0 if str(trade.direction or "").upper() in {"SELL", "SHORT_PREMIUM"} else 1.0
     pnl = round((mark - entry) * qty * mult, 2)
     pct = round(((mark - entry) / entry) * 100.0 * mult, 2) if entry > 0 else 0.0
     return pnl, pct
@@ -1842,6 +1843,16 @@ class SimulationRunner:
                     if bar.get("daily_candle") is not None:
                         from app.services.snapback_replay import settle
                         settle(self, trade, bar["daily_candle"], bar_dt)
+                    elif trade.status == "OPEN":
+                        from app.services.snapback_replay import value
+                        spot = float(bar.get("close", 0) or bar.get("open", 0))
+                        if spot > 0:
+                            raw_m = value(trade, spot)
+                            exec_m, _, _ = _apply_friction(raw_m, raw_m, trade.underlying, self._config, strategy="snapback")
+                            _mark_open_trade(trade, exec_m, raw_mark=raw_m)
+                        if trade.timestamp_ms and bar_dt:
+                            elapsed_sec = max(0.0, bar_dt.timestamp() - (trade.timestamp_ms / 1000.0))
+                            trade.duration_mins = int(elapsed_sec // 60)
                     if trade.status == "OPEN":
                         still_open.append(trade)
                     continue
@@ -2123,6 +2134,138 @@ class SimulationRunner:
                 self._close_position(trade, exit_spot, bar_dt, exit_reason=exit_reason_label)
 
         self._recompute_totals()
+
+    def _fill_pending_snapback_session_close(self) -> None:
+        """Fill any CONFIRMED Snapback setups that fired at day D close using day D+1 09:15 AM open."""
+        if not hasattr(self, "_snapback_watch") or not self._snapback_watch:
+            return
+        wants_sb = False
+        if self._config:
+            cfg_strats = [s.lower() for s in (getattr(self._config, "strategies", None) or [getattr(self._config, "strategy", "")])]
+            wants_sb = "snapback" in cfg_strats or "all" in cfg_strats or "*" in cfg_strats or not cfg_strats
+        if not wants_sb:
+            return
+
+        from datetime import datetime, time, timedelta
+        from app.services.daily_sessions import is_session_day
+        from app.services.ohlcv_store import get_candles_bulk
+        from app.services.snapback_replay import entry_ready, attach
+
+        sb_cfg = getattr(self, "_cached_snapback_cfg", None) or _snapback_config()
+
+        for sym, watch_tuple in list(self._snapback_watch.items()):
+            if not isinstance(watch_tuple, tuple) or len(watch_tuple) < 2:
+                continue
+            prev_day, prev = watch_tuple
+            if not prev or not isinstance(prev, dict) or prev.get("strength") != "CONFIRMED":
+                continue
+
+            open_snapback = [t for t in self._stats.trades if t.strategy == "snapback" and t.status == "OPEN"]
+            if (len(open_snapback) >= sb_cfg.max_open_positions
+                or (sb_cfg.one_position_per_underlying and any(t.underlying == sym for t in open_snapback))):
+                self._strategy_notes["snapback"] = f"{sym}: confirmed setup skipped because the position limit is reached"
+                continue
+
+            try:
+                prev_d = datetime.strptime(prev_day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+            next_day = prev_d + timedelta(days=1)
+            while not is_session_day(next_day):
+                next_day += timedelta(days=1)
+
+            next_open_dt = datetime.combine(next_day, time(9, 15), tzinfo=_IST)
+            next_epoch = int(next_open_dt.timestamp())
+
+            res = getattr(self._config, "resolution", "5m") if self._config else "5m"
+            bulk = get_candles_bulk([sym, "NIFTY"], res, limit_per_symbol=10, since=next_epoch, until=next_epoch + 600)
+            next_bars = bulk.get(sym.upper(), [])
+            if not next_bars:
+                continue
+
+            bar = dict(next_bars[0])
+            bar["symbol"] = sym
+            bar["time"] = bar.get("time") or bar.get("timestamp")
+            fill_spot = float(bar.get("open") or bar.get("close", 0.0))
+            if fill_spot <= 0:
+                continue
+
+            can_fill = entry_ready(self, sym, bar, sb_cfg)
+            today_str = next_day.strftime("%Y-%m-%d")
+            fill_leg = _snapback_leg(sym, fill_spot, prev["opt_type"], prev["snapback_iv"], sb_cfg, today_str)
+
+            if fill_leg and can_fill:
+                entry = dict(prev)
+                entry["strength"] = "STRONG"
+                entry["fill_spot"] = fill_spot
+                entry["leg"] = fill_leg
+                entry["stop"] = _snapback_spot_stop(fill_leg, fill_spot, sb_cfg)
+                entry["max_hold_bars"] = max(1, int(sb_cfg.hold_days) * self._bars_per_session())
+                entry["runner_mult"] = sb_cfg.runner_mult
+                entry["runner_trail_pct"] = sb_cfg.runner_trail_pct
+
+                cfg_lots = max(1, self._config.lots) if self._config else 1
+                lot_size = fill_leg["lot_size"]
+                qty = cfg_lots * lot_size
+                raw_entry_p = fill_leg["premium"]
+                entry_p, _, friction_mode = _apply_friction(
+                    raw_entry_p, raw_entry_p, sym, self._config, strategy="snapback"
+                )
+                entry_slip = round((entry_p - raw_entry_p) * qty, 2)
+
+                is_multi = getattr(self, "_is_multi_day", False)
+                time_iso = next_open_dt.strftime("%Y-%m-%dT%H:%M:%S") if is_multi else next_open_dt.strftime("%H:%M:%S")
+                ts_ms = int(next_epoch * 1000)
+
+                trade = SimTradeEvent(
+                    trade_id=self._next_trade_id(),
+                    entry_time_iso=time_iso,
+                    exit_time_iso="OPEN",
+                    timestamp_ms=ts_ms,
+                    strategy="snapback",
+                    symbol=fill_leg["contract"],
+                    underlying=sym,
+                    direction="BUY",
+                    opt_type=fill_leg["opt_type"],
+                    strike=fill_leg["strike"],
+                    lots=cfg_lots,
+                    quantity=qty,
+                    entry_price=entry_p,
+                    exit_price=None,
+                    mark_price=entry_p,
+                    raw_mark=raw_entry_p,
+                    stop_loss=_premium_at(fill_leg, fill_spot, entry["stop"]),
+                    target_price=_premium_at(fill_leg, fill_spot, prev["target"]),
+                    status="OPEN",
+                    pnl_usd=0.0,
+                    pnl_pct=0.0,
+                    duration_mins=0,
+                    raw_entry=raw_entry_p,
+                    raw_exit=None,
+                    slippage=0.0 if friction_mode == "ideal" else max(0.0, entry_slip),
+                    leg_delta=fill_leg.get("delta") or 0.71,
+                    spot_entry=fill_spot,
+                    spot_stop=entry["stop"],
+                    spot_target=prev["target"],
+                    spot_hwm=fill_spot,
+                    spot_initial_risk=abs(fill_spot - entry["stop"]) if entry["stop"] is not None else None,
+                    spot_initial_stop=entry["stop"],
+                    exit_reason=None,
+                    max_hold_bars=entry["max_hold_bars"],
+                    trails=True,
+                    runner_mult=float(sb_cfg.runner_mult or 0.0),
+                    runner_trail_pct=float(sb_cfg.runner_trail_pct or 25.0),
+                    bars_held=0,
+                    scan_origin="spot_scan",
+                    signal_date=prev_day,
+                )
+                attach(self, trade, entry, sb_cfg, fill_leg, next_open_dt)
+                self._stats.trades_entered += 1
+                self._stats.trades.append(trade)
+                self._open_by_symbol.setdefault(sym, []).append(trade)
+                self._recompute_totals()
+                self._publish("trade", trade.model_dump())
 
     def _recompute_totals(self) -> None:
         """Re-derive every aggregate from the trade ledger.
@@ -3218,8 +3361,9 @@ class SimulationRunner:
             self._publish_state()
 
         try:
+            hydration_end_epoch = end_epoch + (86400 * 3 if _sim_wants_snapback else 0)
             await _hydrate_missing_candles(
-                instruments, res, warmup_start, end_epoch,
+                instruments, res, warmup_start, hydration_end_epoch,
                 session_start=start_epoch, on_progress=_report_hydrate
             )
         except Exception as exc:  # noqa: BLE001
@@ -3232,24 +3376,27 @@ class SimulationRunner:
             return
         try:
             await _hydrate_missing_candles(
-                instruments, "1d", start_epoch - (1500 if _sim_wants_snapback else 90) * 86400, end_epoch,
+                instruments, "1d", start_epoch - (1500 if _sim_wants_snapback else 90) * 86400, hydration_end_epoch,
                 session_start=start_epoch - (1500 if _sim_wants_snapback else 90) * 86400, on_progress=_report_hydrate
             )
         except Exception as exc:
             log.warning("Daily candle hydration notice: %s", exc)
 
         # Pre-seed indicator history with pre-session bars so indicators are ready at 09:15 AM
+        from app.services.ohlcv_store import get_candles_bulk
         self._bar_history = {}
         self._in_session_bars = {}
+        bulk_p_candles = get_candles_bulk(instruments, res, limit_per_symbol=50, until=start_epoch)
         for sym in instruments:
-            prior_candles = ohlcv_get(sym, res, limit=50, until=start_epoch)
+            prior_candles = bulk_p_candles.get(sym.upper(), [])
             p_bars = [{**c, "symbol": sym, "resolution": res} for c in prior_candles]
             self._bar_history[sym] = p_bars[-50:]
 
-        # Fetch candles for each instrument from local store
+        # Fetch candles for each instrument from local store in bulk
         all_bars: List[Dict[str, Any]] = []
+        bulk_session_candles = get_candles_bulk(instruments, res, limit_per_symbol=100000, since=start_epoch, until=end_epoch + 1)
         for sym in instruments:
-            candles = ohlcv_get(sym, res, limit=100000, since=start_epoch)
+            candles = bulk_session_candles.get(sym.upper(), [])
             for c in candles:
                 c_time = c["time"]
                 if start_epoch <= c_time <= end_epoch:
@@ -3266,21 +3413,22 @@ class SimulationRunner:
             from app.services.daily_sessions import is_session_day
             covered = {(b["symbol"], datetime.fromtimestamp(b["time"], ist).date())
                        for b in all_bars}
+            final_close = datetime.fromtimestamp(end_epoch, ist).replace(hour=15, minute=30, second=0)
+            bulk_daily_candles = get_candles_bulk(
+                instruments, "1d", limit_per_symbol=10000, since=start_epoch - 86400,
+                until=max(end_epoch, int(final_close.timestamp())) + 1
+            )
             for sym in instruments:
-                # A daily candle can supply its OPEN to a shorter replay.
-                # Its full range is revealed only by the separate close event.
-                final_close = datetime.fromtimestamp(end_epoch, ist).replace(hour=15, minute=30, second=0)
-                daily = closed_daily_candles(
-                    ohlcv_get(sym, "1d", limit=10000, since=start_epoch - 86400,
-                              until=max(end_epoch, final_close.timestamp()) + 1), final_close)
+                raw_daily = bulk_daily_candles.get(sym.upper(), [])
+                daily = closed_daily_candles(raw_daily, final_close)
                 from app.services.daily_sessions import completed_intraday_candle
                 daily_days = {datetime.fromtimestamp(dc["time"], ist).date() for dc in daily}
                 intraday_days = {}
                 for b in all_bars:
                     if b["symbol"] == sym and not b.get("daily_observation"):
                         intraday_days.setdefault(datetime.fromtimestamp(b["time"], ist).date(), []).append(b)
-                for day, rows in intraday_days.items():
-                    if day not in daily_days:
+                for day_d, rows in intraday_days.items():
+                    if day_d not in daily_days:
                         dc = completed_intraday_candle(rows, res, datetime.fromtimestamp(end_epoch, ist))
                         if dc:
                             daily.append(dc)
@@ -3345,6 +3493,18 @@ class SimulationRunner:
                 self._snapback_days = {}
                 self._session_bars = {}
                 pre_asof = start_epoch - 60
+                asof_day = datetime.fromtimestamp(float(pre_asof), ist).date()
+
+                # Bulk pre-fill daily tape cache to avoid 204 individual 1500-day SQL queries
+                bulk_hist_daily = get_candles_bulk(instruments, "1d", limit_per_symbol=900, since=int(pre_asof - 1500 * 86400), until=int(pre_asof) + 1)
+                for sym in instruments:
+                    sym_u = sym.upper()
+                    raw_h = bulk_hist_daily.get(sym_u, [])
+                    if raw_h:
+                        closed_h = closed_daily_candles(raw_h, datetime.fromtimestamp(pre_asof, ist))
+                        done_h = [b for b in closed_h if datetime.fromtimestamp(_bar_epoch_seconds(b) or 0.0, ist).date() != asof_day][-900:]
+                        self._daily_tape_cache[(sym, asof_day)] = done_h
+
                 for sym in instruments:
                     w_sig = _snapback_watch_from_bars(self, sym, [], pre_asof)
                     if w_sig:
@@ -3414,11 +3574,15 @@ class SimulationRunner:
                 self._publish_frame()
 
                 # Process bars up to current simulated timestamp
+                eval_count = 0
                 while bar_idx < len(all_bars) and self._current_sim_epoch >= all_bars[bar_idx]["time"]:
                     bar = all_bars[bar_idx]
                     self._bars_played = bar_idx + 1
                     self._evaluate_bar(bar, datetime.fromtimestamp(bar["time"], tz=ist))
                     bar_idx += 1
+                    eval_count += 1
+                    if eval_count % 30 == 0:
+                        await asyncio.sleep(0)
 
                 # Check and emit recorded historical signals whose timestamp has arrived
                 curr_sim_ms = int(self._current_sim_epoch * 1000)
@@ -3464,6 +3628,7 @@ class SimulationRunner:
                 self._publish_state()
             elif not self._stop_requested and (not generation or generation == self._run_generation):
                 self._state = SimState.IDLE
+                self._fill_pending_snapback_session_close()
                 self._close_all_open("reached session end")
                 self._session_complete = True
                 if all_bars and bar_idx >= len(all_bars):
@@ -5236,101 +5401,115 @@ async def _hydrate_missing_candles(
         # size, so the replay stops scaling its quantities off a literal table.
         await prime_lot_sizes(kc, instruments)
         for idx, sym in enumerate(instruments):
-            canon_sym = _canonical_symbol(sym)
-            token = KITE_TOKENS.get(canon_sym.upper()) or KITE_TOKENS.get(sym.upper())
-            if not token and sym.upper() in INDEX_ALIASES:
-                token = KITE_TOKENS.get(INDEX_ALIASES[sym.upper()])
-            if not token and canon_sym.upper() in INDEX_ALIASES:
-                token = KITE_TOKENS.get(INDEX_ALIASES[canon_sym.upper()])
-            if not token:
-                for exch in ("NSE", "INDICES", "NFO", "BSE"):
+            try:
+                canon_sym = _canonical_symbol(sym)
+                token = KITE_TOKENS.get(canon_sym.upper()) or KITE_TOKENS.get(sym.upper())
+                if not token and sym.upper() in INDEX_ALIASES:
+                    token = KITE_TOKENS.get(INDEX_ALIASES[sym.upper()])
+                if not token and canon_sym.upper() in INDEX_ALIASES:
+                    token = KITE_TOKENS.get(INDEX_ALIASES[canon_sym.upper()])
+                if not token:
+                    for exch in ("NSE", "INDICES", "NFO", "BSE"):
+                        try:
+                            t = await kc._instruments.resolve_token(canon_sym.upper(), exch)
+                            if t:
+                                token = t
+                                break
+                        except Exception:
+                            pass
+                if not token:
+                    log.warning("Could not resolve Kite token for %s; skipping remote candle hydration", canon_sym)
+                    continue
+
+                range_cov = ohlcv_store.get_range_coverage(canon_sym, resolution, check_start, effective_target_end)
+                range_count = range_cov.get("count") or 0
+                fetch_ranges: List[Tuple[int, int]] = []
+                if range_count == 0:
+                    fetch_ranges.append((check_start, effective_target_end))
+                else:
+                    cov_earliest = range_cov.get("earliest") or check_start
+                    cov_latest = range_cov.get("latest") or effective_target_end
+                    if check_start < (cov_earliest - res_sec):
+                        fetch_ranges.append((check_start, cov_earliest))
+                    if is_today_in_range:
+                        if cov_latest < (effective_target_end - res_sec * 2):
+                            fetch_ranges.append((cov_latest, effective_target_end))
+                    else:
+                        if cov_latest < (effective_target_end - 900):
+                            fetch_ranges.append((cov_latest, effective_target_end))
+
+                    # Internal gap detection: for 5m candles, check if count is lower than expected.
+                    # For 1d daily candles, if we already have candles up to effective_target_end (or within 5 days),
+                    # do NOT re-fetch the entire 1500-day range on every start for newer/IPO stocks.
+                    if resolution in ("1d", "day"):
+                        cov_latest = range_cov.get("latest") or effective_target_end
+                        if cov_latest < (effective_target_end - 86400 * 5) and (check_start, effective_target_end) not in fetch_ranges:
+                            fetch_ranges.append((check_start, effective_target_end))
+                    else:
+                        days_span = max(1, (effective_target_end - check_start) // 86400)
+                        expected_min = max(1, int(days_span * 70 * 0.5))
+                        if range_count < expected_min and (check_start, effective_target_end) not in fetch_ranges:
+                            fetch_ranges.append((check_start, effective_target_end))
+
+                if not fetch_ranges:
+                    continue
+
+                if on_progress:
                     try:
-                        t = await kc._instruments.resolve_token(canon_sym.upper(), exch)
-                        if t:
-                            token = t
-                            break
+                        on_progress(f"⚡ Hydrating {canon_sym} ({idx + 1}/{len(instruments)})...")
+                        await asyncio.sleep(0.001)
                     except Exception:
                         pass
-            if not token:
-                log.warning("Could not resolve Kite token for %s; skipping remote candle hydration", canon_sym)
-                continue
 
-            range_cov = ohlcv_store.get_range_coverage(canon_sym, resolution, check_start, effective_target_end)
-            range_count = range_cov.get("count") or 0
-            fetch_ranges: List[Tuple[int, int]] = []
-            if range_count == 0:
-                fetch_ranges.append((check_start, effective_target_end))
-            else:
-                cov_earliest = range_cov.get("earliest") or check_start
-                cov_latest = range_cov.get("latest") or effective_target_end
-                if check_start < (cov_earliest - res_sec):
-                    fetch_ranges.append((check_start, cov_earliest))
-                if is_today_in_range:
-                    if cov_latest < (effective_target_end - res_sec * 2):
-                        fetch_ranges.append((cov_latest, effective_target_end))
-                else:
-                    if cov_latest < (effective_target_end - 900):
-                        fetch_ranges.append((cov_latest, effective_target_end))
+                log.info("Missing/stale local candles for %s [%s] ranges %s. Fetching from Zerodha Kite...", canon_sym, resolution, fetch_ranges)
 
-                # Internal gap detection: if count is significantly lower than expected
-                days_span = max(1, (effective_target_end - check_start) // 86400)
-                expected_min = max(1, int(days_span * (70 if resolution in ("5m", "5min") else 1) * 0.5))
-                if range_count < expected_min and (check_start, effective_target_end) not in fetch_ranges:
-                    fetch_ranges.append((check_start, effective_target_end))
+                for f_epoch, t_epoch in fetch_ranges:
+                    cur_start = f_epoch
+                    while cur_start < t_epoch:
+                        cur_end = min(cur_start + CHUNK_SEC, t_epoch)
+                        from_str = datetime.fromtimestamp(cur_start, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
+                        to_str = datetime.fromtimestamp(cur_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
+                        hist_data = None
+                        for attempt in range(1, 5):
+                            try:
+                                hist_data = await kc.get_historical(token, k_res, from_str, to_str)
+                                if isinstance(hist_data, dict) and "candles" in hist_data:
+                                    break
+                            except Exception as exc:
+                                err_str = str(exc).lower()
+                                is_rate = "429" in err_str or "too many" in err_str or "rate" in err_str
+                                log.warning("Chunk fetch attempt %d failed for %s (%s to %s) [rate_limit=%s]: %s", attempt, canon_sym, from_str, to_str, is_rate, exc)
+                                if attempt < 4:
+                                    sleep_time = (2.5 * attempt) if is_rate else (1.0 * attempt)
+                                    await asyncio.sleep(sleep_time)
 
-            if not fetch_ranges:
-                continue
-
-            if on_progress:
-                try:
-                    on_progress(f"⚡ Hydrating {canon_sym} ({idx + 1}/{len(instruments)})...")
-                except Exception:
-                    pass
-
-            log.info("Missing/stale local candles for %s [%s] ranges %s. Fetching from Zerodha Kite...", canon_sym, resolution, fetch_ranges)
-
-            for f_epoch, t_epoch in fetch_ranges:
-                cur_start = f_epoch
-                while cur_start < t_epoch:
-                    cur_end = min(cur_start + CHUNK_SEC, t_epoch)
-                    from_str = datetime.fromtimestamp(cur_start, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    to_str = datetime.fromtimestamp(cur_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    hist_data = None
-                    for attempt in range(1, 4):
-                        try:
-                            hist_data = await kc.get_historical(token, k_res, from_str, to_str)
-                            if isinstance(hist_data, dict) and "candles" in hist_data:
-                                break
-                        except Exception as exc:
-                            log.warning("Chunk fetch attempt %d failed for %s (%s to %s): %s", attempt, canon_sym, from_str, to_str, exc)
-                            if attempt < 3:
-                                await asyncio.sleep(1.0 * attempt)
-
-                    if isinstance(hist_data, dict) and "candles" in hist_data:
-                        raw_list = hist_data["candles"]
-                        parsed_candles = []
-                        for row in raw_list:
-                            dt_c = datetime.fromisoformat(row[0])
-                            if dt_c.tzinfo is None:
-                                dt_c = dt_c.replace(tzinfo=ist_tz)
-                            parsed_candles.append({
-                                "time": int(dt_c.timestamp()),
-                                "open": float(row[1]),
-                                "high": float(row[2]),
-                                "low": float(row[3]),
-                                "close": float(row[4]),
-                                "volume": float(row[5]) if len(row) > 5 else 0.0,
-                            })
-                        if parsed_candles:
-                            ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
-                            if canon_sym != sym:
-                                ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
-                            alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
-                            if alias and alias != canon_sym.upper():
-                                ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
-                            log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
-                    cur_start = cur_end + 1
-                    await asyncio.sleep(0.35)
+                        if isinstance(hist_data, dict) and "candles" in hist_data:
+                            raw_list = hist_data["candles"]
+                            parsed_candles = []
+                            for row in raw_list:
+                                dt_c = datetime.fromisoformat(row[0])
+                                if dt_c.tzinfo is None:
+                                    dt_c = dt_c.replace(tzinfo=ist_tz)
+                                parsed_candles.append({
+                                    "time": int(dt_c.timestamp()),
+                                    "open": float(row[1]),
+                                    "high": float(row[2]),
+                                    "low": float(row[3]),
+                                    "close": float(row[4]),
+                                    "volume": float(row[5]) if len(row) > 5 else 0.0,
+                                })
+                            if parsed_candles:
+                                ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
+                                if canon_sym != sym:
+                                    ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
+                                alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
+                                if alias and alias != canon_sym.upper():
+                                    ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
+                                log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
+                        cur_start = cur_end + 1
+                        await asyncio.sleep(0.40)
+            except Exception as instrument_exc:
+                log.warning("Hydration skipped for instrument %s due to error: %s", sym, instrument_exc)
     finally:
         await kc.close()
 
