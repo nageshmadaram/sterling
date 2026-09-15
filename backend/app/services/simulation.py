@@ -5295,35 +5295,42 @@ async def _hydrate_missing_candles(
                     cur_end = min(cur_start + CHUNK_SEC, t_epoch)
                     from_str = datetime.fromtimestamp(cur_start, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
                     to_str = datetime.fromtimestamp(cur_end, tz=ist_tz).strftime("%Y-%m-%d %H:%M:%S")
-                    try:
-                        hist_data = await kc.get_historical(token, k_res, from_str, to_str)
-                        if isinstance(hist_data, dict) and "candles" in hist_data:
-                            raw_list = hist_data["candles"]
-                            parsed_candles = []
-                            for row in raw_list:
-                                dt_c = datetime.fromisoformat(row[0])
-                                if dt_c.tzinfo is None:
-                                    dt_c = dt_c.replace(tzinfo=ist_tz)
-                                parsed_candles.append({
-                                    "time": int(dt_c.timestamp()),
-                                    "open": float(row[1]),
-                                    "high": float(row[2]),
-                                    "low": float(row[3]),
-                                    "close": float(row[4]),
-                                    "volume": float(row[5]) if len(row) > 5 else 0.0,
-                                })
-                            if parsed_candles:
-                                ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
-                                if canon_sym != sym:
-                                    ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
-                                alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
-                                if alias and alias != canon_sym.upper():
-                                    ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
-                                log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
-                    except Exception as exc:
-                        log.warning("Failed chunk fetch for %s (%s to %s): %s", canon_sym, from_str, to_str, exc)
+                    hist_data = None
+                    for attempt in range(1, 4):
+                        try:
+                            hist_data = await kc.get_historical(token, k_res, from_str, to_str)
+                            if isinstance(hist_data, dict) and "candles" in hist_data:
+                                break
+                        except Exception as exc:
+                            log.warning("Chunk fetch attempt %d failed for %s (%s to %s): %s", attempt, canon_sym, from_str, to_str, exc)
+                            if attempt < 3:
+                                await asyncio.sleep(1.0 * attempt)
+
+                    if isinstance(hist_data, dict) and "candles" in hist_data:
+                        raw_list = hist_data["candles"]
+                        parsed_candles = []
+                        for row in raw_list:
+                            dt_c = datetime.fromisoformat(row[0])
+                            if dt_c.tzinfo is None:
+                                dt_c = dt_c.replace(tzinfo=ist_tz)
+                            parsed_candles.append({
+                                "time": int(dt_c.timestamp()),
+                                "open": float(row[1]),
+                                "high": float(row[2]),
+                                "low": float(row[3]),
+                                "close": float(row[4]),
+                                "volume": float(row[5]) if len(row) > 5 else 0.0,
+                            })
+                        if parsed_candles:
+                            ohlcv_store.upsert_candles(canon_sym, resolution, parsed_candles)
+                            if canon_sym != sym:
+                                ohlcv_store.upsert_candles(sym, resolution, parsed_candles)
+                            alias = INDEX_ALIASES.get(canon_sym.upper()) or INDEX_ALIASES.get(sym.upper())
+                            if alias and alias != canon_sym.upper():
+                                ohlcv_store.upsert_candles(alias, resolution, parsed_candles)
+                            log.info("Hydrated %d historical candles for %s (%s to %s)", len(parsed_candles), canon_sym, from_str, to_str)
                     cur_start = cur_end + 1
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.35)
     finally:
         await kc.close()
 

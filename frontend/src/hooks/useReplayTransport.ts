@@ -214,17 +214,39 @@ export function useReplayTransport(): ReplayTransport {
       return;
     }
     const config = draftToConfig(store.draft);
+
+    const existingEvents = store.status.stats?.events || [];
+    const existingTrades = store.status.stats?.trades || [];
+    const isRetry = store.error !== null || store.status.state === 'loading';
+    const hasSimulatedRows = existingEvents.length > 0 || existingTrades.length > 0;
+
     store.setError(null);
-    store.reset();
-    // Show spinner IMMEDIATELY so the user knows the click registered.
-    // Without this, the UI stays idle while the POST is in flight.
-    store.setStatus({ ...store.status, state: 'loading', status_message: 'Starting replay…' });
+    if (!hasSimulatedRows && !isRetry) {
+      store.reset();
+      clearFeedCache();
+    }
+
+    // Show spinner IMMEDIATELY so the user knows the click registered, preserving simulated rows
+    store.setStatus({
+      ...store.status,
+      state: 'loading',
+      status_message: 'Starting replay…',
+      stats: {
+        ...store.status.stats,
+        events: existingEvents,
+        trades: existingTrades,
+      },
+    });
     store.setTab(store.tab === 'signals' ? 'signals' : 'trades');
-    clearFeedCache();
 
     try {
       const status = await call('/start', config);
-      store.setStatus(status);
+      const mergedStats = {
+        ...status.stats,
+        events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
+        trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
+      };
+      store.setStatus({ ...status, stats: mergedStats });
       invalidateSimRelatedQueries(queryClient);
       window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
       if (!(await confirmStarted())) {
@@ -250,9 +272,13 @@ export function useReplayTransport(): ReplayTransport {
         });
         try {
           await call('/stop');
-          clearFeedCache();
           const status = await call('/start', { ...config });
-          store.setStatus(status);
+          const mergedStats = {
+            ...status.stats,
+            events: status.stats.events.length > 0 ? status.stats.events : existingEvents,
+            trades: status.stats.trades.length > 0 ? status.stats.trades : existingTrades,
+          };
+          store.setStatus({ ...status, stats: mergedStats });
           invalidateSimRelatedQueries(queryClient);
           window.dispatchEvent(new CustomEvent('sterling-simulation-start'));
           if (!(await confirmStarted())) {
@@ -269,12 +295,28 @@ export function useReplayTransport(): ReplayTransport {
           }
           return;
         } catch (retryErr: any) {
-          useReplayStore.getState().setStatus({ ...useReplayStore.getState().status, state: 'idle' });
+          useReplayStore.getState().setStatus({
+            ...useReplayStore.getState().status,
+            state: 'idle',
+            stats: {
+              ...useReplayStore.getState().status.stats,
+              events: existingEvents,
+              trades: existingTrades,
+            },
+          });
           fail(retryErr?.api?.code ?? 'start_failed', retryErr?.api?.message || 'Could not start the replay.', () => { void start(); });
           return;
         }
       }
-      useReplayStore.getState().setStatus({ ...useReplayStore.getState().status, state: 'idle' });
+      useReplayStore.getState().setStatus({
+        ...useReplayStore.getState().status,
+        state: 'idle',
+        stats: {
+          ...useReplayStore.getState().status.stats,
+          events: existingEvents,
+          trades: existingTrades,
+        },
+      });
       fail(api.code, api.message || 'Could not start the replay.', () => { void start(); });
     }
   }, [fail, queryClient]);
