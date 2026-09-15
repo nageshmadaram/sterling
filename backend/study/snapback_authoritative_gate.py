@@ -59,17 +59,17 @@ def evaluate_authoritative_snapback_gate(
     quote_coverage_pct: float = 100.0,
     seed: int = 42,
     entry_sessions_count: Optional[int] = None,
+    require_mtm_evidence: bool = False,
 ) -> AuthoritativeGateVerdict:
     """Evaluate Snapback observed replay results against the 04_VALIDATION_AND_DELIVERY.md contract."""
     n_trades = len(trade_pnls)
     reasons: List[str] = []
     checks: Dict[str, bool] = {}
 
-    if statutory_costs is None:
-        statutory_costs = [0.0] * n_trades
-
-    # Fail closed on cost length mismatch
-    if len(statutory_costs) != n_trades:
+    cost_evidence_valid = statutory_costs is not None and len(statutory_costs) == n_trades
+    checks["cost_evidence_provided"] = cost_evidence_valid
+    if not cost_evidence_valid:
+        reasons.append(f"Missing or mismatched cost evidence: costs={len(statutory_costs) if statutory_costs else 0} vs trades={n_trades}")
         return AuthoritativeGateVerdict(
             promoted=False,
             total_sessions=len(set(entry_dates)) if entry_dates else (entry_sessions_count or 0),
@@ -82,8 +82,8 @@ def evaluate_authoritative_snapback_gate(
             top_1pct_pnl_share=0.0,
             unresolved_exposures_count=unresolved_exposures_count,
             quote_coverage_pct=quote_coverage_pct,
-            checks={"cost_data_length_matched": False},
-            reasons=[f"Cost data length mismatch: costs {len(statutory_costs)} != trades {n_trades}"],
+            checks=checks,
+            reasons=reasons,
         )
 
     if entry_dates and len(entry_dates) == n_trades:
@@ -94,6 +94,8 @@ def evaluate_authoritative_snapback_gate(
         dates = [f"day_{i}" for i in range(n_trades)]
 
     if n_trades == 0:
+        checks["completed_trades_ge_300"] = False
+        reasons.append("No completed trades in evaluation run")
         return AuthoritativeGateVerdict(
             promoted=False,
             total_sessions=len(set(dates)) if dates else 0,
@@ -106,8 +108,8 @@ def evaluate_authoritative_snapback_gate(
             top_1pct_pnl_share=0.0,
             unresolved_exposures_count=unresolved_exposures_count,
             quote_coverage_pct=quote_coverage_pct,
-            checks={"completed_trades_ge_300": False},
-            reasons=["No completed trades in evaluation run"],
+            checks=checks,
+            reasons=reasons,
         )
 
     pnls = np.array(trade_pnls, dtype=float)
@@ -142,18 +144,21 @@ def evaluate_authoritative_snapback_gate(
         lower_95_ci = net_expectancy - 1.96 * (float(np.std(pnls)) / math.sqrt(n_trades))
 
     # Daily MTM Drawdown against Predeclared Allocation Capital Budget
-    if daily_mtm_equity_series and len(daily_mtm_equity_series) > 0:
+    has_mtm_evidence = daily_mtm_equity_series is not None and len(daily_mtm_equity_series) > 0
+    checks["daily_mtm_evidence_provided"] = has_mtm_evidence or not require_mtm_evidence
+    
+    if has_mtm_evidence:
         mtm_series = np.array(daily_mtm_equity_series, dtype=float)
         peak = np.maximum.accumulate(mtm_series)
         drawdowns = peak - mtm_series
         max_dd_val = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+        max_dd_pct = (max_dd_val / allocation_capital_budget) * 100.0
     else:
         cum = np.cumsum(pnls)
         peak = np.maximum.accumulate(cum)
         drawdowns = peak - cum
         max_dd_val = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
-
-    max_dd_pct = (max_dd_val / allocation_capital_budget) * 100.0
+        max_dd_pct = (max_dd_val / allocation_capital_budget) * 100.0
 
     # Top 1% PnL share (tail concentration metric)
     sorted_pnls = np.sort(pnls)[::-1]
@@ -188,9 +193,12 @@ def evaluate_authoritative_snapback_gate(
         reasons.append(f"Expectancy under 2x costs ({expectancy_2x:.2f}) <= 0")
 
     # Gate 6: Drawdown within initial evaluation ceiling (10.0%)
-    checks["drawdown_within_budget"] = max_dd_pct <= max_allowed_drawdown_pct
+    checks["drawdown_within_budget"] = max_dd_pct <= max_allowed_drawdown_pct and (has_mtm_evidence or not require_mtm_evidence)
     if not checks["drawdown_within_budget"]:
-        reasons.append(f"Max MTM drawdown {max_dd_pct:.2f}% exceeds budget ceiling {max_allowed_drawdown_pct:.2f}%")
+        if require_mtm_evidence and not has_mtm_evidence:
+            reasons.append("Missing daily MTM equity path evidence")
+        else:
+            reasons.append(f"Max MTM drawdown {max_dd_pct:.2f}% exceeds budget ceiling {max_allowed_drawdown_pct:.2f}%")
 
     # Gate 7: Zero unresolved exposures
     checks["zero_unresolved_exposures"] = unresolved_exposures_count == 0

@@ -157,6 +157,37 @@ class SnapbackContractRegistry:
         """Get strike step for symbol."""
         return DEFAULT_STRIKE_STEPS.get(symbol.upper(), 10.0)
 
+    def get_monthly_expiry(self, symbol: str, entry_date_str: str, min_dte: int = 40, max_dte: int = 60) -> str:
+        """Resolve monthly expiry date (last Thursday of month) targeting 40-60 DTE."""
+        dt = datetime.datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+        candidates = []
+        
+        for month_offset in range(0, 4):
+            # Advance month
+            y = dt.year + (dt.month - 1 + month_offset) // 12
+            m = (dt.month - 1 + month_offset) % 12 + 1
+            
+            # Find last Thursday of month (m, y)
+            if m == 12:
+                next_m_first = datetime.date(y + 1, 1, 1)
+            else:
+                next_m_first = datetime.date(y, m + 1, 1)
+            
+            last_day = next_m_first - datetime.timedelta(days=1)
+            # Thursday is weekday() == 3
+            days_back = (last_day.weekday() - 3) % 7
+            last_thursday = last_day - datetime.timedelta(days=days_back)
+            
+            dte = (last_thursday - dt).days
+            if dte > 0:
+                candidates.append((abs(dte - 50), dte, last_thursday.strftime("%Y-%m-%d")))
+        
+        if not candidates:
+            return entry_date_str
+            
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][2]
+
     def resolve_contract_spec(
         self,
         symbol: str,
@@ -170,7 +201,9 @@ class SnapbackContractRegistry:
         lot = self.get_lot_size(symbol, date_str) or 0
         step = self.get_strike_step(symbol)
         exchange = "BFO" if symbol.upper() in ("SENSEX", "BANKEX") else "NFO"
-        tsym = f"{symbol.upper()}{expiry}{int(strike) if strike else ''}{instrument_type}"
+        
+        resolved_expiry = expiry or self.get_monthly_expiry(symbol, date_str)
+        tsym = f"{symbol.upper()}{resolved_expiry}{int(strike) if strike else ''}{instrument_type}"
 
         return HistoricalContractSpec(
             trade_date=date_str,
@@ -179,7 +212,7 @@ class SnapbackContractRegistry:
             exchange=exchange,
             tradingsymbol=tsym,
             instrument_type=instrument_type,
-            expiry=expiry,
+            expiry=resolved_expiry,
             strike=strike,
             lot_size=lot,
             tick_size=0.05,

@@ -60,7 +60,11 @@ def generate_snapback_reconciliation_bundle(
     run_dir = os.path.join(output_base_dir, run_id)
     os.makedirs(run_dir, exist_ok=True)
 
-    if len(observed_records) == 0:
+    filled_records = [r for r in observed_records if r.fill_status == "FILLED"]
+    total_opportunities = len(observed_records)
+    quote_coverage_pct = (len(filled_records) / total_opportunities * 100.0) if total_opportunities > 0 else 0.0
+
+    if len(filled_records) == 0:
         summary = ReconciliationSummary(
             run_id=run_id,
             total_trades=0,
@@ -75,7 +79,7 @@ def generate_snapback_reconciliation_bundle(
         )
         empty_bundle = {
             "run_manifest.json": manifest_dict or {"run_id": run_id, "status": "EMPTY"},
-            "dataset_manifest.json": dataset_manifest_dict or {"total_quotes": 0},
+            "dataset_manifest.json": dataset_manifest_dict or {"total_quotes": 0, "coverage_pct": quote_coverage_pct},
             "contract_registry.json": contract_registry_dict or {"contracts": 0},
             "opportunities.json": [],
             "quotes.json": [],
@@ -100,27 +104,14 @@ def generate_snapback_reconciliation_bundle(
     observed_pnls = []
     errors = []
     costs = []
+    filled_entry_dates = []
     trades_dict_list = []
     opportunities_list = []
     fills_list = []
     hedge_events_list = []
+    aggregated_mtm_series = []
 
     for rec in observed_records:
-        # Modeled PnL in total Rupees: (modeled_exit - modeled_entry) * quantity
-        modeled_trade_net_rupees = (rec.modeled_exit_price - rec.modeled_entry_price) * rec.quantity
-        observed_trade_net_rupees = rec.total_trade_pnl
-        err = observed_trade_net_rupees - modeled_trade_net_rupees
-
-        modeled_pnls.append(modeled_trade_net_rupees)
-        observed_pnls.append(observed_trade_net_rupees)
-        errors.append(err)
-        costs.append(rec.statutory_charges)
-
-        d = rec.as_dict()
-        d["modeled_pnl_rupees"] = round(modeled_trade_net_rupees, 2)
-        d["observed_error_rupees"] = round(err, 2)
-        trades_dict_list.append(d)
-
         opportunities_list.append({
             "trade_id": rec.trade_id,
             "entry_date": rec.entry_date,
@@ -129,6 +120,23 @@ def generate_snapback_reconciliation_bundle(
             "strike": rec.strike,
         })
         if rec.fill_status == "FILLED":
+            # Like-with-like economic PnL calculation in Rupee terms
+            modeled_option_rupees = (rec.modeled_exit_price - rec.modeled_entry_price) * rec.quantity
+            modeled_trade_net_rupees = modeled_option_rupees + rec.hedge_pnl - rec.statutory_charges
+            observed_trade_net_rupees = rec.total_trade_pnl
+            err = observed_trade_net_rupees - modeled_trade_net_rupees
+
+            modeled_pnls.append(modeled_trade_net_rupees)
+            observed_pnls.append(observed_trade_net_rupees)
+            errors.append(err)
+            costs.append(rec.statutory_charges)
+            filled_entry_dates.append(rec.entry_date)
+
+            d = rec.as_dict()
+            d["modeled_pnl_rupees"] = round(modeled_trade_net_rupees, 2)
+            d["observed_error_rupees"] = round(err, 2)
+            trades_dict_list.append(d)
+
             fills_list.append({
                 "trade_id": rec.trade_id,
                 "symbol": rec.symbol,
@@ -136,14 +144,21 @@ def generate_snapback_reconciliation_bundle(
                 "exit_bid": rec.exit_bid_price,
                 "qty": rec.quantity,
             })
-        if rec.hedge_symbol:
-            hedge_events_list.append({
-                "trade_id": rec.trade_id,
-                "hedge_symbol": rec.hedge_symbol,
-                "entry_price": rec.hedge_entry_price,
-                "exit_price": rec.hedge_exit_price,
-                "hedge_pnl": rec.hedge_pnl,
-            })
+            if rec.hedge_symbol:
+                hedge_events_list.append({
+                    "trade_id": rec.trade_id,
+                    "hedge_symbol": rec.hedge_symbol,
+                    "entry_price": rec.hedge_entry_price,
+                    "exit_price": rec.hedge_exit_price,
+                    "hedge_pnl": rec.hedge_pnl,
+                })
+            if rec.daily_mtm_equity:
+                if not aggregated_mtm_series:
+                    aggregated_mtm_series = list(rec.daily_mtm_equity)
+                else:
+                    for idx, val in enumerate(rec.daily_mtm_equity):
+                        if idx < len(aggregated_mtm_series):
+                            aggregated_mtm_series[idx] += (val - 1000000.0)
 
     errors_arr = np.array(errors)
     mean_err = float(np.mean(errors_arr))
@@ -160,17 +175,18 @@ def generate_snapback_reconciliation_bundle(
     top_n = max(1, int(math.ceil(0.01 * len(observed_pnls))))
     top_1pct_impact = float(np.sum(sorted_obs[:top_n]))
 
-    # Run authoritative gate
-    unique_dates = len(set(r.entry_date for r in observed_records))
+    # Run authoritative gate with exact filled entry dates and MTM equity path
     verdict = evaluate_authoritative_snapback_gate(
         trade_pnls=observed_pnls,
-        entry_sessions_count=unique_dates,
+        entry_dates=filled_entry_dates,
         statutory_costs=costs,
+        daily_mtm_equity_series=daily_equity_series or aggregated_mtm_series,
+        quote_coverage_pct=quote_coverage_pct,
     )
 
     summary = ReconciliationSummary(
         run_id=run_id,
-        total_trades=len(observed_records),
+        total_trades=len(filled_records),
         mean_modeled_pnl=float(np.mean(modeled_pnls)),
         mean_observed_pnl=float(np.mean(observed_pnls)),
         mean_error=mean_err,

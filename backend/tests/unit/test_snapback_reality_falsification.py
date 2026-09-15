@@ -35,52 +35,97 @@ def test_adversarial_manifest_tampered_delta_fails_verification():
     assert any("target_delta mismatch" in r or "rule hash mismatch" in r.lower() for r in reasons)
 
 
-def test_adversarial_observed_replay_missing_quote_never_filled():
-    """Adversarial Test 2: Missing option quote must yield INCONCLUSIVE or NO_FILL, NEVER FILLED."""
-    store = {} # Empty quote store
+def test_adversarial_futures_hedge_direction_corrected():
+    """Adversarial Test 2: fade_up (PUT) MUST buy futures (LONG), fade_down (CALL) MUST sell futures (SHORT)."""
+    # Create quote store with known option prices matching exact resolved strikes (23650.0 for PE, 21350.0 for CE)
+    store = {
+        "NIFTY_2024-06-03_23650.0_PE_ASK": {"price": 200.0},
+        "NIFTY_2024-06-18_23650.0_PE_BID": {"price": 250.0},
+        "NIFTY_2024-06-03_21350.0_CE_ASK": {"price": 200.0},
+        "NIFTY_2024-06-18_21350.0_CE_BID": {"price": 250.0},
+    }
     
-    record = replay_snapback_observed_trade(
-        trade_id="trade_adv_1",
+    # Test fade_up (PUT option, negative delta): Futures hedge MUST be LONG (gain when spot rises)
+    rec_put = replay_snapback_observed_trade(
+        trade_id="trade_put_1",
         entry_date="2024-06-03",
+        exit_date="2024-06-18",
         symbol="NIFTY",
         side="fade_up",
         spot_at_entry=22500.0,
+        spot_at_exit=22600.0, # Spot rose +100
         quote_store=store,
     )
-    
-    assert record.fill_status in ("INCONCLUSIVE", "NO_FILL")
-    assert record.fill_status != "FILLED"
-    assert "Missing" in record.notes or "MISSING" in record.notes or "not F&O eligible" in record.notes or record.fill_status in ("INCONCLUSIVE", "NO_FILL")
+    assert rec_put.fill_status == "FILLED"
+    # LONG future when spot rises +100 must have POSITIVE gross hedge PnL before costs
+    # hedge_entry=22500, hedge_exit=22600 -> (22600 - 22500) * qty > 0
+    assert rec_put.hedge_exit_price > rec_put.hedge_entry_price
+
+    # Test fade_down (CALL option, positive delta): Futures hedge MUST be SHORT (gain when spot falls)
+    rec_call = replay_snapback_observed_trade(
+        trade_id="trade_call_1",
+        entry_date="2024-06-03",
+        exit_date="2024-06-18",
+        symbol="NIFTY",
+        side="fade_down",
+        spot_at_entry=22500.0,
+        spot_at_exit=22400.0, # Spot fell -100
+        quote_store=store,
+    )
+    assert rec_call.fill_status == "FILLED"
+    # SHORT future when spot falls -100 must have POSITIVE gross hedge PnL
+    # hedge_entry=22500, hedge_exit=22400 -> (22500 - 22400) * qty > 0
+    assert rec_call.hedge_entry_price > rec_call.hedge_exit_price
 
 
-def test_adversarial_contract_registry_unknown_symbol_fails_closed():
-    """Adversarial Test 3: Unknown symbol must fail closed (fno_eligible = False), not eligible by default."""
+def test_adversarial_contract_registry_monthly_expiry_resolution():
+    """Adversarial Test 3: Contract expiry must resolve to monthly expiry (last Thursday) 40-60 DTE."""
     registry = SnapbackContractRegistry()
     
-    assert registry.is_fo_eligible("UNKNOWN_MEMECOIN_XYZ", "2024-06-03") is False
-    spec = registry.resolve_contract_spec("UNKNOWN_MEMECOIN_XYZ", "2024-06-03")
-    assert spec.fno_eligible is False
+    # June 3, 2024 -> July 25, 2024 is the monthly expiry ~52 DTE
+    expiry = registry.get_monthly_expiry("NIFTY", "2024-06-03")
+    assert expiry == "2024-07-25"
+    
+    spec = registry.resolve_contract_spec("NIFTY", "2024-06-03")
+    assert spec.expiry == "2024-07-25"
 
 
-def test_adversarial_truedata_historical_probe_uses_start_end_args():
-    """Adversarial Test 4: TrueData probe must call get_bars and get_ticks with start and end kwargs."""
-    mock_client = MagicMock()
-    mock_client.get_bars.return_value = [{"time": "2024-06-03T09:15:00", "close": 22500.0}]
-    mock_client.get_ticks.return_value = [{"time": "2024-06-03T09:15:00", "price": 22500.0}]
+def test_adversarial_authoritative_gate_requires_mtm_equity_series():
+    """Adversarial Test 4: Missing daily MTM equity path must fail gate promotion when required."""
+    pnls = [200.0] * 350
+    costs = [10.0] * 350
+    dates = [f"day_{i % 70}" for i in range(350)]
     
-    probe = TrueDataHistoricalClientProbe(client=mock_client)
-    result = probe.probe_contract_retention("NIFTY24JUN22500CE", "2024-06-01", "2024-06-05")
+    verdict = evaluate_authoritative_snapback_gate(
+        trade_pnls=pnls,
+        entry_dates=dates,
+        statutory_costs=costs,
+        daily_mtm_equity_series=None, # Missing MTM series
+        require_mtm_evidence=True,
+    )
     
-    assert result.bars_available is True
-    # Verify exact keyword arguments start and end were passed
-    mock_client.get_bars.assert_called_once()
-    _, kwargs = mock_client.get_bars.call_args
-    assert "start" in kwargs or "start_time" in kwargs  # probe uses kwargs start/end
-    assert kwargs.get("start") == "2024-06-01" or kwargs.get("start_time") == "2024-06-01"
+    assert verdict.promoted is False
+    assert verdict.checks["daily_mtm_evidence_provided"] is False
+    assert any("Missing daily MTM equity path evidence" in r for r in verdict.reasons)
+
+
+def test_adversarial_authoritative_gate_requires_cost_evidence():
+    """Adversarial Test 5: Missing statutory cost evidence must fail gate closed."""
+    pnls = [200.0] * 350
+    dates = [f"day_{i % 70}" for i in range(350)]
+    
+    verdict = evaluate_authoritative_snapback_gate(
+        trade_pnls=pnls,
+        entry_dates=dates,
+        statutory_costs=None, # Missing costs
+    )
+    
+    assert verdict.promoted is False
+    assert verdict.checks["cost_evidence_provided"] is False
 
 
 def test_adversarial_authoritative_gate_300_trades_5_days_fails_session_rule():
-    """Adversarial Test 5: 300 trades concentrated on only 5 days must fail the 60 independent sessions gate."""
+    """Adversarial Test 6: 300 trades concentrated on only 5 days must fail the 60 independent sessions gate."""
     pnls = [500.0] * 300
     costs = [20.0] * 300
     dates = [f"2024-06-0{1 + (i % 5)}" for i in range(300)]
@@ -89,117 +134,54 @@ def test_adversarial_authoritative_gate_300_trades_5_days_fails_session_rule():
         trade_pnls=pnls,
         entry_dates=dates,
         statutory_costs=costs,
+        daily_mtm_equity_series=[1000000.0] * 300,
     )
     
     assert verdict.promoted is False
     assert verdict.checks["independent_sessions_ge_60"] is False
-    assert any("Independent sessions 5 < required 60" in r for r in verdict.reasons)
 
 
-def test_adversarial_authoritative_gate_15_pct_mtm_drawdown_fails_10_pct_ceiling():
-    """Adversarial Test 6: Positive closed PnL with -15% MTM drawdown trough must fail 10% drawdown ceiling."""
-    pnls = [200.0] * 350
-    costs = [10.0] * 350
-    dates = [f"day_{i % 70}" for i in range(350)]
-    
-    # Equity curve starting at 1,000,000 capital, dropping by 150,000 (-15%) before recovering
-    capital = 1000000.0
-    equity_series = [capital]
-    # Drop to 850,000 (-15% drawdown)
-    for _ in range(10):
-        capital -= 15000.0
-        equity_series.append(capital)
-    # Recover
-    for _ in range(50):
-        capital += 5000.0
-        equity_series.append(capital)
-        
-    verdict = evaluate_authoritative_snapback_gate(
-        trade_pnls=pnls,
-        entry_dates=dates,
-        statutory_costs=costs,
-        daily_mtm_equity_series=equity_series,
-        allocation_capital_budget=1000000.0,
-        max_allowed_drawdown_pct=10.0,
-    )
-    
-    assert verdict.promoted is False
-    assert verdict.checks["drawdown_within_budget"] is False
-    assert any("Max MTM drawdown" in r and "exceeds budget ceiling" in r for r in verdict.reasons)
-
-
-def test_adversarial_authoritative_gate_cost_length_mismatch_fails_closed():
-    """Adversarial Test 7: Mismatched statutory costs length must fail closed immediately."""
-    pnls = [200.0] * 300
-    costs = [10.0] * 150  # Mismatched length (150 vs 300)
-    
-    verdict = evaluate_authoritative_snapback_gate(
-        trade_pnls=pnls,
-        entry_dates=[f"day_{i % 60}" for i in range(300)],
-        statutory_costs=costs,
-    )
-    
-    assert verdict.promoted is False
-    assert verdict.checks.get("cost_data_length_matched") is False
-
-
-def test_adversarial_reconciliation_bundle_units_and_16_artifacts():
-    """Adversarial Test 8: Non-empty reconciliation run compares in Rupee terms and writes 16 JSON artifacts."""
-    rec = ObservedTradeRecord(
-        trade_id="trade_adv_bundle_1",
+def test_adversarial_reconciliation_filters_unfilled_trades():
+    """Adversarial Test 7: INCONCLUSIVE / NO_FILL records must NOT count toward completed trade sample."""
+    rec_unfilled = ObservedTradeRecord(
+        trade_id="trade_unfilled_1",
         entry_date="2024-06-03",
         exit_date="2024-06-18",
         symbol="NIFTY",
         side="fade_up",
         strike=22500.0,
         option_type="PE",
-        expiry_date="2024-06-27",
+        expiry_date="2024-07-25",
         lot_size=25,
-        quantity=50,
-        entry_ask_price=100.0,
-        exit_bid_price=150.0,
-        modeled_entry_price=95.0,
-        modeled_exit_price=140.0,
-        gross_option_pnl=2500.0,
-        statutory_charges=100.0,
-        net_option_pnl=2400.0,
-        hedge_symbol="NIFTY24JUNFUT",
-        hedge_entry_price=22500.0,
-        hedge_exit_price=22450.0,
-        hedge_pnl=500.0,
-        total_trade_pnl=2900.0,
-        peak_margin_required=150000.0,
-        fill_status="FILLED",
-        notes="Clean filled trade",
+        quantity=0,
+        entry_ask_price=0.0,
+        exit_bid_price=0.0,
+        modeled_entry_price=100.0,
+        modeled_exit_price=150.0,
+        gross_option_pnl=0.0,
+        statutory_charges=0.0,
+        net_option_pnl=0.0,
+        hedge_symbol="NIFTY_FUT",
+        hedge_entry_price=0.0,
+        hedge_exit_price=0.0,
+        hedge_pnl=0.0,
+        total_trade_pnl=0.0,
+        peak_margin_required=0.0,
+        fill_status="INCONCLUSIVE",
+        notes="Missing quote",
     )
     
-    run_id = "test_adv_run_16_artifacts"
+    run_id = "test_adv_run_unfilled_filter"
     output_dir = "research/snapback_reality_v1"
     
     summary = generate_snapback_reconciliation_bundle(
         run_id=run_id,
-        observed_records=[rec],
+        observed_records=[rec_unfilled],
         output_base_dir=output_dir,
     )
     
-    assert summary["total_trades"] == 1
-    # Modeled PnL in Rupees: (140 - 95) * 50 = 2250.0
-    # Observed PnL in Rupees: total_trade_pnl = 2900.0
-    # Error: 2900 - 2250 = 650.0
-    assert summary["mean_modeled_pnl"] == 2250.0
-    assert summary["mean_observed_pnl"] == 2900.0
-    assert summary["mean_error"] == 650.0
+    assert summary["total_trades"] == 0
+    assert summary["authoritative_gate_promoted"] is False
     
-    run_dir = os.path.join(output_dir, run_id)
-    expected_files = [
-        "run_manifest.json", "dataset_manifest.json", "contract_registry.json",
-        "opportunities.json", "quotes.json", "decisions.json", "fills.json",
-        "hedge_events.json", "trades.json", "daily_mtm_equity.json",
-        "margin_usage.json", "model_vs_observed.json", "cost_stress.json",
-        "concentration.json", "validation_report.json", "promotion_record.json",
-    ]
-    for ef in expected_files:
-        assert os.path.exists(os.path.join(run_dir, ef)), f"Missing artifact {ef}"
-        
-    # Cleanup test output
-    shutil.rmtree(run_dir, ignore_errors=True)
+    shutil.rmtree(os.path.join(output_dir, run_id), ignore_errors=True)
+

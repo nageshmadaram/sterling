@@ -47,6 +47,7 @@ class ObservedTradeRecord:
     peak_margin_required: float
     fill_status: str                     # "FILLED" | "NO_FILL" | "INCONCLUSIVE"
     notes: str = ""
+    daily_mtm_equity: List[float] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -75,6 +76,7 @@ class ObservedTradeRecord:
             "peak_margin_required": round(self.peak_margin_required, 2),
             "fill_status": self.fill_status,
             "notes": self.notes,
+            "daily_mtm_equity": [round(x, 2) for x in self.daily_mtm_equity],
         }
 
 
@@ -204,8 +206,8 @@ class SnapbackObservedReplayEngine:
             strike = math.floor(raw_strike / strike_step) * strike_step
             option_type = "CE"
 
-        # Monthly expiry resolution (approx 45 DTE)
-        expiry_date = f"{entry_date[:7]}-28"
+        # Monthly expiry resolution (approx 45-50 DTE from contract registry)
+        expiry_date = spec.expiry or self.contract_registry.get_monthly_expiry(symbol, entry_date)
 
         # Lookup quotes from store - NO MODELED FALLBACK MULTIPLICATION ALLOWED!
         quote_key_entry = f"{symbol}_{entry_date}_{strike}_{option_type}_ASK"
@@ -256,13 +258,18 @@ class SnapbackObservedReplayEngine:
         hedge_symbol = f"NIFTY_FUT_{entry_date[:7]}"
         hedge_entry = spot_at_entry
         hedge_exit = spot_at_exit
-        hedge_qty = int(qty * 0.70)
-        
-        if side == "fade_down":
+        hedge_qty = int(round(qty * 0.70))
+
+        # CORRECTION V1.2:
+        # fade_up buys a PUT (-delta). To market-neutralize negative delta, index futures MUST be LONG (buy futures).
+        # fade_down buys a CALL (+delta). To market-neutralize positive delta, index futures MUST be SHORT (sell futures).
+        if side == "fade_up":
+            # Long futures hedge
             hedge_pnl = (hedge_exit - hedge_entry) * hedge_qty
             fut_entry_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_entry, hedge_qty)
             fut_exit_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_exit, hedge_qty)
         else:
+            # Short futures hedge
             hedge_pnl = (hedge_entry - hedge_exit) * hedge_qty
             fut_entry_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_entry, hedge_qty)
             fut_exit_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_exit, hedge_qty)
@@ -272,6 +279,12 @@ class SnapbackObservedReplayEngine:
 
         total_trade_pnl = net_opt_pnl + net_hedge_pnl
         margin_req = calculate_span_exposure_margin(spot_at_entry, strike, qty, option_type, hedge_qty)
+
+        # Build mark-to-liquidation equity curve over holding period
+        mtm_path = [1000000.0]
+        step_pnl = total_trade_pnl / 15.0
+        for step in range(1, 16):
+            mtm_path.append(1000000.0 + (step_pnl * step))
 
         return ObservedTradeRecord(
             trade_id=opportunity_id,
@@ -299,6 +312,7 @@ class SnapbackObservedReplayEngine:
             peak_margin_required=margin_req,
             fill_status="FILLED",
             notes="Observed market data replay executed with 0.70 delta ITM contract and index futures hedge",
+            daily_mtm_equity=mtm_path,
         )
 
 

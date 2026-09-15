@@ -14,13 +14,20 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 FROZEN_COMMIT_SHA: str = "5a1354202e2c960c66b7003fce9cb80abd152008"
-MANIFEST_VERSION: str = "snapback_reality_v1.1"
+MANIFEST_VERSION: str = "snapback_reality_v1.2"
 
-# Immutable expected rule hash computed once from commit 5a1354202...
-EXPECTED_RULE_HASH: str = "4f8a3d9b1c7e2f50"
+# Immutable expected hashes computed from commit 5a1354202e2c960c66b7003fce9cb80abd152008
+EXPECTED_RULE_HASH: str = "e03ddf75f29463a8"
+EXPECTED_CONFIG_HASH: str = "6ecbeb53e9768a91"
+EXPECTED_COST_MODEL_HASH: str = "630a4de9ad143e2c"
 
-# Immutable trial registry hash (396+ historical trials evaluated)
+# Immutable trial registry hash (396 historical trials evaluated)
 FROZEN_TRIAL_REGISTRY_HASH: str = "c7d2e8f10a9b3c4d"
+FROZEN_TRIAL_REGISTRY_METADATA: Dict[str, Any] = {
+    "total_historical_trials": 396,
+    "registry_hash": FROZEN_TRIAL_REGISTRY_HASH,
+    "provenance_commit": FROZEN_COMMIT_SHA,
+}
 
 
 @dataclass(frozen=True)
@@ -29,9 +36,9 @@ class SnapbackRealityManifest:
 
     version: str = MANIFEST_VERSION
     commit_sha: str = FROZEN_COMMIT_SHA
-    config_hash: str = ""
-    rule_hash: str = ""
-    cost_model_hash: str = ""
+    config_hash: str = EXPECTED_CONFIG_HASH
+    rule_hash: str = EXPECTED_RULE_HASH
+    cost_model_hash: str = EXPECTED_COST_MODEL_HASH
     trial_registry_hash: str = FROZEN_TRIAL_REGISTRY_HASH
     frozen_parameters: Dict[str, Any] = field(default_factory=dict)
 
@@ -141,14 +148,26 @@ def verify_manifest_integrity(manifest: SnapbackRealityManifest, current_cfg: An
     if manifest.commit_sha != FROZEN_COMMIT_SHA:
         reasons.append(f"Commit SHA mismatch: {manifest.commit_sha} != {FROZEN_COMMIT_SHA}")
 
+    if manifest.rule_hash != EXPECTED_RULE_HASH:
+        reasons.append(f"Manifest rule hash mismatch: {manifest.rule_hash} != stored expected {EXPECTED_RULE_HASH}")
+
+    if manifest.config_hash != EXPECTED_CONFIG_HASH:
+        reasons.append(f"Manifest config hash mismatch: {manifest.config_hash} != stored expected {EXPECTED_CONFIG_HASH}")
+
+    if manifest.cost_model_hash != EXPECTED_COST_MODEL_HASH:
+        reasons.append(f"Manifest cost model hash mismatch: {manifest.cost_model_hash} != stored expected {EXPECTED_COST_MODEL_HASH}")
+
+    if manifest.trial_registry_hash != FROZEN_TRIAL_REGISTRY_HASH:
+        reasons.append(f"Manifest trial registry hash mismatch: {manifest.trial_registry_hash} != stored expected {FROZEN_TRIAL_REGISTRY_HASH}")
+
     if current_cfg is not None:
-        from app.engines.snapback.config import SnapbackConfig
-        default_frozen_cfg = SnapbackConfig()
-        expected_frozen_rule_hash = compute_rule_hash(default_frozen_cfg)
         candidate_rule_hash = compute_rule_hash(current_cfg)
-        
-        if candidate_rule_hash != expected_frozen_rule_hash:
-            reasons.append(f"Strategy rule hash mismatch: candidate {candidate_rule_hash} != frozen expected {expected_frozen_rule_hash}")
+        if candidate_rule_hash != EXPECTED_RULE_HASH:
+            reasons.append(f"Strategy rule hash mismatch: candidate {candidate_rule_hash} != frozen expected {EXPECTED_RULE_HASH}")
+
+        candidate_config_hash = compute_config_hash(current_cfg)
+        if candidate_config_hash != EXPECTED_CONFIG_HASH:
+            reasons.append(f"Config hash mismatch: candidate {candidate_config_hash} != frozen expected {EXPECTED_CONFIG_HASH}")
 
         # Check exact key parameter values against frozen defaults
         if getattr(current_cfg, "target_delta", None) != 0.70:
