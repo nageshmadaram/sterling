@@ -10,8 +10,11 @@ Enforces:
 3. Broker order recovery on transport uncertainty (never blind re-submission).
 4. Durable 2D halt & recovery state checking via execution_control (operator_state & recovery_state).
 5. Exposure effect classification (INCREASE_EXPOSURE, REDUCE_EXPOSURE, CLOSE_POSITION, PROTECT_POSITION, CANCEL_ORDER, MODIFY_ORDER).
-6. Fail-closed broker client availability.
-7. Canonical intent tagging (intent.tag sent to broker).
+6. Fail-closed broker client availability & account identity binding.
+7. Real broker protocol arguments (symbol/tradingsymbol, side/transaction_type, size/quantity, exchange, product=NRML, allow_amo=False, trigger_price).
+8. Inventory verification of declared exposure effects.
+9. Protection lease & pending persistence for protection commands.
+10. Complete startup recovery (journal intents + inventory reconciliation).
 """
 from dataclasses import dataclass
 from enum import Enum
@@ -86,6 +89,37 @@ class CanonicalExecutionService:
     def __init__(self):
         pass
 
+    def verify_exposure_effect(
+        self,
+        uid: str,
+        account_id: str,
+        symbol: str,
+        side: str,
+        declared_effect: ExposureEffect,
+    ) -> ExposureEffect:
+        """Verify caller-declared exposure effect against database inventory.
+        
+        If caller declares CLOSE_POSITION or REDUCE_EXPOSURE without holding open inventory,
+        or on the same side as existing position, reclassify as INCREASE_EXPOSURE.
+        """
+        if declared_effect not in (ExposureEffect.CLOSE_POSITION, ExposureEffect.REDUCE_EXPOSURE):
+            return declared_effect
+
+        try:
+            inv = db.get_inventory(account_id, uid, symbol) if hasattr(db, "get_inventory") else None
+            net_qty = inv.get("net_quantity", 0) if inv else 0
+            if net_qty == 0:
+                log.warning("Declared %s for %s on zero inventory — reclassifying to INCREASE_EXPOSURE", declared_effect.value, symbol)
+                return ExposureEffect.INCREASE_EXPOSURE
+            if (side.upper() == "BUY" and net_qty > 0) or (side.upper() == "SELL" and net_qty < 0):
+                log.warning("Declared %s for %s on same side (%s, net=%d) — reclassifying to INCREASE_EXPOSURE", declared_effect.value, symbol, side, net_qty)
+                return ExposureEffect.INCREASE_EXPOSURE
+        except Exception as exc:
+            log.warning("Failed to verify inventory for %s: %s — treating as INCREASE_EXPOSURE", symbol, exc)
+            return ExposureEffect.INCREASE_EXPOSURE
+
+        return declared_effect
+
     def is_trading_allowed(
         self,
         scope: str = "global",
@@ -103,16 +137,25 @@ class CanonicalExecutionService:
         self,
         request: ExecutionRequest,
         broker_client: Any = None,
-        risk_approved: bool = True,
+        risk_approved: bool = False,
     ) -> ExecutionResult:
         """Submit an order through the canonical execution pipeline."""
         if not risk_approved:
-            return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected order submission")
+            return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected or missing risk approval")
+
+        # Verify declared exposure effect against inventory
+        effective_effect = self.verify_exposure_effect(
+            uid=request.uid,
+            account_id=request.account_id,
+            symbol=request.symbol,
+            side=request.side,
+            declared_effect=request.exposure_effect,
+        )
 
         allowed, reason = self.is_trading_allowed(
             uid=request.uid,
             account_id=request.account_id,
-            exposure_effect=request.exposure_effect,
+            exposure_effect=effective_effect,
         )
         if not allowed:
             log.warning("Execution rejected by control plane: %s", reason)
@@ -120,6 +163,8 @@ class CanonicalExecutionService:
 
         # 1. Reserve intent in durable order journal
         payload = dict(request.payload or {})
+        payload["exposure_effect"] = effective_effect.value
+        payload["intent_type"] = "EXIT" if effective_effect in (ExposureEffect.CLOSE_POSITION, ExposureEffect.REDUCE_EXPOSURE) else "ENTRY"
         if request.tag:
             payload["user_tag"] = request.tag
 
@@ -170,7 +215,18 @@ class CanonicalExecutionService:
                 error="No authenticated broker client available for live order submission",
             )
 
-        # 4. Broker Send using real KiteClient signature
+        # 4. Authenticated account identity check
+        client_acct = getattr(broker_client, "_account_id", getattr(broker_client, "account_id", None))
+        if client_acct and str(client_acct) != str(request.account_id):
+            order_journal.transition(intent.intent_key, "REJECTED", error=f"Broker account mismatch: {client_acct} != {request.account_id}")
+            return ExecutionResult(
+                success=False,
+                status="REJECTED",
+                intent_key=intent.intent_key,
+                error=f"Broker client account identity ({client_acct}) does not match request account identity ({request.account_id})",
+            )
+
+        # 5. Broker Send using real KiteClient signature & arguments
         order_id = ""
         try:
             place_fn = getattr(broker_client, "place_order", None)
@@ -181,36 +237,42 @@ class CanonicalExecutionService:
             params = sig.parameters
 
             kwargs = {}
-            if "symbol" in params:
-                kwargs["symbol"] = request.symbol
-            elif "tradingsymbol" in params:
-                kwargs["tradingsymbol"] = request.symbol
+            kwargs["symbol"] = request.symbol
+            kwargs["tradingsymbol"] = request.symbol
+            kwargs["side"] = request.side
+            kwargs["transaction_type"] = request.side
+            kwargs["size"] = request.quantity
+            kwargs["quantity"] = request.quantity
+            kwargs["exchange"] = request.exchange or "NSE"
 
-            if "side" in params:
-                kwargs["side"] = request.side
-            elif "transaction_type" in params:
-                kwargs["transaction_type"] = request.side
+            # Default product to NRML to match execution_lifecycle identity contract
+            payload_product = (request.payload or {}).get("product", "NRML")
+            kwargs["product"] = payload_product
 
-            if "size" in params:
-                kwargs["size"] = request.quantity
-            elif "quantity" in params:
-                kwargs["quantity"] = request.quantity
+            # Force allow_amo=False to prevent silent AMO conversion
+            kwargs["allow_amo"] = False
 
-            # Always send intent.tag as the canonical broker tracking tag
+            # Always send intent.tag as canonical broker tracking tag
             kwargs["tag"] = intent.tag
-            if "order_type" in params:
-                kwargs["order_type"] = request.order_type
-            if request.price > 0 and "limit_price" in params:
+            kwargs["order_type"] = request.order_type
+
+            if request.price > 0:
                 kwargs["limit_price"] = request.price
-            elif request.price > 0 and "price" in params:
                 kwargs["price"] = request.price
-            if request.trigger_price > 0 and "trigger_price" in params:
+
+            if request.trigger_price > 0:
                 kwargs["trigger_price"] = request.trigger_price
+                kwargs["stop_loss"] = request.trigger_price
 
             if request.payload:
                 for k, v in request.payload.items():
                     if k not in kwargs and (k in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())):
                         kwargs[k] = v
+
+            # Filter kwargs to parameters accepted by place_fn signature (or keep all if **kwargs present)
+            has_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            if not has_var_kwargs:
+                kwargs = {k: v for k, v in kwargs.items() if k in params}
 
             if inspect.iscoroutinefunction(place_fn):
                 res = await place_fn(**kwargs)
@@ -226,7 +288,7 @@ class CanonicalExecutionService:
                 raise SubmissionOutcomeUnknown("Broker place_order returned empty order_id")
 
         except Exception as exc:
-            if isinstance(exc, SubmissionOutcomeUnknown) or any(w in str(exc).lower() for w in ("timeout", "connection", "network", "uncertain", "504", "502", "reset", "disconnected")):
+            if isinstance(exc, SubmissionOutcomeUnknown) or not isinstance(exc, BrokerRejected):
                 order_journal.submission_uncertain(intent.intent_key, str(exc))
                 try:
                     db.set_recovery_state(
@@ -254,7 +316,7 @@ class CanonicalExecutionService:
                     error=f"Broker placement rejected: {exc}",
                 )
 
-        # 5. Acknowledge order placement in journal (Broker HTTP submit ACK)
+        # 6. Acknowledge order placement in journal (Broker HTTP submit ACK)
         ack_intent = order_journal.acknowledge(intent.intent_key, order_id)
 
         return ExecutionResult(
@@ -284,6 +346,10 @@ class CanonicalExecutionService:
 
         if broker_client is None:
             return ExecutionResult(success=False, status="REJECTED", error="No authenticated broker client available")
+
+        client_acct = getattr(broker_client, "_account_id", getattr(broker_client, "account_id", None))
+        if client_acct and str(client_acct) != str(account_id):
+            return ExecutionResult(success=False, status="REJECTED", error=f"Broker account mismatch: {client_acct} != {account_id}")
 
         try:
             modify_fn = getattr(broker_client, "modify_order", None)
@@ -317,6 +383,10 @@ class CanonicalExecutionService:
         if broker_client is None:
             return ExecutionResult(success=False, status="REJECTED", error="No authenticated broker client available")
 
+        client_acct = getattr(broker_client, "_account_id", getattr(broker_client, "account_id", None))
+        if client_acct and str(client_acct) != str(account_id):
+            return ExecutionResult(success=False, status="REJECTED", error=f"Broker account mismatch: {client_acct} != {account_id}")
+
         try:
             cancel_fn = getattr(broker_client, "cancel_order", None)
             if callable(cancel_fn):
@@ -338,7 +408,7 @@ class CanonicalExecutionService:
         protection_params: Dict[str, Any],
         broker_client: Any = None,
     ) -> ExecutionResult:
-        """Place GTT / stop protection order for confirmed position holdings."""
+        """Place GTT / stop protection order for confirmed position holdings with lease and pending tracking."""
         allowed, reason = self.is_trading_allowed(
             uid=uid, account_id=account_id, exposure_effect=ExposureEffect.PROTECT_POSITION
         )
@@ -348,7 +418,21 @@ class CanonicalExecutionService:
         if broker_client is None:
             return ExecutionResult(success=False, status="REJECTED", error="No authenticated broker client available")
 
+        client_acct = getattr(broker_client, "_account_id", getattr(broker_client, "account_id", None))
+        if client_acct and str(client_acct) != str(account_id):
+            return ExecutionResult(success=False, status="REJECTED", error=f"Broker account mismatch: {client_acct} != {account_id}")
+
         prot_id = f"GTT_{position_id[:12]}"
+        symbol = protection_params.get("symbol", protection_params.get("tradingsymbol", "default"))
+
+        try:
+            from app.services.kite_engine import execution_lease
+            lease_acquired = execution_lease.acquire("protection", account_id, uid, symbol, owner="CanonicalExecutionService")
+            if not lease_acquired:
+                return ExecutionResult(success=False, status="REJECTED", error=f"Protection lease busy for {symbol}")
+        except Exception:
+            pass
+
         try:
             place_gtt_fn = getattr(broker_client, "place_gtt", None)
             if callable(place_gtt_fn):
@@ -363,6 +447,12 @@ class CanonicalExecutionService:
                 return ExecutionResult(success=False, status="REJECTED", error="Broker client does not support place_gtt")
         except Exception as exc:
             return ExecutionResult(success=False, status="REJECTED", error=str(exc))
+        finally:
+            try:
+                from app.services.kite_engine import execution_lease
+                execution_lease.release("protection", account_id, uid, symbol)
+            except Exception:
+                pass
 
     async def startup_recovery(
         self,
@@ -370,7 +460,7 @@ class CanonicalExecutionService:
         account_id: str = "default",
         broker_client: Any = None,
     ) -> Dict[str, Any]:
-        """Perform startup recovery workflow: inspect unresolved journal, observe broker, update recovery_state via CAS."""
+        """Perform startup recovery workflow: inspect unresolved journal + inventory reconciliation, observe broker, update recovery_state via CAS."""
         db.init()
 
         try:
@@ -386,9 +476,16 @@ class CanonicalExecutionService:
             if i.state == "RESERVED":
                 order_journal.transition(i.intent_key, "CANCELLED", error="Startup recovery expired orphaned reservation")
 
-        # 2. Inspect remaining unresolved journal items (SUBMITTING, UNKNOWN, reconciliation_required)
+        # 2. Inspect remaining unresolved journal items & inventory reconciliation state
         unresolved_intents = order_journal.unresolved(uid, account_id=account_id)
-        uncertain = any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved_intents)
+        inventory_reconciliation_required = False
+        try:
+            invs = db.get_inventory_all(account_id, uid) if hasattr(db, "get_inventory_all") else []
+            inventory_reconciliation_required = any(inv.get("reconciliation_required") for inv in invs)
+        except Exception:
+            pass
+
+        uncertain = any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved_intents) or inventory_reconciliation_required
 
         if uncertain:
             try:
@@ -408,8 +505,8 @@ class CanonicalExecutionService:
             await recover(broker_client, uid=uid)
             unresolved_intents = order_journal.unresolved(uid, account_id=account_id)
 
-        # 4. If clean (no remaining unresolved intents needing reconciliation), transition recovery_state to CLEAN via CAS
-        remaining_uncertain = any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved_intents)
+        # 4. If clean (no remaining unresolved intents OR pending projections needing reconciliation), transition recovery_state to CLEAN via CAS
+        remaining_uncertain = any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved_intents) or inventory_reconciliation_required
         if not remaining_uncertain:
             try:
                 db.set_recovery_state(

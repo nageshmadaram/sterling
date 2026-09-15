@@ -74,7 +74,7 @@ async def test_execution_service_broker_send_ack():
         tag="st_1002",
     )
 
-    res = await service.submit_order(req, broker_client=MockBrokerClient())
+    res = await service.submit_order(req, broker_client=MockBrokerClient(), risk_approved=True)
     assert res.success is True
     assert res.status == "ACKNOWLEDGED"
     assert res.order_id == "ORD_12345"
@@ -100,7 +100,7 @@ async def test_execution_service_transport_uncertainty():
         tag="st_1003",
     )
 
-    res = await service.submit_order(req, broker_client=TimeoutBrokerClient())
+    res = await service.submit_order(req, broker_client=TimeoutBrokerClient(), risk_approved=True)
     assert res.success is False
     assert res.status == "UNKNOWN"
 

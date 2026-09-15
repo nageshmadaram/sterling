@@ -10,28 +10,28 @@ No strategy module, background runner, or API endpoint may invoke broker REST/We
 
 ## 2. Durable Execution Control Architecture (Phase 1)
 
-### State Machine
+### 2D Orthogonal State Model
+
+Execution control tracks two independent, orthogonal dimensions to eliminate state collisions:
+
+1. **`operator_state`**: `RUNNING` | `HALTED`
+   - Controls operator/risk permission to initiate exposure-increasing execution.
+   - Set by manual operator commands or safety circuit breakers.
+
+2. **`recovery_state`**: `CLEAN` | `RECOVERY_REQUIRED`
+   - Controls technical reconciliation state following transport uncertainty or un-projected broker fills.
+   - Updated automatically by execution recovery workflows and cleared via authenticated CAS reconciliation.
 
 ```text
-                 ┌───────────────┐
-                 │    RUNNING    │
-                 └───────┬───────┘
-                         │ operator halt / risk breach
-                         ▼
-                 ┌───────────────┐
-                 │    HALTED     │
-                 └───────┬───────┘
-                         │ restart / transport uncertainty
-                         ▼
-              ┌─────────────────────┐
-              │  RECOVERY_REQUIRED  │
-              └──────────┬──────────┘
-                         │ authenticated reconciliation +
-                         │ explicit operator reset
-                         ▼
-                 ┌───────────────┐
-                 │    RUNNING    │
-                 └───────────────┘
+               OPERATOR DIMENSION                       RECOVERY DIMENSION
+           ┌────────────────────────┐                ┌───────────────────────┐
+           │        RUNNING         │                │         CLEAN         │
+           └───────────┬────────────┘                └───────────┬───────────┘
+                       │ operator halt                           │ transport uncertainty
+                       ▼                                         ▼
+           ┌────────────────────────┐                ┌───────────────────────┐
+           │         HALTED         │                │   RECOVERY_REQUIRED   │
+           └────────────────────────┘                └───────────────────────┘
 ```
 
 ### Invariable Rule
@@ -45,31 +45,34 @@ CREATE TABLE IF NOT EXISTS execution_control (
     scope                TEXT NOT NULL DEFAULT 'global',
     uid                  TEXT NOT NULL DEFAULT 'default',
     account_id           TEXT NOT NULL DEFAULT 'default',
-    state                TEXT NOT NULL DEFAULT 'RUNNING',  -- RUNNING | HALTED | RECOVERY_REQUIRED
+    operator_state       TEXT NOT NULL DEFAULT 'RUNNING',  -- RUNNING | HALTED
+    recovery_state       TEXT NOT NULL DEFAULT 'CLEAN',    -- CLEAN | RECOVERY_REQUIRED
+    reason_code          TEXT NOT NULL DEFAULT '',
     reason               TEXT NOT NULL DEFAULT '',
-    revision             INTEGER NOT NULL DEFAULT 0,
+    revision             INTEGER NOT NULL DEFAULT 1,
     actor                TEXT NOT NULL DEFAULT 'system',
-    created_ms           INTEGER NOT NULL,
-    updated_ms           INTEGER NOT NULL,
+    last_reconciled_ms   INTEGER NOT NULL DEFAULT 0,
+    created_ms           INTEGER NOT NULL DEFAULT 0,
+    updated_ms           INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (scope, uid, account_id)
 );
 ```
 
 ### Pre-Submission Execution Control Check Pipeline
 
-Every live order request must pass `assert_live_allowed`:
+Every live order request must pass `assert_safe_to_trade`:
 
 ```text
 Strategy Signal
       │
       ▼
-RiskAuthority.evaluate(...)
+RiskAuthority.evaluate(...) [Requires explicit risk_approved=True]
       │
       ▼
-ExecutionControl.assert_live_allowed(...) [Reads durable DB]
+ExecutionControl.assert_safe_to_trade(...) [Reads durable DB 2D state + unresolved journal]
       │
       ▼
-ExecutionService.submit(...)
+ExecutionService.submit_order(...)
       │
       ▼
 Durable Order Journal (RESERVED)
@@ -78,7 +81,7 @@ Durable Order Journal (RESERVED)
 Submission Claim (SUBMITTING)
       │
       ▼
-Broker Send → ACK / UNKNOWN
+Broker Send → ACK / UNKNOWN (RECOVERY_REQUIRED on transport error)
 ```
 
 ---
@@ -130,13 +133,13 @@ Broker Send → ACK / UNKNOWN
 
 | Order | Component / Runner | Migration Status | Target Execution Pipeline |
 |---:|---|---|---|
-| **1** | **Manual Kite Orders API** | Migrated | `CanonicalExecutionService.submit(...)` |
-| **2** | **Sterling Kite Engine** | Baseline Canonical | `order_journal` + `execution_lifecycle` |
-| **3** | **Opening Volume Leaders** | Migration Target #1 | Replace direct `place_order` with `ExecutionService` |
-| **4** | **Intraday Runner** | Migration Target #2 | Route via `ExecutionService` |
-| **5** | **Gamma Move** | Migration Target #3 | Route via `ExecutionService` |
-| **6** | **Adaptive Edge** | Migration Target #4 | Route via `ExecutionService` |
-| **7** | **Navigator & Other Runners** | Migration Target #5 | Route via `ExecutionService` |
+| **1** | **Sterling Canonical Execution Engine** | Implemented (Slice 1 & 2) | `order_journal` + `CanonicalExecutionService` |
+| **2** | **Manual Kite Orders API** | Open (Target #1) | `CanonicalExecutionService.submit_order(...)` |
+| **3** | **Opening Volume Leaders** | Open (Target #2) | Replace direct `place_order` with `ExecutionService` |
+| **4** | **Intraday Runner** | Open (Target #3) | Route via `ExecutionService` |
+| **5** | **Gamma Move** | Open (Target #4) | Route via `ExecutionService` |
+| **6** | **Adaptive Edge** | Open (Target #5) | Route via `ExecutionService` |
+| **7** | **Navigator & Other Runners** | Open (Target #6) | Route via `ExecutionService` |
 
 ---
 

@@ -430,6 +430,10 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE execution_control SET operator_state = 'HALTED', recovery_state = 'CLEAN' WHERE state = 'HALTED'")
         conn.execute("UPDATE execution_control SET operator_state = 'RUNNING', recovery_state = 'RECOVERY_REQUIRED' WHERE state = 'RECOVERY_REQUIRED'")
         conn.execute("UPDATE execution_control SET operator_state = 'RUNNING', recovery_state = 'CLEAN' WHERE state = 'RUNNING'")
+        try:
+            conn.execute("UPDATE execution_control SET state = 'MIGRATED' WHERE state IS NOT NULL AND state != 'MIGRATED'")
+        except Exception:
+            pass
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS atm_trades (
@@ -1115,12 +1119,12 @@ def get_execution_control(
                 "updated_ms": 0,
             }
         d = dict(row)
-        op = d.get("operator_state") or d.get("state", "RUNNING")
+        op = d.get("operator_state") or d.get("state")
         rec = d.get("recovery_state", "CLEAN")
-        if op not in ("RUNNING", "HALTED"):
-            op = "HALTED" if op in ("RECOVERY_REQUIRED", "HALTED") else "RUNNING"
-        if rec not in ("CLEAN", "RECOVERY_REQUIRED"):
-            rec = "CLEAN"
+        if not op or op not in ("RUNNING", "HALTED"):
+            raise ControlPlaneUnavailableError(f"Corrupt or invalid operator_state in execution_control: '{op}'")
+        if not rec or rec not in ("CLEAN", "RECOVERY_REQUIRED"):
+            raise ControlPlaneUnavailableError(f"Corrupt or invalid recovery_state in execution_control: '{rec}'")
         d["operator_state"] = op
         d["state"] = op
         d["recovery_state"] = rec
@@ -1217,12 +1221,10 @@ def set_operator_state(
     account_id: str = "default",
     expected_revision: int | None = None,
 ) -> dict:
-    """Set operator permission state (RUNNING | HALTED), preserving orthogonal recovery_state."""
-    ctrl = get_execution_control(scope=scope, uid=uid, account_id=account_id)
-    recovery_state = ctrl.get("recovery_state", "CLEAN")
+    """Set operator permission state (RUNNING | HALTED), preserving orthogonal recovery_state in transaction."""
     return set_execution_control(
         operator_state=operator_state,
-        recovery_state=recovery_state,
+        recovery_state=None,
         reason_code=reason_code,
         reason=reason,
         actor=actor,
@@ -1244,11 +1246,9 @@ def set_recovery_state(
     expected_revision: int | None = None,
     last_reconciled_ms: int | None = None,
 ) -> dict:
-    """Set reconciliation recovery state (CLEAN | RECOVERY_REQUIRED), preserving orthogonal operator_state."""
-    ctrl = get_execution_control(scope=scope, uid=uid, account_id=account_id)
-    operator_state = ctrl.get("operator_state", "RUNNING")
+    """Set reconciliation recovery state (CLEAN | RECOVERY_REQUIRED), preserving orthogonal operator_state in transaction."""
     return set_execution_control(
-        operator_state=operator_state,
+        operator_state=None,
         recovery_state=recovery_state,
         reason_code=reason_code,
         reason=reason,
@@ -1259,6 +1259,50 @@ def set_recovery_state(
         expected_revision=expected_revision,
         last_reconciled_ms=last_reconciled_ms,
     )
+
+
+def get_inventory(account_id: str, uid: str, symbol: str) -> dict | None:
+    if not _available:
+        return None
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT account_id, uid, symbol, exchange, net_quantity, lot_size, average_cost, realized_pnl, fees, reconciliation_required, reconciliation_reason, version, updated_ms"
+                " FROM kite_inventory WHERE account_id=? AND uid=? AND symbol=?",
+                (account_id, uid, symbol),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def get_inventory_all(account_id: str, uid: str) -> list[dict]:
+    if not _available:
+        return []
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT account_id, uid, symbol, exchange, net_quantity, lot_size, average_cost, realized_pnl, fees, reconciliation_required, reconciliation_reason, version, updated_ms"
+                " FROM kite_inventory WHERE account_id=? AND uid=?",
+                (account_id, uid),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def set_inventory(account_id: str, uid: str, symbol: str, net_quantity: int, exchange: str = "NSE") -> dict:
+    if not _available:
+        raise ControlPlaneUnavailableError("Database unavailable")
+    now_ms = int(time.time() * 1000)
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO kite_inventory (account_id, uid, symbol, exchange, net_quantity, updated_ms)"
+            " VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(account_id, uid, symbol) DO UPDATE SET net_quantity=excluded.net_quantity, updated_ms=excluded.updated_ms",
+            (account_id, uid, symbol, exchange, int(net_quantity), now_ms),
+        )
+    return {"account_id": account_id, "uid": uid, "symbol": symbol, "net_quantity": net_quantity, "updated_ms": now_ms}
 
 
 def record_calibration_trade(source_trade_id: str, pnl_pct: float, regime: str = "default") -> bool:

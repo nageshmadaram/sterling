@@ -136,9 +136,12 @@ async def test_canonical_execution_service_exposure_policy():
         exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
     )
 
-    res_inc = await service.submit_order(req_increase)
+    res_inc = await service.submit_order(req_increase, risk_approved=True)
     assert not res_inc.success
     assert res_inc.status == "HALTED"
+
+    # Set open inventory so CLOSE_POSITION is valid
+    db.set_inventory(account_id="acc1", uid="user1", symbol="SBIN", net_quantity=10)
 
     req_close = ExecutionRequest(
         uid="user1",
@@ -158,6 +161,6 @@ async def test_canonical_execution_service_exposure_policy():
         async def place_order(self, **kwargs):
             return {"order_id": "ORD_CLOSE_123"}
 
-    res_close = await service.submit_order(req_close, broker_client=MockBroker())
+    res_close = await service.submit_order(req_close, broker_client=MockBroker(), risk_approved=True)
     assert res_close.success
     assert res_close.status == "ACKNOWLEDGED"

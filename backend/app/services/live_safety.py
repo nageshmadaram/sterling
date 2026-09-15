@@ -194,6 +194,11 @@ def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=Tr
             scopes_to_check.append(("account", u, acct))
 
         if is_exposure_increasing:
+            from app.services.kite_engine import order_journal
+            unresolved = order_journal.unresolved(u, account_id=acct)
+            if any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved):
+                return SafetyDecision(False, f"Unresolved journal intent present for {u}/{acct} (broker reconciliation pending)", "recovery_required")
+
             for scope, tgt_uid, tgt_acct in scopes_to_check:
                 ctrl = db.get_execution_control(scope=scope, uid=tgt_uid, account_id=tgt_acct)
                 op_state = ctrl.get("operator_state") or ctrl.get("state", "RUNNING")
