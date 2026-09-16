@@ -69,21 +69,47 @@ def _verdict():
 def test_family_mode_ignores_preflight_escape_hatches(env, monkeypatch):
     """These exist for a developer machine. On the family deployment they would
     let a mis-set clock or uncommitted code produce evidence that cannot be
-    reproduced."""
-    from app.services import snapback_preflight
+    reproduced.
+
+    Asserted on the hatch itself rather than on the check's result: whether a
+    worktree happens to be dirty is a property of the machine running the
+    tests, not of the contract.
+    """
+    from app.services.snapback_preflight import _escape_hatch_allowed
 
     monkeypatch.setenv("STERLING_FAMILY_MODE", "true")
     monkeypatch.setenv(env, "true")
 
-    if env == "STERLING_SKIP_CLOCK_CHECK":
-        monkeypatch.setattr(
-            snapback_preflight, "_ntp_synchronised", lambda: (False, "no NTP"),
-        )
-        passed, _ = snapback_preflight.check_clock()
-    else:
-        passed, _ = snapback_preflight._default_worktree_clean()
+    assert _escape_hatch_allowed(env) is False
 
-    assert passed is False, f"{env} weakened preflight under Family Mode"
+
+@pytest.mark.parametrize("env", [
+    "STERLING_SKIP_CLOCK_CHECK",
+    "STERLING_ALLOW_DIRTY_WORKTREE",
+])
+def test_the_hatches_are_available_on_a_workstation(env, monkeypatch):
+    from app.services.snapback_preflight import _escape_hatch_allowed
+
+    monkeypatch.delenv("STERLING_FAMILY_MODE", raising=False)
+    monkeypatch.setenv(env, "true")
+
+    assert _escape_hatch_allowed(env) is True
+
+
+def test_an_unsynchronised_clock_is_refused_under_family_mode(monkeypatch):
+    """The consequence that matters, for the check whose result does not depend
+    on the machine's git state."""
+    from app.services import snapback_preflight
+
+    monkeypatch.setenv("STERLING_FAMILY_MODE", "true")
+    monkeypatch.setenv("STERLING_SKIP_CLOCK_CHECK", "true")
+    monkeypatch.setattr(
+        snapback_preflight, "_ntp_synchronised", lambda: (False, "no NTP"),
+    )
+
+    passed, _ = snapback_preflight.check_clock()
+
+    assert passed is False
 
 
 def test_the_escape_hatches_still_work_outside_family_mode(monkeypatch):
