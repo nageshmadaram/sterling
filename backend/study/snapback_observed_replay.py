@@ -1,12 +1,41 @@
-"""Observed Market Data Replay & Falsification Engine for Snapback.
+"""LEGACY — NOT PROMOTION-AUTHORITATIVE. Do not use this module as evidence.
 
-Replays the frozen daily Snapback signal against actual observed option bid/ask
-quotes, actual futures prices, historical contract lot sizes, dated fees/taxes,
-SPAN/exposure margin requirements, and daily mark-to-liquidation MTM.
+STATUS: quarantined 2026-09-17.
 
-Invariable Rule:
-Every missing or stale quote yields NO_FILL / INCONCLUSIVE — NEVER a Black-Scholes
-or synthetic modeled replacement.
+This was the Observed Market Data Replay & Falsification Engine for Snapback. It
+is retained only so the reasoning behind its retirement is discoverable next to
+the code itself.
+
+Reason for quarantine: historical real option coverage is 0/746. The SterlingLake
+inventory of 2026-09-17 found no NFO-OPT or BFO-OPT bars at any interval, dated
+contract masters for two days only (2026-08-13 and 2026-08-14, both
+current-universe snapshots), and an empty tick archive. Kite cannot return
+candles for expired options, so this is not a gap that backfill closes. There is
+no observed option data for this module to replay, and there never will be for
+the 2017-2026 sample.
+
+Independent defects found in this file on 2026-09-17, none of them repaired:
+
+  * futures quotes fall back to ``spot_at_entry``/``spot_at_exit`` when absent,
+    fabricating the hedge leg while the docstring claims no modeled fallback;
+  * contract selection uses a fixed ``sigma=0.25`` instead of the signal's
+    ``assumed_iv``, so replay and runtime may select different contracts;
+  * an arithmetic strike ladder is generated when real strikes are absent,
+    inventing contracts that were never listed;
+  * costs import the pre-1.5 ``snapback_costs``, not the exchange-aware v2
+    schedule that runtime-1.5 introduced precisely because the earlier model
+    understated option costs;
+  * ``SnapbackObservedReplayEngine`` is defined twice, and the first definition
+    is both shadowed and truncated mid-method;
+  * a registry miss silently defaults the NIFTY lot size to 50, mis-sizing every
+    hedge across a window in which the real lot size changed repeatedly;
+  * an unparseable expiry becomes a fabricated 50-day DTE;
+  * a missing strike list falls back to using raw spot as a strike;
+  * no staleness check exists anywhere, despite the docstring promising one.
+
+Any number this module prints is modeled, not observed. It must never reach a
+promotion decision. The replacement is to be built around an observed-evidence
+schema and fed only by prospectively recorded market data.
 """
 from __future__ import annotations
 
