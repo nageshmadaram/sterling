@@ -520,11 +520,15 @@ class KiteClient(TradingExchangeAdapter):
     async def cancel_order(self, order_id: str, product_id: int = 0, variety: str = K.VARIETY_REGULAR) -> dict:
         """Cancel an order. ``product_id`` is unused for Kite (kept to satisfy the
         TradingExchangeAdapter contract); cancellation needs ``variety``+order_id."""
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("cancel_order")
         if self._is_paper:
             return {"order_id": str(order_id)}
         return await self._auth_delete(f"/orders/{variety}/{order_id}")
 
     async def modify_order(self, order_id: str, variety: str = K.VARIETY_REGULAR, **fields) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("modify_order")
         if self._is_paper:
             return {"order_id": str(order_id)}
         body = {k: v for k, v in fields.items() if v is not None}
@@ -575,12 +579,16 @@ class KiteClient(TradingExchangeAdapter):
         }
 
     async def place_gtt(self, *, trigger_type, tradingsymbol, exchange, last_price, trigger_values, orders) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("place_gtt")
         if self._is_paper:
             return {"trigger_id": int(time.time())}
         body = self._gtt_body(trigger_type, tradingsymbol, exchange, last_price, trigger_values, orders)
         return await self._auth_post("/gtt/triggers", body)
 
     async def modify_gtt(self, trigger_id, *, trigger_type, tradingsymbol, exchange, last_price, trigger_values, orders) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("modify_gtt")
         body = self._gtt_body(trigger_type, tradingsymbol, exchange, last_price, trigger_values, orders)
         return await self._auth_put(f"/gtt/triggers/{trigger_id}", body)
 
@@ -653,6 +661,8 @@ class KiteClient(TradingExchangeAdapter):
         return await self._auth_get("/mf/sips") or []
 
     async def place_mf_order(self, *, tradingsymbol, transaction_type, amount=None, quantity=None, tag=None) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("place_mf_order")
         if self._is_paper:
             return {"order_id": "PAPER-MF-" + uuid.uuid4().hex[:10]}
         body = {"tradingsymbol": tradingsymbol, "transaction_type": transaction_type}
@@ -665,11 +675,15 @@ class KiteClient(TradingExchangeAdapter):
         return await self._auth_post("/mf/orders", body)
 
     async def cancel_mf_order(self, order_id: str) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("cancel_mf_order")
         if self._is_paper:
             return {"order_id": order_id}
         return await self._auth_delete(f"/mf/orders/{order_id}")
 
     async def place_mf_sip(self, *, tradingsymbol, amount, instalments, frequency, initial_amount=None) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("place_mf_sip")
         if self._is_paper:
             return {"sip_id": "PAPER-SIP-" + uuid.uuid4().hex[:10]}
         body = {
@@ -691,6 +705,8 @@ class KiteClient(TradingExchangeAdapter):
     async def modify_mf_sip(self, sip_id, *, amount=None, frequency=None,
                             instalments=None, instalment_day=None, status=None) -> dict:
         """Modify a SIP — amount/frequency/instalments or pause/resume via status."""
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("modify_mf_sip")
         if self._is_paper:
             return {"sip_id": str(sip_id)}
         body = {}
@@ -707,6 +723,8 @@ class KiteClient(TradingExchangeAdapter):
         return await self._auth_put(f"/mf/sips/{sip_id}", body)
 
     async def cancel_mf_sip(self, sip_id: str) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("cancel_mf_sip")
         if self._is_paper:
             return {"sip_id": str(sip_id)}
         return await self._auth_delete(f"/mf/sips/{sip_id}")
@@ -727,6 +745,8 @@ class KiteClient(TradingExchangeAdapter):
         return await self._auth_get("/portfolio/positions") or {"net": [], "day": []}
 
     async def convert_position(self, **fields) -> dict:
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("convert_position")
         if self._is_paper:
             return {"status": "paper"}
         body = {k: v for k, v in fields.items() if v is not None}

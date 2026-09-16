@@ -123,19 +123,10 @@ def build_gate_inputs(
         records.get("quote_quality_events"), expected_build_sha=expected_build_sha
     )
     coverage = coverage_from_events(events)
-    if coverage["required"]:
-        quote_coverage_pct = coverage["coverage_pct"]
-    else:
-        total_quotes = len(quotes)
-        usable = 0
-        for q in quotes:
-            if int(q.get("is_stale") or 0) == 1:
-                continue
-            bid = _f(q.get("bid"))
-            ask = _f(q.get("ask"))
-            if bid > 0 and ask > 0 and ask >= bid:
-                usable += 1
-        quote_coverage_pct = (usable / total_quotes * 100.0) if total_quotes else 0.0
+    # No fallback to the legacy option_quotes table: reconstructing coverage from
+    # stored rows divides good rows by good rows, so absent instrumentation would
+    # read as measurable coverage. Absent attempts is UNKNOWN.
+    quote_coverage_pct = coverage["coverage_pct"]
 
     # Real portfolio equity: realized P&L carries forward instead of vanishing when a
     # position closes.
@@ -194,7 +185,7 @@ def _missing_requirements(
         missing.append(f"completed trades {trades} of {MIN_TRADES} required")
     if unresolved:
         missing.append(f"unresolved exposures {unresolved} (must be 0)")
-    if trades and quote_coverage_pct < MIN_QUOTE_COVERAGE_PCT:
+    if trades and (quote_coverage_pct or 0.0) < MIN_QUOTE_COVERAGE_PCT:
         missing.append(
             f"quote coverage {quote_coverage_pct:.1f}% of {MIN_QUOTE_COVERAGE_PCT}% required"
         )
@@ -209,17 +200,35 @@ def evaluate_forward_gate(
     allocation_capital_budget: Optional[float] = None,
     load_errors: Optional[List[str]] = None,
     expected_build_sha: Optional[str] = None,
+    observed_sessions: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the authoritative gate over prospective evidence and classify the verdict."""
     inputs = build_gate_inputs(records=records, expected_build_sha=expected_build_sha)
 
     data_quality_errors = list(load_errors or []) + list(inputs.get("data_quality_errors") or [])
 
+    attempts = inputs.get("quote_attempts") or {}
+    completed_trades = len(inputs["trade_pnls"])
+    if completed_trades > 0 and int(attempts.get("required") or 0) == 0:
+        data_quality_errors.append(
+            "required quote-quality attempt evidence absent for completed trades"
+        )
+    coverage_pct = inputs.get("quote_coverage_pct")
+    if completed_trades > 0 and coverage_pct is not None and coverage_pct < MIN_QUOTE_COVERAGE_PCT:
+        data_quality_errors.append(
+            f"quote coverage {coverage_pct:.1f}% below the required "
+            f"{MIN_QUOTE_COVERAGE_PCT}%"
+        )
+
     if allocation_capital_budget is None:
         allocation_capital_budget, capital_errors = evaluation_capital()
         data_quality_errors.extend(capital_errors)
 
-    sessions = len({d for d in inputs["entry_dates"] if not d.startswith("unknown_")})
+    # The held-out session count comes from the session ledger, not from unique trade
+    # entry dates: a fully observed session that produced no signal is still a
+    # held-out session, and counting entry days silently shrinks the denominator.
+    entry_sessions = len({d for d in inputs["entry_dates"] if not d.startswith("unknown_")})
+    sessions = observed_sessions if observed_sessions is not None else entry_sessions
     trades = len(inputs["trade_pnls"])
 
     result = evaluate_authoritative_snapback_gate(
@@ -229,12 +238,17 @@ def evaluate_forward_gate(
         daily_mtm_equity_series=inputs["daily_mtm_equity_series"] or None,
         allocation_capital_budget=allocation_capital_budget,
         unresolved_exposures_count=inputs["unresolved_exposures_count"],
-        quote_coverage_pct=inputs["quote_coverage_pct"],
+        quote_coverage_pct=(
+            inputs["quote_coverage_pct"] if inputs["quote_coverage_pct"] is not None else 0.0
+        ),
+        entry_sessions_count=sessions,
     )
 
     payload = result.as_dict()
+    payload["total_sessions"] = sessions
+    payload["entry_date_count"] = entry_sessions
     sample_sufficient = (
-        payload.get("total_sessions", sessions) >= MIN_SESSIONS
+        sessions >= MIN_SESSIONS
         and payload.get("completed_trades", trades) >= MIN_TRADES
     )
 
@@ -254,10 +268,10 @@ def evaluate_forward_gate(
     payload["allocation_capital_budget"] = allocation_capital_budget
     payload["verdict"] = verdict
     payload["missing_requirements"] = _missing_requirements(
-        sessions=payload.get("total_sessions", sessions),
+        sessions=sessions,
         trades=payload.get("completed_trades", trades),
         unresolved=inputs["unresolved_exposures_count"],
-        quote_coverage_pct=inputs["quote_coverage_pct"],
+        quote_coverage_pct=inputs["quote_coverage_pct"] or 0.0,
         has_mtm=bool(inputs["daily_mtm_equity_series"]),
     )
     payload["evaluated_at"] = datetime.now(timezone.utc).isoformat()
@@ -274,7 +288,14 @@ def evaluate_forward_gate_from_warehouse(warehouse=None) -> Dict[str, Any]:
 
         warehouse = SnapbackObservationWarehouse()
 
-    return evaluate_forward_gate(records=load_forward_records(warehouse))
+    from app.services.snapback_session_ledger import observed_session_count
+
+    records, load_errors = load_forward_records(warehouse, strict=True)
+    return evaluate_forward_gate(
+        records=records,
+        load_errors=load_errors,
+        observed_sessions=observed_session_count(warehouse),
+    )
 
 
 if __name__ == "__main__":

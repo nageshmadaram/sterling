@@ -112,10 +112,18 @@ def test_rescanning_a_session_updates_rather_than_duplicates(warehouse):
 
 
 def test_gate_counts_only_fully_observed_sessions(warehouse):
+    from app.services.snapback_session_ledger import (
+        observed_session_count, update_session_phase,
+    )
+
     _scan(warehouse, session_date="2026-09-17", status=SessionStatus.COMPLETE)
     _scan(warehouse, session_date="2026-09-18", universe_scanned=10,
           symbol_failures=190, status=SessionStatus.FAILED)
 
-    from app.services.snapback_session_ledger import observed_session_count
+    # Evidence completeness needs the trading day's phases, not just the scan.
+    update_session_phase(
+        warehouse, "2026-09-17", entry_phase_status="COMPLETE",
+        eod_phase_status="COMPLETE", package_status="COMPLETE",
+    )
 
     assert observed_session_count(warehouse) == 1

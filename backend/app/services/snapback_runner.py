@@ -119,10 +119,10 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         if curr_time >= SCAN_AFTER_CLOSE:
             try:
                 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
-                from app.services.snapback_session_ledger import session_is_complete
+                from app.services.snapback_session_ledger import session_scan_complete, session_record
 
                 warehouse = SnapbackObservationWarehouse()
-                if not session_is_complete(warehouse, str(today)):
+                if not session_scan_complete(session_record(warehouse, str(today)) or {}):
                     scan_result = await finalize_session_signals(
                         session_date=today, client=client, warehouse=warehouse, uid=uid,
                     )

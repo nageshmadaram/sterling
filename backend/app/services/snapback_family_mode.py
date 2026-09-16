@@ -18,17 +18,39 @@ from typing import Iterator, Optional
 log = logging.getLogger(__name__)
 
 # Set only for the duration of a canonical execution call.
-_capability: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+_capability: contextvars.ContextVar[Optional[tuple]] = contextvars.ContextVar(
     "snapback_broker_capability", default=None
 )
 
-GUARDED_OPERATIONS = {
+# Anything that can create, increase or alter exposure.
+EXPOSURE_OPERATIONS = {
     "place_order",
-    "modify_order",
-    "cancel_order_unsafe",
+    "modify_order",          # can change quantity or price of a live order
     "place_gtt",
     "modify_gtt",
+    "place_mf_order",
+    "place_mf_sip",
+    "modify_mf_sip",
+    "convert_position",
 }
+
+# Protective mutations. Still capability-bound, but permitted while halted: refusing
+# to cancel or exit would trap capital rather than protect it.
+PROTECTIVE_OPERATIONS = {
+    "cancel_order",
+    "cancel_order_unsafe",
+    "cancel_gtt",
+    "cancel_mf_order",
+    "cancel_mf_sip",
+    "exit_order",
+}
+
+GUARDED_OPERATIONS = EXPOSURE_OPERATIONS | PROTECTIVE_OPERATIONS
+
+# Intents a capability can declare.
+INTENT_INCREASE = "INCREASE_EXPOSURE"
+INTENT_REDUCE = "REDUCE_EXPOSURE"
+INTENT_CANCEL = "CANCEL"
 
 
 def family_mode_enabled() -> bool:
@@ -38,9 +60,15 @@ def family_mode_enabled() -> bool:
 
 
 @contextmanager
-def canonical_broker_capability(intent_id: str) -> Iterator[str]:
-    """Grant broker-write capability for one canonical execution intent."""
-    token = _capability.set(intent_id)
+def canonical_broker_capability(
+    intent_id: str, *, intent: str = INTENT_INCREASE
+) -> Iterator[str]:
+    """Grant broker-write capability for one canonical execution intent.
+
+    The declared intent bounds what the capability authorises: a REDUCE_EXPOSURE or
+    CANCEL capability cannot be used to open a position.
+    """
+    token = _capability.set((intent_id, intent))
     try:
         yield intent_id
     finally:
@@ -48,7 +76,13 @@ def canonical_broker_capability(intent_id: str) -> Iterator[str]:
 
 
 def current_capability() -> Optional[str]:
-    return _capability.get()
+    held = _capability.get()
+    return held[0] if held else None
+
+
+def current_intent() -> Optional[str]:
+    held = _capability.get()
+    return held[1] if held else None
 
 
 def guard_broker_write(operation: str) -> None:
@@ -57,7 +91,8 @@ def guard_broker_write(operation: str) -> None:
         return
     if operation not in GUARDED_OPERATIONS:
         return
-    if _capability.get() is None:
+    held = _capability.get()
+    if held is None:
         log.error(
             "Family Mode: refused %s — broker writes must pass through canonical execution",
             operation,
@@ -65,4 +100,14 @@ def guard_broker_write(operation: str) -> None:
         raise PermissionError(
             f"Family Mode: {operation} must pass through the canonical execution "
             "authority; direct broker writes are refused"
+        )
+
+    _, intent = held
+    if operation in EXPOSURE_OPERATIONS and intent != INTENT_INCREASE:
+        log.error(
+            "Family Mode: refused %s under a %s capability", operation, intent,
+        )
+        raise PermissionError(
+            f"Family Mode: {operation} increases exposure and cannot run under a "
+            f"{intent} capability"
         )

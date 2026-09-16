@@ -7,6 +7,7 @@ in a local SQLite database (`snapback_observations.db`).
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import time
@@ -36,6 +37,56 @@ def _current_build_sha() -> str:
 
 
 _BUILD_SHA = _current_build_sha()
+
+
+class EvidenceIntegrityError(Exception):
+    """An evidence write was refused because required information is missing.
+
+    Defaulting a missing economic field to 0.0 converts "we do not know" into a
+    legitimate-looking result before any gate can object, so the writer refuses.
+    """
+
+
+# Economics that must be present on every closed trade. No defaults.
+REQUIRED_OUTCOME_FIELDS = (
+    "actual_option_pnl",
+    "actual_futures_pnl",
+    "actual_costs",
+    "actual_total_pnl",
+    "entry_ts",
+    "exit_ts",
+    "exit_reason",
+)
+
+REQUIRED_OUTCOME_NUMERIC = (
+    "actual_option_pnl",
+    "actual_futures_pnl",
+    "actual_costs",
+    "actual_total_pnl",
+)
+
+
+def _require_outcome_fields(outcome_data: Dict[str, Any]) -> Dict[str, float]:
+    """Validate required economics before the insert. Missing is never zero."""
+    for field in REQUIRED_OUTCOME_FIELDS:
+        if field not in outcome_data or outcome_data[field] is None:
+            raise EvidenceIntegrityError(
+                f"outcome is missing required field {field!r}; refusing to record "
+                "a trade whose economics are unknown"
+            )
+
+    numeric: Dict[str, float] = {}
+    for field in REQUIRED_OUTCOME_NUMERIC:
+        try:
+            value = float(outcome_data[field])
+        except (TypeError, ValueError) as exc:
+            raise EvidenceIntegrityError(
+                f"outcome field {field!r} is not numeric: {outcome_data[field]!r}"
+            ) from exc
+        if not math.isfinite(value):
+            raise EvidenceIntegrityError(f"outcome field {field!r} is not finite")
+        numeric[field] = value
+    return numeric
 
 
 def _now_iso() -> str:
@@ -1009,6 +1060,10 @@ class SnapbackObservationWarehouse:
         erases the trade's economics while removing it from the open book. Either every
         row lands or none of them do, and the position stays where it was.
         """
+        # Validate BEFORE opening the transaction, so a malformed close never even
+        # begins to write.
+        required = _require_outcome_fields(outcome_data)
+
         now = _now_iso()
         conn = self._get_connection()
         try:
@@ -1062,10 +1117,12 @@ class SnapbackObservationWarehouse:
                     (
                         o["outcome_id"], o.get("opportunity_id", opportunity_id),
                         o["exit_reason"], o["entry_ts"], o["exit_ts"],
-                        float(o.get("modeled_option_pnl", 0.0)), float(o.get("actual_option_pnl", 0.0)),
-                        float(o.get("modeled_futures_pnl", 0.0)), float(o.get("actual_futures_pnl", 0.0)),
-                        float(o.get("modeled_costs", 0.0)), float(o.get("actual_costs", 0.0)),
-                        float(o.get("modeled_total_pnl", 0.0)), float(o.get("actual_total_pnl", 0.0)),
+                        # Modeled values are diagnostics and may default; the actual
+                        # economics were validated above and are never defaulted.
+                        float(o.get("modeled_option_pnl", 0.0)), required["actual_option_pnl"],
+                        float(o.get("modeled_futures_pnl", 0.0)), required["actual_futures_pnl"],
+                        float(o.get("modeled_costs", 0.0)), required["actual_costs"],
+                        float(o.get("modeled_total_pnl", 0.0)), required["actual_total_pnl"],
                         float(o.get("observed_vs_model_error", 0.0)),
                         now, o.get("provider_timestamp"), now, o.get("symbol", ""),
                         o.get("provider_symbol", ""), o.get("expiry", ""),

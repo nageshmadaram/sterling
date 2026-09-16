@@ -18,7 +18,9 @@ def _records(outcomes=None, **over):
         "paper_positions": [],
         "daily_mtm": [],
         "option_quotes": [],
-        "quote_quality_events": [],
+        "quote_quality_events": [
+            {"required_for_economics": 1, "accepted": 1} for _ in range(20)
+        ],
     }
     base.update(over)
     return base

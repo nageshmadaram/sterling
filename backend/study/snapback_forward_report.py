@@ -29,6 +29,7 @@ MIN_HELD_OUT_SESSIONS = 60
 MIN_COMPLETED_TRADES = 300
 
 WAREHOUSE_TABLES = (
+    "prospective_sessions",
     "quote_quality_events",
     "opportunities",
     "contract_candidates",
@@ -170,14 +171,24 @@ def build_forward_summary(
     open_positions = int(pos_counts.get("OPEN", 0))
     exit_pending = int(pos_counts.get("EXIT_PENDING", 0))
 
-    session_dates = {
-        str(row.get("entry_timestamp") or row.get("session_date") or "")[:10]
-        for row in positions
-    }
-    session_dates.discard("")
-    mtm_sessions = {str(r.get("session_date") or "")[:10] for r in mtm_rows}
-    mtm_sessions.discard("")
-    observed_sessions = len(session_dates | mtm_sessions)
+    # Observed sessions come from the session ledger when it is available: a fully
+    # observed session that produced no trade is still a held-out session.
+    ledger_rows = records.get("prospective_sessions") or []
+    if ledger_rows:
+        from app.services.snapback_session_ledger import session_evidence_complete
+
+        observed_sessions = sum(
+            1 for row in ledger_rows if session_evidence_complete(dict(row))
+        )
+    else:
+        session_dates = {
+            str(row.get("entry_timestamp") or row.get("session_date") or "")[:10]
+            for row in positions
+        }
+        session_dates.discard("")
+        mtm_sessions = {str(r.get("session_date") or "")[:10] for r in mtm_rows}
+        mtm_sessions.discard("")
+        observed_sessions = len(session_dates | mtm_sessions)
 
     slippages = [_f(f.get("slippage")) for f in fills]
     slippages = [s for s in slippages if s is not None]

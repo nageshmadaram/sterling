@@ -119,7 +119,21 @@ def session_record(warehouse, session_date: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def _is_complete(row: Dict[str, Any]) -> bool:
+def evidence_gap_codes(row: Dict[str, Any]) -> List[str]:
+    try:
+        return list(json.loads(row.get("evidence_gap_codes_json") or "[]"))
+    except Exception:
+        # An unreadable gap list is itself a gap.
+        return ["unreadable_evidence_gap_codes"]
+
+
+def session_scan_complete(row: Dict[str, Any]) -> bool:
+    """Did the SCANNER observe the whole session?
+
+    This answers "must I rescan?" only. It says nothing about whether the trading
+    day's entry, end-of-day and packaging phases finished, so it must never be used
+    as the economic evidence denominator.
+    """
     if not row:
         return False
     if str(row.get("scanner_status")) != SessionStatus.COMPLETE:
@@ -135,19 +149,37 @@ def _is_complete(row: Dict[str, Any]) -> bool:
     return True
 
 
+def session_evidence_complete(row: Dict[str, Any]) -> bool:
+    """Is this session admissible as economic evidence?
+
+    Every phase must have finished and no gap may be recorded. A session whose
+    end-of-day mark is missing is not a held-out session, however well it scanned.
+    """
+    if not session_scan_complete(row):
+        return False
+    for phase in ("entry_phase_status", "eod_phase_status", "package_status"):
+        if str(row.get(phase) or "") != SessionStatus.COMPLETE:
+            return False
+    return not evidence_gap_codes(row)
+
+
 def session_is_complete(warehouse, session_date: str) -> bool:
-    """A session counts only when the whole universe and the market gate were observed."""
-    return _is_complete(session_record(warehouse, session_date) or {})
+    """Scanner completeness, used by the runner to avoid a duplicate scan."""
+    return session_scan_complete(session_record(warehouse, session_date) or {})
 
 
 def observed_session_count(warehouse) -> int:
-    """Fully observed sessions — the denominator the 60-session rule actually means."""
+    """Fully observed sessions — the denominator the 60-session rule actually means.
+
+    Counted from the session ledger, not from unique trade entry dates: a session
+    that produced no signal is still a held-out session if it was fully observed.
+    """
     try:
         rows = warehouse.get_records_by_table("prospective_sessions")
     except Exception as exc:
         log.warning("Snapback session ledger: unreadable (%s); counting zero", exc)
         return 0
-    return sum(1 for r in rows if _is_complete(dict(r)))
+    return sum(1 for r in rows if session_evidence_complete(dict(r)))
 
 
 def incomplete_sessions(warehouse) -> List[str]:
@@ -155,4 +187,8 @@ def incomplete_sessions(warehouse) -> List[str]:
         rows = warehouse.get_records_by_table("prospective_sessions")
     except Exception:
         return []
-    return [str(dict(r)["session_date"]) for r in rows if not _is_complete(dict(r))]
+    return [
+        str(dict(r)["session_date"])
+        for r in rows
+        if not session_evidence_complete(dict(r))
+    ]

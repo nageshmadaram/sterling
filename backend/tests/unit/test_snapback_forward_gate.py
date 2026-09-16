@@ -63,9 +63,10 @@ def test_inputs_use_observed_values_only():
         {"status": "EXIT_PENDING"},
         {"status": "CLOSED"},
     ]
-    records["option_quotes"] = [
-        {"bid": 10.0, "ask": 11.0, "is_stale": 0},
-        {"bid": 0.0, "ask": 0.0, "is_stale": 0},
+    # Coverage is measured from required attempts, not from stored quote rows.
+    records["quote_quality_events"] = [
+        {"required_for_economics": 1, "accepted": 1},
+        {"required_for_economics": 1, "accepted": 0},
     ]
     records["daily_mtm"] = [
         {"session_date": "2026-09-01", "total_mtm": 100.0},
