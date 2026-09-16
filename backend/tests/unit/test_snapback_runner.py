@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 import tempfile
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -1279,3 +1279,162 @@ async def test_intraday_exit_latches_pending_exit_and_closes_on_next_tick_even_i
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# Freeze patch regression tests: EXIT_PENDING isolation + actual intraday exit DTE
+# ---------------------------------------------------------------------------
+
+
+async def _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeypatch):
+    """Helper: record a signal and execute the T+1 paper entry, returning the opportunity id."""
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    dt_t = datetime(2026, 9, 15, 10, 0, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000),
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    opp_id = collector.record_signal_at_close(signal=sig, cfg=sample_config)["opportunity_id"]
+
+    t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return t1_dt.astimezone(tz) if tz is not None else t1_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
+
+    mock_client = build_mock_client()
+    await process_prospective_pending_entries(mock_client, sample_config)
+    assert temp_warehouse.get_paper_position(opp_id) is not None
+    return opp_id, mock_client
+
+
+def _quotes_at(ist_stamp: str, option_bid: float = 100.0, option_ask: float = 102.0):
+    return {
+        "NSE:NIFTY": {"last_price": 24510.0},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24511.0,
+            "buy_price": 24510.0,
+            "sell_price": 24512.0,
+            "buy_quantity": 100,
+            "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24510.0, "quantity": 100}], "sell": [{"price": 24512.0, "quantity": 100}]},
+            "timestamp": ist_stamp,
+            "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": option_bid + 1.0,
+            "buy_price": option_bid,
+            "sell_price": option_ask,
+            "buy_quantity": 50,
+            "sell_quantity": 50,
+            "depth": {"buy": [{"price": option_bid, "quantity": 50}], "sell": [{"price": option_ask, "quantity": 50}]},
+            "timestamp": ist_stamp,
+            "oi": 60000,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_exit_pending_isolated_from_eod_cycle(temp_warehouse, sample_config, monkeypatch):
+    """TEST A: an EXIT_PENDING position must never be touched by the EOD MTM/rebalance phase."""
+    opp_id, mock_client = await _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeypatch)
+
+    # Latch EXIT_PENDING exactly as the intraday risk monitor does
+    temp_warehouse.set_paper_position_pending_exit(
+        opportunity_id=opp_id,
+        pending_exit_reason="PREMIUM_STOP",
+        pending_exit_option_bid=40.0,
+        pending_exit_ts=datetime.now(timezone.utc).isoformat(),
+    )
+    before = temp_warehouse.get_paper_position(opp_id)
+    assert before["status"] == "EXIT_PENDING"
+    hedges_before = len(temp_warehouse.get_records_by_table("hedge_rebalances", opportunity_id=opp_id))
+
+    # Run the 15:29 EOD phase
+    eod_dt = datetime(2026, 9, 16, 9, 59, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: eod_dt.timestamp())
+
+    class FixedDateTimeEOD(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return eod_dt.astimezone(tz) if tz is not None else eod_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTimeEOD)
+    mock_client.get_quote = AsyncMock(return_value=_quotes_at("2026-09-16T15:28:59+05:30"))
+
+    processed = await process_prospective_daily_mtm_and_exits(mock_client, sample_config)
+    assert processed == 0
+
+    assert temp_warehouse.get_records_by_table("daily_mtm", opportunity_id=opp_id) == []
+    assert len(temp_warehouse.get_records_by_table("hedge_rebalances", opportunity_id=opp_id)) == hedges_before
+
+    after = temp_warehouse.get_paper_position(opp_id)
+    assert after["status"] == "EXIT_PENDING"
+    assert after["pending_exit_reason"] == "PREMIUM_STOP"
+    assert after["sessions_held"] == before["sessions_held"]
+    assert after["is_runner"] == before["is_runner"]
+
+
+@pytest.mark.asyncio
+async def test_intraday_exit_uses_remaining_dte(temp_warehouse, sample_config, monkeypatch):
+    """TEST B: an actual intraday exit must report remaining DTE, not the original entry DTE."""
+    opp_id, mock_client = await _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeypatch)
+
+    pos = temp_warehouse.get_paper_position(opp_id)
+    entry_dte = int(pos["entry_dte"])
+    assert entry_dte > 0
+
+    # Advance several calendar days into the holding period
+    later_dt = datetime(2026, 9, 26, 6, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: later_dt.timestamp())
+
+    class FixedDateTimeLater(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later_dt.astimezone(tz) if tz is not None else later_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTimeLater)
+
+    # Collapse the option bid far below the premium stop
+    stop_bid = float(pos["option_entry_price"]) * 0.30
+    mock_client.get_quote = AsyncMock(
+        return_value=_quotes_at("2026-09-26T11:29:59+05:30", option_bid=stop_bid, option_ask=stop_bid + 2.0)
+    )
+
+    captured = {}
+    real_close = SnapbackProspectiveCollector.close_opportunity
+
+    def spy_close(self, **kwargs):
+        captured.update(kwargs)
+        return real_close(self, **kwargs)
+
+    monkeypatch.setattr(SnapbackProspectiveCollector, "close_opportunity", spy_close)
+
+    from app.services.snapback import process_prospective_intraday_risk
+    await process_prospective_intraday_risk(mock_client, sample_config)
+
+    assert captured, "close_opportunity was not invoked by the intraday risk monitor"
+    expiry = date.fromisoformat(str(pos["option_expiry"])[:10])
+    expected_dte = max(0, (expiry - later_dt.astimezone(_IST).date()).days)
+    assert captured["exit_dte"] == expected_dte
+    assert captured["exit_dte"] != entry_dte

@@ -950,6 +950,11 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
         session_date = datetime.now(_IST).strftime("%Y-%m-%d")
 
         for pos in active_positions:
+            if pos.get("status") == "EXIT_PENDING":
+                # Exit decision was already latched by the intraday risk monitor.
+                # Only process_prospective_intraday_risk() may complete liquidation.
+                continue
+
             opp_id = pos["opportunity_id"]
 
             # Idempotency guard: if MTM already recorded for (opp_id, session_date), skip duplicate run!
@@ -1173,6 +1178,14 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                     entry_dte_val = int(pos.get("entry_dte") or 45)
                     entry_ts_str = str(pos.get("entry_timestamp") or "")
 
+                    # Remaining DTE at the actual intraday exit (counterfactual diagnostic only)
+                    try:
+                        expiry_date = date.fromisoformat(str(pos.get("option_expiry") or "")[:10])
+                        today_ist = datetime.now(_IST).date()
+                        exit_dte = max(0, (expiry_date - today_ist).days)
+                    except Exception:
+                        exit_dte = entry_dte_val
+
                     collector.close_opportunity(
                         opportunity_id=opp_id,
                         symbol=symbol,
@@ -1183,7 +1196,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         exit_spot=curr_spot,
                         selected_strike=opt_strike_val,
                         entry_dte=entry_dte_val,
-                        exit_dte=entry_dte_val,
+                        exit_dte=exit_dte,
                         iv_proxy=float(pos.get("entry_iv") or 0.20),
                         option_entry_price=float(pos["option_entry_price"]),
                         option_exit_bid=curr_bid,
