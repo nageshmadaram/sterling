@@ -286,3 +286,66 @@ curl -sS http://127.0.0.1:8000/api/v1/snapback/prospective/health
 
 `ready: true` with `failed_checks: []` means everything except the login is done.
 `broker_connected: false` before you log in is expected.
+
+---
+
+## If the operator dies, or hands Sterling on
+
+Sterling is built to outlive whoever set it up. It is deliberately **not** built
+to keep trading an account after its holder has died — transactions in a deceased
+person's account are not lawful, and no amount of working software makes that
+acceptable.
+
+The division that matters:
+
+- **the strategy's evidence history belongs to Sterling.** It describes the
+  strategy, not the account, and stays valid across a handover.
+- **broker inventory belongs to the legal account holder.** It does not transfer
+  because a piece of software was reconfigured.
+
+### The procedure
+
+1. **Stop the service.** `systemctl --user stop sterling-backend`. Place no
+   further orders on the previous account.
+2. **Flatten and reconcile.** A handover is refused while any position holds
+   exposure or any order has an unknown outcome. Rebinding then would leave real
+   positions owned by an account Sterling has stopped watching.
+3. **Legal transmission.** The nominee or legal heir claims the assets through
+   the broker's own transmission process, into **their own account**. Sterling
+   plays no part in this.
+4. **New credentials.** The new operator opens or uses their own broker account
+   and generates their own API key and secret. **Never reuse the previous
+   holder's password, API key or access token** — they identify a person, not a
+   role, and reusing them is both unlawful and untraceable.
+5. **Rebind.** Set `STERLING_FAMILY_USER_ID` and `STERLING_FAMILY_ACCOUNT_ID` to
+   the new account and put the new credentials in the environment file.
+6. **Start.** Preflight refuses to run until the new account reconciles clean
+   and flat, with no unknown orders or positions.
+
+The evidence database is preserved read-only. All account-specific live state is
+reset, because it described somebody else's book.
+
+### What is NOT a succession
+
+Reusing the old login to "keep things running" is not a succession. It is trading
+in another person's account. If you are ever tempted because the alternative
+looks like paperwork, stop the service and leave it stopped — a halted Sterling
+loses nothing, and there is no deadline that makes this the right call.
+
+---
+
+## What Sterling is, and is not
+
+Sterling carries **one** strategy for family use: Snapback, and only in paper
+mode until its evidence says otherwise. Every other engine in this repository is
+research: some are unvalidated, one is measured as economically negative, others
+are calibration projects. Family Mode hides and refuses all of them, so there is
+no screen where an unvalidated strategy can be armed by mistake.
+
+Even if Snapback eventually passes its gate, it should not be treated as a
+salary. Its measured history is concentrated: a small number of large winners
+paid for many small losers. A strategy with that shape can have long, discouraging
+stretches while still being sound over years. **Sterling should never be the only
+thing a household lives on**, and the appropriate first live size is the smallest
+one the broker permits — scaled only against evidence milestones decided in
+advance, never because a few trades went well.

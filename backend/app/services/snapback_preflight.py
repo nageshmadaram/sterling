@@ -127,8 +127,23 @@ def _ntp_synchronised() -> Tuple[bool, str]:
     return False, f"not_synchronised:{value or 'unknown'}"
 
 
+def _escape_hatch_allowed(name: str) -> bool:
+    """Whether a developer escape hatch applies here.
+
+    These exist so a workstation without NTP or with uncommitted edits can still
+    run. On the family deployment they would let a mis-set clock or code that is
+    not in any commit produce evidence nobody can reproduce, so Family Mode
+    ignores them entirely.
+    """
+    from app.services.snapback_family_mode import family_mode_enabled
+
+    if family_mode_enabled():
+        return False
+    return os.environ.get(name, "").lower() in ("1", "true", "yes")
+
+
 def check_clock() -> Tuple[bool, Dict[str, Any]]:
-    if os.environ.get("STERLING_SKIP_CLOCK_CHECK", "").lower() in ("1", "true", "yes"):
+    if _escape_hatch_allowed("STERLING_SKIP_CLOCK_CHECK"):
         return True, {"clock_sync_ok": True, "clock_sync_detail": "skipped_by_env"}
 
     ok, detail = _ntp_synchronised()
@@ -281,7 +296,7 @@ def _default_worktree_clean() -> Tuple[bool, List[str]]:
     Evidence stamped with a build SHA whose worktree had uncommitted edits records
     a provenance that cannot be reproduced.
     """
-    if os.environ.get("STERLING_ALLOW_DIRTY_WORKTREE", "").lower() in ("1", "true", "yes"):
+    if _escape_hatch_allowed("STERLING_ALLOW_DIRTY_WORKTREE"):
         return True, ["dirty_worktree_allowed_by_env"]
     try:
         out = subprocess.run(

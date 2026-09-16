@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -282,5 +282,18 @@ class PromotionService:
                 evaluated_at=result.evaluated_at,
             )
         except Exception as exc:
-            log.warning("Promotion record could not be persisted: %s", exc)
+            # A verdict nobody can audit later is not evidence of anything. If
+            # the record cannot be stored, the decision does not stand: it
+            # degrades to INCONCLUSIVE rather than being reported as a result
+            # whose provenance was silently lost.
+            log.error("Promotion record could not be persisted: %s", exc)
+            return replace(
+                result,
+                verdict=INCONCLUSIVE,
+                promoted=False,
+                data_quality_ok=False,
+                missing_requirements=list(result.missing_requirements) + [
+                    f"promotion_record could not be persisted: {exc}"
+                ],
+            )
         return result

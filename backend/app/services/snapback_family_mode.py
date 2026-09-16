@@ -111,3 +111,29 @@ def guard_broker_write(operation: str) -> None:
             f"Family Mode: {operation} increases exposure and cannot run under a "
             f"{intent} capability"
         )
+
+
+# Only a strategy with its own production promotion may be offered to the family.
+# Every other engine in this repository is explicitly research-only, unvalidated,
+# or measured as economically negative. A research workstation may arm one
+# manually; the family product must not make that possible.
+FAMILY_VISIBLE_STRATEGIES = frozenset({"snapback"})
+
+
+def family_visible_strategies() -> frozenset:
+    return FAMILY_VISIBLE_STRATEGIES
+
+
+def guard_family_strategy(strategy_id: str) -> None:
+    """Refuse any strategy the family product does not carry.
+
+    Outside Family Mode nothing is restricted: that is the research surface.
+    """
+    if not family_mode_enabled():
+        return
+
+    if str(strategy_id).lower() not in FAMILY_VISIBLE_STRATEGIES:
+        raise PermissionError(
+            f"FAMILY MODE: {strategy_id} has no production promotion and cannot "
+            f"be armed here. Only {sorted(FAMILY_VISIBLE_STRATEGIES)} is carried."
+        )
