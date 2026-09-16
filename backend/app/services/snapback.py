@@ -920,6 +920,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     futures_lot_size=fut_lot_size,
                     execution_timestamp_ms=int(time.time() * 1000),
                     entry_iv=iv_proxy,
+                    processing_token=lease_token,
                 )
                 processed += 1
 
@@ -927,7 +928,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 log.debug("Pending prospective entry processing failed for %s: %s", opp_id, opp_exc)
                 opp_st = collector.warehouse.get_opportunity_by_id(opp_id)
                 if opp_st and opp_st.get("status") == "PROCESSING_ENTRY":
-                    collector.warehouse.update_opportunity_status(opp_id, "PENDING_ENTRY")
+                    collector.warehouse.release_locked_opportunity(opp_id, processing_token=lease_token)
 
     except Exception as exc:
         log.warning("Prospective pending entry cycle skipped: %s", exc)
@@ -1101,19 +1102,17 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
 
                 entry_price = float(pos["option_entry_price"])
                 curr_bid = opt_ev.best_bid
-                peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
-
-                if peak_bid > float(pos.get("peak_option_bid") or 0.0):
-                    collector.warehouse.update_paper_position_peak_bid(
-                        opportunity_id=opp_id,
-                        peak_option_bid=peak_bid,
-                        is_runner=int(pos.get("is_runner") or 0),
-                    )
-
-                exit_reason = None
                 is_runner = bool(pos.get("is_runner"))
+                exit_reason = None
 
                 if is_runner:
+                    peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
+                    if peak_bid > float(pos.get("peak_option_bid") or 0.0):
+                        collector.warehouse.update_paper_position_peak_bid(
+                            opportunity_id=opp_id,
+                            peak_option_bid=peak_bid,
+                            is_runner=1,
+                        )
                     runner_trail_pct = float(getattr(cfg, "runner_trail_pct", 25.0) or 25.0)
                     trail_price = peak_bid * (1.0 - runner_trail_pct / 100.0)
                     if curr_bid <= trail_price:
@@ -1124,17 +1123,23 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         exit_reason = "PREMIUM_STOP"
 
                 if exit_reason:
-                    # Fetch live futures quote to compute actual futures exit PnL on intraday exit
+                    # Fetch live futures quote and validate quote quality before completing intraday exit
                     futures_exit_bid = float(pos.get("avg_futures_entry_price") or 0.0)
                     if int(pos.get("current_futures_lots") or 0) > 0 and fut_sym:
                         try:
                             fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
                             q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
                             fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
-                            if fut_ev and fut_ev.best_bid > 0:
-                                futures_exit_bid = fut_ev.best_bid
+                            q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=receive_now_ms) if fut_ev else None
+                            if not fut_ev or not q_fut_eval or not q_fut_eval.accepted_for_execution or fut_ev.best_bid <= 0:
+                                log.warning("Skipping intraday exit for %s: missing or invalid futures exit quote for %s", opp_id, fut_sym)
+                                processed += 1
+                                continue
+                            futures_exit_bid = fut_ev.best_bid
                         except Exception as fut_exc:
                             log.warning("Failed to fetch live futures exit quote for %s: %s", opp_id, fut_exc)
+                            processed += 1
+                            continue
 
                     opt_type_str = "PE" if "PE" in opt_sym else "CE"
                     opt_strike_val = float(pos.get("option_strike") or 0.0)

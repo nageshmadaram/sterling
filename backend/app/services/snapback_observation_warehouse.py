@@ -671,14 +671,14 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
     ) -> None:
-        """Record an eligible contract candidate immutably."""
+        """Record an eligible contract candidate immutably (idempotent overwrite on retry)."""
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO contract_candidates (
+                    INSERT OR REPLACE INTO contract_candidates (
                         candidate_id, opportunity_id, candidate_rank, option_type, dte,
                         strike_distance, theoretical_delta, is_chosen,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
@@ -717,14 +717,14 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
     ) -> None:
-        """Record option quote snapshot immutably."""
+        """Record option quote snapshot immutably (idempotent overwrite on retry)."""
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO option_quotes (
+                    INSERT OR REPLACE INTO option_quotes (
                         quote_id, opportunity_id, bid, ask, bidqty, askqty, ltp, oi, iv, delta,
                         quote_age_ms, is_stale,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
@@ -759,14 +759,14 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
     ) -> None:
-        """Record futures quote snapshot immutably."""
+        """Record futures quote snapshot immutably (idempotent overwrite on retry)."""
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO futures_quotes (
+                    INSERT OR REPLACE INTO futures_quotes (
                         quote_id, opportunity_id, futures_symbol, bid, ask, ltp, basis,
                         quote_age_ms, is_stale,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
@@ -1196,6 +1196,24 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def release_locked_opportunity(self, opportunity_id: str, processing_token: Optional[str] = None) -> None:
+        """Reset a locked PROCESSING_ENTRY opportunity back to PENDING_ENTRY if token matches."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                if processing_token:
+                    conn.execute(
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY' AND processing_token = ?",
+                        (opportunity_id, processing_token)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY'",
+                        (opportunity_id,)
+                    )
+        finally:
+            conn.close()
+
     def commit_paper_entry_transaction(
         self,
         opportunity_id: str,
@@ -1205,6 +1223,7 @@ class SnapbackObservationWarehouse:
         cost_data: Dict[str, Any],
         margin_snapshot_data: Dict[str, Any],
         paper_position_data: Dict[str, Any],
+        processing_token: Optional[str] = None,
     ) -> None:
         """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction."""
         now = _now_iso()
@@ -1317,11 +1336,19 @@ class SnapbackObservationWarehouse:
                         p["entry_spot"], p["entry_timestamp"], p["entry_dte"], p["entry_iv"], p["causal_beta"], p.get("status", "OPEN")
                     ),
                 )
-                # 7. Atomically mark opportunity as OPEN_POSITION and clear processing token
-                conn.execute(
-                    "UPDATE opportunities SET status = 'OPEN_POSITION', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ?",
-                    (opportunity_id,)
-                )
+                # 7. Atomically mark opportunity as OPEN_POSITION and clear processing token (enforces lease token)
+                if processing_token:
+                    cur = conn.execute(
+                        "UPDATE opportunities SET status = 'OPEN_POSITION', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY' AND processing_token = ?",
+                        (opportunity_id, processing_token)
+                    )
+                    if cur.rowcount == 0:
+                        raise RuntimeError(f"Lease lost for opportunity {opportunity_id} (token {processing_token})")
+                else:
+                    conn.execute(
+                        "UPDATE opportunities SET status = 'OPEN_POSITION', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ?",
+                        (opportunity_id,)
+                    )
         finally:
             conn.close()
 

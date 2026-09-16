@@ -157,6 +157,7 @@ class SnapbackProspectiveCollector:
         slippage_pct: float = 0.0005,
         execution_timestamp_ms: Optional[int] = None,
         entry_iv: float = 0.20,
+        processing_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Day T+1 First Executable Session: Execute entry observation on fresh market quotes."""
         now_ms = execution_timestamp_ms or int(time.time() * 1000)
@@ -232,8 +233,21 @@ class SnapbackProspectiveCollector:
                 }
             try:
                 expected_t1_date = next_trading_day(sig_date)
-            except Exception:
-                expected_t1_date = sig_date + timedelta(days=1)
+            except Exception as cal_exc:
+                self.warehouse.update_opportunity_status(opportunity_id, "CALENDAR_ERROR")
+                self.warehouse.record_decision(
+                    decision_id=f"DECISION-{opportunity_id}",
+                    opportunity_id=opportunity_id,
+                    symbol=opp.get("symbol", "UNKNOWN"),
+                    decision="CALENDAR_ERROR_REJECTED",
+                    reason=f"Failed to compute next trading day for signal date {sig_date}: {cal_exc}",
+                    provider_timestamp=provider_ts,
+                )
+                return {
+                    "opportunity_id": opportunity_id,
+                    "status": "CALENDAR_ERROR",
+                    "reason": f"Failed to compute next trading day for signal date {sig_date}: {cal_exc}",
+                }
 
             if exec_date > expected_t1_date:
                 self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
@@ -600,6 +614,7 @@ class SnapbackProspectiveCollector:
                 "is_runner": 0,
                 "status": "OPEN",
             },
+            processing_token=processing_token,
         )
 
 
@@ -783,7 +798,7 @@ class SnapbackProspectiveCollector:
         elif sessions_held >= hold_days and not is_runner:
             if option_bid >= option_entry_price * 1.5:
                 is_runner = 1
-                peak_option_bid = max(peak_option_bid, option_bid)
+                peak_option_bid = option_bid
             else:
                 exit_reason = "HOLDING_HORIZON_EXPIRED"
 
@@ -794,7 +809,7 @@ class SnapbackProspectiveCollector:
             elif option_bid <= peak_option_bid * 0.75:
                 exit_reason = "RUNNER_TRAIL_STOP"
 
-        if pos and (is_runner != int(pos.get("is_runner") or 0) or peak_option_bid > float(pos.get("peak_option_bid") or 0)):
+        if pos and (is_runner != int(pos.get("is_runner") or 0) or (is_runner == 1 and peak_option_bid != float(pos.get("peak_option_bid") or 0))):
             self.warehouse.update_paper_position_peak_bid(opportunity_id, peak_option_bid, is_runner)
 
         # Calculate Liquidation MTM
