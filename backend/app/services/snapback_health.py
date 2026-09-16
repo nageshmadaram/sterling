@@ -150,6 +150,9 @@ def build_prospective_health(
         "status": status,
         "healthy": healthy,
         "runtime_sha": runtime_sha,
+        "build_sha": _identity().get("build_sha"),
+        "expected_build_sha": _identity().get("expected_build_sha"),
+        "historical_strategy_sha": _identity().get("historical_strategy_sha"),
         "strategy_manifest": strategy_manifest,
         "manifest_ok": bool(manifest_ok),
         "mode": mode,
@@ -181,6 +184,16 @@ def build_prospective_health(
 # --------------------------------------------------------------------------- #
 # Live probes
 # --------------------------------------------------------------------------- #
+
+
+def _identity() -> Dict[str, Any]:
+    """Both identities: the frozen strategy, and the build actually executing."""
+    try:
+        from app.services.snapback_identity import identity_payload
+
+        return identity_payload()
+    except Exception:
+        return {}
 
 
 def _runtime_sha() -> Optional[str]:
@@ -310,7 +323,7 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
 
     return build_prospective_health(
         warehouse=warehouse,
-        runtime_sha=_runtime_sha(),
+        runtime_sha=_identity().get("build_sha") or _runtime_sha(),
         strategy_manifest=FROZEN_MANIFEST_HASH,
         manifest_ok=manifest_ok,
         mode="PAPER",
