@@ -1,0 +1,76 @@
+name: snapback-release-gate
+
+# The frozen Snapback prospective runtime may only be released when its own
+# invariants hold. Unlike the regression gate, this is absolute: a failure here
+# is a release blocker, not a comparison against a merge-base.
+#
+# It fails on:
+#   - any Snapback test failure
+#   - a strategy/runtime file changed without its freeze record being updated
+#   - a secret pattern in tracked files
+#   - a gate caller outside the single promotion authority
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/app/services/snapback*'
+      - 'backend/app/engines/snapback/**'
+      - 'backend/study/snapback*'
+      - 'backend/tests/unit/test_snapback*'
+      - 'docs/strategy/snapback/**'
+      - '.github/workflows/snapback-release-gate.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  snapback-release-gate:
+    name: Snapback release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Snapback test suite
+        working-directory: backend
+        run: python -m pytest tests/ -q -p no:randomly -k snapback
+        env:
+          ENVIRONMENT: test
+          PAPER_TRADING: "true"
+          REAL_PUBLIC_DATA: "false"
+          DEFAULT_UNDERLYING: NIFTY
+          LOG_LEVEL: WARNING
+          PYTHONWARNINGS: ignore
+
+      - name: Release invariants
+        working-directory: backend
+        run: python -m pytest tests/unit/test_snapback_release_identity.py tests/unit/test_snapback_preflight.py tests/unit/test_snapback_fault_injection.py tests/unit/test_snapback_recovery_drills.py -q -p no:randomly
+        env:
+          ENVIRONMENT: test
+          PAPER_TRADING: "true"
+          LOG_LEVEL: WARNING
+          PYTHONWARNINGS: ignore
+
+      - name: No secrets in tracked files
+        run: bash scripts/snapback_secret_scan.sh
+
+      - name: Single promotion authority
+        working-directory: backend
+        run: python -m pytest tests/unit/test_snapback_promotion_single_authority.py -q -p no:randomly
+        env:
+          ENVIRONMENT: test
+          PAPER_TRADING: "true"
+          LOG_LEVEL: WARNING
+          PYTHONWARNINGS: ignore

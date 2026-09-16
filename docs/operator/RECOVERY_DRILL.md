@@ -105,12 +105,51 @@ reasons. `EXIT`, `FLATTEN` and `RECONCILE` remain permitted while halted.
 
 ---
 
+## 12. Fault injection (Block 6, 2026-09-16)
+
+Each drill below injects a dependency failure that a healthy-looking system gives
+no warning about. Automated in `backend/tests/unit/test_snapback_fault_injection.py`.
+
+**Disk full during an outcome write.** PASS. The insert raises and the transaction
+leaves no partial outcome row behind, so a half-written close cannot be read later
+as a completed trade.
+
+**Corrupt evidence database.** PASS. `check_database()` reports `writable: False`
+and preflight blocks startup rather than appending to a damaged file.
+
+**Locked database.** PASS. The write probe never reports a pass alongside
+`writable: False`; a busy writer surfaces as a failed probe, not an empty result.
+
+**Calendar outage.** PASS. The post-market cycle returns `CALENDAR_UNAVAILABLE`.
+It does not assume a trading day, and it does not assume a holiday.
+
+**Backup failure (no space left on device).** PASS. The session is not marked
+complete and no state file is written, so the next cycle retries rather than
+recording the day as packaged.
+
+**Alert transport outage.** PASS. Backup and report still complete and the cycle
+records `alert_dispatch_failed`. Evidence is the product; notification is not.
+
+**Broker outage during reconciliation.** PASS. The snapshot is `clean: False`.
+No broker answer is not a clean book; it is no information.
+
+**Quote outage.** PASS. A required quote that never arrived lowers coverage to
+50% in the two-event case rather than being excluded from the denominator. A
+missing quote is never priced at zero.
+
+**Unsynchronised clock.** PASS. Preflight fails on the `clock` check. Every
+freshness and session-boundary decision is made against this clock.
+
+---
+
 ## How to repeat these drills
 
 ```bash
 cd backend
 python3 -m pytest tests/unit/test_snapback_recovery_drills.py -v
 python3 -m pytest tests/unit/test_snapback_backup.py -v
+python3 -m pytest tests/unit/test_snapback_fault_injection.py -v
+python3 -m pytest tests/unit/test_snapback_preflight.py -v
 ```
 
 The live drills (7, 8, 9) are performed against a running backend using the endpoints
