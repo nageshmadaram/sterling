@@ -49,8 +49,9 @@ def _outcome(opp="OPP-1"):
         "exit_ts": "2026-10-03T11:00:00+05:30",
         "actual_option_pnl": -1000.0,
         "actual_futures_pnl": 200.0,
-        "actual_costs": 120.0,
-        "actual_total_pnl": -920.0,
+        # Costs now come from the ledger; an empty ledger means zero cost here.
+        "actual_costs": 0.0,
+        "actual_total_pnl": -800.0,
         "modeled_option_pnl": -900.0,
         "modeled_futures_pnl": 200.0,
         "modeled_costs": 100.0,

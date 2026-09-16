@@ -1,10 +1,24 @@
-"""Model vs. Observed Reconciliation & Research Artifact Bundle Generator.
+"""RESEARCH_DIAGNOSTIC_ONLY.
+
+Model vs. Observed Reconciliation & Research Artifact Bundle Generator.
 
 Produces the model-vs-observed reconciliation report, error distribution,
 decile breakdown, tail winner impact, cost stress, and full research artifact
 bundle inside research/snapback_reality_v1/<run_id>/.
 """
 from __future__ import annotations
+
+# RESEARCH_DIAGNOSTIC_ONLY. Promotion has exactly one authority:
+# app/services/snapback_promotion.PromotionService. This report may describe the
+# evidence, but it may not decide whether the family is allowed to trade.
+RESEARCH_AUTHORITY = {"authority": "RESEARCH_DIAGNOSTIC_ONLY", "promotable": False}
+
+
+def _diagnostic_gate_unavailable(*args, **kwargs):
+    raise RuntimeError(
+        "RESEARCH_DIAGNOSTIC_ONLY: this report cannot evaluate the promotion gate"
+    )
+
 
 import json
 import math
@@ -14,7 +28,6 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from study.snapback_authoritative_gate import evaluate_authoritative_snapback_gate
 from study.snapback_observed_replay import ObservedTradeRecord
 
 
@@ -95,7 +108,7 @@ def generate_snapback_reconciliation_bundle(
             "cost_stress.json": {"stress_multiplier": 2.0, "promoted": False},
             "concentration.json": {"max_day_share": 0.0},
             "validation_report.json": summary.as_dict(),
-            "promotion_record.json": {"promoted": False, "reason": "No filled trades in replay"},
+            "diagnostic_gate_result.json": {"promoted": False, "reason": "No filled trades in replay"},
         }
         for fname, content in empty_bundle.items():
             with open(os.path.join(run_dir, fname), "w") as f:
@@ -179,7 +192,7 @@ def generate_snapback_reconciliation_bundle(
         aggregated_mtm_series.append(cum_equity)
 
     # Run authoritative gate with exact filled entry dates and calendar MTM equity path
-    verdict = evaluate_authoritative_snapback_gate(
+    verdict = _diagnostic_gate_unavailable(
         trade_pnls=observed_pnls,
         entry_dates=filled_entry_dates,
         statutory_costs=costs,
@@ -225,7 +238,7 @@ def generate_snapback_reconciliation_bundle(
         "cost_stress.json": {"total_charges": sum(costs), "double_charge_pnl": sum(observed_pnls) - sum(costs)},
         "concentration.json": {"max_day_share": round(max_day_share, 4), "day_count": len(day_pnls)},
         "validation_report.json": verdict.as_dict(),
-        "promotion_record.json": {
+        "diagnostic_gate_result.json": {
             "promoted": verdict.promoted,
             "gate_failures": verdict.reasons,
             "timestamp": filled_records[-1].exit_date if filled_records else "",

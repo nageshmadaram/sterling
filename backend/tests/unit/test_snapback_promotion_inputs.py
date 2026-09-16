@@ -1,0 +1,211 @@
+"""E32: one builder turns evidence into gate inputs, and checks it first.
+
+Every other path that assembles "promotable" numbers is a second opinion nobody
+asked for, and the two will eventually disagree about whether the family may trade.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from study.snapback_promotion_inputs import (
+    PromotionInput,
+    PromotionInputError,
+    build_promotion_input,
+)
+
+
+IDENTITY = {
+    "experiment_id": "prospective_runtime_1_1",
+    "runtime_build_sha": "build-1",
+    "strategy_config_hash": "cfg-1",
+    "strategy_rule_hash": "rule-1",
+    "execution_policy_hash": "pol-1",
+    "execution_cost_schedule_hash": "zerodha_fno_costs_2026_04",
+}
+
+
+def _outcome(i=0, pnl=100.0, costs=25.0, **over):
+    row = {
+        "opportunity_id": f"OPP-{i}",
+        "actual_option_pnl": pnl + costs,
+        "actual_futures_pnl": 0.0,
+        "actual_costs": costs,
+        "actual_total_pnl": pnl,
+        "entry_ts": f"2026-10-{(i % 28) + 1:02d}T09:20:00+05:30",
+        "exit_ts": f"2026-11-{(i % 28) + 1:02d}T15:20:00+05:30",
+        "exit_reason": "PREMIUM_STOP",
+        "authoritative": 1,
+        "runtime_build_sha": "build-1",
+    }
+    row.update(over)
+    return row
+
+
+def _cost_rows(i=0, total=25.0, phases=("OPTION_ENTRY", "OPTION_EXIT")):
+    return [
+        {
+            "cost_id": f"COST:{phase}-{i}", "opportunity_id": f"OPP-{i}",
+            "execution_event_id": f"{phase}-{i}", "phase": phase,
+            "total_cost": total / len(phases), "authoritative": 1,
+            "runtime_build_sha": "build-1",
+        }
+        for phase in phases
+    ]
+
+
+def _records(n=2, **over):
+    outcomes, costs = [], []
+    for i in range(n):
+        outcomes.append(_outcome(i))
+        costs.extend(_cost_rows(i))
+    base = {
+        "outcomes": outcomes,
+        "costs": costs,
+        "paper_positions": [],
+        "daily_mtm": [],
+        "option_quotes": [],
+        "quote_quality_events": [
+            {"required_for_economics": 1, "accepted": 1} for _ in range(40)
+        ],
+        "prospective_sessions": [],
+    }
+    base.update(over)
+    return base
+
+
+def test_a_clean_sample_builds_inputs():
+    result = build_promotion_input(
+        records=_records(), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-1", observed_sessions=12,
+    )
+
+    assert isinstance(result, PromotionInput)
+    assert result.completed_trades == 2
+    assert result.observed_sessions == 12
+    assert result.trade_pnls == (100.0, 100.0)
+    assert result.allocation_capital == pytest.approx(100_000.0)
+
+
+def test_costs_come_from_the_ledger_not_the_outcome():
+    records = _records(n=1)
+    # The outcome claims a smaller cost than its legs actually charged.
+    records["outcomes"][0]["actual_costs"] = 5.0
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("cost" in e.lower() for e in excinfo.value.errors)
+
+
+def test_a_trade_with_no_cost_events_is_inadmissible():
+    records = _records(n=1)
+    records["costs"] = []
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("cost" in e.lower() for e in excinfo.value.errors)
+
+
+def test_an_orphan_cost_event_is_a_data_quality_error():
+    records = _records(n=1)
+    records["costs"].extend(_cost_rows(i=99))
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("orphan" in e.lower() for e in excinfo.value.errors)
+
+
+def test_a_total_that_does_not_reconcile_is_refused():
+    records = _records(n=1)
+    records["outcomes"][0]["actual_total_pnl"] = 999.0
+
+    with pytest.raises(PromotionInputError):
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+
+def test_a_build_mismatch_is_refused():
+    records = _records(n=1)
+    records["outcomes"][0]["runtime_build_sha"] = "another-build"
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("build" in e.lower() for e in excinfo.value.errors)
+
+
+def test_unresolved_exposure_is_counted():
+    records = _records(n=1, paper_positions=[{"status": "OPEN"}, {"status": "EXIT_PENDING"}])
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("unresolved" in e.lower() for e in excinfo.value.errors)
+
+
+def test_quote_coverage_comes_only_from_attempts():
+    records = _records(n=1, quote_quality_events=[])
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("quote" in e.lower() for e in excinfo.value.errors)
+
+
+def test_the_gate_input_hash_is_deterministic():
+    a = build_promotion_input(
+        records=_records(), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-1", observed_sessions=12,
+    )
+    b = build_promotion_input(
+        records=_records(), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-1", observed_sessions=12,
+    )
+
+    assert a.gate_input_hash == b.gate_input_hash
+
+
+def test_a_different_snapshot_hashes_differently():
+    a = build_promotion_input(
+        records=_records(), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-1", observed_sessions=12,
+    )
+    b = build_promotion_input(
+        records=_records(n=3), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-2", observed_sessions=12,
+    )
+
+    assert a.gate_input_hash != b.gate_input_hash
+
+
+def test_the_hash_ignores_evaluation_time():
+    inputs = build_promotion_input(
+        records=_records(), expected_identity=IDENTITY,
+        source_snapshot_sha256="snap-1", observed_sessions=12,
+    )
+
+    assert "evaluated_at" not in inputs.gate_input_hash
+    assert len(inputs.gate_input_hash) == 64

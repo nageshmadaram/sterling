@@ -66,15 +66,28 @@ def set_new_trades_halted(halted: bool, reason: str = "") -> Dict[str, Any]:
 def get_family_evidence_verdict() -> Dict[str, Any]:
     """Current authoritative verdict over the frozen prospective evidence."""
     try:
-        from study.snapback_forward_gate import evaluate_forward_gate_from_warehouse
+        # The family screen reads the recorded verdict; it does not re-evaluate the
+        # gate on every page load, so the answer is stable between packages.
+        from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+        from app.services.snapback_promotion import PromotionService
 
-        payload = evaluate_forward_gate_from_warehouse()
+        record = PromotionService().latest(warehouse=SnapbackObservationWarehouse())
+        if record is None:
+            return {
+                "verdict": "INCONCLUSIVE",
+                "completed_trades": 0,
+                "total_sessions": 0,
+                "missing_requirements": ["no promotion evaluation has been recorded yet"],
+                "net_pnl": None,
+            }
+
         return {
-            "verdict": payload.get("verdict", "INCONCLUSIVE"),
-            "completed_trades": payload.get("completed_trades"),
-            "total_sessions": payload.get("total_sessions"),
-            "missing_requirements": payload.get("missing_requirements", []),
-            "net_pnl": None if not payload.get("completed_trades") else payload.get("net_expectancy"),
+            "verdict": record.verdict,
+            "completed_trades": record.completed_trades,
+            "total_sessions": record.observed_sessions,
+            "missing_requirements": list(record.missing_requirements or record.reasons),
+            "net_pnl": None,
+            "evaluated_at": record.evaluated_at,
         }
     except Exception as exc:
         log.warning("Family ops: evidence verdict unavailable: %s", exc)

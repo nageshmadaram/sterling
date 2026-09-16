@@ -31,7 +31,10 @@ from app.engines.snapback.pricing import RISK_FREE, bs_price
 from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trading_day, next_trading_day, session_bounds_ist
 from app.services.snapback_capacity import evaluate_capacity
 from app.engines.snapback.policy import RUNNER_PEAK_SOURCE, update_runner_peak
-from app.services.snapback_costs import statutory_charges
+from app.services.snapback_costs import (PHASE_HEDGE_ENTRY, PHASE_HEDGE_EXIT,
+                                         PHASE_HEDGE_REBALANCE, PHASE_OPTION_ENTRY,
+                                         PHASE_OPTION_EXIT, cost_event_for_execution,
+                                         statutory_charges)
 from app.services.snapback_market_data import (evaluate_execution_quote,
                                                is_stale_decision,
                                                spread_pct as canonical_spread_pct)
@@ -718,18 +721,23 @@ class SnapbackProspectiveCollector:
                 "provider_symbol": futures_quote_event.contract_id,
                 "provider_timestamp": provider_ts,
             },
-            cost_data={
-                "cost_id": f"COST-{opportunity_id}",
-                "symbol": symbol,
-                "brokerage": brokerage,
-                "stt": stt,
-                "exchange_txn_fee": exchange_txn_fee,
-                "clearing_fee": 0.0,
-                "gst": gst,
-                "stamp_duty": stamp_duty,
-                "total_statutory_costs": total_costs,
-                "provider_timestamp": provider_ts,
-            },
+            cost_events=[
+                cost_event_for_execution(
+                    execution_event_id=f"PAPERFILL-{opportunity_id}",
+                    opportunity_id=opportunity_id, phase=PHASE_OPTION_ENTRY,
+                    exchange="NFO", segment="OPTIONS",
+                    instrument=chosen_cand.symbol, side="BUY",
+                    quantity=option_qty, price=option_fill_price,
+                ),
+            ] + ([
+                cost_event_for_execution(
+                    execution_event_id=f"HEDGE-{opportunity_id}-ENTRY",
+                    opportunity_id=opportunity_id, phase=PHASE_HEDGE_ENTRY,
+                    exchange="NFO", segment="FUTURES", instrument=futures_symbol,
+                    side="BUY", quantity=int(actual_futures_qty),
+                    price=futures_fill_price,
+                ),
+            ] if actual_futures_qty > 0 else []),
             margin_snapshot_data={
                 "snapshot_id": f"MARGIN-{opportunity_id}",
                 "symbol": symbol,
@@ -892,6 +900,13 @@ class SnapbackProspectiveCollector:
                 reason=f"Increase long futures hedge at ask ({current_futures_lots} -> {new_hedge_lots} lots)",
                 provider_timestamp=provider_ts,
             )
+            # The executed leg owns its charge: no hedge moves without a cost event.
+            self.warehouse.record_cost_event(cost_event_for_execution(
+                execution_event_id=reb_id, opportunity_id=opportunity_id,
+                phase=PHASE_HEDGE_REBALANCE, exchange="NFO", segment="FUTURES",
+                instrument=str(getattr(futures_quote_event, "contract_id", "") or ""),
+                side="BUY", quantity=int(add_lots * futures_lot_size), price=fill_price,
+            ))
 
         elif new_hedge_lots < current_futures_lots:
             # Decreasing LONG index futures hedge -> Sell reduced lots at BID
@@ -915,8 +930,15 @@ class SnapbackProspectiveCollector:
                 reason=f"Decrease long futures hedge at bid ({current_futures_lots} -> {new_hedge_lots} lots, realized PnL: {closed_pnl:.2f})",
                 provider_timestamp=provider_ts,
             )
+            self.warehouse.record_cost_event(cost_event_for_execution(
+                execution_event_id=reb_id, opportunity_id=opportunity_id,
+                phase=PHASE_HEDGE_REBALANCE, exchange="NFO", segment="FUTURES",
+                instrument=str(getattr(futures_quote_event, "contract_id", "") or ""),
+                side="SELL", quantity=int(red_lots * futures_lot_size), price=fill_price,
+            ))
 
-        accumulated_costs = round(accumulated_costs, 2)
+        # The projection mirrors the ledger; the ledger is the source of truth.
+        accumulated_costs = round(self.warehouse.sum_cost_events(opportunity_id), 2)
 
         # Update position state ledger in warehouse (including accumulated_costs)
         if pos:
@@ -1117,17 +1139,31 @@ class SnapbackProspectiveCollector:
                 "modeled_futures_pnl": modeled_fut_pnl,
                 "actual_futures_pnl": actual_fut_pnl,
                 "modeled_costs": modeled_costs,
-                "actual_costs": final_costs,
+                # actual_costs is derived from the ledger inside the transaction.
                 "modeled_total_pnl": modeled_total,
                 "actual_total_pnl": actual_total,
                 "observed_vs_model_error": actual_total - modeled_total,
                 "provider_timestamp": exit_ts,
             },
-            cost_events=[{
-                "cost_id": f"COST-{opportunity_id}-EXIT",
-                "opportunity_id": opportunity_id,
-                "symbol": symbol,
-                "total_cost": exit_costs,
-                "provider_timestamp": exit_ts,
-            }],
+            # One immutable event per executed exit leg; the ledger, not this call,
+            # decides what the trade cost.
+            cost_events=[
+                cost_event_for_execution(
+                    execution_event_id=f"OPTIONEXIT-{opportunity_id}",
+                    opportunity_id=opportunity_id, phase=PHASE_OPTION_EXIT,
+                    exchange="NFO", segment="OPTIONS",
+                    instrument=str(pos.get("option_symbol") or symbol) if pos else symbol,
+                    side="SELL", quantity=int(option_quantity),
+                    price=float(option_exit_bid),
+                ),
+            ] + ([
+                cost_event_for_execution(
+                    execution_event_id=f"HEDGEEXIT-{opportunity_id}",
+                    opportunity_id=opportunity_id, phase=PHASE_HEDGE_EXIT,
+                    exchange="NFO", segment="FUTURES",
+                    instrument=str(pos.get("futures_symbol") or "") if pos else "",
+                    side="SELL", quantity=int(fut_liq_qty),
+                    price=float(futures_exit_bid),
+                ),
+            ] if fut_liq_qty > 0 else []),
         )

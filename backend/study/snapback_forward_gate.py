@@ -22,7 +22,6 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from study.snapback_authoritative_gate import evaluate_authoritative_snapback_gate
 
 MIN_SESSIONS = 60
 MIN_TRADES = 300
@@ -231,7 +230,9 @@ def evaluate_forward_gate(
     sessions = observed_sessions if observed_sessions is not None else entry_sessions
     trades = len(inputs["trade_pnls"])
 
-    result = evaluate_authoritative_snapback_gate(
+    from study.snapback_authoritative_gate import evaluate_authoritative_snapback_gate as _gate
+
+    result = _gate(
         trade_pnls=inputs["trade_pnls"],
         entry_dates=inputs["entry_dates"],
         statutory_costs=inputs["statutory_costs"],
@@ -279,23 +280,22 @@ def evaluate_forward_gate(
     return payload
 
 
-def evaluate_forward_gate_from_warehouse(warehouse=None) -> Dict[str, Any]:
-    """Read the clean frozen prospective database and evaluate the gate."""
-    from study.snapback_forward_report import load_forward_records
+def evaluate_forward_gate_from_warehouse(warehouse=None, *, source_snapshot_sha256: str = "") -> Dict[str, Any]:
+    """Delegate to the one promotion authority.
+
+    Kept for scripts and tests; it evaluates nothing itself, because a second
+    production authority is exactly what E32 removes.
+    """
+    from app.services.snapback_promotion import PromotionService
 
     if warehouse is None:
         from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
         warehouse = SnapbackObservationWarehouse()
 
-    from app.services.snapback_session_ledger import observed_session_count
-
-    records, load_errors = load_forward_records(warehouse, strict=True)
-    return evaluate_forward_gate(
-        records=records,
-        load_errors=load_errors,
-        observed_sessions=observed_session_count(warehouse),
-    )
+    return PromotionService().evaluate(
+        warehouse=warehouse, source_snapshot_sha256=source_snapshot_sha256,
+    ).as_dict()
 
 
 if __name__ == "__main__":

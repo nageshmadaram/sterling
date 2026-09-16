@@ -154,13 +154,37 @@ def build_forward_summary(
     hedges = records.get("hedge_rebalances") or []
     mtm_rows = records.get("daily_mtm") or []
 
-    pnls = [_f(o.get("actual_total_pnl"), 0.0) or 0.0 for o in outcomes]
-    modeled = [_f(o.get("modeled_total_pnl"), 0.0) or 0.0 for o in outcomes]
-    option_pnls = [_f(o.get("actual_option_pnl"), 0.0) or 0.0 for o in outcomes]
-    futures_pnls = [_f(o.get("actual_futures_pnl"), 0.0) or 0.0 for o in outcomes]
-    outcome_costs = [_f(o.get("actual_costs"), 0.0) or 0.0 for o in outcomes]
+    # A malformed trade is excluded and named, never rendered as a Rs 0 result: a
+    # zero reads as "this trade made nothing", which is a different claim entirely.
+    malformed: List[str] = []
+    pnls: List[float] = []
+    modeled: List[float] = []
+    option_pnls: List[float] = []
+    futures_pnls: List[float] = []
+    outcome_costs: List[float] = []
 
-    completed = len(outcomes)
+    for index, outcome in enumerate(outcomes):
+        opp = str(outcome.get("opportunity_id") or f"row_{index}")
+        values = {}
+        broken = False
+        for field in ("actual_total_pnl", "actual_option_pnl", "actual_futures_pnl",
+                      "actual_costs"):
+            value = _f(outcome.get(field))
+            if value is None:
+                malformed.append(f"{opp}: unusable {field}")
+                broken = True
+            else:
+                values[field] = value
+        if broken:
+            continue
+
+        pnls.append(values["actual_total_pnl"])
+        option_pnls.append(values["actual_option_pnl"])
+        futures_pnls.append(values["actual_futures_pnl"])
+        outcome_costs.append(values["actual_costs"])
+        modeled.append(_f(outcome.get("modeled_total_pnl")) or 0.0)
+
+    completed = len(pnls)
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]
 
@@ -251,7 +275,7 @@ def build_forward_summary(
 
     summary.update(_quote_stats(records.get("option_quotes") or []))
 
-    data_quality_errors = list(load_errors or [])
+    data_quality_errors = list(load_errors or []) + malformed
     summary["data_quality_ok"] = not data_quality_errors
     summary["data_quality_errors"] = data_quality_errors
 
@@ -437,9 +461,14 @@ def write_forward_report(
     # verdict stay in separate files so neither can be mistaken for the other.
     authoritative_gate = directory / "authoritative_gate.json"
     try:
-        from study.snapback_forward_gate import evaluate_forward_gate
+        # One authority: the report renders the promotion verdict, it does not make one.
+        from app.services.snapback_promotion import PromotionService
+        from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
-        gate_payload = evaluate_forward_gate(records=records)
+        gate_payload = PromotionService().evaluate(
+            warehouse=SnapbackObservationWarehouse(),
+            source_snapshot_sha256=str(summary.get("source_snapshot_sha256") or ""),
+        ).as_dict()
     except Exception as exc:
         gate_payload = {
             "verdict": "INCONCLUSIVE",

@@ -248,15 +248,17 @@ def _full_outcome(**over):
         "entry_ts": "2026-10-01T09:20:00+05:30",
         "exit_ts": "2026-10-03T11:00:00+05:30",
         "actual_option_pnl": -1000.0, "actual_futures_pnl": 200.0,
-        "actual_costs": 120.0, "actual_total_pnl": -920.0,
+        # Costs now come from the ledger; an empty ledger means zero cost here.
+        "actual_costs": 0.0, "actual_total_pnl": -920.0,
     }
     base.update(over)
     return base
 
 
+# actual_costs and actual_total_pnl are DERIVED from the cost ledger now, so they are
+# no longer caller inputs; the rest must still be supplied.
 @pytest.mark.parametrize("field", [
-    "actual_option_pnl", "actual_futures_pnl", "actual_costs", "actual_total_pnl",
-    "entry_ts", "exit_ts", "exit_reason",
+    "actual_option_pnl", "actual_futures_pnl", "entry_ts", "exit_ts", "exit_reason",
 ])
 def test_a_missing_required_field_is_refused_at_the_writer(warehouse, field):
     from app.services.snapback_observation_warehouse import EvidenceIntegrityError
@@ -278,7 +280,7 @@ def test_a_none_economic_value_is_refused(warehouse):
     with pytest.raises(EvidenceIntegrityError):
         warehouse.commit_paper_close_transaction(
             opportunity_id="OPP-1",
-            outcome_data=_full_outcome(actual_costs=None), cost_events=[],
+            outcome_data=_full_outcome(actual_option_pnl=None), cost_events=[],
         )
 
 
@@ -288,7 +290,7 @@ def test_a_non_finite_value_is_refused(warehouse):
     with pytest.raises(EvidenceIntegrityError):
         warehouse.commit_paper_close_transaction(
             opportunity_id="OPP-1",
-            outcome_data=_full_outcome(actual_total_pnl=float("nan")), cost_events=[],
+            outcome_data=_full_outcome(actual_futures_pnl=float("nan")), cost_events=[],
         )
 
 

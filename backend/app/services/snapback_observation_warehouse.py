@@ -39,6 +39,10 @@ def _current_build_sha() -> str:
 _BUILD_SHA = _current_build_sha()
 
 
+# Rupee tolerance when reconciling ledger costs against a projection or an outcome.
+ABS_ECONOMIC_RECONCILIATION_TOLERANCE = 0.01
+
+
 class EvidenceIntegrityError(Exception):
     """An evidence write was refused because required information is missing.
 
@@ -350,6 +354,11 @@ class SnapbackObservationWarehouse:
                         price             REAL NOT NULL DEFAULT 0.0,
                         sebi_fee          REAL NOT NULL DEFAULT 0.0,
                         cost_schedule_version TEXT NOT NULL DEFAULT '',
+                        execution_event_id TEXT NOT NULL DEFAULT '',
+                        exchange          TEXT NOT NULL DEFAULT '',
+                        segment           TEXT NOT NULL DEFAULT '',
+                        turnover          REAL NOT NULL DEFAULT 0.0,
+                        payload_hash      TEXT NOT NULL DEFAULT '',
                         {common_cols}
                     )
                 """)
@@ -587,6 +596,31 @@ class SnapbackObservationWarehouse:
                     "ON beta_snapshots(opportunity_id)"
                 )
 
+                # 17. promotion_records — the immutable verdict trail.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS promotion_records (
+                        promotion_id           TEXT PRIMARY KEY,
+                        experiment_id          TEXT NOT NULL DEFAULT '',
+                        gate_version           TEXT NOT NULL DEFAULT '',
+                        gate_input_hash        TEXT NOT NULL,
+                        source_snapshot_sha256 TEXT NOT NULL DEFAULT '',
+                        runtime_build_sha      TEXT NOT NULL DEFAULT '',
+                        config_hash            TEXT NOT NULL DEFAULT '',
+                        rule_hash              TEXT NOT NULL DEFAULT '',
+                        execution_policy_hash  TEXT NOT NULL DEFAULT '',
+                        cost_schedule_hash     TEXT NOT NULL DEFAULT '',
+                        observed_sessions      INTEGER NOT NULL DEFAULT 0,
+                        completed_trades       INTEGER NOT NULL DEFAULT 0,
+                        verdict                TEXT NOT NULL,
+                        promoted               INTEGER NOT NULL DEFAULT 0,
+                        data_quality_ok        INTEGER NOT NULL DEFAULT 0,
+                        reasons_json           TEXT NOT NULL DEFAULT '[]',
+                        checks_json            TEXT NOT NULL DEFAULT '{}',
+                        evaluated_at           TEXT NOT NULL DEFAULT '',
+                        payload_hash           TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
         finally:
@@ -616,6 +650,11 @@ class SnapbackObservationWarehouse:
         "price": "REAL NOT NULL DEFAULT 0.0",
         "sebi_fee": "REAL NOT NULL DEFAULT 0.0",
         "cost_schedule_version": "TEXT NOT NULL DEFAULT ''",
+        "execution_event_id": "TEXT NOT NULL DEFAULT ''",
+        "exchange": "TEXT NOT NULL DEFAULT ''",
+        "segment": "TEXT NOT NULL DEFAULT ''",
+        "turnover": "REAL NOT NULL DEFAULT 0.0",
+        "payload_hash": "TEXT NOT NULL DEFAULT ''",
     }
 
     def _migrate_identity_columns(self, conn) -> None:
@@ -1241,14 +1280,54 @@ class SnapbackObservationWarehouse:
         row lands or none of them do, and the position stays where it was.
         """
         # Validate BEFORE opening the transaction, so a malformed close never even
-        # begins to write.
+        # begins to write. Costs come from the LEDGER: a caller-supplied total is a
+        # consistency check, never the authority.
+        exit_events = list(cost_events or [])
+        exit_total = sum(float(getattr(e, "total_cost", 0.0)) for e in exit_events)
+        ledger_before = self.sum_cost_events(opportunity_id)
+        ledger_total = ledger_before + exit_total
+
+        position = self.get_paper_position(opportunity_id) or {}
+        projection = float(position.get("accumulated_costs") or 0.0)
+        if position and abs(projection - ledger_before) > ABS_ECONOMIC_RECONCILIATION_TOLERANCE:
+            raise EvidenceIntegrityError(
+                f"{opportunity_id}: accumulated_costs projection {projection} disagrees "
+                f"with the cost ledger {ledger_before}"
+            )
+
+        supplied = outcome_data.get("actual_costs")
+        if supplied is not None and abs(float(supplied) - ledger_total) > ABS_ECONOMIC_RECONCILIATION_TOLERANCE:
+            raise EvidenceIntegrityError(
+                f"{opportunity_id}: outcome actual_costs {supplied} disagrees with the "
+                f"cost ledger {ledger_total}"
+            )
+
+        outcome_data = dict(outcome_data)
+        outcome_data["actual_costs"] = ledger_total
+        # Derive the total only from legs that are themselves valid; a malformed input
+        # must reach the field validation below, not be swallowed by arithmetic.
+        legs = (outcome_data.get("actual_option_pnl"), outcome_data.get("actual_futures_pnl"))
+        if all(leg is not None for leg in legs):
+            try:
+                option_leg, futures_leg = float(legs[0]), float(legs[1])
+            except (TypeError, ValueError):
+                option_leg = futures_leg = None
+            if option_leg is not None and math.isfinite(option_leg) and math.isfinite(futures_leg):
+                outcome_data["actual_total_pnl"] = option_leg + futures_leg - ledger_total
+
         required = _require_outcome_fields(outcome_data)
 
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:  # one transaction: any exception rolls the whole close back
-                for cost in (cost_events or []):
+                for cost in exit_events:
+                    if hasattr(cost, "as_row"):
+                        # Canonical execution-leg event: one leg, one immutable row.
+                        self._insert_cost_event(
+                            conn, cost.as_row(), getattr(cost, "payload_hash", ""), now,
+                        )
+                        continue
                     conn.execute(
                         """
                         INSERT INTO costs (
@@ -1313,8 +1392,9 @@ class SnapbackObservationWarehouse:
                 )
 
                 conn.execute(
-                    "UPDATE paper_positions SET status = 'CLOSED' WHERE opportunity_id = ?",
-                    (opportunity_id,),
+                    "UPDATE paper_positions SET status = 'CLOSED', accumulated_costs = ? "
+                    "WHERE opportunity_id = ?",
+                    (ledger_total, opportunity_id),
                 )
                 conn.execute(
                     "UPDATE opportunities SET status = 'CLOSED' WHERE opportunity_id = ?",
@@ -1393,6 +1473,151 @@ class SnapbackObservationWarehouse:
                     (opportunity_id,),
                 ).fetchone()
                 return int(row[0] or 0) + 1
+        finally:
+            conn.close()
+
+    def record_promotion_record(self, **payload: Any) -> None:
+        """Append one promotion verdict. The same inputs must give the same verdict."""
+        import hashlib as _hashlib
+        import json as _json
+
+        promotion_id = payload["promotion_id"]
+        now = _now_iso()
+        payload_hash = _hashlib.sha256(
+            _json.dumps(
+                {k: v for k, v in payload.items()
+                 if k not in ("promotion_id", "payload_hash", "evaluated_at")},
+                sort_keys=True, separators=(",", ":"), default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                existing = conn.execute(
+                    "SELECT payload_hash FROM promotion_records WHERE promotion_id = ?",
+                    (promotion_id,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["payload_hash"] or "") != payload_hash:
+                        raise EvidenceIntegrityError(
+                            f"promotion record {promotion_id} already exists with a "
+                            "different verdict; promotion evidence is append-only"
+                        )
+                    return
+
+                columns = [
+                    "promotion_id", "experiment_id", "gate_version", "gate_input_hash",
+                    "source_snapshot_sha256", "runtime_build_sha", "config_hash",
+                    "rule_hash", "execution_policy_hash", "cost_schedule_hash",
+                    "observed_sessions", "completed_trades", "verdict", "promoted",
+                    "data_quality_ok", "reasons_json", "checks_json", "evaluated_at",
+                    "payload_hash",
+                ]
+                values = []
+                for column in columns:
+                    if column == "payload_hash":
+                        values.append(payload_hash)
+                    elif column == "evaluated_at":
+                        values.append(payload.get("evaluated_at") or now)
+                    else:
+                        values.append(payload.get(column))
+
+                conn.execute(
+                    f"INSERT INTO promotion_records ({', '.join(columns)}) "
+                    f"VALUES ({', '.join('?' for _ in columns)})",
+                    values,
+                )
+        finally:
+            conn.close()
+
+    def latest_promotion_record(self) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM promotion_records ORDER BY evaluated_at DESC LIMIT 1"
+                ).fetchone()
+                return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def record_cost_event(self, event: Any) -> None:
+        """Append one execution-leg cost event. Contradicting one is refused.
+
+        The event carries its own payload hash, computed from the leg, so an edited
+        value cannot be written under the same id.
+        """
+        row = event.as_row()
+        payload_hash = getattr(event, "payload_hash", "") or ""
+        now = _now_iso()
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                self._insert_cost_event(conn, row, payload_hash, now)
+        finally:
+            conn.close()
+
+    def _insert_cost_event(self, conn, row: Dict[str, Any], payload_hash: str, now: str) -> None:
+        existing = conn.execute(
+            "SELECT payload_hash FROM costs WHERE cost_id = ?", (row["cost_id"],),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["payload_hash"] or "") != payload_hash:
+                raise EvidenceIntegrityError(
+                    f"cost event {row['cost_id']} already exists with different values; "
+                    "evidence is append-only"
+                )
+            return
+
+        conn.execute(
+            """
+            INSERT INTO costs (
+                cost_id, opportunity_id, execution_event_id, phase, exchange, segment,
+                instrument, side, quantity, price, turnover,
+                brokerage, stt, exchange_txn_fee, sebi_fee, gst, stamp_duty,
+                total_cost, total_statutory_costs, cost_schedule_version, payload_hash,
+                observed_at, provider_timestamp, received_at, symbol, provider_symbol,
+                expiry, strike, instrument_token, source, strategy_commit,
+                manifest_hash, runtime_build_sha, authoritative
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["cost_id"], row["opportunity_id"], row["execution_event_id"],
+                row["phase"], row["exchange"], row["segment"], row["instrument"],
+                row["side"], row["quantity"], row["price"], row["turnover"],
+                row["brokerage"], row["stt"], row["exchange_txn_fee"], row["sebi_fee"],
+                row["gst"], row["stamp_duty"], row["total_cost"], row["total_cost"],
+                row["cost_schedule_version"], payload_hash,
+                now, now, now, row["instrument"], row["instrument"], "", 0.0, "",
+                "PROSPECTIVE_PAPER", FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                _BUILD_SHA, 1,
+            ),
+        )
+
+    def sum_cost_events(self, opportunity_id: str) -> float:
+        """The ledger total: the source of truth for this trade's costs."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(total_cost), 0.0) FROM costs WHERE opportunity_id = ?",
+                    (opportunity_id,),
+                ).fetchone()
+                return float(row[0] or 0.0)
+        finally:
+            conn.close()
+
+    def update_paper_position_accumulated_costs(self, opportunity_id: str, value: float) -> None:
+        """Update the fast projection. The ledger remains the source of truth."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE paper_positions SET accumulated_costs = ? WHERE opportunity_id = ?",
+                    (float(value), opportunity_id),
+                )
         finally:
             conn.close()
 
@@ -1827,7 +2052,7 @@ class SnapbackObservationWarehouse:
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes", "paper_positions",
             "prospective_sessions", "scan_symbol_decisions", "entry_attempts",
-            "beta_snapshots",
+            "beta_snapshots", "promotion_records",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")
@@ -2030,9 +2255,9 @@ class SnapbackObservationWarehouse:
         decision_data: Dict[str, Any],
         paper_fill_data: Dict[str, Any],
         hedge_rebalance_data: Dict[str, Any],
-        cost_data: Dict[str, Any],
         margin_snapshot_data: Dict[str, Any],
         paper_position_data: Dict[str, Any],
+        cost_events: Optional[List[Any]] = None,
         processing_token: Optional[str] = None,
     ) -> None:
         """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction."""
@@ -2090,24 +2315,12 @@ class SnapbackObservationWarehouse:
                         "", h.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
                     ),
                 )
-                # 4. Costs
-                c = cost_data
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO costs (
-                        cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
-                        total_statutory_costs,
-                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        c["cost_id"], opportunity_id, c.get("brokerage", 0.0), c.get("stt", 0.0), c.get("exchange_txn_fee", 0.0), c.get("clearing_fee", 0.0), c.get("gst", 0.0), c.get("stamp_duty", 0.0),
-                        c.get("total_statutory_costs", 0.0),
-                        now, c.get("provider_timestamp") or now, now, c["symbol"], c["symbol"], "", 0.0,
-                        "", c.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
-                    ),
-                )
+                # 4. Costs — one immutable event per executed leg, in the SAME
+                # transaction as the fills, so a filled leg can never lack its charge.
+                for leg in (cost_events or []):
+                    self._insert_cost_event(
+                        conn, leg.as_row(), getattr(leg, "payload_hash", ""), now,
+                    )
                 # 5. Margin snapshot
                 m = margin_snapshot_data
                 conn.execute(

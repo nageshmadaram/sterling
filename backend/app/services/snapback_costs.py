@@ -20,6 +20,9 @@ charges are a schedule. Mixing them makes both unauditable.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import Dict
 
 COST_SCHEDULE_VERSION = "zerodha_fno_costs_2026_04"
@@ -120,3 +123,122 @@ def round_trip_charges(
         "exit": exit_,
         "total": entry["total"] + exit_["total"],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Execution-leg cost events. One executed leg, one immutable event.
+# --------------------------------------------------------------------------- #
+
+# Deterministic phases. A cost belongs to a leg, never to "the entry" in general.
+PHASE_OPTION_ENTRY = "OPTION_ENTRY"
+PHASE_HEDGE_ENTRY = "HEDGE_ENTRY"
+PHASE_HEDGE_REBALANCE = "HEDGE_REBALANCE"
+PHASE_OPTION_EXIT = "OPTION_EXIT"
+PHASE_HEDGE_EXIT = "HEDGE_EXIT"
+PHASE_FUTURES_ROLL = "FUTURES_ROLL"
+
+COST_PHASES = frozenset({
+    PHASE_OPTION_ENTRY, PHASE_HEDGE_ENTRY, PHASE_HEDGE_REBALANCE,
+    PHASE_OPTION_EXIT, PHASE_HEDGE_EXIT, PHASE_FUTURES_ROLL,
+})
+
+
+@dataclass(frozen=True)
+class ExecutionCostEvent:
+    cost_id: str
+    execution_event_id: str
+    opportunity_id: str
+    phase: str
+    exchange: str
+    segment: str
+    instrument: str
+    side: str
+    quantity: int
+    price: float
+    turnover: float
+    brokerage: float
+    stt: float
+    exchange_txn_fee: float
+    sebi_fee: float
+    gst: float
+    stamp_duty: float
+    total_cost: float
+    cost_schedule_version: str
+    payload_hash: str = ""
+
+    def as_row(self) -> Dict[str, object]:
+        return {
+            "cost_id": self.cost_id,
+            "execution_event_id": self.execution_event_id,
+            "opportunity_id": self.opportunity_id,
+            "phase": self.phase,
+            "exchange": self.exchange,
+            "segment": self.segment,
+            "instrument": self.instrument,
+            "side": self.side,
+            "quantity": int(self.quantity),
+            "price": float(self.price),
+            "turnover": float(self.turnover),
+            "brokerage": float(self.brokerage),
+            "stt": float(self.stt),
+            "exchange_txn_fee": float(self.exchange_txn_fee),
+            "sebi_fee": float(self.sebi_fee),
+            "gst": float(self.gst),
+            "stamp_duty": float(self.stamp_duty),
+            "total_cost": float(self.total_cost),
+            "cost_schedule_version": self.cost_schedule_version,
+        }
+
+
+def _payload_hash(payload: Dict[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def cost_event_for_execution(
+    *,
+    execution_event_id: str,
+    opportunity_id: str,
+    phase: str,
+    exchange: str,
+    segment: str,
+    instrument: str,
+    side: str,
+    quantity: int,
+    price: float,
+) -> ExecutionCostEvent:
+    """Build the cost event for one executed leg.
+
+    The charges are computed HERE from the single versioned schedule; callers cannot
+    pass precomputed taxes, so a persisted fee can always be recomputed from the leg.
+    """
+    if phase not in COST_PHASES:
+        raise ValueError(f"unknown cost phase {phase!r}")
+
+    charges = statutory_charges(
+        side=side, segment=segment, price=price, quantity=quantity,
+    )
+
+    event = ExecutionCostEvent(
+        cost_id=f"COST:{execution_event_id}",
+        execution_event_id=execution_event_id,
+        opportunity_id=opportunity_id,
+        phase=phase,
+        exchange=exchange,
+        segment=segment,
+        instrument=instrument,
+        side=str(side).upper(),
+        quantity=int(quantity),
+        price=float(price),
+        turnover=float(charges["turnover"]),
+        brokerage=float(charges["brokerage"]),
+        stt=float(charges["stt"]),
+        exchange_txn_fee=float(charges["exchange_txn"]),
+        sebi_fee=float(charges["sebi"]),
+        gst=float(charges["gst"]),
+        stamp_duty=float(charges["stamp_duty"]),
+        total_cost=float(charges["total"]),
+        cost_schedule_version=COST_SCHEDULE_VERSION,
+    )
+    return ExecutionCostEvent(**{**event.__dict__, "payload_hash": _payload_hash(event.as_row())})

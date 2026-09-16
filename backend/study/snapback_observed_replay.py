@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.engines.snapback.config import SnapbackConfig
 from app.engines.snapback.manifest import create_frozen_manifest, verify_manifest_integrity
+from app.services.snapback_costs import statutory_charges
 from study.snapback_contract_registry import SnapbackContractRegistry
 
 
@@ -78,43 +79,6 @@ class ObservedTradeRecord:
             "notes": self.notes,
             "daily_mtm_equity": [round(x, 2) for x in self.daily_mtm_equity],
         }
-
-
-def calculate_statutory_charges(
-    transaction_type: str,            # "BUY" | "SELL"
-    instrument_type: str,             # "OPTION" | "FUTURES"
-    price: float,
-    quantity: int,
-    brokerage_per_order: float = 20.0,
-) -> float:
-    """Calculate realistic Indian statutory charges & taxes for a trade leg."""
-    turnover = price * quantity
-    if turnover <= 0:
-        return 0.0
-
-    brokerage = brokerage_per_order
-    
-    # STT: 0.0625% on option sell (on premium), 0.0125% on futures sell
-    stt = 0.0
-    if transaction_type == "SELL":
-        if instrument_type == "OPTION":
-            stt = turnover * 0.000625
-        elif instrument_type == "FUTURES":
-            stt = turnover * 0.000125
-
-    # Exchange Txn Fee: ~0.05% options, ~0.0019% futures
-    exchange_fee = turnover * (0.0005 if instrument_type == "OPTION" else 0.000019)
-    
-    # Stamp Duty: 0.003% on BUY
-    stamp_duty = (turnover * 0.00003) if transaction_type == "BUY" else 0.0
-
-    # GST: 18% on (Brokerage + Exchange Fee)
-    gst = (brokerage + exchange_fee) * 0.18
-
-    # SEBI turnover fee: 0.0001%
-    sebi_fee = turnover * 0.000001
-
-    return brokerage + stt + exchange_fee + stamp_duty + gst + sebi_fee
 
 
 def calculate_span_exposure_margin(
@@ -407,8 +371,8 @@ class SnapbackObservedReplayEngine:
 
         # Option PnL & Statutory Charges
         gross_opt_pnl = (exit_bid - entry_ask) * qty
-        opt_entry_charges = calculate_statutory_charges("BUY", "OPTION", entry_ask, qty)
-        opt_exit_charges = calculate_statutory_charges("SELL", "OPTION", exit_bid, qty)
+        opt_entry_charges = statutory_charges(side="BUY", segment="OPTIONS", price=entry_ask, quantity=qty)["total"]
+        opt_exit_charges = statutory_charges(side="SELL", segment="OPTIONS", price=exit_bid, quantity=qty)["total"]
         net_opt_pnl = gross_opt_pnl - (opt_entry_charges + opt_exit_charges)
 
         # Index Futures Hedge Contract Sizing using option delta * causal beta -> Index Futures Lots
@@ -432,12 +396,12 @@ class SnapbackObservedReplayEngine:
         # fade_down buys a CALL (+delta). To market-neutralize positive delta, index futures MUST be SHORT.
         if side == "fade_up":
             hedge_pnl = (hedge_exit - hedge_entry) * hedge_qty
-            fut_entry_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_entry, hedge_qty)
-            fut_exit_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_exit, hedge_qty)
+            fut_entry_charges = statutory_charges(side="BUY", segment="FUTURES", price=hedge_entry, quantity=hedge_qty)["total"]
+            fut_exit_charges = statutory_charges(side="SELL", segment="FUTURES", price=hedge_exit, quantity=hedge_qty)["total"]
         else:
             hedge_pnl = (hedge_entry - hedge_exit) * hedge_qty
-            fut_entry_charges = calculate_statutory_charges("SELL", "FUTURES", hedge_entry, hedge_qty)
-            fut_exit_charges = calculate_statutory_charges("BUY", "FUTURES", hedge_exit, hedge_qty)
+            fut_entry_charges = statutory_charges(side="SELL", segment="FUTURES", price=hedge_entry, quantity=hedge_qty)["total"]
+            fut_exit_charges = statutory_charges(side="BUY", segment="FUTURES", price=hedge_exit, quantity=hedge_qty)["total"]
 
         net_hedge_pnl = hedge_pnl - (fut_entry_charges + fut_exit_charges)
         total_statutory_charges = opt_entry_charges + opt_exit_charges + fut_entry_charges + fut_exit_charges

@@ -13,6 +13,7 @@ from app.engines.snapback import SnapbackConfig, SnapbackSignal
 from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.services.snapback_prospective_collector import SnapbackProspectiveCollector, SnapbackObservationWarehouse
 from app.services.snapback import process_prospective_pending_entries, process_prospective_daily_mtm_and_exits
+from app.services.snapback_costs import cost_event_for_execution
 from app.services.snapback_runner import tick, _is_nse_trading_day
 
 
@@ -1121,7 +1122,12 @@ async def test_stalled_worker_lease_loss_fails_commit(temp_warehouse, sample_con
                 "rebalance_id": f"REB-{opp_id}", "symbol": "NIFTY", "prior_hedge_lots": 0,
                 "new_hedge_lots": 1, "futures_fill_price": 24510.0,
             },
-            cost_data={"cost_id": f"COST-{opp_id}", "symbol": "NIFTY", "total_statutory_costs": 50.0},
+            # Costs are per-executed-leg events now, not one lumped row.
+            cost_events=[cost_event_for_execution(
+                execution_event_id=f"PAPERFILL-{opp_id}", opportunity_id=opp_id,
+                phase="OPTION_ENTRY", exchange="NFO", segment="OPTIONS",
+                instrument="NIFTY26OCT25000PE", side="BUY", quantity=25, price=100.0,
+            )],
             margin_snapshot_data={
                 "snapshot_id": f"MARGIN-{opp_id}", "symbol": "NIFTY", "option_margin_required": 10000.0,
                 "futures_margin_required": 120000.0, "total_margin": 130000.0, "available_capital": 1000000.0,
