@@ -227,3 +227,62 @@ Stopping sends SIGTERM and waits up to 90 seconds. That window exists so the
 runtime can finish the transaction it is in and drain queued alerts. Do not
 `kill -9` a running session: a process killed mid-write leaves evidence that
 cannot be told apart from a crash.
+
+---
+
+## Unattended morning start-up
+
+The goal is that nothing needs typing except the Kite login itself.
+
+### What is automatic
+
+With the environment file in place, a boot does all of this on its own:
+
+1. The config store opens and the Snapback config loads (a failure here halts
+   loudly rather than running a disabled strategy).
+2. The Kite account is provisioned from `KITE_API_KEY` / `KITE_API_SECRET` — no
+   retyping credentials into the UI, even on a wiped database.
+3. The evidence database is created and stamped with its experiment identity.
+4. Preflight runs its twelve checks; the runner starts only if they pass.
+5. The ops scheduler starts, and the session keeper renews any token Zerodha
+   issued a `refresh_token` for.
+
+### What is not, and cannot be
+
+**The daily login.** Zerodha requires a human at the TOTP/2FA step every trading
+day. No setting changes that. Perform the Kite login yourself before 09:15 IST.
+
+Until you do, `/health/ready` and the Family screen will show the broker as not
+connected. That is the system reporting the truth, not a fault. The alert outbox
+sends a WARNING at 08:45 IST and a CRITICAL at 09:10 IST if the login has not
+happened.
+
+### One-time setup
+
+```bash
+mkdir -p ~/.config/sterling
+install -m 600 deploy/sterling.env.example ~/.config/sterling/sterling.env
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"   # STERLING_SECRET_KEY
+${EDITOR:-nano} ~/.config/sterling/sterling.env
+```
+
+Fill in the Kite key and secret, the family user and account identifiers, the
+generated `STERLING_SECRET_KEY`, and the paths. Then follow the systemd install
+above.
+
+`STERLING_SECRET_KEY` is not optional in practice. Leave it unset and the Kite
+API secret and access token are encrypted in the local database under a dev key
+that is published in the source, which is no protection at all.
+
+Note that changing this key later makes already-stored secrets undecryptable —
+you would re-enter the Kite credentials once. Set it before first use.
+
+### Checking the unattended path worked
+
+```bash
+curl -sS http://127.0.0.1:8000/api/v1/health/ready | head -40
+curl -sS http://127.0.0.1:8000/api/v1/snapback/prospective/health
+```
+
+`ready: true` with `failed_checks: []` means everything except the login is done.
+`broker_connected: false` before you log in is expected.

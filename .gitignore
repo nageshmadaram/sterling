@@ -121,6 +121,12 @@ backend/sterling_paper.db
 # .env holds real credentials once filled in; .env.example documents the key list.
 backend/.env
 .env
+# A filled-in deployment environment file holds the Kite API secret. The
+# committed template is deploy/sterling.env.example; every real copy stays out.
+sterling.env
+*/sterling.env
+**/sterling.env
+!deploy/sterling.env.example
 # tooling / scratch output
 .playwright-mcp/
 youtube-transcript/
