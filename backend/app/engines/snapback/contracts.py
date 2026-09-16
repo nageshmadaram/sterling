@@ -107,10 +107,30 @@ def pick_for(signal: SnapbackSignal, cfg: SnapbackConfig, *,
     if vol <= 0:
         return None
 
-    strike = float(strike_for_delta(S, vol, years, cfg.target_delta,
-                                    call=call, step=spec.strike_step))
+    # The pick itself lives in app.services.snapback_contract_selection so that
+    # production and the evidence recorder cannot drift apart. Behaviour is
+    # unchanged — see tests/unit/test_snapback_selector_parity.py, which pins 840
+    # captured outputs in both directions.
+    from app.services.snapback_contract_selection import (
+        SelectionInputs, select_snapback_contract,
+    )
+
+    selection = select_snapback_contract(
+        SelectionInputs(
+            opportunity_id=getattr(signal, "signal_id", "") or signal.symbol,
+            underlying=spec.underlying,
+            option_type=signal.option_type,
+            spot=S,
+            assumed_iv=vol,
+            target_delta=cfg.target_delta,
+            dte_days=days,
+            strike_step=spec.strike_step,
+            expiry=expiry,
+        )
+    )
+    strike = selection.selected_strike
+    delta = selection.computed_delta
     premium = float(bs_price(S, strike, years, vol, call=call))
-    delta = float(bs_delta(S, strike, years, vol, call=call))
     pretty = int(strike) if float(strike).is_integer() else strike
     return Pick(
         underlying=spec.underlying,
