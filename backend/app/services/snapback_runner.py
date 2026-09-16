@@ -95,7 +95,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             risk_processed = await process_prospective_intraday_risk(client, cfg)
 
         # 5. Phase C: EOD Closing Window Phase (15:25 - 15:30 IST / EOD)
-        if curr_time >= EOD_WINDOW_START:
+        if EOD_WINDOW_START <= curr_time <= EOD_WINDOW_END:
             mtm_processed = await process_prospective_daily_mtm_and_exits(client, cfg)
 
         return {

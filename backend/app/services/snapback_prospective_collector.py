@@ -502,53 +502,9 @@ class SnapbackProspectiveCollector:
                 "reason": f"Discrete futures hedge error too high ({hedge_error_pct:.1f}%)",
             }
 
-        # 7. Execute T+1 Paper Position
+        # 7. Execute T+1 Paper Position in ONE single SQLite transaction
         option_fill_price = chosen_quote.best_ask * (1.0 + slippage_pct)
         futures_fill_price = futures_quote_event.best_ask * (1.0 + slippage_pct)
-
-        decision_id = f"DECISION-{opportunity_id}"
-        self.warehouse.record_decision(
-            decision_id=decision_id,
-            opportunity_id=opportunity_id,
-            symbol=symbol,
-            decision="EXECUTE_PAPER",
-            chosen_option_symbol=chosen_cand.symbol,
-            chosen_strike=chosen_cand.strike,
-            chosen_delta=chosen_cand.theoretical_delta,
-            causal_beta=causal_beta,
-            target_hedge_lots=hedge_lots,
-            reason=f"Selected candidate {chosen_cand.symbol} (DTE={chosen_cand.dte}, delta={chosen_cand.theoretical_delta:.2f}, beta={causal_beta:.2f})",
-            provider_timestamp=provider_ts,
-        )
-
-        opt_fill_id = f"FILL-OPT-{opportunity_id}"
-        self.warehouse.record_paper_fill(
-            fill_id=opt_fill_id,
-            opportunity_id=opportunity_id,
-            symbol=chosen_cand.symbol,
-            order_side="BUY",
-            fill_price=option_fill_price,
-            fill_quantity=option_qty,
-            slippage=chosen_quote.best_ask * slippage_pct,
-            provider_symbol=chosen_cand.provider_symbol or chosen_cand.symbol,
-            expiry=chosen_cand.expiry,
-            strike=chosen_cand.strike,
-            instrument_token=chosen_cand.instrument_token,
-            provider_timestamp=provider_ts,
-        )
-
-        reb_id = f"REB-{opportunity_id}-ENTRY"
-        self.warehouse.record_hedge_rebalance(
-            rebalance_id=reb_id,
-            opportunity_id=opportunity_id,
-            symbol=symbol,
-            prior_hedge_lots=0,
-            new_hedge_lots=hedge_lots,
-            futures_fill_price=futures_fill_price,
-            reason="Initial Long Index Futures Hedge Entry (bought at ask)",
-            provider_symbol=futures_quote_event.contract_id,
-            provider_timestamp=provider_ts,
-        )
 
         opt_turnover = option_qty * option_fill_price
         fut_turnover = actual_futures_qty * futures_fill_price
@@ -559,65 +515,92 @@ class SnapbackProspectiveCollector:
         stamp_duty = opt_turnover * 0.00003
         total_costs = brokerage + stt + exchange_txn_fee + gst + stamp_duty
 
-        cost_id = f"COST-{opportunity_id}"
-        self.warehouse.record_cost(
-            cost_id=cost_id,
-            opportunity_id=opportunity_id,
-            symbol=symbol,
-            brokerage=brokerage,
-            stt=stt,
-            exchange_txn_fee=exchange_txn_fee,
-            clearing_fee=0.0,
-            gst=gst,
-            stamp_duty=stamp_duty,
-            total_statutory_costs=total_costs,
-            provider_timestamp=provider_ts,
-        )
-
         option_margin = opt_turnover
         futures_margin = fut_turnover * 0.12
         total_margin = option_margin + futures_margin
 
-        margin_id = f"MARGIN-{opportunity_id}"
-        self.warehouse.record_margin_snapshot(
-            snapshot_id=margin_id,
+        self.warehouse.commit_paper_entry_transaction(
             opportunity_id=opportunity_id,
-            symbol=symbol,
-            option_margin_required=option_margin,
-            futures_margin_required=futures_margin,
-            total_margin=total_margin,
-            available_capital=available_capital,
-            provider_timestamp=provider_ts,
+            decision_data={
+                "decision_id": f"DECISION-{opportunity_id}",
+                "symbol": symbol,
+                "decision": "EXECUTE_PAPER",
+                "chosen_option_symbol": chosen_cand.symbol,
+                "chosen_strike": chosen_cand.strike,
+                "chosen_delta": chosen_cand.theoretical_delta,
+                "causal_beta": causal_beta,
+                "target_hedge_lots": hedge_lots,
+                "reason": f"Selected candidate {chosen_cand.symbol} (DTE={chosen_cand.dte}, delta={chosen_cand.theoretical_delta:.2f}, beta={causal_beta:.2f})",
+                "provider_timestamp": provider_ts,
+            },
+            paper_fill_data={
+                "fill_id": f"FILL-OPT-{opportunity_id}",
+                "symbol": chosen_cand.symbol,
+                "order_side": "BUY",
+                "fill_price": option_fill_price,
+                "fill_quantity": option_qty,
+                "slippage": chosen_quote.best_ask * slippage_pct,
+                "provider_symbol": chosen_cand.provider_symbol or chosen_cand.symbol,
+                "expiry": chosen_cand.expiry,
+                "strike": chosen_cand.strike,
+                "instrument_token": chosen_cand.instrument_token,
+                "provider_timestamp": provider_ts,
+            },
+            hedge_rebalance_data={
+                "rebalance_id": f"REB-{opportunity_id}-ENTRY",
+                "symbol": symbol,
+                "prior_hedge_lots": 0,
+                "new_hedge_lots": hedge_lots,
+                "futures_fill_price": futures_fill_price,
+                "reason": "Initial Long Index Futures Hedge Entry (bought at ask)",
+                "provider_symbol": futures_quote_event.contract_id,
+                "provider_timestamp": provider_ts,
+            },
+            cost_data={
+                "cost_id": f"COST-{opportunity_id}",
+                "symbol": symbol,
+                "brokerage": brokerage,
+                "stt": stt,
+                "exchange_txn_fee": exchange_txn_fee,
+                "clearing_fee": 0.0,
+                "gst": gst,
+                "stamp_duty": stamp_duty,
+                "total_statutory_costs": total_costs,
+                "provider_timestamp": provider_ts,
+            },
+            margin_snapshot_data={
+                "snapshot_id": f"MARGIN-{opportunity_id}",
+                "symbol": symbol,
+                "option_margin_required": option_margin,
+                "futures_margin_required": futures_margin,
+                "total_margin": total_margin,
+                "available_capital": available_capital,
+                "provider_timestamp": provider_ts,
+            },
+            paper_position_data={
+                "symbol": symbol,
+                "option_symbol": chosen_cand.symbol,
+                "option_qty": option_qty,
+                "option_entry_price": option_fill_price,
+                "option_expiry": chosen_cand.expiry,
+                "option_strike": chosen_cand.strike,
+                "futures_symbol": futures_quote_event.contract_id,
+                "futures_lot_size": futures_lot_size,
+                "current_futures_lots": hedge_lots,
+                "avg_futures_entry_price": futures_fill_price,
+                "realized_futures_pnl": 0.0,
+                "entry_spot": t1_spot_price,
+                "entry_timestamp": provider_ts,
+                "entry_dte": chosen_cand.dte,
+                "entry_iv": entry_iv,
+                "causal_beta": causal_beta,
+                "accumulated_costs": total_costs,
+                "peak_option_bid": option_fill_price,
+                "sessions_held": 1,
+                "is_runner": 0,
+                "status": "OPEN",
+            },
         )
-
-        # 8. Save active paper position state ledger FIRST
-        self.warehouse.save_paper_position(
-            opportunity_id=opportunity_id,
-            symbol=symbol,
-            option_symbol=chosen_cand.symbol,
-            option_qty=option_qty,
-            option_entry_price=option_fill_price,
-            option_expiry=chosen_cand.expiry,
-            option_strike=chosen_cand.strike,
-            futures_symbol=futures_quote_event.contract_id,
-            futures_lot_size=futures_lot_size,
-            current_futures_lots=hedge_lots,
-            avg_futures_entry_price=futures_fill_price,
-            realized_futures_pnl=0.0,
-            entry_spot=t1_spot_price,
-            entry_timestamp=provider_ts,
-            entry_dte=chosen_cand.dte,
-            entry_iv=entry_iv,
-            causal_beta=causal_beta,
-            accumulated_costs=total_costs,
-            peak_option_bid=option_fill_price,
-            sessions_held=1,
-            is_runner=0,
-            status="OPEN",
-        )
-
-        # 9. Atomically mark opportunity as OPEN_POSITION strictly AFTER position ledger is committed
-        self.warehouse.update_opportunity_status(opportunity_id, "OPEN_POSITION")
 
 
         return {

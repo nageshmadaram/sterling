@@ -770,8 +770,8 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 processed += 1
                 continue
 
-            # Atomically lock opportunity so concurrent ticks/processes cannot double-process (force_recover allows relocking stranded PROCESSING_ENTRY rows)
-            locked = collector.warehouse.try_lock_pending_opportunity(opp_id, force_recover=True)
+            # Atomically lock opportunity using lease token (guards against duplicate processing)
+            locked, lease_token = collector.warehouse.try_lock_pending_opportunity(opp_id)
             if not locked:
                 log.debug("Skipping pending opportunity %s: already processing or non-pending", opp_id)
                 continue
@@ -918,7 +918,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     option_quote_events=opt_quote_events,
                     causal_beta=causal_beta,
                     futures_lot_size=fut_lot_size,
-                    execution_timestamp_ms=int(datetime.now(timezone.utc).timestamp() * 1000),
+                    execution_timestamp_ms=int(time.time() * 1000),
                     entry_iv=iv_proxy,
                 )
                 processed += 1
@@ -976,12 +976,12 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
                     log.debug("Skipping daily MTM/exit cycle for %s: missing quotes or spot price", opp_id)
                     continue
 
-                now_ms = opt_ev.exchange_timestamp_ms
+                receive_now_ms = int(time.time() * 1000)
 
-                # Revalidate quote quality before MTM, hedge rebalance, or exit
+                # Revalidate quote quality before MTM, hedge rebalance, or exit using receive wall-clock time
                 from app.services.snapback_market_data import evaluate_quote_quality
-                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=now_ms)
-                q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=now_ms)
+                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
+                q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=receive_now_ms)
                 if not q_opt_eval.accepted_for_execution or not q_fut_eval.accepted_for_execution:
                     log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
                     continue
@@ -1075,7 +1075,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
         if not active_positions or not client:
             return 0
 
-        now_ms = int(time.time() * 1000)
+        receive_now_ms = int(time.time() * 1000)
 
         for pos in active_positions:
             opp_id = pos["opportunity_id"]
@@ -1094,10 +1094,8 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                 if not opt_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
                     continue
 
-                now_ms = opt_ev.exchange_timestamp_ms
-
                 from app.services.snapback_market_data import evaluate_quote_quality
-                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=now_ms)
+                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
                 if not q_opt_eval.accepted_for_execution:
                     continue
 
@@ -1106,41 +1104,38 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                 peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
 
                 if peak_bid > float(pos.get("peak_option_bid") or 0.0):
-                    collector.warehouse.update_paper_position_hedge(
+                    collector.warehouse.update_paper_position_peak_bid(
                         opportunity_id=opp_id,
-                        current_futures_lots=int(pos["current_futures_lots"]),
-                        avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
-                        realized_futures_pnl=float(pos["realized_futures_pnl"]),
-                        accumulated_costs=float(pos.get("accumulated_costs") or 0.0),
                         peak_option_bid=peak_bid,
-                        sessions_held=int(pos.get("sessions_held") or 1),
                         is_runner=int(pos.get("is_runner") or 0),
                     )
 
-                stop_price = entry_price * (1.0 - cfg.premium_stop_pct / 100.0)
                 exit_reason = None
+                is_runner = bool(pos.get("is_runner"))
 
-                if curr_bid <= stop_price:
-                    exit_reason = "PREMIUM_STOP"
+                if is_runner:
+                    runner_trail_pct = float(getattr(cfg, "runner_trail_pct", 25.0) or 25.0)
+                    trail_price = peak_bid * (1.0 - runner_trail_pct / 100.0)
+                    if curr_bid <= trail_price:
+                        exit_reason = "RUNNER_TRAIL_STOP"
                 else:
-                    is_runner = bool(pos.get("is_runner"))
-                    if is_runner and cfg.premium_trail_pct > 0:
-                        trail_price = peak_bid * (1.0 - cfg.premium_trail_pct / 100.0)
-                        if curr_bid <= trail_price:
-                            exit_reason = "RUNNER_TRAIL_STOP"
-                    elif not is_runner and cfg.runner_mult > 0 and curr_bid >= entry_price * cfg.runner_mult:
-                        collector.warehouse.update_paper_position_hedge(
-                            opportunity_id=opp_id,
-                            current_futures_lots=int(pos["current_futures_lots"]),
-                            avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
-                            realized_futures_pnl=float(pos["realized_futures_pnl"]),
-                            accumulated_costs=float(pos.get("accumulated_costs") or 0.0),
-                            peak_option_bid=peak_bid,
-                            sessions_held=int(pos.get("sessions_held") or 1),
-                            is_runner=1,
-                        )
+                    stop_price = entry_price * (1.0 - cfg.premium_stop_pct / 100.0)
+                    if curr_bid <= stop_price:
+                        exit_reason = "PREMIUM_STOP"
 
                 if exit_reason:
+                    # Fetch live futures quote to compute actual futures exit PnL on intraday exit
+                    futures_exit_bid = float(pos.get("avg_futures_entry_price") or 0.0)
+                    if int(pos.get("current_futures_lots") or 0) > 0 and fut_sym:
+                        try:
+                            fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
+                            q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
+                            fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
+                            if fut_ev and fut_ev.best_bid > 0:
+                                futures_exit_bid = fut_ev.best_bid
+                        except Exception as fut_exc:
+                            log.warning("Failed to fetch live futures exit quote for %s: %s", opp_id, fut_exc)
+
                     opt_type_str = "PE" if "PE" in opt_sym else "CE"
                     opt_strike_val = float(pos.get("option_strike") or 0.0)
                     entry_dte_val = int(pos.get("entry_dte") or 45)
@@ -1161,15 +1156,15 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         option_entry_price=entry_price,
                         option_exit_bid=curr_bid,
                         futures_entry_price=float(pos.get("avg_futures_entry_price") or 0.0),
-                        futures_exit_bid=float(pos.get("avg_futures_entry_price") or 0.0),
+                        futures_exit_bid=futures_exit_bid,
                         option_quantity=int(pos["option_qty"]),
                         futures_quantity=int(pos["current_futures_lots"]) * int(pos.get("futures_lot_size") or 65),
                         nifty_futures_entry=float(pos.get("avg_futures_entry_price") or 0.0),
-                        nifty_futures_exit=float(pos.get("avg_futures_entry_price") or 0.0),
+                        nifty_futures_exit=futures_exit_bid,
                         option_type=opt_type_str,
                         accumulated_costs=float(pos.get("accumulated_costs") or 0.0),
                     )
-                    log.info("Intraday risk monitor closed %s due to %s", opp_id, exit_reason)
+                    log.info("Intraday risk monitor closed %s due to %s (futures_exit_bid=%.2f)", opp_id, exit_reason, futures_exit_bid)
                 processed += 1
             except Exception as r_exc:
                 log.debug("Intraday risk check failed for %s: %s", opp_id, r_exc)

@@ -506,6 +506,7 @@ async def test_crash_after_processing_entry_recovers_deterministically(temp_ware
     monkeypatch.setattr("app.services.snapback_runner.get_config", lambda uid="default": sample_config)
     monkeypatch.setattr("app.services.snapback.get_config", lambda uid="default": sample_config)
 
+    monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
     monkeypatch.setattr("app.services.snapback_runner.datetime", FixedDateTime)
     monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
     monkeypatch.setattr("app.services.snapback_prospective_collector.datetime", FixedDateTime)
@@ -569,6 +570,7 @@ async def test_option_crosses_premium_stop_intraday_then_recovers(temp_warehouse
 
     now_dt = datetime(2026, 9, 16, 6, 0, 0, tzinfo=timezone.utc)
     q_time = "2026-09-16T11:30:00+05:30"
+    monkeypatch.setattr("time.time", lambda: now_dt.timestamp())
 
     # Step 1: Intraday price drops to 40.0 (crosses 50.0 stop)
     mock_client_stop = AsyncMock()
@@ -659,6 +661,7 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
 
     # Step 1: 15:00 IST tick (price = 110.0, outside closing window 15:25-15:30 IST)
     dt_1500 = datetime(2026, 9, 16, 9, 30, 0, tzinfo=timezone.utc)  # 15:00 IST
+    monkeypatch.setattr("time.time", lambda: dt_1500.timestamp())
 
     class FixedDateTime1500(datetime):
         @classmethod
@@ -704,6 +707,7 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
 
     # Step 2: 15:28 IST tick (price = 125.0, inside closing window 15:25-15:30 IST)
     dt_1528 = datetime(2026, 9, 16, 9, 58, 0, tzinfo=timezone.utc)  # 15:28 IST
+    monkeypatch.setattr("time.time", lambda: dt_1528.timestamp())
 
     class FixedDateTime1528(datetime):
         @classmethod
@@ -741,3 +745,250 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
     mtms_1528 = temp_warehouse.get_records_by_table("daily_mtm")
     assert len(mtms_1528) == 1
     assert float(mtms_1528[0]["option_liquidation_bid"]) == 125.0
+
+
+@pytest.mark.asyncio
+async def test_crash_after_partial_option_fill_recovers_cleanly(temp_warehouse, sample_config, monkeypatch):
+    """Adversarial Test 1: Crash after partial records exist -> process restart recovers cleanly without duplicate key errors."""
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    opp_id = "OPP-CRASH-PARTIAL-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="PROCESSING_ENTRY",
+        provider_timestamp="2026-09-15T09:20:00+05:30",
+    )
+
+    # Simulate partial records already inserted prior to hard process crash
+    temp_warehouse.record_decision(
+        decision_id=f"DECISION-{opp_id}",
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        decision="EXECUTE_PAPER",
+        chosen_option_symbol="NIFTY26OCT25000PE",
+        chosen_strike=25000.0,
+        chosen_delta=-0.50,
+        causal_beta=1.0,
+        target_hedge_lots=1,
+    )
+    temp_warehouse.record_paper_fill(
+        fill_id=f"FILL-OPT-{opp_id}",
+        opportunity_id=opp_id,
+        symbol="NIFTY26OCT25000PE",
+        order_side="BUY",
+        fill_price=100.0,
+        fill_quantity=25,
+    )
+
+    t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return t1_dt.astimezone(tz)
+            return t1_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
+
+    mock_client = build_mock_client()
+
+    # Re-run entry processing on recovered opportunity (relocks expired/stranded lease)
+    processed = await process_prospective_pending_entries(mock_client, sample_config)
+
+    assert processed == 1
+    opp_after = temp_warehouse.get_opportunity_by_id(opp_id)
+    assert opp_after["status"] == "OPEN_POSITION"
+
+    pos = temp_warehouse.get_paper_position(opp_id)
+    assert pos is not None
+    assert pos["status"] == "OPEN"
+    assert pos["option_qty"] == 25
+
+
+@pytest.mark.asyncio
+async def test_concurrent_process_blocked_by_active_lease(temp_warehouse):
+    """Adversarial Test 2: Two concurrent processes -> active lease blocks second process until TTL expires."""
+    opp_id = "OPP-CONCURRENT-LEASE-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="PENDING_ENTRY",
+    )
+
+    # Process 1 acquires lock
+    locked1, token1 = temp_warehouse.try_lock_pending_opportunity(opp_id, lease_ttl_ms=60000)
+    assert locked1 is True
+    assert token1.startswith("LEASE-")
+
+    # Process 2 attempts lock while lease is active -> BLOCKED
+    locked2, token2 = temp_warehouse.try_lock_pending_opportunity(opp_id, lease_ttl_ms=60000)
+    assert locked2 is False
+    assert token2 == ""
+
+    # Simulate lease expiration by advancing system time in try_lock by > 60s
+    with patch("time.time", return_value=datetime.now(timezone.utc).timestamp() + 100.0):
+        locked3, token3 = temp_warehouse.try_lock_pending_opportunity(opp_id, lease_ttl_ms=60000)
+        assert locked3 is True
+        assert token3.startswith("LEASE-")
+
+
+@pytest.mark.asyncio
+async def test_intraday_price_hits_runner_mult_before_session_15_not_promoted(temp_warehouse, sample_config, monkeypatch):
+    """Adversarial Test 3: Premium hits 1.5x intraday before session 15 -> position is NOT promoted to runner intraday."""
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    opp_id = "OPP-RUNNER-MULT-INTRADAY-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="OPEN_POSITION",
+    )
+
+    # Save position at session 2 (entry_price = 100.0, runner_mult = 1.5 -> 150.0)
+    temp_warehouse.save_paper_position(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        option_symbol="NIFTY26OCT25000PE",
+        option_qty=75,
+        option_entry_price=100.0,
+        option_expiry="2026-10-26",
+        option_strike=25000.0,
+        futures_symbol="NIFTY26OCTFUT",
+        futures_lot_size=65,
+        current_futures_lots=1,
+        avg_futures_entry_price=24510.0,
+        realized_futures_pnl=0.0,
+        entry_spot=24500.0,
+        entry_timestamp="2026-09-15T09:20:00+05:30",
+        entry_dte=45,
+        entry_iv=0.20,
+        causal_beta=1.0,
+        peak_option_bid=100.0,
+        sessions_held=2,
+        is_runner=0,
+        status="OPEN",
+    )
+
+    now_dt = datetime(2026, 9, 16, 6, 0, 0, tzinfo=timezone.utc)
+    q_time = "2026-09-16T11:30:00+05:30"
+    monkeypatch.setattr("time.time", lambda: now_dt.timestamp())
+
+    # Option price surges to 160.0 (> 150.0 1.5x runner threshold) intraday
+    mock_client = AsyncMock()
+    mock_client.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 160.0, "buy_price": 160.0, "sell_price": 161.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 160.0, "quantity": 100}], "sell": [{"price": 161.0, "quantity": 100}]},
+            "timestamp": q_time, "oi": 50000,
+        },
+    })
+
+    from app.services.snapback import process_prospective_intraday_risk
+    processed = await process_prospective_intraday_risk(mock_client, sample_config)
+    assert processed == 1
+
+    pos = temp_warehouse.get_paper_position(opp_id)
+    assert pos["status"] == "OPEN"
+    # MUST remain non-runner (is_runner == 0); promotion ONLY occurs at 15-session horizon
+    assert pos["is_runner"] == 0
+    assert pos["peak_option_bid"] == 160.0
+
+
+@pytest.mark.asyncio
+async def test_intraday_stop_calculates_real_futures_pnl_when_futures_moved(temp_warehouse, sample_config, monkeypatch):
+    """Adversarial Test 4: Intraday stop with futures moving significantly -> produces non-zero futures hedge PnL."""
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    opp_id = "OPP-INTRADAY-FUT-PNL-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="OPEN_POSITION",
+    )
+
+    # Long 1 NIFTY futures lot (lot_size=65) hedged at avg entry = 24500.0
+    temp_warehouse.save_paper_position(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        option_symbol="NIFTY26OCT25000PE",
+        option_qty=75,
+        option_entry_price=100.0,
+        option_expiry="2026-10-26",
+        option_strike=25000.0,
+        futures_symbol="NIFTY26OCTFUT",
+        futures_lot_size=65,
+        current_futures_lots=1,
+        avg_futures_entry_price=24500.0,
+        realized_futures_pnl=0.0,
+        entry_spot=24500.0,
+        entry_timestamp="2026-09-15T09:20:00+05:30",
+        entry_dte=45,
+        entry_iv=0.20,
+        causal_beta=1.0,
+        peak_option_bid=100.0,
+        status="OPEN",
+    )
+
+    now_dt = datetime(2026, 9, 16, 6, 0, 0, tzinfo=timezone.utc)
+    q_time = "2026-09-16T11:30:00+05:30"
+    monkeypatch.setattr("time.time", lambda: now_dt.timestamp())
+
+    # Option drops to 40.0 (triggers PREMIUM_STOP), while Futures rises to 24650.0 (+150 pts gain!)
+    mock_client = AsyncMock()
+    mock_client.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24650.0},
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 40.0, "quantity": 100}], "sell": [{"price": 41.0, "quantity": 100}]},
+            "timestamp": q_time, "oi": 50000,
+        },
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24650.0, "buy_price": 24650.0, "sell_price": 24652.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24650.0, "quantity": 100}], "sell": [{"price": 24652.0, "quantity": 100}]},
+            "timestamp": q_time, "oi": 500000,
+        },
+    })
+
+    from app.services.snapback import process_prospective_intraday_risk
+    processed = await process_prospective_intraday_risk(mock_client, sample_config)
+    assert processed == 1
+
+    outcomes = temp_warehouse.get_records_by_table("outcomes")
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
+    assert outcome["exit_reason"] == "PREMIUM_STOP"
+
+    # Actual futures PnL must be (24650.0 - 24500.0) * 65 = +9750.0
+    expected_futures_pnl = (24650.0 - 24500.0) * 65
+    assert float(outcome["actual_futures_pnl"]) == pytest.approx(expected_futures_pnl)
+    assert float(outcome["actual_futures_pnl"]) > 0.0
+

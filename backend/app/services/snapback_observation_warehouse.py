@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -81,6 +82,8 @@ class SnapbackObservationWarehouse:
                         is_valid          INTEGER NOT NULL DEFAULT 1,
                         rejection_reason  TEXT NOT NULL DEFAULT '',
                         status            TEXT NOT NULL DEFAULT 'PENDING_ENTRY',
+                        processing_token  TEXT NOT NULL DEFAULT '',
+                        processing_started_at_ms INTEGER NOT NULL DEFAULT 0,
                         {common_cols}
                     )
                 """)
@@ -91,6 +94,8 @@ class SnapbackObservationWarehouse:
                 }
                 col_migrations = {
                     "status": "TEXT NOT NULL DEFAULT 'PENDING_ENTRY'",
+                    "processing_token": "TEXT NOT NULL DEFAULT ''",
+                    "processing_started_at_ms": "INTEGER NOT NULL DEFAULT 0",
                     "signal_spot": "REAL NOT NULL DEFAULT 0.0",
                     "mean_target": "REAL NOT NULL DEFAULT 0.0",
                     "breakout_level": "REAL NOT NULL DEFAULT 0.0",
@@ -1120,45 +1125,203 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
-    def try_lock_pending_opportunity(self, opportunity_id: str, force_recover: bool = False) -> bool:
-        """Atomically transition opportunity to PROCESSING_ENTRY.
+    def try_lock_pending_opportunity(
+        self, opportunity_id: str, lease_ttl_ms: int = 60000
+    ) -> Tuple[bool, str]:
+        """Atomically transition opportunity to PROCESSING_ENTRY using a lease token and TTL.
         
-        Guards against duplicate processing when runner ticks or manual triggers coincide.
-        If force_recover is True, allows relocking a stranded PROCESSING_ENTRY row.
-        Returns True if the lock was acquired, False if already locked or non-pending.
+        Guards against duplicate processing across concurrent runner processes.
+        If paper_positions already has an OPEN position for this opportunity (e.g. from partial crash),
+        reconciles opportunities.status = 'OPEN_POSITION' immediately and returns (False, "").
+        
+        Only locks if status is PENDING_ENTRY, or status is PROCESSING_ENTRY with an expired lease.
+        Returns (True, lease_token) if lock acquired, else (False, "").
         """
+        now_ms = int(time.time() * 1000)
+        token = f"LEASE-{now_ms}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        cutoff_ms = now_ms - lease_ttl_ms
+
         conn = self._get_connection()
         try:
             with conn:
-                if force_recover:
-                    cur = conn.execute(
-                        "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status IN ('PENDING_ENTRY', 'PROCESSING_ENTRY')",
+                pos = conn.execute(
+                    "SELECT status FROM paper_positions WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                ).fetchone()
+                if pos and pos["status"] == "OPEN":
+                    conn.execute(
+                        "UPDATE opportunities SET status = 'OPEN_POSITION', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ?",
                         (opportunity_id,)
                     )
-                else:
-                    cur = conn.execute(
-                        "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status = 'PENDING_ENTRY'",
-                        (opportunity_id,)
-                    )
-                return cur.rowcount > 0
+                    return False, ""
+
+                cur = conn.execute(
+                    """
+                    UPDATE opportunities
+                    SET status = 'PROCESSING_ENTRY',
+                        processing_token = ?,
+                        processing_started_at_ms = ?
+                    WHERE opportunity_id = ?
+                      AND (
+                        status = 'PENDING_ENTRY'
+                        OR (status = 'PROCESSING_ENTRY' AND processing_started_at_ms < ?)
+                      )
+                    """,
+                    (token, now_ms, opportunity_id, cutoff_ms)
+                )
+                if cur.rowcount > 0:
+                    return True, token
+                return False, ""
         finally:
             conn.close()
 
-    def recover_stranded_processing_entries(self, opportunity_id: Optional[str] = None) -> int:
-        """Reset stranded PROCESSING_ENTRY rows back to PENDING_ENTRY following a crash."""
+    def recover_stranded_processing_entries(self, opportunity_id: Optional[str] = None, lease_ttl_ms: int = 60000) -> int:
+        """Reset stranded PROCESSING_ENTRY rows back to PENDING_ENTRY following a crash if lease expired."""
+        now_ms = int(time.time() * 1000)
+        cutoff_ms = now_ms - lease_ttl_ms
         conn = self._get_connection()
         try:
             with conn:
                 if opportunity_id:
                     cur = conn.execute(
-                        "UPDATE opportunities SET status = 'PENDING_ENTRY' WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY'",
-                        (opportunity_id,)
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY' AND processing_started_at_ms < ?",
+                        (opportunity_id, cutoff_ms)
                     )
                 else:
                     cur = conn.execute(
-                        "UPDATE opportunities SET status = 'PENDING_ENTRY' WHERE status = 'PROCESSING_ENTRY'"
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY', processing_token = '', processing_started_at_ms = 0 WHERE status = 'PROCESSING_ENTRY' AND processing_started_at_ms < ?",
+                        (cutoff_ms,)
                     )
                 return cur.rowcount
+        finally:
+            conn.close()
+
+    def commit_paper_entry_transaction(
+        self,
+        opportunity_id: str,
+        decision_data: Dict[str, Any],
+        paper_fill_data: Dict[str, Any],
+        hedge_rebalance_data: Dict[str, Any],
+        cost_data: Dict[str, Any],
+        margin_snapshot_data: Dict[str, Any],
+        paper_position_data: Dict[str, Any],
+    ) -> None:
+        """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                # 1. Decision
+                d = decision_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO decisions (
+                        decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
+                        chosen_delta, causal_beta, target_hedge_lots, reason,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        d["decision_id"], opportunity_id, d["decision"], d["chosen_option_symbol"], d["chosen_strike"],
+                        d["chosen_delta"], d["causal_beta"], d["target_hedge_lots"], d["reason"],
+                        now, d.get("provider_timestamp") or now, now, d["symbol"], d["symbol"], "", d["chosen_strike"],
+                        "", d.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+                # 2. Paper fill
+                f = paper_fill_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO paper_fills (
+                        fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f["fill_id"], opportunity_id, f["order_side"], f["fill_price"], f["fill_quantity"], f.get("slippage", 0.0),
+                        now, f.get("provider_timestamp") or now, now, f["symbol"], f.get("provider_symbol") or f["symbol"], f.get("expiry", ""), f.get("strike", 0.0),
+                        f.get("instrument_token", ""), f.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+                # 3. Hedge rebalance
+                h = hedge_rebalance_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO hedge_rebalances (
+                        rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        h["rebalance_id"], opportunity_id, h["prior_hedge_lots"], h["new_hedge_lots"], h["futures_fill_price"], h.get("reason", ""),
+                        now, h.get("provider_timestamp") or now, now, h["symbol"], h.get("provider_symbol") or h["symbol"], "", 0.0,
+                        "", h.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+                # 4. Costs
+                c = cost_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO costs (
+                        cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
+                        total_statutory_costs,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        c["cost_id"], opportunity_id, c.get("brokerage", 0.0), c.get("stt", 0.0), c.get("exchange_txn_fee", 0.0), c.get("clearing_fee", 0.0), c.get("gst", 0.0), c.get("stamp_duty", 0.0),
+                        c.get("total_statutory_costs", 0.0),
+                        now, c.get("provider_timestamp") or now, now, c["symbol"], c["symbol"], "", 0.0,
+                        "", c.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+                # 5. Margin snapshot
+                m = margin_snapshot_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO margin_snapshots (
+                        snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
+                        total_margin, available_capital,
+                        observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
+                        instrument_token, source, strategy_commit, manifest_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        m["snapshot_id"], opportunity_id, m["option_margin_required"], m["futures_margin_required"],
+                        m["total_margin"], m["available_capital"],
+                        now, m.get("provider_timestamp") or now, now, m["symbol"], m["symbol"], "", 0.0,
+                        "", m.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                    ),
+                )
+                # 6. Paper position ledger
+                p = paper_position_data
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO paper_positions (
+                        opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
+                        option_expiry, option_strike, futures_symbol, futures_lot_size,
+                        current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
+                        accumulated_costs, peak_option_bid, sessions_held, is_runner,
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        opportunity_id, p["symbol"], p["option_symbol"], p["option_qty"], p["option_entry_price"],
+                        p["option_expiry"], p["option_strike"], p["futures_symbol"], p["futures_lot_size"],
+                        p["current_futures_lots"], p["avg_futures_entry_price"], p.get("realized_futures_pnl", 0.0),
+                        p.get("accumulated_costs", 0.0), p.get("peak_option_bid") or p["option_entry_price"], p.get("sessions_held", 1), p.get("is_runner", 0),
+                        p["entry_spot"], p["entry_timestamp"], p["entry_dte"], p["entry_iv"], p["causal_beta"], p.get("status", "OPEN")
+                    ),
+                )
+                # 7. Atomically mark opportunity as OPEN_POSITION and clear processing token
+                conn.execute(
+                    "UPDATE opportunities SET status = 'OPEN_POSITION', processing_token = '', processing_started_at_ms = 0 WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                )
         finally:
             conn.close()
 
