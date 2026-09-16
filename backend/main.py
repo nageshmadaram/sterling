@@ -173,16 +173,18 @@ async def lifespan(app: FastAPI):
     # positions: the guard is DB-persisted across restarts, but a position may
     # have closed/expired while we were down — reconciling prevents both a stale
     # guard (forever-blocked re-entry) and a dropped guard (double-entry).
-    from app.services.kite_engine.service import (
-        auto_scan_loop as _kite_auto_scan,
-        reconcile_all_auto_open as _kite_reconcile_auto_open,
-    )
-    try:
-        await _kite_reconcile_auto_open()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Kite auto-open startup reconcile failed: %s", exc)
-    kite_engine_task = asyncio.create_task(_kite_auto_scan())
-    log.info("Kite Sterling Kite Engine auto-scan loop started (every 5 min)")
+    kite_engine_task = None
+    if not _family_mode:
+        from app.services.kite_engine.service import (
+            auto_scan_loop as _kite_auto_scan,
+            reconcile_all_auto_open as _kite_reconcile_auto_open,
+        )
+        try:
+            await _kite_reconcile_auto_open()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Kite auto-open startup reconcile failed: %s", exc)
+        kite_engine_task = asyncio.create_task(_kite_auto_scan())
+        log.info("Kite Sterling Kite Engine auto-scan loop started (every 5 min)")
 
     # Kite session keeper — renews access tokens shortly before the 06:00 IST reset
     # for accounts Zerodha issued a refresh_token to. The strategy engines run
@@ -195,9 +197,11 @@ async def lifespan(app: FastAPI):
     # Sterling Value-Flow Navigator — independent strategy scanner. It reuses
     # the Kite account/client/instrument caches, but does not depend on the
     # Triple-Supertrend engine being enabled or scanning.
-    from app.services.navigator.runtime import auto_scan_loop as _navigator_auto_scan
-    navigator_task = asyncio.create_task(_navigator_auto_scan())
-    log.info("Value-Flow Navigator auto-scan loop started (every 5 min)")
+    navigator_task = None
+    if not _family_mode:
+        from app.services.navigator.runtime import auto_scan_loop as _navigator_auto_scan
+        navigator_task = asyncio.create_task(_navigator_auto_scan())
+        log.info("Value-Flow Navigator auto-scan loop started (every 5 min)")
 
     # ── Telegram bot + Kite signal alerts ────────────────────────────────────
     from app.services.notifications import telegram_bot as _tg_bot
@@ -246,21 +250,23 @@ async def lifespan(app: FastAPI):
         except (Exception, BaseException):
             pass
 
-    kite_engine_task.cancel()
-    try:
-        await kite_engine_task
-    except (Exception, BaseException):
-        pass
+    if kite_engine_task is not None:
+        kite_engine_task.cancel()
+        try:
+            await kite_engine_task
+        except (Exception, BaseException):
+            pass
     kite_session_task.cancel()
     try:
         await kite_session_task
     except (Exception, BaseException):
         pass
-    navigator_task.cancel()
-    try:
-        await navigator_task
-    except (Exception, BaseException):
-        pass
+    if navigator_task is not None:
+        navigator_task.cancel()
+        try:
+            await navigator_task
+        except (Exception, BaseException):
+            pass
     if gamma_move_task is not None:
         gamma_move_task.cancel()
         try:
@@ -305,6 +311,15 @@ async def lifespan(app: FastAPI):
         await ticker_watchdog_task
     except asyncio.CancelledError:
         pass
+
+    # A crashed process and a cleanly stopped one leave identical evidence behind
+    # unless one of them says so.
+    try:
+        from app.services.snapback_deployment import record_shutdown
+
+        record_shutdown(reason="lifespan_shutdown")
+    except Exception as exc:  # noqa: BLE001 - shutdown must never raise
+        log.warning("Snapback shutdown record failed: %s", exc)
 
     log.info("Sterling shutdown complete")
 
@@ -433,5 +448,11 @@ app = create_app()
 if __name__ == "__main__":
     import os
     import uvicorn
+
+    from app.services.snapback_deployment import bind_host
+
     port = int(os.getenv("PORT", "8000"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # Loopback unless STERLING_BIND_HOST says otherwise: binding every interface
+    # on a home network exposes an authenticated broker session to whatever else
+    # is on the Wi-Fi.
+    uvicorn.run("main:app", host=bind_host(), port=port, reload=True)

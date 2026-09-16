@@ -1,0 +1,48 @@
+# Sterling backend — family deployment.
+#
+# Install as a user service:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/*.service deploy/systemd/*.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now sterling-backend
+#   loginctl enable-linger "$USER"     # so it survives logout
+#
+# Secrets are NOT in this file. This unit is committed to the repository; the
+# environment file it reads is not, and must never be. Create it by hand with
+# mode 600:
+#   install -m 600 /dev/null ~/.config/sterling/sterling.env
+[Unit]
+Description=Sterling backend (Snapback prospective runtime)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Sterling/backend
+EnvironmentFile=%h/.config/sterling/sterling.env
+# Closed by default. Overriding this in the environment file exposes an
+# authenticated broker session to the whole network.
+Environment=STERLING_BIND_HOST=127.0.0.1
+ExecStart=%h/Sterling/.venv/bin/python -m uvicorn main:app --host ${STERLING_BIND_HOST} --port 8000
+
+Restart=always
+RestartSec=10
+
+# A restart mid-write loses evidence. Give the process time to finish its
+# transaction and drain the alert outbox before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+# The runtime needs its own directory tree and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/Sterling %h/Sterling/backups %h/.config/sterling
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sterling-backend
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,17 @@
+# Liveness watchdog for the Sterling backend.
+#
+# Probes liveness only, never readiness. Readiness is allowed to be false for
+# ordinary reasons — a non-trading day, a pending morning Kite login, an
+# incomplete session — and restarting on those would loop the service all
+# weekend without fixing anything. Liveness means the process stopped answering
+# at all, which a restart does fix.
+#
+# Driven by sterling-backend.watchdog.timer.
+[Unit]
+Description=Sterling backend liveness watchdog
+After=sterling-backend.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'curl -fsS --max-time 10 http://127.0.0.1:8000/api/v1/health/live > /dev/null || systemctl --user restart sterling-backend'
+SyslogIdentifier=sterling-watchdog

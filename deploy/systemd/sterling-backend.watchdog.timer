@@ -1,0 +1,11 @@
+[Unit]
+Description=Probe the Sterling backend every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=sterling-backend.watchdog.service
+
+[Install]
+WantedBy=timers.target

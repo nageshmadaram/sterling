@@ -170,3 +170,60 @@ They are in the household password manager, together with:
 - the Zerodha login and its two-factor recovery,
 - the machine login,
 - the location of the off-laptop backup copy.
+
+---
+
+## Installing the backend as a service (one time)
+
+The backend must come back by itself after a reboot or a crash. Without this,
+a machine that restarts overnight produces a silent gap in the evidence.
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/sterling
+install -m 600 /dev/null ~/.config/sterling/sterling.env
+cp deploy/systemd/sterling-backend.service ~/.config/systemd/user/
+cp deploy/systemd/sterling-backend.watchdog.service ~/.config/systemd/user/
+cp deploy/systemd/sterling-backend.watchdog.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now sterling-backend sterling-backend.watchdog.timer
+loginctl enable-linger "$USER"
+```
+
+`loginctl enable-linger` is what keeps the service running after you log out.
+Without it the service stops when the desktop session ends.
+
+### The environment file
+
+`~/.config/sterling/sterling.env` holds the settings and secrets. It is mode 600
+and is never committed. Put the Kite API key and secret, the Telegram token, the
+family account identifiers and the allocation capital there — not in the unit
+file, and not in the repository.
+
+The unit file sets `STERLING_BIND_HOST=127.0.0.1`. Leave it. Changing it to
+`0.0.0.0` puts an authenticated broker session on every device on the home
+network.
+
+### Checking it
+
+```bash
+systemctl --user status sterling-backend
+curl -fsS http://127.0.0.1:8000/api/v1/health/live
+curl -sS http://127.0.0.1:8000/api/v1/health/ready | head -40
+```
+
+`/health/live` answering means the process is up. `/health/ready` may answer 503
+for ordinary reasons — a non-trading day, a pending morning Kite login, an
+incomplete session — and that is not a fault. The watchdog timer deliberately
+probes only liveness, because restarting on a false readiness would loop the
+service all weekend without fixing anything.
+
+### Stopping it
+
+```bash
+systemctl --user stop sterling-backend
+```
+
+Stopping sends SIGTERM and waits up to 90 seconds. That window exists so the
+runtime can finish the transaction it is in and drain queued alerts. Do not
+`kill -9` a running session: a process killed mid-write leaves evidence that
+cannot be told apart from a crash.
