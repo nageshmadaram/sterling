@@ -47,6 +47,8 @@ class SnapbackExecutionPolicy:
     max_hedge_discretization_error_pct: float = 50.0
     runner_expiry_buffer_calendar_days: int = RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS
     require_full_visible_depth: bool = True
+    # The spot that sizes a hedge must be as fresh as the quotes it is combined with.
+    underlying_context_max_age_ms: int = 2_000
     runner_peak_source: str = RUNNER_PEAK_SOURCE
 
     def as_dict(self) -> dict:

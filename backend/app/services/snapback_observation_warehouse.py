@@ -420,6 +420,11 @@ class SnapbackObservationWarehouse:
                         age_ms                 INTEGER,
                         accepted               INTEGER NOT NULL DEFAULT 0,
                         reason_codes           TEXT NOT NULL DEFAULT '',
+                        required_quantity      INTEGER NOT NULL DEFAULT 0,
+                        visible_quantity       INTEGER NOT NULL DEFAULT 0,
+                        raw_vwap               REAL,
+                        execution_price        REAL,
+                        spread_pct             REAL,
                         {common_cols}
                     )
                 """)
@@ -507,6 +512,14 @@ class SnapbackObservationWarehouse:
         "margin_snapshots", "costs", "outcomes",
     )
 
+    _QUOTE_EVENT_COLUMNS = {
+        "required_quantity": "INTEGER NOT NULL DEFAULT 0",
+        "visible_quantity": "INTEGER NOT NULL DEFAULT 0",
+        "raw_vwap": "REAL",
+        "execution_price": "REAL",
+        "spread_pct": "REAL",
+    }
+
     _COST_COLUMNS = {
         "total_cost": "REAL NOT NULL DEFAULT 0.0",
         "phase": "TEXT NOT NULL DEFAULT ''",
@@ -519,6 +532,14 @@ class SnapbackObservationWarehouse:
     }
 
     def _migrate_identity_columns(self, conn) -> None:
+        try:
+            qcols = {r[1] for r in conn.execute("PRAGMA table_info(quote_quality_events)")}
+            for name, decl in self._QUOTE_EVENT_COLUMNS.items():
+                if qcols and name not in qcols:
+                    conn.execute(f"ALTER TABLE quote_quality_events ADD COLUMN {name} {decl}")
+        except Exception:
+            pass
+
         try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(costs)")}
             for name, decl in self._COST_COLUMNS.items():
@@ -1301,27 +1322,62 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         symbol: str = "",
         source: str = "PROSPECTIVE_PAPER",
+        required_quantity: int = 0,
+        visible_quantity: int = 0,
+        raw_vwap: Optional[float] = None,
+        execution_price: Optional[float] = None,
+        spread_pct: Optional[float] = None,
     ) -> None:
-        """Append one quote attempt, accepted or refused."""
+        """Append one quote attempt, accepted or refused.
+
+        Evidence is append-only: replaying the identical event is a no-op, and the
+        same id carrying different values is an integrity violation, not an update.
+        """
         now = _now_iso()
         conn = self._get_connection()
         try:
             with conn:
+                existing = conn.execute(
+                    "SELECT bid, ask, accepted, reason_codes, required_quantity, "
+                    "visible_quantity FROM quote_quality_events WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if existing is not None:
+                    incoming = (
+                        bid, ask, int(accepted), reason_codes,
+                        int(required_quantity or 0), int(visible_quantity or 0),
+                    )
+                    stored = (
+                        existing["bid"], existing["ask"], int(existing["accepted"]),
+                        existing["reason_codes"], int(existing["required_quantity"] or 0),
+                        int(existing["visible_quantity"] or 0),
+                    )
+                    if incoming != stored:
+                        raise EvidenceIntegrityError(
+                            f"quote event {event_id} already exists with different "
+                            f"values; evidence is append-only"
+                        )
+                    return
+
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO quote_quality_events (
+                    INSERT INTO quote_quality_events (
                         event_id, opportunity_id, phase, leg, contract_id,
                         required_for_economics, quote_present, bid, ask, age_ms,
                         accepted, reason_codes,
+                        required_quantity, visible_quantity, raw_vwap, execution_price,
+                        spread_pct,
                         observed_at, provider_timestamp, received_at, symbol,
                         provider_symbol, expiry, strike, instrument_token, source,
                         strategy_commit, manifest_hash, runtime_build_sha, authoritative
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event_id, opportunity_id, phase, leg, contract_id,
                         int(required_for_economics), int(quote_present), bid, ask, age_ms,
                         int(accepted), reason_codes,
+                        int(required_quantity or 0), int(visible_quantity or 0),
+                        raw_vwap, execution_price, spread_pct,
                         now, provider_timestamp, now, symbol or contract_id,
                         contract_id, "", 0.0, "", source,
                         FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH, _BUILD_SHA,

@@ -32,6 +32,10 @@ from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trad
 from app.services.snapback_capacity import evaluate_capacity
 from app.engines.snapback.policy import RUNNER_PEAK_SOURCE, update_runner_peak
 from app.services.snapback_costs import statutory_charges
+from app.services.snapback_market_data import (evaluate_execution_quote,
+                                               is_stale_decision,
+                                               spread_pct as canonical_spread_pct)
+from app.services.snapback_quote_evidence import record_quote_attempt
 from app.services.snapback_health import record_cycle
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
@@ -368,7 +372,11 @@ class SnapbackProspectiveCollector:
                     rejection_reasons.append("MISSING_OR_ZERO_BID")
 
                 if q_event.best_ask > 0 and q_event.best_bid > 0:
-                    spread_pct = (q_event.best_ask - q_event.best_bid) / q_event.best_ask * 100.0
+                    # Canonical midpoint spread — the board and the entry path must
+                    # not disagree about how wide a book is.
+                    spread_pct = canonical_spread_pct(
+                        bid=q_event.best_bid, ask=q_event.best_ask,
+                    ) or 0.0
                     if spread_pct > max_spread_pct:
                         rejection_reasons.append(f"SPREAD_EXCEEDS_CAP ({spread_pct:.2f}% > {max_spread_pct}%)")
                     if q_event.best_ask < min_premium:
@@ -435,7 +443,11 @@ class SnapbackProspectiveCollector:
                     iv=entry_iv,
                     delta=cand.theoretical_delta,
                     quote_age_ms=float(now_ms - q_event.exchange_timestamp_ms),
-                    is_stale=False,
+                    # Staleness is the quality decision's verdict, not a flag written
+                    # beside it. Crossed or thin books are refused for other reasons.
+                    is_stale=is_stale_decision(
+                        evaluate_quote_quality(q_event, cfg, now_ms=now_ms)
+                    ) if cfg else False,
                     provider_symbol=cand.provider_symbol or cand.symbol,
                     expiry=cand.expiry,
                     strike=cand.strike,
@@ -456,7 +468,9 @@ class SnapbackProspectiveCollector:
             ltp=futures_quote_event.last_price,
             basis=futures_quote_event.last_price - t1_spot_price,
             quote_age_ms=float(now_ms - futures_quote_event.exchange_timestamp_ms),
-            is_stale=False,
+            is_stale=is_stale_decision(
+                evaluate_quote_quality(futures_quote_event, cfg, now_ms=now_ms)
+            ) if cfg else False,
             provider_symbol=futures_quote_event.contract_id,
             expiry="",
             instrument_token=futures_quote_event.contract_id,
@@ -527,9 +541,80 @@ class SnapbackProspectiveCollector:
                 "reason": f"Discrete futures hedge error too high ({hedge_error_pct:.1f}%)",
             }
 
-        # 7. Execute T+1 Paper Position in ONE single SQLite transaction
-        option_fill_price = chosen_quote.best_ask * (1.0 + slippage_pct)
-        futures_fill_price = futures_quote_event.best_ask * (1.0 + slippage_pct)
+        # 7. Both legs must be executable against VISIBLE depth for the WHOLE lot.
+        # Filling a full lot at top-of-book price regardless of the quantity shown
+        # there is liquidity the market never offered.
+        from app.engines.snapback.policy import EXECUTION_POLICY
+
+        opt_exec = evaluate_execution_quote(
+            chosen_quote, cfg=cfg, side="BUY", required_quantity=option_qty,
+            slippage_bps=EXECUTION_POLICY.option_slippage_bps, now_ms=now_ms,
+        )
+        record_quote_attempt(
+            self.warehouse, opportunity_id=opportunity_id, phase="ENTRY", leg="OPTION",
+            contract_id=chosen_cand.symbol, required_for_economics=True,
+            quote_present=True, bid=chosen_quote.best_bid, ask=chosen_quote.best_ask,
+            provider_timestamp=str(chosen_quote.exchange_timestamp_ms),
+            age_ms=int(now_ms - chosen_quote.exchange_timestamp_ms),
+            accepted=opt_exec.accepted, reason_codes=list(opt_exec.reason_codes),
+            symbol=symbol, required_quantity=option_qty,
+            visible_quantity=opt_exec.visible_quantity, raw_vwap=opt_exec.raw_vwap,
+            execution_price=opt_exec.execution_price, spread_pct=opt_exec.spread_pct,
+        )
+        if not opt_exec.accepted:
+            self.warehouse.update_opportunity_status(opportunity_id, "NO_FILL_INSUFFICIENT_DEPTH")
+            self.warehouse.record_decision(
+                decision_id=f"DECISION-{opportunity_id}-DEPTH-{now_ms}",
+                opportunity_id=opportunity_id, symbol=symbol,
+                decision="NO_FILL_INSUFFICIENT_DEPTH",
+                reason=f"Option leg not executable for {option_qty}: {opt_exec.reason_codes}",
+                provider_timestamp=provider_ts,
+            )
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "NO_FILL_INSUFFICIENT_DEPTH",
+                "reason": ", ".join(opt_exec.reason_codes),
+            }
+
+        fut_exec = evaluate_execution_quote(
+            futures_quote_event, cfg=cfg, side="BUY",
+            required_quantity=max(int(actual_futures_qty), 0),
+            slippage_bps=EXECUTION_POLICY.futures_slippage_bps, now_ms=now_ms,
+        ) if actual_futures_qty > 0 else None
+        if fut_exec is not None:
+            record_quote_attempt(
+                self.warehouse, opportunity_id=opportunity_id, phase="ENTRY",
+                leg="FUTURES", contract_id=futures_symbol, required_for_economics=True,
+                quote_present=True, bid=futures_quote_event.best_bid,
+                ask=futures_quote_event.best_ask,
+                provider_timestamp=str(futures_quote_event.exchange_timestamp_ms),
+                age_ms=int(now_ms - futures_quote_event.exchange_timestamp_ms),
+                accepted=fut_exec.accepted, reason_codes=list(fut_exec.reason_codes),
+                symbol=symbol, required_quantity=int(actual_futures_qty),
+                visible_quantity=fut_exec.visible_quantity, raw_vwap=fut_exec.raw_vwap,
+                execution_price=fut_exec.execution_price, spread_pct=fut_exec.spread_pct,
+            )
+            if not fut_exec.accepted:
+                # The entry is atomic in economic intent: no naked option leg.
+                self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE_HEDGE_DEPTH")
+                self.warehouse.record_decision(
+                    decision_id=f"DECISION-{opportunity_id}-HEDGEDEPTH-{now_ms}",
+                    opportunity_id=opportunity_id, symbol=symbol,
+                    decision="INCONCLUSIVE_HEDGE_DEPTH",
+                    reason=f"Hedge leg not executable for {actual_futures_qty}: {fut_exec.reason_codes}",
+                    provider_timestamp=provider_ts,
+                )
+                return {
+                    "opportunity_id": opportunity_id,
+                    "status": "INCONCLUSIVE_HEDGE_DEPTH",
+                    "reason": ", ".join(fut_exec.reason_codes),
+                }
+
+        option_fill_price = opt_exec.execution_price
+        futures_fill_price = (
+            fut_exec.execution_price if fut_exec is not None
+            else futures_quote_event.best_ask * (1.0 + slippage_pct)
+        )
 
         opt_turnover = option_qty * option_fill_price
         fut_turnover = actual_futures_qty * futures_fill_price

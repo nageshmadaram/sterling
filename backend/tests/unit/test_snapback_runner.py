@@ -68,7 +68,7 @@ def build_mock_client():
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": "2026-09-16T09:19:59+05:30"},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -231,7 +231,7 @@ async def test_restart_resilience_at_0925(temp_warehouse, sample_config, monkeyp
     # Align quote timestamp with 09:25:00 IST (09:24:59 IST)
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": "2026-09-16T09:24:59+05:30"},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -387,7 +387,7 @@ async def test_eod_position_phase_double_execution_idempotency(temp_warehouse, s
     # Align mock quote timestamps with 15:15:00 IST (09:44:59 UTC / 15:14:59 IST)
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": "2026-09-16T15:14:59+05:30"},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -1376,7 +1376,7 @@ async def _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeyp
 def _quotes_at(ist_stamp: str, option_bid: float = 100.0, option_ask: float = 102.0):
     return {
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": ist_stamp},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,

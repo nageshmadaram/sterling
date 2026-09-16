@@ -106,7 +106,7 @@ def _quotes(stamp_ist: str, *, option_bid: float, spot=24500.0, fut_bid=24500.0,
         }
     return {
         f"NSE:NIFTY": {"last_price": spot},
-        "NSE:NIFTY 50": {"last_price": spot},
+        "NSE:NIFTY 50": {"last_price": spot, "timestamp": stamp_ist},
         f"NFO:{FUT_SYM}": fut,
         f"NFO:{OPT_SYM}": {
             "last_price": option_bid + 1.0,

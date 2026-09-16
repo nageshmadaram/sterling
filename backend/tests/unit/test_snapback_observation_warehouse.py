@@ -225,8 +225,8 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
         received_at_ms=t1_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -360,8 +360,8 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         received_at_ms=now_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -383,8 +383,8 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         received_at_ms=now_ms - 100,
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
         open_interest=60000,
     )
@@ -414,8 +414,8 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         received_at_ms=now_ms + 86400000,
         best_bid=24618.0,
         best_ask=24620.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24619.0,
     )
 
@@ -446,8 +446,8 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         received_at_ms=now_ms + 172800000,
         best_bid=24700.0,
         best_ask=24702.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24701.0,
     )
 
@@ -593,8 +593,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         received_at_ms=mon_open_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -604,8 +604,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         received_at_ms=mon_open_ms - 100,
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
         open_interest=60000,
     )
@@ -653,8 +653,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         received_at_ms=mon_late_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -664,8 +664,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         received_at_ms=mon_late_ms - 100,
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
         open_interest=60000,
     )
@@ -737,8 +737,8 @@ def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
         received_at_ms=now_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -758,8 +758,8 @@ def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
         received_at_ms=now_ms - 100,
         best_bid=100.0,
         best_ask=102.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=101.0,
         open_interest=60000,
     )
@@ -829,8 +829,8 @@ def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback
         received_at_ms=now_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -850,8 +850,8 @@ def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback
         received_at_ms=now_ms - 100,
         best_bid=100.0,
         best_ask=102.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=101.0,
         open_interest=60000,
     )
@@ -1091,8 +1091,8 @@ def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
         received_at_ms=now_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1112,8 +1112,8 @@ def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
         received_at_ms=now_ms - 100,
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
         open_interest=60000,
     )
@@ -1189,8 +1189,8 @@ def test_stale_exit_quote_cannot_close_trade(sample_config):
         received_at_ms=int(time.time() * 1000),
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
     )
     res = evaluate_quote_quality(stale_event, sample_config, now_ms=int(time.time() * 1000))
@@ -1202,8 +1202,8 @@ def test_stale_exit_quote_cannot_close_trade(sample_config):
         received_at_ms=int(time.time() * 1000),
         best_bid=0.0,
         best_ask=452.0,
-        bid_quantity=0,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
     )
     res_bad = evaluate_quote_quality(bad_bid_event, sample_config, now_ms=int(time.time() * 1000))
@@ -1242,8 +1242,8 @@ def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
         received_at_ms=early_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1263,8 +1263,8 @@ def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
         received_at_ms=early_ms - 100,
         best_bid=450.0,
         best_ask=452.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=451.0,
         open_interest=60000,
     )
@@ -1319,8 +1319,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=t1_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1340,8 +1340,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=t1_ms - 100,
         best_bid=100.0,
         best_ask=102.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=101.0,
         open_interest=60000,
     )
@@ -1372,8 +1372,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s2_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1383,8 +1383,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s2_ms - 100,
         best_bid=110.0,
         best_ask=112.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=111.0,
         open_interest=60000,
     )
@@ -1421,8 +1421,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s15_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1432,8 +1432,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s15_ms - 100,
         best_bid=160.0,
         best_ask=162.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=161.0,
         open_interest=60000,
     )
@@ -1466,8 +1466,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s16_ms - 100,
         best_bid=24510.0,
         best_ask=24512.0,
-        bid_quantity=100,
-        ask_quantity=100,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=24511.0,
         open_interest=500000,
     )
@@ -1477,8 +1477,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         received_at_ms=s16_ms - 100,
         best_bid=110.0,
         best_ask=112.0,
-        bid_quantity=50,
-        ask_quantity=50,
+        bid_quantity=100000,
+        ask_quantity=100000,
         last_price=111.0,
         open_interest=60000,
     )
@@ -1582,7 +1582,7 @@ async def test_adapter_process_prospective_pending_entries_unusual_lot_size(temp
 
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": "2026-09-16T09:19:59+05:30"},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -1691,7 +1691,7 @@ async def test_adapter_process_prospective_pending_entries_zero_lot_size_rejecte
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
-        "NSE:NIFTY 50": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0, "timestamp": "2026-09-16T09:19:59+05:30"},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,

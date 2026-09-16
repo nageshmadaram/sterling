@@ -33,9 +33,11 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
                                   TUPLE_FIELDS, descriptor, evaluate, evaluate_at,
                                   to_bars)
 from app.engines.snapback.contracts import lots_for, moneyness_label
-from app.engines.snapback.intraday_models import RawQuoteEvent
+from app.engines.snapback.intraday_models import DepthLevel, RawQuoteEvent
 from app.services.snapback_hedge_contract import HedgeContractError, select_hedge_future
 from app.services.snapback_entry_observation import record_attempt, session_continuity
+from app.services.snapback_market_data import (evaluate_underlying_context_quote,
+                                               spread_pct as canonical_spread_pct)
 from app.services.snapback_instrument_identity import IdentityError, identity_from_opportunity
 from app.engines.snapback.policy import (RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS,
                                           runner_should_exit_for_expiry)
@@ -360,7 +362,7 @@ async def _quote_for(client, contract: dict, cfg: SnapbackConfig) -> Optional[di
     ltp = number(q.get("last_price"))
     has_book = bid > 0 and ask > 0 and ask >= bid
     mid = (bid + ask) / 2.0 if has_book else ltp
-    spread_pct = ((ask - bid) / mid * 100.0) if mid > 0 and bid > 0 and ask > 0 else None
+    spread_pct = canonical_spread_pct(bid=bid, ask=ask)
     blockers: list[str] = []
     if not has_book:
         blockers.append("fresh two-sided book unavailable")
@@ -747,6 +749,19 @@ def extract_raw_quote_event(contract_id: str, quote_dict: dict) -> Optional[RawQ
     ltp = float(quote_dict.get("last_price") or 0.0)
     oi = int(quote_dict.get("oi") or 0)
 
+    # Every provider-observed level, never a ladder fabricated from the last price.
+    def _ladder(levels) -> tuple:
+        out = []
+        for level in levels or []:
+            try:
+                price = float(level.get("price") or 0.0)
+                quantity = int(level.get("quantity") or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if price > 0 and quantity > 0:
+                out.append(DepthLevel(price=price, quantity=quantity))
+        return tuple(out)
+
     now_ms = int(time.time() * 1000)
     return RawQuoteEvent(
         contract_id=contract_id,
@@ -758,6 +773,8 @@ def extract_raw_quote_event(contract_id: str, quote_dict: dict) -> Optional[RawQ
         ask_quantity=ask_qty,
         last_price=ltp,
         open_interest=oi,
+        bid_depth=_ladder(buy_list),
+        ask_depth=_ladder(sell_list),
     )
 
 
@@ -916,12 +933,42 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 spot_key = identity.cash_quote_key()
                 spot_quotes = await client.get_quote([spot_key])
                 q_spot_raw = (spot_quotes or {}).get(spot_key) or {}
-                spot_price = float(q_spot_raw.get("last_price") or 0.0)
-                if spot_price <= 0 or not math.isfinite(spot_price):
-                    log.warning("Skipping T+1 fill for %s: missing or non-finite current spot price", opp_id)
-                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+
+                # The spot that sizes the hedge is evidence, not a bare float: it must
+                # be identified, timestamped and as fresh as the option and futures
+                # quotes it will be combined with.
+                spot_event = extract_raw_quote_event(identity.cash_tradingsymbol, q_spot_raw)
+                spot_decision = (
+                    evaluate_underlying_context_quote(spot_event, now_ms=int(time.time() * 1000))
+                    if spot_event else None
+                )
+                record_quote_attempt(
+                    collector.warehouse, opportunity_id=opp_id, phase="ENTRY",
+                    leg="UNDERLYING", contract_id=identity.cash_tradingsymbol,
+                    required_for_economics=True, quote_present=bool(spot_event),
+                    bid=None, ask=None,
+                    provider_timestamp=str(getattr(spot_event, "exchange_timestamp_ms", "") or ""),
+                    age_ms=int(getattr(spot_decision, "quote_age_ms", 0) or 0),
+                    accepted=bool(spot_decision and spot_decision.accepted_for_execution),
+                    reason_codes=list(getattr(spot_decision, "reason_codes", []) or ["missing_quote"]),
+                    symbol=symbol,
+                )
+                if not spot_decision or not spot_decision.accepted_for_execution:
+                    log.warning(
+                        "Skipping T+1 fill for %s: INCONCLUSIVE_UNDERLYING_QUOTE (%s)",
+                        opp_id, getattr(spot_decision, "reason_codes", ["missing_quote"]),
+                    )
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE_UNDERLYING_QUOTE")
+                    record_attempt(
+                        collector.warehouse, opportunity_id=opp_id,
+                        session_date=str(curr_date), continuous=True,
+                        decision="INCONCLUSIVE_UNDERLYING_QUOTE",
+                        reason_codes=list(getattr(spot_decision, "reason_codes", []) or ["missing_quote"]),
+                    )
                     processed += 1
                     continue
+
+                spot_price = float(spot_event.last_price)
 
                 # Resolve option candidates from Kite instrument dump
                 option_exchange = identity.option_exchange

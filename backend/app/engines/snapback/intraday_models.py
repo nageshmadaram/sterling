@@ -58,6 +58,14 @@ class ContractRegistry:
 
 
 @dataclass(frozen=True)
+class DepthLevel:
+    """One visible price level of the order book."""
+
+    price: float
+    quantity: int
+
+
+@dataclass(frozen=True)
 class RawQuoteEvent:
     """Raw tick or quote snapshot from WebSocket or REST feed."""
 
@@ -73,6 +81,10 @@ class RawQuoteEvent:
     volume: int = 0
     payload_hash: str = ""
     envelope: ArtifactEnvelope = field(default_factory=ArtifactEnvelope)
+    # Provider-observed ladders. Appended last on purpose: existing call sites build
+    # this event positionally.
+    bid_depth: tuple = ()
+    ask_depth: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -91,6 +103,12 @@ class QualityDecision:
     contract_valid: bool
     reason_codes: List[str] = field(default_factory=list)
     envelope: ArtifactEnvelope = field(default_factory=ArtifactEnvelope)
+    # Book-quality facts, so no consumer has to recompute them from bid/ask.
+    spread_pct: Optional[float] = None
+    depth_valid: bool = False
+    visible_bid_quantity: int = 0
+    visible_ask_quantity: int = 0
+    provider_timestamp_valid: bool = False
 
 
 @dataclass(frozen=True)

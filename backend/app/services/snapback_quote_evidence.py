@@ -34,6 +34,11 @@ def record_quote_attempt(
     accepted: bool,
     reason_codes: Optional[Iterable[str]] = None,
     symbol: str = "",
+    required_quantity: int = 0,
+    visible_quantity: int = 0,
+    raw_vwap: Optional[float] = None,
+    execution_price: Optional[float] = None,
+    spread_pct: Optional[float] = None,
 ) -> None:
     """Persist one quote attempt. Never raises into the trading path."""
     try:
@@ -52,9 +57,19 @@ def record_quote_attempt(
             reason_codes=",".join(str(r) for r in (reason_codes or [])),
             provider_timestamp=provider_timestamp,
             symbol=symbol or contract_id,
+            required_quantity=required_quantity,
+            visible_quantity=visible_quantity,
+            raw_vwap=raw_vwap,
+            execution_price=execution_price,
+            spread_pct=spread_pct,
         )
     except Exception as exc:
-        # Evidence recording must never break execution; a failure is logged loudly.
+        from app.services.snapback_observation_warehouse import EvidenceIntegrityError
+
+        if isinstance(exc, EvidenceIntegrityError):
+            # Contradictory evidence is never swallowed.
+            raise
+        # Other recording failures must not break execution; logged loudly.
         log.warning("Snapback quote evidence: could not record attempt for %s: %s",
                     contract_id, exc)
 
