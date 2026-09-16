@@ -6,14 +6,30 @@ row stamped `source = SAME_DAY_SHADOW_REPLAY`, `authoritative = 0`. The clean
 `prospective_freeze_1.db` was not touched — the replay script refuses to run against
 any path containing `prospective_freeze`.
 
-Classification: **REPLAY_INCOMPLETE**
+Classification: **MECHANICS_REHEARSAL_INCOMPLETE**
 Gate adapter: `INCONCLUSIVE` (`authoritative: false`)
+
+```
+Original signal session:            2026-09-11
+Synthetic rehearsal signal session: 2026-09-15
+Reason:   signal timestamp deliberately shifted solely to exercise T+1 machinery
+Economic / prospective authority:   NONE
+```
+
+This is **not** "a September 15 signal replayed on September 16 data". The live
+scanner searches the last three closed sessions as a catch-up mechanism, which is why
+a 2026-09-11 signal appeared in today's scan. The real T+1 collector correctly rejects
+such an aged opportunity once its expected entry session has passed, marking it
+`INCONCLUSIVE` rather than filling it — which is exactly what it did before the
+rehearsal re-dated it.
 
 ---
 
 ## 1. Did the frozen scan generate signals today?
 
-Yes — one, across a 200-name universe, with zero symbol failures.
+One row surfaced across a 200-name universe, with zero symbol failures — but its
+signal bar is **2026-09-11**, surfaced by the scanner's three-session catch-up window.
+No new 2026-09-16 signal fired.
 
 The engine was genuinely running: config `enabled: true`, lookback 20,
 `min_stretch_atr` 1.5, `max_rv_pct` 70, market filter `bearish`, EMA 50, target delta
@@ -24,7 +40,7 @@ The engine was genuinely running: config `enabled: true`, lookback 20,
 | Field | Value |
 |---|---|
 | symbol | LAURUSLABS |
-| signal bar | 2026-09-11 (not today's session) |
+| signal bar | 2026-09-11 — an aged catch-up row, not a 2026-09-16 signal |
 | side | fade_up |
 | direction | BEARISH |
 | stretch ATR | 1.89 |
@@ -99,13 +115,14 @@ summary reports these as UNKNOWN, not zero.
 
 ## 9. Classification
 
-**REPLAY_INCOMPLETE.** The pipeline ran end to end and every stage either produced
+**MECHANICS_REHEARSAL_INCOMPLETE.** The pipeline ran end to end and every stage either produced
 evidence or refused with a recorded reason, but the fill, hedge, lifecycle and
 economics stages could not be exercised, because after the close there is no quote
 that can pass an honest freshness check.
 
-Not REPLAY_FAILED: nothing fabricated a price, and no stage raised.
-Not REPLAY_VALID: no fill was produced, so the downstream path is unproven here.
+Not a failure: nothing fabricated a price, and no stage raised.
+Not valid evidence of anything economic: no fill was produced, the signal itself was
+re-dated, and the whole exercise carries zero prospective authority.
 
 ---
 
@@ -144,8 +161,10 @@ which the frozen flow does not normally do. **Backlog, not P0.**
 
 Three, none of which changed a decision rule:
 
-1. **Signal re-dated** to the previous session's close, so the T+1 entry phase could
-   run inside one day.
+1. **Signal re-dated** from its true 2026-09-11 session to the previous session's
+   close, purely so the T+1 entry phase could run inside one day. The unmodified
+   collector had already rejected it as an aged opportunity, which is correct
+   behaviour; the re-dating exists only to reach the machinery behind that check.
 2. **`decisions` cleared** before the entry attempt — `scan_once()` runs the collector
    cycle itself and had already written a "missed T+1 window" decision.
 3. **Fixed clock of 09:20 IST** for the entry phase only. Prices, books and provider
