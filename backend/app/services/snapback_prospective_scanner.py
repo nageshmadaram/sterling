@@ -139,7 +139,7 @@ async def finalize_session_signals(
     started = datetime.now(timezone.utc).isoformat()
 
     if warehouse is None:
-        from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+        from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
 
         warehouse = SnapbackObservationWarehouse()
 

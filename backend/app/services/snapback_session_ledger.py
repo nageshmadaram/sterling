@@ -73,7 +73,7 @@ def record_session_scan(
                     scanner_status = excluded.scanner_status,
                     market_gate_status = excluded.market_gate_status,
                     signals_authoritative = excluded.signals_authoritative,
-                    evidence_gap_codes_json = excluded.evidence_gap_codes_json,
+                    -- Gap codes accumulate; a rescan cannot erase an earlier gap.
                     observed_at = excluded.observed_at
                 """,
                 (
@@ -101,6 +101,43 @@ def update_session_phase(warehouse, session_date: str, **phases: str) -> None:
             conn.execute(
                 f"UPDATE prospective_sessions SET {clause} WHERE session_date = ?",
                 (*sets.values(), session_date),
+            )
+    finally:
+        conn.close()
+
+
+def append_session_evidence_gap(warehouse, session_date: str, code: str) -> None:
+    """Add one gap code, preserving the others.
+
+    A scanner rerun must never erase an entry or end-of-day gap recorded earlier in
+    the day: the session is only as good as its worst phase.
+    """
+    conn = warehouse._get_connection()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT evidence_gap_codes_json FROM prospective_sessions "
+                "WHERE session_date = ?",
+                (session_date,),
+            ).fetchone()
+            existing: List[str] = []
+            if row:
+                try:
+                    existing = list(json.loads(row["evidence_gap_codes_json"] or "[]"))
+                except Exception:
+                    existing = []
+            if code in existing:
+                return
+            existing.append(code)
+            conn.execute(
+                """
+                INSERT INTO prospective_sessions (session_date, evidence_gap_codes_json,
+                    scanner_status)
+                VALUES (?, ?, 'PENDING')
+                ON CONFLICT(session_date) DO UPDATE SET
+                    evidence_gap_codes_json = excluded.evidence_gap_codes_json
+                """,
+                (session_date, json.dumps(existing)),
             )
     finally:
         conn.close()
@@ -149,18 +186,32 @@ def session_scan_complete(row: Dict[str, Any]) -> bool:
     return True
 
 
-def session_evidence_complete(row: Dict[str, Any]) -> bool:
+def session_market_evidence_complete(row: Dict[str, Any]) -> bool:
     """Is this session admissible as economic evidence?
 
-    Every phase must have finished and no gap may be recorded. A session whose
-    end-of-day mark is missing is not a held-out session, however well it scanned.
+    The scanner, the entry phase and the end-of-day phase must all have finished with
+    no recorded gap. Packaging is deliberately NOT required: the report needs the
+    session count, so requiring the package here would deadlock the gate behind its
+    own output.
     """
     if not session_scan_complete(row):
         return False
-    for phase in ("entry_phase_status", "eod_phase_status", "package_status"):
+    for phase in ("entry_phase_status", "eod_phase_status"):
         if str(row.get(phase) or "") != SessionStatus.COMPLETE:
             return False
     return not evidence_gap_codes(row)
+
+
+def session_package_complete(row: Dict[str, Any]) -> bool:
+    """Did the post-market package finish on top of complete market evidence?"""
+    return (
+        session_market_evidence_complete(row)
+        and str(row.get("package_status") or "") == SessionStatus.COMPLETE
+    )
+
+
+# Kept for callers that predate the split; market evidence is the economic meaning.
+session_evidence_complete = session_market_evidence_complete
 
 
 def session_is_complete(warehouse, session_date: str) -> bool:
@@ -179,7 +230,7 @@ def observed_session_count(warehouse) -> int:
     except Exception as exc:
         log.warning("Snapback session ledger: unreadable (%s); counting zero", exc)
         return 0
-    return sum(1 for r in rows if session_evidence_complete(dict(r)))
+    return sum(1 for r in rows if session_market_evidence_complete(dict(r)))
 
 
 def incomplete_sessions(warehouse) -> List[str]:
@@ -190,5 +241,5 @@ def incomplete_sessions(warehouse) -> List[str]:
     return [
         str(dict(r)["session_date"])
         for r in rows
-        if not session_evidence_complete(dict(r))
+        if not session_market_evidence_complete(dict(r))
     ]

@@ -137,7 +137,8 @@ def test_stop_switch_blocks_entries_but_not_exits(tmp_path, monkeypatch):
     # Entries are gated; the risk monitor and EOD phases are not.
     assert "entries_halted" in source
     assert "process_prospective_intraday_risk" in source
-    assert "process_prospective_daily_mtm_and_exits" in source
+    # The end-of-day phase is now the durable finalizer, not the fetching wrapper.
+    assert "finalize_eod_session" in source
 
     fam.set_new_trades_halted(False, reason="drill end")
     assert fam.new_trades_halted() is False

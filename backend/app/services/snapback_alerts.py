@@ -49,6 +49,8 @@ def derive_operational_alerts(
     report_ok: bool = True,
     exit_pending_stale: bool = False,
     processing_entry_stale: bool = False,
+    session_evidence_incomplete: bool = False,
+    session_evidence_gaps: Optional[List[str]] = None,
     daily_loss_breached: bool = False,
     drawdown_breached: bool = False,
     reconciliation_mismatch: bool = False,
@@ -171,6 +173,16 @@ def derive_operational_alerts(
             CRITICAL,
             "Evidence report failed",
             "The daily Snapback prospective evidence report could not be generated. Do not treat today's evidence package as complete.",
+        )
+
+    if session_evidence_incomplete:
+        gaps = ", ".join(session_evidence_gaps or []) or "phase status incomplete"
+        add(
+            "session_evidence_incomplete",
+            CRITICAL,
+            "Session evidence incomplete",
+            f"The trading session cannot be packaged because its market evidence is "
+            f"incomplete: {gaps}. This is not a quiet market; something did not observe.",
         )
 
     if daily_loss_breached:

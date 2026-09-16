@@ -782,11 +782,48 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
     })
     monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", AsyncMock(return_value=mock_client_1529))
 
+    # 15:29 OBSERVES the close; it does not transition state.
     res_1529 = await tick(uid="default")
     assert res_1529["status"] == "ok"
-    assert res_1529["mtm_processed"] == 1
+    assert temp_warehouse.get_records_by_table("daily_mtm") == []
 
-    # Exactly 1 daily MTM record created with closing-window option bid = 125.0
+    # After the close the finalizer runs from the PERSISTED observation. The quote
+    # available now is deliberately different: a post-close price must never become
+    # the close mark.
+    dt_1530 = datetime(2026, 9, 16, 10, 0, 30, tzinfo=timezone.utc)
+
+    class FixedDateTime1530(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt_1530.astimezone(tz) if tz is not None else dt_1530
+
+    monkeypatch.setattr("time.time", lambda: dt_1530.timestamp())
+    monkeypatch.setattr("app.services.snapback_runner.datetime", FixedDateTime1530)
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime1530)
+
+    mock_client_post = AsyncMock()
+    mock_client_post.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NSE:NIFTY 50": {"last_price": 24500.0, "timestamp": "2026-09-16T15:30:25+05:30"},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24999.0, "buy_price": 24999.0, "sell_price": 25000.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24999.0, "quantity": 100}], "sell": [{"price": 25000.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:30:25+05:30", "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 999.0, "buy_price": 999.0, "sell_price": 1000.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 999.0, "quantity": 100}], "sell": [{"price": 1000.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:30:25+05:30", "oi": 50000,
+        },
+    })
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", AsyncMock(return_value=mock_client_post))
+
+    res_1530 = await tick(uid="default")
+    assert res_1530["status"] == "ok"
+
+    # Exactly 1 daily MTM record, priced from the 15:29 observation, not 999.
     mtms_1528 = temp_warehouse.get_records_by_table("daily_mtm")
     assert len(mtms_1528) == 1
     assert float(mtms_1528[0]["option_liquidation_bid"]) == 125.0

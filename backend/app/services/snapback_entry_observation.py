@@ -221,3 +221,58 @@ def record_attempt(
         decision=decision,
         reason_codes=list(reason_codes or []),
     )
+
+
+def finalize_entry_phase(
+    warehouse, *, session_date, now_ist: Optional[datetime] = None,
+) -> str:
+    """Give the entry phase a durable verdict once its window has closed.
+
+    COMPLETE requires that observation ran from the open without a gap and that every
+    T+1 opportunity for the session reached a decision. A pending opportunity is not
+    a quiet outcome; it is an unresolved one.
+    """
+    from app.services.snapback_session_ledger import (
+        SessionStatus, append_session_evidence_gap, session_record, update_session_phase,
+    )
+
+    now_ist = now_ist or datetime.now(_IST)
+    session_key = session_date.isoformat() if hasattr(session_date, "isoformat") else str(session_date)
+
+    row = session_record(warehouse, session_key) or {}
+    if str(row.get("entry_phase_status") or "PENDING") == SessionStatus.COMPLETE:
+        return SessionStatus.COMPLETE
+
+    session_open = datetime.combine(
+        session_date if hasattr(session_date, "year") else now_ist.date(),
+        datetime.min.time(),
+    ).replace(hour=9, minute=15, tzinfo=_IST)
+
+    verdict = continuity_verdict(
+        session_open=session_open,
+        monitor_started_at=row.get("entry_monitor_started_at"),
+        last_heartbeat_at=row.get("entry_last_heartbeat_at"),
+        max_gap_ms=int(row.get("entry_max_gap_ms") or 0),
+        now=now_ist,
+    )
+
+    unresolved = []
+    try:
+        for opp in warehouse.get_pending_opportunities() or []:
+            unresolved.append(str(dict(opp).get("opportunity_id")))
+    except Exception as exc:
+        unresolved.append(f"pending_unreadable:{exc}")
+
+    status = SessionStatus.COMPLETE
+    if not verdict.continuous:
+        status = SessionStatus.FAILED
+        for reason in verdict.reasons:
+            append_session_evidence_gap(warehouse, session_key, reason)
+    if unresolved:
+        status = SessionStatus.FAILED
+        append_session_evidence_gap(
+            warehouse, session_key, f"unresolved_entry_opportunities:{len(unresolved)}",
+        )
+
+    update_session_phase(warehouse, session_key, entry_phase_status=status)
+    return status

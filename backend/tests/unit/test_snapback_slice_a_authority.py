@@ -44,13 +44,20 @@ def test_scan_completeness_only_covers_the_scanner():
     assert session_scan_complete(row) is True
 
 
-def test_evidence_completeness_requires_every_phase():
-    from app.services.snapback_session_ledger import session_evidence_complete
+def test_evidence_completeness_requires_every_trading_phase():
+    """Packaging is excluded on purpose: requiring it here would deadlock the gate
+    behind its own report. See session_package_complete for the packaging question."""
+    from app.services.snapback_session_ledger import (
+        session_market_evidence_complete, session_package_complete,
+    )
 
-    assert session_evidence_complete(_row()) is True
+    assert session_market_evidence_complete(_row()) is True
 
-    for field in ("entry_phase_status", "eod_phase_status", "package_status"):
-        assert session_evidence_complete(_row(**{field: "PENDING"})) is False
+    for field in ("entry_phase_status", "eod_phase_status"):
+        assert session_market_evidence_complete(_row(**{field: "PENDING"})) is False
+
+    assert session_market_evidence_complete(_row(package_status="PENDING")) is True
+    assert session_package_complete(_row(package_status="PENDING")) is False
 
 
 def test_an_evidence_gap_disqualifies_the_session():

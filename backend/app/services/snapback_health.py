@@ -86,6 +86,7 @@ def build_prospective_health(
     market_open: bool = True,
     alert_transport_configured: bool = False,
     stale_state: Optional[Dict[str, Any]] = None,
+    family_account: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Build the health object from observed component truth. Unknown is never green."""
@@ -174,6 +175,7 @@ def build_prospective_health(
         "open_positions": open_positions,
         "exit_pending": exit_pending,
         "alert_transport_configured": bool(alert_transport_configured),
+        **dict(family_account or {}),
         "stop_monitor_gap": bool(stale_state.get("stop_monitor_gap", False)),
         "stop_monitor_gap_positions": stale_state.get("stop_monitor_gap_positions", []),
         "exit_pending_stale": bool(stale_state.get("exit_pending_stale", False)),
@@ -249,14 +251,37 @@ def _probe_alert_transport(uid: str = "default") -> bool:
         return False
 
 
-def _probe_broker(uid: str = "default") -> bool:
+def _probe_family_account(uid: str = "default") -> Dict[str, Any]:
     try:
+        from app.services.snapback_family_account import family_account_health
+
+        return family_account_health(uid)
+    except Exception as exc:
+        log.warning("Snapback health: family account probe failed: %s", exc)
+        return {"family_account_configured": False, "family_account_identity_ok": False}
+
+
+def _probe_broker(uid: str = "default") -> bool:
+    """Is the BOUND account's broker session alive?
+
+    In Family Mode there is exactly one account. A different connected account is not
+    a substitute, so this never searches for one.
+    """
+    try:
+        from app.services.snapback_family_account import (
+            FamilyAccountBindingError, binding_configured, resolve_family_account,
+        )
+
+        if binding_configured():
+            try:
+                return bool(getattr(resolve_family_account(), "connected", False))
+            except FamilyAccountBindingError as exc:
+                log.warning("Snapback health: family account unavailable: %s", exc)
+                return False
+
         from app.services.exchanges.kite import accounts
 
         acct = accounts.get_active(uid)
-        if not acct:
-            all_accts = accounts.all_accounts()
-            acct = all_accts[0] if all_accts else None
         return bool(acct and acct.connected)
     except Exception as exc:
         log.warning("Snapback health: broker probe failed: %s", exc)
@@ -353,6 +378,7 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         unresolved_errors=standing_errors,
         market_open=market_open,
         alert_transport_configured=_probe_alert_transport(),
+        family_account=_probe_family_account(uid),
         stale_state=_probe_stale_state(warehouse),
         now=now,
     )

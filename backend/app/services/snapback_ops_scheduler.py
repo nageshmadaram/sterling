@@ -69,6 +69,8 @@ class SnapbackOpsScheduler:
         health_fn: Optional[Callable[[], dict]] = None,
         dispatcher: Any = None,
         is_trading_day_fn: Optional[Callable[[date], bool]] = None,
+        session_evidence_complete_fn: Optional[Callable[[date], bool]] = None,
+        finalize_session_fn: Optional[Callable[[date], bool]] = None,
     ) -> None:
         from app.services import snapback_backup
         from app.services.snapback_alerts import AlertDispatcher, LoggingAlertSink
@@ -113,6 +115,10 @@ class SnapbackOpsScheduler:
             sink=CompositeAlertSink(LoggingAlertSink(), TelegramAlertSink())
         )
         self.is_trading_day_fn = is_trading_day_fn or self._default_trading_day_fn
+        self.session_evidence_complete_fn = (
+            session_evidence_complete_fn or self._default_session_evidence_complete
+        )
+        self.finalize_session_fn = finalize_session_fn or self._default_finalize_session
 
         self._last_backup_ok = True
 
@@ -129,6 +135,32 @@ class SnapbackOpsScheduler:
         from app.services.snapback_health import get_prospective_health
 
         return get_prospective_health()
+
+    @staticmethod
+    def _default_session_evidence_complete(session_date: date) -> bool:
+        from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+        from app.services.snapback_session_ledger import (
+            session_market_evidence_complete, session_record,
+        )
+
+        warehouse = SnapbackObservationWarehouse()
+        return session_market_evidence_complete(
+            session_record(warehouse, session_date.isoformat()) or {}
+        )
+
+    @staticmethod
+    def _default_finalize_session(session_date: date) -> bool:
+        """One deterministic finalisation attempt from persisted evidence."""
+        from app.services.snapback import get_config
+        from app.services.snapback_eod import finalize_eod_session
+        from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+
+        warehouse = SnapbackObservationWarehouse()
+        result = finalize_eod_session(
+            cfg=get_config("default"), warehouse=warehouse, session_date=session_date,
+            finalized_at=datetime.now(_IST),
+        )
+        return result.status == "COMPLETE"
 
     @staticmethod
     def _default_trading_day_fn(d: date) -> bool:
@@ -156,8 +188,13 @@ class SnapbackOpsScheduler:
         payload = {
             "last_completed_session": session_date,
             "completed_at": now_ist.isoformat(),
+            "scanner_complete": True,
+            "entry_phase_complete": True,
+            "eod_complete": True,
             "backup_verified": True,
             "report_generated": True,
+            "promotion_evaluated": True,
+            "package_complete": True,
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
@@ -216,10 +253,43 @@ class SnapbackOpsScheduler:
         if now_ist.timetz().replace(tzinfo=None) < POST_MARKET_START:
             return OpsCycleResult(status="NOT_DUE", session_date=session_key)
 
-        if self._read_state().get("last_completed_session") == session_key:
+        state = self._read_state()
+        # A legacy state file cannot prove the phases this cycle now requires.
+        if (
+            state.get("last_completed_session") == session_key
+            and state.get("package_complete") is True
+        ):
             return OpsCycleResult(status="ALREADY_COMPLETE", session_date=session_key)
 
         result = OpsCycleResult(status="RUNNING", session_date=session_key)
+
+        # 0. A session is only packaged once its MARKET evidence is complete. Backing
+        # up and reporting a session whose close mark never happened produces a
+        # complete-looking package around a hole.
+        evidence_ok = False
+        try:
+            evidence_ok = bool(self.session_evidence_complete_fn(session_date))
+            if not evidence_ok:
+                # One deterministic attempt from already-persisted observations.
+                evidence_ok = bool(self.finalize_session_fn(session_date))
+        except Exception as exc:
+            log.exception("Snapback ops: session evidence check failed: %s", exc)
+            result.errors.append(f"session_evidence_check_failed:{exc}")
+
+        if not evidence_ok:
+            result.errors.append("session_market_evidence_incomplete")
+            try:
+                health = self.health_fn()
+            except Exception as exc:
+                health = {"status": "HALTED", "healthy": False,
+                          "unresolved_errors": ["health_probe_failed"]}
+                result.errors.append(f"health_probe_failed:{exc}")
+            self._dispatch(
+                health, result, now_ist, backup_ok=self._last_backup_ok, report_ok=True,
+                session_evidence_incomplete=True,
+            )
+            result.status = "PARTIAL_FAILURE"
+            return result
 
         # 1. Backup + 2. checksum verification
         backup_ok = False
@@ -270,6 +340,16 @@ class SnapbackOpsScheduler:
         if backup_ok and report_ok:
             try:
                 self._write_state(session_key, now_ist)
+                try:
+                    from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+                    from app.services.snapback_session_ledger import SessionStatus, update_session_phase
+
+                    update_session_phase(
+                        SnapbackObservationWarehouse(), session_key,
+                        package_status=SessionStatus.COMPLETE,
+                    )
+                except Exception as exc:
+                    log.warning("Snapback ops: could not mark package complete: %s", exc)
                 result.status = "COMPLETE"
             except Exception as exc:
                 log.exception("Snapback ops: could not persist session state: %s", exc)
@@ -290,7 +370,7 @@ class SnapbackOpsScheduler:
                 "processing_entry_stale": health.get("processing_entry_stale"),
             }
         try:
-            from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+            from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
             from app.services.snapback_stale import stale_lifecycle_state
 
             return stale_lifecycle_state(SnapbackObservationWarehouse())
@@ -306,6 +386,7 @@ class SnapbackOpsScheduler:
         *,
         backup_ok: bool,
         report_ok: bool,
+        session_evidence_incomplete: bool = False,
     ) -> None:
         from app.services.snapback_alerts import derive_operational_alerts
 
@@ -319,6 +400,8 @@ class SnapbackOpsScheduler:
                 report_ok=report_ok,
                 exit_pending_stale=bool(stale.get("exit_pending_stale")),
                 processing_entry_stale=bool(stale.get("processing_entry_stale")),
+                session_evidence_incomplete=session_evidence_incomplete,
+                session_evidence_gaps=list(result.errors),
             )
             dispatched = self.dispatcher.dispatch(alerts, now=now_ist)
             result.alert_sent = int(getattr(dispatched, "sent", 0) or 0)

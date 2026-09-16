@@ -15,8 +15,12 @@ from typing import Any, Dict, Optional
 
 from app.core.logging import get_logger
 from app.services.snapback_family_ops import new_trades_halted
+from app.engines.snapback.policy import EXECUTION_POLICY
 from app.services.snapback_health import record_cycle
 from app.services.snapback_prospective_scanner import SCAN_AFTER_CLOSE, finalize_session_signals
+
+EOD_OBSERVE_START = time.fromisoformat(EXECUTION_POLICY.eod_observation_start)
+EOD_OBSERVE_END = time.fromisoformat(EXECUTION_POLICY.eod_observation_end)
 from app.services.snapback import (
     _IST,
     get_config,
@@ -75,10 +79,21 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         client = None
         try:
             from app.services.exchanges.kite import accounts
-            acct = accounts.get_active(uid)
-            if not acct:
-                all_accts = accounts.all_accounts()
-                acct = all_accts[0] if all_accts else None
+            from app.services.snapback_family_account import (
+                FamilyAccountBindingError, binding_configured, resolve_family_account,
+            )
+
+            if binding_configured():
+                # Exactly one bound account. A different connected account is not a
+                # substitute for the family account being logged out.
+                try:
+                    acct = resolve_family_account()
+                except FamilyAccountBindingError as bind_exc:
+                    log.error("Snapback runner: family account unavailable: %s", bind_exc)
+                    acct = None
+            else:
+                acct = accounts.get_active(uid)
+
             if acct and acct.connected:
                 client = await accounts.acquire_client(acct)
         except Exception as client_exc:
@@ -114,7 +129,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             from app.services.snapback_entry_observation import (
                 heartbeat_entry_monitor, start_entry_monitor,
             )
-            from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+            from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
 
             if OPENING_WINDOW_START <= curr_time <= MARKET_WINDOW_END:
                 obs_warehouse = SnapbackObservationWarehouse()
@@ -135,10 +150,60 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             risk_processed = await process_prospective_intraday_risk(client, cfg)
             record_cycle("intraday_risk_cycle")
 
-        # 5. Phase C: EOD Closing Window Phase (15:25 - 15:30 IST / EOD)
-        if EOD_WINDOW_START <= curr_time <= EOD_WINDOW_END:
-            mtm_processed = await process_prospective_daily_mtm_and_exits(client, cfg)
-            record_cycle("eod_cycle")
+        # 5. Phase C1: OBSERVE the close (15:29-15:30 IST). Fetch and persist only;
+        # no state transition happens inside the window.
+        if EOD_OBSERVE_START <= curr_time <= EOD_OBSERVE_END:
+            try:
+                from app.services.snapback_eod import collect_eod_observations
+                from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+
+                obs = await collect_eod_observations(
+                    client=client, cfg=cfg, warehouse=SnapbackObservationWarehouse(),
+                    session_date=today, now_ist=now_ist,
+                )
+                log.info(
+                    "Snapback EOD observation %s: %s accepted, %s rejected",
+                    today, obs.observed, obs.rejected,
+                )
+            except Exception as obs_exc:
+                log.exception("Snapback EOD observation failed: %s", obs_exc)
+
+        # 5b. Phase C2: FINALIZE after the close, from persisted evidence only. A
+        # restart at 15:31 finalises from what was observed, or records a gap — it
+        # never fetches a post-close quote and calls it the close.
+        if curr_time >= EOD_OBSERVE_END:
+            try:
+                from app.services.snapback_eod import finalize_eod_session
+                from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+                from app.services.snapback_session_ledger import session_record
+
+                warehouse = SnapbackObservationWarehouse()
+                row = session_record(warehouse, str(today)) or {}
+                if str(row.get("eod_phase_status") or "PENDING") != "COMPLETE":
+                    final = finalize_eod_session(
+                        cfg=cfg, warehouse=warehouse, session_date=today,
+                        finalized_at=now_ist,
+                    )
+                    mtm_processed = final.positions_finalized
+                    record_cycle("eod_cycle")
+                    log.info(
+                        "Snapback EOD finalisation %s: %s (%s positions, gaps=%s)",
+                        today, final.status, final.positions_finalized, final.gap_codes,
+                    )
+            except Exception as fin_exc:
+                log.exception("Snapback EOD finalisation failed: %s", fin_exc)
+
+        # 5c. Entry phase reaches a durable verdict once its window has closed.
+        if curr_time > OPENING_WINDOW_END:
+            try:
+                from app.services.snapback_entry_observation import finalize_entry_phase
+                from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+
+                finalize_entry_phase(
+                    SnapbackObservationWarehouse(), session_date=today, now_ist=now_ist,
+                )
+            except Exception as entry_exc:
+                log.warning("Snapback entry phase finalisation failed: %s", entry_exc)
 
         # 6. Phase D: unattended Day-T signal finalisation, after the official close.
         # A signal must exist because the session closed, not because a browser was
@@ -146,7 +211,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         session_scanned = False
         if curr_time >= SCAN_AFTER_CLOSE:
             try:
-                from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+                from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
                 from app.services.snapback_session_ledger import session_scan_complete, session_record
 
                 warehouse = SnapbackObservationWarehouse()

@@ -128,6 +128,31 @@ def run_startup_preflight(
     except Exception as exc:
         errors.append(f"manifest_probe_failed:{exc}")
 
+    # 3b. Family Mode binds one exact account. Without it, account selection would
+    # fall back to whatever is connected, which is somebody else's money.
+    try:
+        from app.services.snapback_family_mode import family_mode_enabled
+
+        if family_mode_enabled():
+            from app.services.snapback_family_account import (
+                FamilyAccountBindingError, configured_binding, resolve_family_account,
+            )
+
+            try:
+                configured_binding()
+            except FamilyAccountBindingError as exc:
+                errors.append("family_account_binding_missing")
+                details["family_account"] = str(exc)
+            else:
+                try:
+                    resolve_family_account()
+                except FamilyAccountBindingError as exc:
+                    # An expired token is operational, not an identity failure.
+                    errors.append("family_account_binding_invalid")
+                    details["family_account"] = str(exc)
+    except Exception as exc:
+        errors.append(f"family_account_probe_failed:{exc}")
+
     # 4. Config store reachable — an unreachable store silently disables the engine.
     store_ok = False
     try:

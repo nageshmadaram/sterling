@@ -49,6 +49,10 @@ class SnapbackExecutionPolicy:
     require_full_visible_depth: bool = True
     # The spot that sizes a hedge must be as fresh as the quotes it is combined with.
     underlying_context_max_age_ms: int = 2_000
+    # The close mark must be OBSERVED inside this window, by provider time. The
+    # finalizer then runs after it, from what was persisted.
+    eod_observation_start: str = "15:29:00"
+    eod_observation_end: str = "15:30:00"
     runner_peak_source: str = RUNNER_PEAK_SOURCE
 
     def as_dict(self) -> dict:
