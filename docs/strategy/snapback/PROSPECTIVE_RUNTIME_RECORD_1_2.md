@@ -24,7 +24,7 @@ premium stop, 1.5x runner, 25% give-back, index-futures hedge.
 
 ```
 runtime tag        snapback-prospective-runtime-1.2   at 572972ac679610d5474f9a0e1a170b8ee6b7e65a
-running build      266fd02181732f73489a0a1d7a7394453062ea0c   (one post-tag fix, below)
+running build      dd25969ba13dbeda446ea33c823266195c9ec2d9   (post-tag fix + this record)
 experiment id      prospective_runtime_1_2
 evidence database  data/snapback/prospective_runtime_1_2.db   (fresh, empty of observations)
 evidence schema    user_version = 1
@@ -114,9 +114,10 @@ Live service after restart onto this build:
 
 ```
 /api/v1/health/live                     200  alive
-/api/v1/health/ready                    all twelve checks pass
-/api/v1/snapback/prospective/health     HEALTHY, build 572972ac6…, no unresolved errors
-listener                                127.0.0.1:8000
+/api/v1/health/ready                    200  ready: true, failed_checks: []
+/api/v1/snapback/prospective/health     HEALTHY, build dd25969ba…, no unresolved errors
+listener                                127.0.0.1:8000        (not 0.0.0.0)
+alert outbox                            pending 0, dead 0
 ```
 
 Graceful shutdown was observed, not assumed: the earlier restart logged
