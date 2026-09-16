@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.auth import UserContext, get_current_user
 
@@ -19,6 +19,32 @@ from app.services.snapback_health import get_prospective_health
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["snapback-ops"])
+
+
+@router.get("/health/live")
+async def health_live() -> dict:
+    """Liveness only: this process is answering. Deliberately does no I/O.
+
+    A liveness probe that touches the database restarts the process when the
+    database is slow, which is the worst possible moment to lose in-memory state.
+    """
+    return {"alive": True, "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/health/ready")
+async def health_ready(response: Response) -> dict:
+    """Readiness: may this process produce evidence right now.
+
+    Not ready is a normal state, not an error, so it answers 503 rather than
+    raising: the supervisor must back off, not restart.
+    """
+    from app.services.snapback_preflight import run_preflight
+
+    result = run_preflight()
+    if not result.passed:
+        response.status_code = 503
+    return {"ready": result.passed, **result.as_dict()}
+
 
 
 def _reconciliation_view() -> dict:

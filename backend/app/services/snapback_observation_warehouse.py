@@ -93,6 +93,11 @@ def _require_outcome_fields(outcome_data: Dict[str, Any]) -> Dict[str, float]:
     return numeric
 
 
+# Bumped whenever a stored column changes meaning. A file written under an older
+# version is not silently reinterpreted under the current one.
+EVIDENCE_SCHEMA_VERSION = 1
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -648,6 +653,28 @@ class SnapbackObservationWarehouse:
                     "CREATE UNIQUE INDEX IF NOT EXISTS ix_alert_outbox_dedupe "
                     "ON operational_alert_outbox(dedupe_key)"
                 )
+
+                # 19. evidence_meta — the identity of the experiment this file holds.
+                # A database is not self-describing: without this row, a file that
+                # was written by a different build, config or capital allocation is
+                # indistinguishable from one that was not.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS evidence_meta (
+                        meta_id                     INTEGER PRIMARY KEY CHECK (meta_id = 1),
+                        experiment_id               TEXT NOT NULL,
+                        schema_version              INTEGER NOT NULL,
+                        runtime_build_sha           TEXT NOT NULL,
+                        strategy_config_hash        TEXT NOT NULL,
+                        strategy_rule_hash          TEXT NOT NULL,
+                        execution_policy_hash       TEXT NOT NULL,
+                        execution_cost_schedule_hash TEXT NOT NULL,
+                        calendar_version            TEXT NOT NULL,
+                        allocation_capital_inr      REAL NOT NULL,
+                        created_at                  TEXT NOT NULL,
+                        updated_at                  TEXT NOT NULL
+                    )
+                """)
+                conn.execute(f"PRAGMA user_version = {EVIDENCE_SCHEMA_VERSION}")
 
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
@@ -2072,6 +2099,90 @@ class SnapbackObservationWarehouse:
                 )
         finally:
             conn.close()
+
+    # ------------------------------------------------------------ evidence meta
+
+    def schema_version(self) -> int:
+        conn = self._get_connection()
+        try:
+            return int(conn.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            conn.close()
+
+    def write_evidence_meta(
+        self,
+        *,
+        experiment_id: str,
+        schema_version: int,
+        runtime_build_sha: str,
+        strategy_config_hash: str,
+        strategy_rule_hash: str,
+        execution_policy_hash: str,
+        execution_cost_schedule_hash: str,
+        calendar_version: str,
+        allocation_capital_inr: float,
+    ) -> Dict[str, Any]:
+        """Stamp this file's identity. Contradicting an existing stamp is an error:
+        the same file cannot belong to two experiments."""
+        existing = self.read_evidence_meta()
+        incoming = {
+            "experiment_id": experiment_id,
+            "schema_version": int(schema_version),
+            "runtime_build_sha": runtime_build_sha,
+            "strategy_config_hash": strategy_config_hash,
+            "strategy_rule_hash": strategy_rule_hash,
+            "execution_policy_hash": execution_policy_hash,
+            "execution_cost_schedule_hash": execution_cost_schedule_hash,
+            "calendar_version": calendar_version,
+            "allocation_capital_inr": float(allocation_capital_inr),
+        }
+        if existing is not None:
+            conflicts = [
+                key for key, value in incoming.items()
+                if key != "runtime_build_sha" and existing.get(key) != value
+            ]
+            if conflicts:
+                raise EvidenceIntegrityError(
+                    f"evidence_meta conflict on {sorted(conflicts)}: this database "
+                    f"already belongs to experiment {existing.get('experiment_id')!r}"
+                )
+
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO evidence_meta (
+                        meta_id, experiment_id, schema_version, runtime_build_sha,
+                        strategy_config_hash, strategy_rule_hash, execution_policy_hash,
+                        execution_cost_schedule_hash, calendar_version,
+                        allocation_capital_inr, created_at, updated_at
+                    ) VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(meta_id) DO UPDATE SET
+                        runtime_build_sha = excluded.runtime_build_sha,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        experiment_id, int(schema_version), runtime_build_sha,
+                        strategy_config_hash, strategy_rule_hash, execution_policy_hash,
+                        execution_cost_schedule_hash, calendar_version,
+                        float(allocation_capital_inr), now, now,
+                    ),
+                )
+        finally:
+            conn.close()
+        return self.read_evidence_meta() or {}
+
+    def read_evidence_meta(self) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        try:
+            row = conn.execute("SELECT * FROM evidence_meta WHERE meta_id = 1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            conn.close()
+        return dict(row) if row is not None else None
 
     def get_records_by_table(self, table_name: str, opportunity_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Query stored rows from any of the 11 warehouse tables."""
