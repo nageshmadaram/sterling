@@ -54,7 +54,7 @@ def _admission(*, mode: str, account_id: str) -> Dict[str, Any]:
     reconciliation = latest_reconciliation(account_id) or {}
 
     decision = evaluate_live_gate(
-        intent="ENTRY",
+        intent="ENTER",
         evidence_verdict=str(verdict.get("verdict") or "INCONCLUSIVE"),
         live_eligible=bool(verdict.get("live_eligible")),
         risk_approved=True,
