@@ -89,7 +89,8 @@ class SnapbackEvidenceStore:
 
     KINDS = (
         "opportunities", "candidate_universes", "selections",
-        "hedge_selections", "broker_events", "lifecycle",
+        "hedge_selections", "broker_events", "lifecycle", "market_events",
+        "protection",
     )
 
     def __init__(self, root: Path | str, *, session_date: Optional[date] = None,
@@ -162,6 +163,14 @@ class SnapbackEvidenceStore:
 
     def append_lifecycle_event(self, event: Any) -> Optional[Path]:
         return self._write("lifecycle", _as_row(event))
+
+    def append_market_event(self, row: Any) -> Optional[Path]:
+        """One market evidence row. Accepts a plain dict, since tick rows are
+        built by kitelake and are already flat."""
+        return self._write("market_events", row if isinstance(row, dict) else _as_row(row))
+
+    def append_protection_event(self, event: Any) -> Optional[Path]:
+        return self._write("protection", _as_row(event))
 
     # ─── reading back ────────────────────────────────────────────────────────
 
