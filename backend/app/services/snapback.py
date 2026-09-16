@@ -724,8 +724,9 @@ def extract_raw_quote_event(contract_id: str, quote_dict: dict) -> Optional[RawQ
     )
 
 
-async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfig) -> None:
-    """Process pending T+1 entries, daily open position MTM/rebalances, and exit lifecycle for prospective warehouse."""
+async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> int:
+    """Phase A: Process pending T+1 entries during opening window (09:15-09:45 IST) or on tick."""
+    processed = 0
     try:
         from app.services.snapback_prospective_collector import SnapbackProspectiveCollector, OptionCandidateInfo
         from app.services.navigator.calendar import next_trading_day
@@ -733,287 +734,333 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
         from app.services.kite_engine.strikes import chain_rows_for, filter_chain_by_expiry_types, _expiry_date_set
         collector = SnapbackProspectiveCollector()
 
-        # 1. Process Pending T+1 Entries (only when genuine chain and exchange quotes are fetched)
         pending = collector.warehouse.get_pending_opportunities()
-        if pending and client:
-            chain_cache: dict[str, list] = {}
-            for opp in pending:
-                opp_id = opp["opportunity_id"]
-                symbol = opp["symbol"]
-                sig_ts_str = opp.get("signal_timestamp") or opp.get("provider_timestamp") or ""
-                if not sig_ts_str:
-                    continue
+        if not pending or not client:
+            return 0
 
-                try:
-                    sig_date = datetime.fromisoformat(sig_ts_str.replace("Z", "+00:00")).date()
-                    expected_t1_date = next_trading_day(sig_date)
-                except Exception:
-                    continue
+        chain_cache: dict[str, list] = {}
+        for opp in pending:
+            opp_id = opp["opportunity_id"]
+            symbol = opp["symbol"]
+            sig_ts_str = opp.get("signal_timestamp") or opp.get("provider_timestamp") or ""
+            if not sig_ts_str:
+                continue
 
-                curr_date = datetime.now(_IST).date()
-                if curr_date < expected_t1_date:
-                    # Still Day T close — skip execution until Day T+1 session
-                    continue
+            try:
+                sig_date = datetime.fromisoformat(sig_ts_str.replace("Z", "+00:00")).date()
+                expected_t1_date = next_trading_day(sig_date)
+            except Exception:
+                continue
 
-                if curr_date > expected_t1_date:
+            curr_date = datetime.now(_IST).date()
+            if curr_date < expected_t1_date:
+                # Still Day T close — skip execution until Day T+1 session
+                continue
+
+            if curr_date > expected_t1_date:
+                collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                collector.warehouse.record_decision(
+                    decision_id=f"DECISION-{opp_id}",
+                    opportunity_id=opp_id,
+                    symbol=symbol,
+                    decision="INCONCLUSIVE",
+                    reason=f"Missed T+1 entry window (expected next trading session {expected_t1_date}, current date {curr_date})",
+                    provider_timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+                processed += 1
+                continue
+
+            # Atomically lock opportunity so concurrent ticks/processes cannot double-process
+            locked = collector.warehouse.try_lock_pending_opportunity(opp_id)
+            if not locked:
+                log.debug("Skipping pending opportunity %s: already processing or non-pending", opp_id)
+                continue
+
+            try:
+                # Fetch genuine spot price (fail-closed if missing)
+                spot_quotes = await client.get_quote([f"NSE:{symbol}"])
+                q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                spot_price = float(q_spot_raw.get("last_price") or 0.0)
+                if spot_price <= 0 or not math.isfinite(spot_price):
+                    log.warning("Skipping T+1 fill for %s: missing or non-finite current spot price", opp_id)
                     collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
-                    collector.warehouse.record_decision(
-                        decision_id=f"DECISION-{opp_id}",
-                        opportunity_id=opp_id,
-                        symbol=symbol,
-                        decision="INCONCLUSIVE",
-                        reason=f"Missed T+1 entry window (expected next trading session {expected_t1_date}, current date {curr_date})",
-                        provider_timestamp=datetime.now(timezone.utc).isoformat(),
-                    )
+                    processed += 1
                     continue
 
-                try:
-                    # Fetch genuine spot price (fail-closed if missing)
-                    spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                    q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
-                    spot_price = float(q_spot_raw.get("last_price") or 0.0)
-                    if spot_price <= 0 or not math.isfinite(spot_price):
-                        log.warning("Skipping T+1 fill for %s: missing or non-finite current spot price", opp_id)
-                        collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                # Resolve option candidates from Kite instrument dump
+                option_exchange = "NFO"
+                rows = chain_cache.get(option_exchange)
+                if rows is None:
+                    rows = await client.search_instruments("", option_exchange, limit=1_000_000)
+                    chain_cache[option_exchange] = rows
+
+                # Resolve actual front-month NIFTY futures contract
+                fut_pick = pick_futures_contract(rows or [], name="NIFTY", exchange="NFO", expiry_preference="near", today=ist_today())
+                if not fut_pick:
+                    log.warning("Skipping T+1 fill for %s: unable to resolve front-month NIFTY futures contract from NFO dump", opp_id)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    processed += 1
+                    continue
+
+                futures_symbol = fut_pick.tradingsymbol
+                fut_quotes = await client.get_quote([f"NFO:{futures_symbol}"])
+                q_fut_raw = (fut_quotes or {}).get(f"NFO:{futures_symbol}") or {}
+                fut_event = extract_raw_quote_event(futures_symbol, q_fut_raw)
+                if not fut_event:
+                    log.warning("Skipping T+1 fill for %s: missing genuine futures exchange quote event for %s", opp_id, futures_symbol)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    processed += 1
+                    continue
+
+                chain = chain_rows_for(rows or [], symbol, ist_today())
+                if not chain:
+                    collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
+                    processed += 1
+                    continue
+
+                # Filter chain to ONLY verified monthly expiries
+                chain = filter_chain_by_expiry_types(chain, ["monthly"], ist_today())
+                if not chain:
+                    collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
+                    processed += 1
+                    continue
+
+                monthly_date_sets = _expiry_date_set(chain, ist_today())
+
+                sig_side = opp.get("signal_side") or ("fade_up" if "FADE_UP" in opp.get("signal_type", "") else "fade_down")
+                want_type = "PE" if sig_side == "fade_up" else "CE"
+                iv_proxy = float(opp.get("signal_iv") or cfg.assumed_vrp * 0.15)
+
+                cand_infos: List[OptionCandidateInfo] = []
+                cand_symbols: List[str] = []
+                for row in chain:
+                    opt_t = str(row.get("option_type") or "").upper()
+                    if opt_t.lower() != ("call" if want_type == "CE" else "put") and opt_t != want_type:
                         continue
-
-                    # Resolve option candidates from Kite instrument dump
-                    option_exchange = "NFO"
-                    rows = chain_cache.get(option_exchange)
-                    if rows is None:
-                        rows = await client.search_instruments("", option_exchange, limit=1_000_000)
-                        chain_cache[option_exchange] = rows
-
-                    # Resolve actual front-month NIFTY futures contract
-                    fut_pick = pick_futures_contract(rows or [], name="NIFTY", exchange="NFO", expiry_preference="near", today=ist_today())
-                    if not fut_pick:
-                        log.warning("Skipping T+1 fill for %s: unable to resolve front-month NIFTY futures contract from NFO dump", opp_id)
-                        collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    dte = int(row.get("dte") or 0)
+                    if not (cfg.min_dte <= dte <= cfg.max_dte):
                         continue
-
-                    futures_symbol = fut_pick.tradingsymbol
-                    fut_quotes = await client.get_quote([f"NFO:{futures_symbol}"])
-                    q_fut_raw = (fut_quotes or {}).get(f"NFO:{futures_symbol}") or {}
-                    fut_event = extract_raw_quote_event(futures_symbol, q_fut_raw)
-                    if not fut_event:
-                        log.warning("Skipping T+1 fill for %s: missing genuine futures exchange quote event for %s", opp_id, futures_symbol)
-                        collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    strike = float(row.get("strike") or 0.0)
+                    if strike <= 0:
                         continue
+                    sym_name = str(row.get("instrument_name") or row.get("tradingsymbol") or "")
+                    cand_symbols.append(f"{option_exchange}:{sym_name}")
 
-                    chain = chain_rows_for(rows or [], symbol, ist_today())
-                    if not chain:
-                        collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
-                        continue
+                    cand_d_raw = float(bs_delta(spot_price, strike, dte / 365.0, iv_proxy, call=(want_type == "CE")))
+                    cand_d_val = -abs(cand_d_raw) if want_type == "PE" else abs(cand_d_raw)
 
-                    # Filter chain to ONLY verified monthly expiries
-                    chain = filter_chain_by_expiry_types(chain, ["monthly"], ist_today())
-                    if not chain:
-                        collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
-                        continue
+                    exp_date_str = str(row.get("expiry_date") or "")
+                    is_monthly_exp = "monthly" in monthly_date_sets.get(exp_date_str[:10], set())
 
-                    monthly_date_sets = _expiry_date_set(chain, ist_today())
+                    cand_infos.append(OptionCandidateInfo(
+                        symbol=sym_name,
+                        expiry=exp_date_str,
+                        strike=strike,
+                        option_type=want_type,
+                        dte=dte,
+                        is_monthly=is_monthly_exp,
+                        theoretical_delta=cand_d_val,
+                        provider_symbol=sym_name,
+                        instrument_token=str(row.get("token") or ""),
+                        lot_size=int(row.get("lot_size") or 0),
+                    ))
 
-                    sig_side = opp.get("signal_side") or ("fade_up" if "FADE_UP" in opp.get("signal_type", "") else "fade_down")
-                    want_type = "PE" if sig_side == "fade_up" else "CE"
-                    iv_proxy = float(opp.get("signal_iv") or cfg.assumed_vrp * 0.15)
+                if not cand_symbols:
+                    collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
+                    processed += 1
+                    continue
 
-                    cand_infos: List[OptionCandidateInfo] = []
-                    cand_symbols: List[str] = []
-                    for row in chain:
-                        opt_t = str(row.get("option_type") or "").upper()
-                        if opt_t.lower() != ("call" if want_type == "CE" else "put") and opt_t != want_type:
-                            continue
-                        dte = int(row.get("dte") or 0)
-                        if not (cfg.min_dte <= dte <= cfg.max_dte):
-                            continue
-                        strike = float(row.get("strike") or 0.0)
-                        if strike <= 0:
-                            continue
-                        sym_name = str(row.get("instrument_name") or row.get("tradingsymbol") or "")
-                        cand_symbols.append(f"{option_exchange}:{sym_name}")
+                opt_quotes_raw = await client.get_quote(cand_symbols)
+                opt_quote_events: Dict[str, RawQuoteEvent] = {}
+                for c_sym_full in cand_symbols:
+                    sym_short = c_sym_full.split(":")[-1]
+                    q_raw = (opt_quotes_raw or {}).get(c_sym_full) or {}
+                    q_ev = extract_raw_quote_event(sym_short, q_raw)
+                    if q_ev:
+                        opt_quote_events[sym_short] = q_ev
 
-                        cand_d_raw = float(bs_delta(spot_price, strike, dte / 365.0, iv_proxy, call=(want_type == "CE")))
-                        cand_d_val = -abs(cand_d_raw) if want_type == "PE" else abs(cand_d_raw)
+                # Lot sizes from actual selected option and futures contracts
+                fut_lot_size = int(getattr(fut_pick, "lot_size", 0) or 0)
 
-                        exp_date_str = str(row.get("expiry_date") or "")
-                        is_monthly_exp = "monthly" in monthly_date_sets.get(exp_date_str[:10], set())
-
-                        cand_infos.append(OptionCandidateInfo(
-                            symbol=sym_name,
-                            expiry=exp_date_str,
-                            strike=strike,
-                            option_type=want_type,
-                            dte=dte,
-                            is_monthly=is_monthly_exp,
-                            theoretical_delta=cand_d_val,
-                            provider_symbol=sym_name,
-                            instrument_token=str(row.get("token") or ""),
-                            lot_size=int(row.get("lot_size") or 0),
-                        ))
-
-                    if not cand_symbols:
-                        collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
-                        continue
-
-                    opt_quotes_raw = await client.get_quote(cand_symbols)
-                    opt_quote_events: Dict[str, RawQuoteEvent] = {}
-                    for c_sym_full in cand_symbols:
-                        sym_short = c_sym_full.split(":")[-1]
-                        q_raw = (opt_quotes_raw or {}).get(c_sym_full) or {}
-                        q_ev = extract_raw_quote_event(sym_short, q_raw)
-                        if q_ev:
-                            opt_quote_events[sym_short] = q_ev
-
-                    # Lot sizes from actual selected option and futures contracts
-                    fut_lot_size = int(getattr(fut_pick, "lot_size", 0) or 0)
-
-                    # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
-                    _INDEX_CANONICAL_BETA = 1.0
-                    if symbol == "NIFTY":
-                        causal_beta = _INDEX_CANONICAL_BETA
-                    else:
-
-                        causal_beta = None
-                        try:
-                            from app.services.ohlcv_store import get_daily_bars
-                            from app.engines.snapback.hedge import rolling_beta
-                            stock_candles = get_daily_bars(symbol)
-                            nifty_candles = get_daily_bars("NIFTY")
-                            if stock_candles and nifty_candles:
-                                stock_b = to_bars(stock_candles)
-                                nifty_b = to_bars(nifty_candles)
-                                betas_map = rolling_beta(stock_b, nifty_b)
-                                sig_date_str = sig_date.strftime("%Y-%m-%d")
-                                causal_beta = betas_map.get(sig_date_str)
-                        except Exception as beta_exc:
-                            log.warning("Failed to compute rolling_beta for %s on %s: %s", symbol, sig_date, beta_exc)
-
-                        if causal_beta is None or not math.isfinite(causal_beta) or causal_beta <= 0:
-                            log.warning("Skipping T+1 fill for %s: missing causal rolling beta for %s", opp_id, symbol)
-                            collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
-                            continue
-
-                    collector.execute_pending_entry(
-                        opportunity_id=opp_id,
-                        cfg=cfg,
-                        t1_spot_price=spot_price,
-                        futures_quote_event=fut_event,
-                        futures_symbol=futures_symbol,
-                        option_candidates=cand_infos,
-                        option_quote_events=opt_quote_events,
-                        causal_beta=causal_beta,
-                        futures_lot_size=fut_lot_size,
-                        execution_timestamp_ms=int(time.time() * 1000),
-                        entry_iv=iv_proxy,
-                    )
-
-                except Exception as opp_exc:
-                    log.debug("Pending prospective entry processing failed for %s: %s", opp_id, opp_exc)
-
-        # 2. Process Active Open Position MTM, Rebalances & Exit Lifecycle from Persisted State Ledger
-        active_positions = collector.warehouse.get_active_paper_positions()
-        if active_positions and client:
-            now_ms = int(time.time() * 1000)
-            session_date = datetime.now(_IST).strftime("%Y-%m-%d")
-            for pos in active_positions:
-                opp_id = pos["opportunity_id"]
-                symbol = pos["symbol"]
-                opt_sym = pos["option_symbol"]
-                fut_sym = pos["futures_symbol"]
-                try:
-                    opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
-                    q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
-                    opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
-
-                    fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
-                    q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
-                    fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
-
-                    spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                    q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
-                    curr_spot = float(q_spot_raw.get("last_price") or 0.0)
-
-                    if not opt_ev or not fut_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
-                        log.debug("Skipping daily MTM/exit cycle for %s: missing quotes or spot price", opp_id)
-                        continue
-
-                    # Revalidate quote quality before MTM, hedge rebalance, or exit
-                    from app.services.snapback_market_data import evaluate_quote_quality
-                    q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=now_ms)
-                    q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=now_ms)
-                    if not q_opt_eval.accepted_for_execution or not q_fut_eval.accepted_for_execution:
-                        log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
-                        continue
-
-                    opt_type_str = "PE" if "PE" in opt_sym else "CE"
-                    opt_strike_val = float(pos.get("option_strike") or 0.0)
-                    entry_dte_val = int(pos.get("entry_dte") or 45)
-                    entry_ts_str = str(pos.get("entry_timestamp") or "")
+                # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
+                _INDEX_CANONICAL_BETA = 1.0
+                if symbol == "NIFTY":
+                    causal_beta = _INDEX_CANONICAL_BETA
+                else:
+                    causal_beta = None
                     try:
-                        entry_date_val = datetime.fromisoformat(entry_ts_str.replace("Z", "+00:00")).date()
-                        days_elapsed = max(0, (datetime.now(_IST).date() - entry_date_val).days)
-                    except Exception:
-                        days_elapsed = 1
-                    rem_dte = max(1, entry_dte_val - days_elapsed)
-                    curr_iv = float(pos.get("entry_iv") or 0.20)
-                    curr_d_raw = float(bs_delta(curr_spot, opt_strike_val, rem_dte / 365.0, curr_iv, call=(opt_type_str == "CE")))
-                    curr_opt_delta = -abs(curr_d_raw) if opt_type_str == "PE" else abs(curr_d_raw)
+                        from app.services.ohlcv_store import get_daily_bars
+                        from app.engines.snapback.hedge import rolling_beta
+                        stock_candles = get_daily_bars(symbol)
+                        nifty_candles = get_daily_bars("NIFTY")
+                        if stock_candles and nifty_candles:
+                            stock_b = to_bars(stock_candles)
+                            nifty_b = to_bars(nifty_candles)
+                            betas_map = rolling_beta(stock_b, nifty_b)
+                            sig_date_str = sig_date.strftime("%Y-%m-%d")
+                            causal_beta = betas_map.get(sig_date_str)
+                    except Exception as beta_exc:
+                        log.warning("Failed to compute rolling_beta for %s on %s: %s", symbol, sig_date, beta_exc)
 
-                    # Execute MTM, hedge rebalancing, and frozen exit rule evaluation
-                    mtm_res = collector.rebalance_and_mtm(
-                        opportunity_id=opp_id,
-                        session_date=session_date,
-                        symbol=symbol,
-                        current_spot=curr_spot,
-                        current_option_delta=curr_opt_delta,
-                        option_bid=opt_ev.best_bid,
-                        futures_quote_event=fut_ev,
-                        option_entry_price=float(pos["option_entry_price"]),
-                        option_quantity=int(pos["option_qty"]),
-                        current_futures_lots=int(pos["current_futures_lots"]),
-                        futures_lot_size=int(pos["futures_lot_size"]),
-                        causal_beta=float(pos["causal_beta"]),
-                        prior_realized_futures_pnl=float(pos["realized_futures_pnl"]),
-                        prior_avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
-                        option_quote_event=opt_ev,
-                        cfg=cfg,
-                    )
+                    if causal_beta is None or not math.isfinite(causal_beta) or causal_beta <= 0:
+                        log.warning("Skipping T+1 fill for %s: missing causal rolling beta for %s", opp_id, symbol)
+                        collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                        processed += 1
+                        continue
 
-                    exit_reason = mtm_res.get("exit_reason")
-                    should_close = bool(exit_reason)
-                    if not should_close and rem_dte <= 1:
-                        should_close = True
-                        exit_reason = "EXPIRY_APPROACHING"
+                collector.execute_pending_entry(
+                    opportunity_id=opp_id,
+                    cfg=cfg,
+                    t1_spot_price=spot_price,
+                    futures_quote_event=fut_event,
+                    futures_symbol=futures_symbol,
+                    option_candidates=cand_infos,
+                    option_quote_events=opt_quote_events,
+                    causal_beta=causal_beta,
+                    futures_lot_size=fut_lot_size,
+                    execution_timestamp_ms=int(time.time() * 1000),
+                    entry_iv=iv_proxy,
+                )
+                processed += 1
 
-                    if should_close:
-                        collector.close_opportunity(
-                            opportunity_id=opp_id,
-                            symbol=symbol,
-                            exit_reason=exit_reason,
-                            entry_ts=entry_ts_str,
-                            exit_ts=datetime.now(timezone.utc).isoformat(),
-                            entry_spot=float(pos.get("entry_spot") or curr_spot),
-                            exit_spot=curr_spot,
-                            selected_strike=opt_strike_val,
-                            entry_dte=entry_dte_val,
-                            exit_dte=rem_dte,
-                            iv_proxy=curr_iv,
-                            option_entry_price=float(pos["option_entry_price"]),
-                            option_exit_bid=opt_ev.best_bid,
-                            futures_entry_price=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
-                            futures_exit_bid=fut_ev.best_bid,
-                            option_quantity=int(pos["option_qty"]),
-                            futures_quantity=int(pos["current_futures_lots"]) * int(pos.get("futures_lot_size") or 65),
-                            nifty_futures_entry=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
-                            nifty_futures_exit=fut_ev.best_bid,
-                            option_type=opt_type_str,
-                            accumulated_costs=float(mtm_res.get("accumulated_costs") or pos.get("accumulated_costs") or 0.0),
-                        )
-                except Exception as mtm_exc:
-                    log.debug("Prospective MTM update failed for %s: %s", opp_id, mtm_exc)
+            except Exception as opp_exc:
+                log.debug("Pending prospective entry processing failed for %s: %s", opp_id, opp_exc)
+                opp_st = collector.warehouse.get_opportunity_by_id(opp_id)
+                if opp_st and opp_st.get("status") == "PROCESSING_ENTRY":
+                    collector.warehouse.update_opportunity_status(opp_id, "PENDING_ENTRY")
 
     except Exception as exc:
-        log.warning("Prospective collector cycle skipped: %s", exc)
+        log.warning("Prospective pending entry cycle skipped: %s", exc)
+    return processed
+
+
+async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -> int:
+    """Phase B: Process active open position MTM, rebalances & exit lifecycle from persisted state ledger (strictly idempotent per session)."""
+    processed = 0
+    try:
+        from app.services.snapback_prospective_collector import SnapbackProspectiveCollector
+        collector = SnapbackProspectiveCollector()
+
+        active_positions = collector.warehouse.get_active_paper_positions()
+        if not active_positions or not client:
+            return 0
+
+        now_ms = int(time.time() * 1000)
+        session_date = datetime.now(_IST).strftime("%Y-%m-%d")
+
+        for pos in active_positions:
+            opp_id = pos["opportunity_id"]
+
+            # Idempotency guard: if MTM already recorded for (opp_id, session_date), skip duplicate run!
+            if collector.warehouse.has_daily_mtm_for_session(opp_id, session_date):
+                log.debug("Skipping daily MTM/exit cycle for %s on %s: already recorded for session", opp_id, session_date)
+                continue
+
+            symbol = pos["symbol"]
+            opt_sym = pos["option_symbol"]
+            fut_sym = pos["futures_symbol"]
+            try:
+                opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
+                q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
+                opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
+
+                fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
+                q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
+                fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
+
+                spot_quotes = await client.get_quote([f"NSE:{symbol}"])
+                q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                curr_spot = float(q_spot_raw.get("last_price") or 0.0)
+
+                if not opt_ev or not fut_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
+                    log.debug("Skipping daily MTM/exit cycle for %s: missing quotes or spot price", opp_id)
+                    continue
+
+                # Revalidate quote quality before MTM, hedge rebalance, or exit
+                from app.services.snapback_market_data import evaluate_quote_quality
+                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=now_ms)
+                q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=now_ms)
+                if not q_opt_eval.accepted_for_execution or not q_fut_eval.accepted_for_execution:
+                    log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
+                    continue
+
+                opt_type_str = "PE" if "PE" in opt_sym else "CE"
+                opt_strike_val = float(pos.get("option_strike") or 0.0)
+                entry_dte_val = int(pos.get("entry_dte") or 45)
+                entry_ts_str = str(pos.get("entry_timestamp") or "")
+                try:
+                    entry_date_val = datetime.fromisoformat(entry_ts_str.replace("Z", "+00:00")).date()
+                    days_elapsed = max(0, (datetime.now(_IST).date() - entry_date_val).days)
+                except Exception:
+                    days_elapsed = 1
+                rem_dte = max(1, entry_dte_val - days_elapsed)
+                curr_iv = float(pos.get("entry_iv") or 0.20)
+                curr_d_raw = float(bs_delta(curr_spot, opt_strike_val, rem_dte / 365.0, curr_iv, call=(opt_type_str == "CE")))
+                curr_opt_delta = -abs(curr_d_raw) if opt_type_str == "PE" else abs(curr_d_raw)
+
+                # Execute MTM, hedge rebalancing, and frozen exit rule evaluation
+                mtm_res = collector.rebalance_and_mtm(
+                    opportunity_id=opp_id,
+                    session_date=session_date,
+                    symbol=symbol,
+                    current_spot=curr_spot,
+                    current_option_delta=curr_opt_delta,
+                    option_bid=opt_ev.best_bid,
+                    futures_quote_event=fut_ev,
+                    option_entry_price=float(pos["option_entry_price"]),
+                    option_quantity=int(pos["option_qty"]),
+                    current_futures_lots=int(pos["current_futures_lots"]),
+                    futures_lot_size=int(pos["futures_lot_size"]),
+                    causal_beta=float(pos["causal_beta"]),
+                    prior_realized_futures_pnl=float(pos["realized_futures_pnl"]),
+                    prior_avg_futures_entry_price=float(pos["avg_futures_entry_price"]),
+                    option_quote_event=opt_ev,
+                    cfg=cfg,
+                )
+
+                exit_reason = mtm_res.get("exit_reason")
+                should_close = bool(exit_reason)
+                if not should_close and rem_dte <= 1:
+                    should_close = True
+                    exit_reason = "EXPIRY_APPROACHING"
+
+                if should_close:
+                    collector.close_opportunity(
+                        opportunity_id=opp_id,
+                        symbol=symbol,
+                        exit_reason=exit_reason,
+                        entry_ts=entry_ts_str,
+                        exit_ts=datetime.now(timezone.utc).isoformat(),
+                        entry_spot=float(pos.get("entry_spot") or curr_spot),
+                        exit_spot=curr_spot,
+                        selected_strike=opt_strike_val,
+                        entry_dte=entry_dte_val,
+                        exit_dte=rem_dte,
+                        iv_proxy=curr_iv,
+                        option_entry_price=float(pos["option_entry_price"]),
+                        option_exit_bid=opt_ev.best_bid,
+                        futures_entry_price=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
+                        futures_exit_bid=fut_ev.best_bid,
+                        option_quantity=int(pos["option_qty"]),
+                        futures_quantity=int(pos["current_futures_lots"]) * int(pos.get("futures_lot_size") or 65),
+                        nifty_futures_entry=float(pos.get("avg_futures_entry_price") or fut_ev.best_bid),
+                        nifty_futures_exit=fut_ev.best_bid,
+                        option_type=opt_type_str,
+                        accumulated_costs=float(mtm_res.get("accumulated_costs") or pos.get("accumulated_costs") or 0.0),
+                    )
+                processed += 1
+            except Exception as mtm_exc:
+                log.debug("Prospective MTM update failed for %s: %s", opp_id, mtm_exc)
+
+    except Exception as exc:
+        log.warning("Prospective MTM cycle skipped: %s", exc)
+    return processed
+
+
+async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfig) -> None:
+    """Master entrypoint: process pending entries followed by daily MTM and exits."""
+    await process_prospective_pending_entries(client, cfg)
+    await process_prospective_daily_mtm_and_exits(client, cfg)
 
 
 async def _candles(client, st: ScanState, token: int, name: str) -> list:

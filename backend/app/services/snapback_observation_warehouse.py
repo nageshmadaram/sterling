@@ -1116,3 +1116,38 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def try_lock_pending_opportunity(self, opportunity_id: str) -> bool:
+        """Atomically transition opportunity from PENDING_ENTRY to PROCESSING_ENTRY.
+        
+        Guards against duplicate processing when runner ticks or manual triggers coincide.
+        Returns True if the lock was acquired, False if already locked or non-pending.
+        """
+        conn = self._get_connection()
+        try:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status = 'PENDING_ENTRY'",
+                    (opportunity_id,)
+                )
+                return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def has_daily_mtm_for_session(self, opportunity_id: str, session_date: str) -> bool:
+        """Check if an end-of-day MTM record already exists for (opportunity_id, session_date).
+        
+        Guards against duplicate MTM snapshots and double execution in a single trading session.
+        """
+        mtm_id = f"MTM-{opportunity_id}-{session_date}"
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT 1 FROM daily_mtm WHERE mtm_id = ? OR (opportunity_id = ? AND session_date = ?)",
+                    (mtm_id, opportunity_id, session_date)
+                ).fetchone()
+                return row is not None
+        finally:
+            conn.close()
+
+

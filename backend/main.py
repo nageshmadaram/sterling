@@ -117,7 +117,9 @@ async def lifespan(app: FastAPI):
     # if something actually runs after the close.
     from app.services.intraday_runner import auto_scan_loop as _intraday_scan
     intraday_task = asyncio.create_task(_intraday_scan(interval=300))
-    log.info("Intraday pack auto-scan loop started (every 5 min)")
+    from app.services.snapback_runner import start as start_snapback_runner
+    snapback_runner_task = start_snapback_runner()
+    log.info("Snapback prospective unattended runner started (every 30s)")
 
     log.info("ATM PI auto-arm loop started (every 30s)")
     log.info("Adaptive Edge auto scan loop started (every 60s)")

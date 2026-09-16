@@ -886,7 +886,7 @@ def test_banknifty_uses_rolling_beta():
     import inspect
     from app.services import snapback
 
-    fn_source = inspect.getsource(snapback.process_prospective_pending_entries_and_mtm)
+    fn_source = inspect.getsource(snapback.process_prospective_pending_entries)
     assert 'symbol == "NIFTY"' in fn_source  # Only NIFTY is forced to 1.0
     assert 'symbol in ("NIFTY", "BANKNIFTY", "FINNIFTY")' not in fn_source
 

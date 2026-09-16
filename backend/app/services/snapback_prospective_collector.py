@@ -171,11 +171,11 @@ class SnapbackProspectiveCollector:
                 "reason": f"Opportunity {opportunity_id} not found in warehouse",
             }
 
-        if opp.get("status") != "PENDING_ENTRY":
+        if opp.get("status") not in ("PENDING_ENTRY", "PROCESSING_ENTRY"):
             return {
                 "opportunity_id": opportunity_id,
                 "status": opp.get("status"),
-                "reason": f"Opportunity is not PENDING_ENTRY (current status: {opp.get('status')})",
+                "reason": f"Opportunity is not PENDING_ENTRY or PROCESSING_ENTRY (current status: {opp.get('status')})",
             }
 
         # 2. Enforce Frozen Config Provenance
