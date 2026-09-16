@@ -42,16 +42,70 @@ def _entry_session(row: Dict[str, Any]) -> str:
     return raw[:10] if raw else ""
 
 
-def build_gate_inputs(*, records: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
-    """Shape observed warehouse records into authoritative gate inputs."""
-    outcomes = records.get("outcomes") or []
-    positions = records.get("paper_positions") or []
-    quotes = records.get("option_quotes") or []
-    mtm_rows = records.get("daily_mtm") or []
+def build_gate_inputs(
+    *,
+    records: Dict[str, List[Dict[str, Any]]],
+    expected_build_sha: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Shape observed warehouse records into authoritative gate inputs.
 
-    trade_pnls = [_f(o.get("actual_total_pnl")) for o in outcomes]
-    statutory_costs = [_f(o.get("actual_costs")) for o in outcomes]
-    entry_dates = [_entry_session(o) or f"unknown_{i}" for i, o in enumerate(outcomes)]
+    Only rows that are flagged authoritative, carry an authoritative source and match
+    the expected build are admitted. Catch-up replays and rows written by a different
+    build are evidence about the pipeline, not about the strategy.
+    """
+    from app.services.snapback_authority import filter_authoritative
+
+    outcomes = filter_authoritative(records.get("outcomes"), expected_build_sha=expected_build_sha)
+    positions = records.get("paper_positions") or []
+    quotes = filter_authoritative(records.get("option_quotes"), expected_build_sha=expected_build_sha)
+    mtm_rows = filter_authoritative(records.get("daily_mtm"), expected_build_sha=expected_build_sha)
+
+    # Strict admission: a row missing an economic field is evidence that collection
+    # broke, not evidence of a zero-P&L trade. Malformed rows are excluded from the
+    # sample and recorded as data-quality errors.
+    trade_pnls: List[float] = []
+    statutory_costs: List[float] = []
+    entry_dates: List[str] = []
+    data_quality_errors: List[str] = []
+
+    REQUIRED_NUMERIC = (
+        "actual_total_pnl",
+        "actual_option_pnl",
+        "actual_futures_pnl",
+        "actual_costs",
+    )
+
+    for index, outcome in enumerate(outcomes):
+        opp = str(outcome.get("opportunity_id") or f"row_{index}")
+        problems: List[str] = []
+
+        values: Dict[str, float] = {}
+        for field in REQUIRED_NUMERIC:
+            raw = outcome.get(field)
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                problems.append(f"{opp}: missing {field}")
+                continue
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError):
+                problems.append(f"{opp}: non-numeric {field}={raw!r}")
+                continue
+            if not math.isfinite(parsed):
+                problems.append(f"{opp}: non-finite {field}")
+                continue
+            values[field] = parsed
+
+        session = _entry_session(outcome)
+        if not session:
+            problems.append(f"{opp}: missing entry date")
+
+        if problems:
+            data_quality_errors.extend(problems)
+            continue
+
+        trade_pnls.append(values["actual_total_pnl"])
+        statutory_costs.append(values["actual_costs"])
+        entry_dates.append(session)
 
     # Unresolved exposure: anything still carrying risk or not reconcilable.
     unresolved = sum(
@@ -60,26 +114,39 @@ def build_gate_inputs(*, records: Dict[str, List[Dict[str, Any]]]) -> Dict[str, 
         if str(p.get("status") or "").upper() in {"OPEN", "EXIT_PENDING", "UNKNOWN", ""}
     )
 
-    # Quote coverage: executable observations over required observations.
-    total_quotes = len(quotes)
-    usable = 0
-    for q in quotes:
-        if int(q.get("is_stale") or 0) == 1:
-            continue
-        bid = _f(q.get("bid"))
-        ask = _f(q.get("ask"))
-        if bid > 0 and ask > 0 and ask >= bid:
-            usable += 1
-    quote_coverage_pct = (usable / total_quotes * 100.0) if total_quotes else 0.0
+    # Quote coverage over REQUIRED attempts, including refusals. Falling back to
+    # persisted quotes alone would divide good rows by good rows and always look
+    # perfect, which is exactly how missing evidence hides.
+    from app.services.snapback_quote_evidence import coverage_from_events
 
-    # Observed liquidation-equity path, aggregated per session in date order.
-    per_session: Dict[str, float] = {}
-    for row in mtm_rows:
-        session = str(row.get("session_date") or "")[:10]
-        if not session:
-            continue
-        per_session[session] = per_session.get(session, 0.0) + _f(row.get("total_mtm"))
-    equity_series = [per_session[k] for k in sorted(per_session)]
+    events = filter_authoritative(
+        records.get("quote_quality_events"), expected_build_sha=expected_build_sha
+    )
+    coverage = coverage_from_events(events)
+    if coverage["required"]:
+        quote_coverage_pct = coverage["coverage_pct"]
+    else:
+        total_quotes = len(quotes)
+        usable = 0
+        for q in quotes:
+            if int(q.get("is_stale") or 0) == 1:
+                continue
+            bid = _f(q.get("bid"))
+            ask = _f(q.get("ask"))
+            if bid > 0 and ask > 0 and ask >= bid:
+                usable += 1
+        quote_coverage_pct = (usable / total_quotes * 100.0) if total_quotes else 0.0
+
+    # Real portfolio equity: realized P&L carries forward instead of vanishing when a
+    # position closes.
+    from app.services.snapback_portfolio import build_equity_curve, equity_series as _series
+
+    curve = build_equity_curve(
+        daily_mtm=mtm_rows,
+        outcomes=outcomes,
+        costs=filter_authoritative(records.get("costs"), expected_build_sha=expected_build_sha),
+    )
+    equity_series = _series(curve)
 
     return {
         "trade_pnls": trade_pnls,
@@ -88,7 +155,31 @@ def build_gate_inputs(*, records: Dict[str, List[Dict[str, Any]]]) -> Dict[str, 
         "daily_mtm_equity_series": equity_series,
         "unresolved_exposures_count": unresolved,
         "quote_coverage_pct": quote_coverage_pct,
+        "quote_attempts": coverage,
+        "data_quality_errors": data_quality_errors,
+        "equity_curve": curve,
     }
+
+
+def evaluation_capital() -> tuple:
+    """Evaluation capital from the frozen config, never a convenient default.
+
+    A drawdown measured against the wrong denominator is the difference between a 10%
+    breach and a 1% blip, so an unreadable capital base is a data-quality failure.
+    """
+    errors: List[str] = []
+    try:
+        from app.services.snapback import get_config
+
+        cfg = get_config("default")
+        capital = float(getattr(cfg, "capital_inr", 0) or 0)
+        if capital <= 0:
+            errors.append("evaluation capital missing from the frozen config")
+            return 0.0, errors
+        return capital, errors
+    except Exception as exc:
+        errors.append(f"evaluation capital unavailable: {exc}")
+        return 0.0, errors
 
 
 def _missing_requirements(
@@ -115,10 +206,18 @@ def _missing_requirements(
 def evaluate_forward_gate(
     *,
     records: Dict[str, List[Dict[str, Any]]],
-    allocation_capital_budget: float = 1_000_000.0,
+    allocation_capital_budget: Optional[float] = None,
+    load_errors: Optional[List[str]] = None,
+    expected_build_sha: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the authoritative gate over prospective evidence and classify the verdict."""
-    inputs = build_gate_inputs(records=records)
+    inputs = build_gate_inputs(records=records, expected_build_sha=expected_build_sha)
+
+    data_quality_errors = list(load_errors or []) + list(inputs.get("data_quality_errors") or [])
+
+    if allocation_capital_budget is None:
+        allocation_capital_budget, capital_errors = evaluation_capital()
+        data_quality_errors.extend(capital_errors)
 
     sessions = len({d for d in inputs["entry_dates"] if not d.startswith("unknown_")})
     trades = len(inputs["trade_pnls"])
@@ -146,6 +245,13 @@ def evaluate_forward_gate(
     else:
         verdict = "FAILED"
 
+    if data_quality_errors:
+        # Broken or missing evidence can never be a decision.
+        verdict = "INCONCLUSIVE"
+
+    payload["data_quality_ok"] = not data_quality_errors
+    payload["data_quality_errors"] = data_quality_errors
+    payload["allocation_capital_budget"] = allocation_capital_budget
     payload["verdict"] = verdict
     payload["missing_requirements"] = _missing_requirements(
         sessions=payload.get("total_sessions", sessions),

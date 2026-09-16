@@ -35,6 +35,7 @@ from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.pricing import bs_delta, bs_price
 from app.services.snapback_health import record_cycle
+from app.services.snapback_quote_evidence import record_quote_attempt
 
 log = get_logger(__name__)
 
@@ -588,6 +589,18 @@ async def scan_once(uid: str) -> dict:
                                    market_filter=cfg.market_filter, ema_period=cfg.market_ema)
             if not market_gate:
                 raise UnreadableCandles("NIFTY daily tape cannot establish the market filter")
+        # The latest session whose daily bar is closed, used to separate a live signal
+        # from a catch-up row.
+        from app.services.navigator.calendar import is_trading_day as _is_trading_day
+        latest_closed_session = ist_today()
+        for _ in range(10):
+            try:
+                if _is_trading_day(latest_closed_session):
+                    break
+            except Exception:
+                break
+            latest_closed_session = latest_closed_session - timedelta(days=1)
+
         chain_cache: dict[str, list] = {"NFO": nfo, "BFO": bfo}
         # Kite's historical endpoint is 3 requests/second. Four concurrent
         # fetchers over a 200-name universe spent their budget on 429
@@ -609,9 +622,27 @@ async def scan_once(uid: str) -> dict:
                         return
                     for sig in evaluate_symbol(raw, cfg, item.name, market_gate=market_gate):
                         try:
+                            from app.services.snapback_authority import (
+                                classify_signal_authority, dataset_start,
+                            )
                             from app.services.snapback_prospective_collector import SnapbackProspectiveCollector
+
+                            # The board searches the last three closed sessions as a
+                            # catch-up. Only the latest closed session may become
+                            # authoritative evidence; older rows are stored as replay.
+                            verdict = classify_signal_authority(
+                                signal_timestamp_ms=int(getattr(sig, "timestamp_ms", 0) or 0),
+                                latest_closed_session=latest_closed_session,
+                                dataset_start=dataset_start(),
+                            )
+                            if not verdict.authoritative:
+                                log.info(
+                                    "%s: %s signal recorded as %s (%s)",
+                                    STRATEGY_ID, item.name, verdict.source,
+                                    ", ".join(verdict.reasons),
+                                )
                             collector = SnapbackProspectiveCollector()
-                            collector.record_signal_at_close(sig, cfg, source="PROSPECTIVE_PAPER")
+                            collector.record_signal_at_close(sig, cfg, source=verdict.source)
                         except Exception as collector_exc:
                             log.warning(f"Prospective collector record_signal_at_close failed for {item.name}: {collector_exc}")
 
@@ -1035,6 +1066,18 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
                 curr_spot = float(q_spot_raw.get("last_price") or 0.0)
 
                 if not opt_ev or not fut_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
+                    # Record the missing observation before refusing, so coverage can
+                    # count it. A refusal that leaves no trace is unmeasurable.
+                    for leg, contract, present in (("OPTION", opt_sym, bool(opt_ev)),
+                                                   ("FUTURES", fut_sym, bool(fut_ev))):
+                        record_quote_attempt(
+                            collector.warehouse, opportunity_id=opp_id, phase="EOD_MTM",
+                            leg=leg, contract_id=contract, required_for_economics=True,
+                            quote_present=present, bid=None, ask=None,
+                            provider_timestamp=None, age_ms=None, accepted=False,
+                            reason_codes=["missing_quote" if not present else "missing_spot"],
+                            symbol=symbol,
+                        )
                     log.debug("Skipping daily MTM/exit cycle for %s: missing quotes or spot price", opp_id)
                     continue
 
@@ -1044,6 +1087,21 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
                 from app.services.snapback_market_data import evaluate_quote_quality
                 q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
                 q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=receive_now_ms)
+                for leg, contract, ev, verdict in (
+                    ("OPTION", opt_sym, opt_ev, q_opt_eval),
+                    ("FUTURES", fut_sym, fut_ev, q_fut_eval),
+                ):
+                    record_quote_attempt(
+                        collector.warehouse, opportunity_id=opp_id, phase="EOD_MTM",
+                        leg=leg, contract_id=contract, required_for_economics=True,
+                        quote_present=True, bid=ev.best_bid, ask=ev.best_ask,
+                        provider_timestamp=str(getattr(ev, "exchange_timestamp_ms", "") or ""),
+                        age_ms=int(getattr(verdict, "age_ms", 0) or 0),
+                        accepted=bool(verdict.accepted_for_execution),
+                        reason_codes=list(getattr(verdict, "reason_codes", []) or []),
+                        symbol=symbol,
+                    )
+
                 if not q_opt_eval.accepted_for_execution or not q_fut_eval.accepted_for_execution:
                     log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
                     continue
@@ -1175,6 +1233,16 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         continue
 
                     q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
+                    record_quote_attempt(
+                        collector.warehouse, opportunity_id=opp_id, phase="INTRADAY_RISK",
+                        leg="OPTION", contract_id=opt_sym, required_for_economics=True,
+                        quote_present=True, bid=opt_ev.best_bid, ask=opt_ev.best_ask,
+                        provider_timestamp=str(getattr(opt_ev, "exchange_timestamp_ms", "") or ""),
+                        age_ms=int(getattr(q_opt_eval, "age_ms", 0) or 0),
+                        accepted=bool(q_opt_eval.accepted_for_execution),
+                        reason_codes=list(getattr(q_opt_eval, "reason_codes", []) or []),
+                        symbol=symbol,
+                    )
                     if not q_opt_eval.accepted_for_execution:
                         continue
 

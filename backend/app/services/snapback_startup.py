@@ -108,7 +108,18 @@ def run_startup_preflight(
         errors.append(f"evidence_db_probe_failed:{exc}")
         recovery = True
 
-    # 2. Frozen manifest valid.
+    # 2. The executing build must be the declared one.
+    try:
+        from app.services.snapback_identity import verify_build_identity
+
+        build_ok, build_reasons = verify_build_identity()
+        details["build_identity"] = list(build_reasons)
+        if not build_ok:
+            errors.append("build_identity_mismatch")
+    except Exception as exc:
+        errors.append(f"build_identity_probe_failed:{exc}")
+
+    # 3. Frozen manifest valid.
     try:
         manifest_ok, manifest_reasons = manifest_fn()
         details["manifest_reasons"] = list(manifest_reasons or [])
@@ -117,7 +128,7 @@ def run_startup_preflight(
     except Exception as exc:
         errors.append(f"manifest_probe_failed:{exc}")
 
-    # 3. Config store reachable — an unreachable store silently disables the engine.
+    # 4. Config store reachable — an unreachable store silently disables the engine.
     store_ok = False
     try:
         store_ok = bool(config_store_available_fn())
@@ -126,7 +137,7 @@ def run_startup_preflight(
     except Exception as exc:
         errors.append(f"config_store_probe_failed:{exc}")
 
-    # 4. Config loads, is enabled, and matches the frozen hash.
+    # 5. Config loads, is enabled, and matches the frozen hash.
     cfg = None
     try:
         cfg = config_fn()

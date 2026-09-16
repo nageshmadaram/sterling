@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import os
 import sys
@@ -28,6 +29,7 @@ MIN_HELD_OUT_SESSIONS = 60
 MIN_COMPLETED_TRADES = 300
 
 WAREHOUSE_TABLES = (
+    "quote_quality_events",
     "opportunities",
     "contract_candidates",
     "option_quotes",
@@ -72,14 +74,25 @@ def _counts(rows: List[Dict[str, Any]], field: str = "status") -> Dict[str, int]
     return out
 
 
-def load_forward_records(warehouse) -> Dict[str, List[Dict[str, Any]]]:
-    """Read every prospective warehouse table into plain dict rows."""
+def load_forward_records(warehouse, *, strict: bool = False):
+    """Read every prospective warehouse table into plain dict rows.
+
+    A table that cannot be read is reported, never silently substituted with an empty
+    list: "no rows" and "could not read the rows" are opposite facts, and conflating
+    them is how a broken collector looks like a quiet market.
+    """
     records: Dict[str, List[Dict[str, Any]]] = {}
+    errors: List[str] = []
     for table in WAREHOUSE_TABLES:
         try:
             records[table] = [dict(r) for r in (warehouse.get_records_by_table(table) or [])]
-        except Exception:
+        except Exception as exc:
             records[table] = []
+            errors.append(f"{table}: {exc}")
+    if strict:
+        return records, errors
+    if errors:
+        log.warning("Snapback report: table read failures: %s", errors)
     return records
 
 
@@ -130,6 +143,7 @@ def build_forward_summary(
     records: Dict[str, List[Dict[str, Any]]],
     runtime_sha: str,
     strategy_manifest: str,
+    load_errors: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Summarize observed prospective evidence. Absent economics stay None (UNKNOWN)."""
     outcomes = records.get("outcomes") or []
@@ -226,7 +240,18 @@ def build_forward_summary(
 
     summary.update(_quote_stats(records.get("option_quotes") or []))
 
+    data_quality_errors = list(load_errors or [])
+    summary["data_quality_ok"] = not data_quality_errors
+    summary["data_quality_errors"] = data_quality_errors
+
     # Evidence status only. Promotion belongs to the authoritative gate.
+    if data_quality_errors:
+        summary["evidence_status"] = "INCONCLUSIVE"
+        summary["evidence_status_reason"] = (
+            "evidence could not be read completely: " + "; ".join(data_quality_errors[:5])
+        )
+        return summary
+
     if completed >= MIN_COMPLETED_TRADES and observed_sessions >= MIN_HELD_OUT_SESSIONS:
         summary["evidence_status"] = "SAMPLE_SUFFICIENT_SEE_AUTHORITATIVE_GATE"
     else:
@@ -468,11 +493,12 @@ def generate_forward_report(
     if report_date is None:
         report_date = datetime.now(timezone.utc).date()
 
-    records = load_forward_records(warehouse)
+    records, load_errors = load_forward_records(warehouse, strict=True)
     summary = build_forward_summary(
         records=records,
         runtime_sha=runtime_sha,
         strategy_manifest=strategy_manifest,
+        load_errors=load_errors,
     )
     return write_forward_report(
         summary=summary,

@@ -22,6 +22,8 @@ def _records(n_trades=0, n_sessions=0, pnl=10.0):
             {
                 "opportunity_id": f"OPP-{i}",
                 "actual_total_pnl": pnl,
+                "actual_option_pnl": pnl,
+                "actual_futures_pnl": 0.0,
                 "actual_costs": 5.0,
                 "entry_ts": f"{session}T09:20:00+05:30",
             }
@@ -77,6 +79,7 @@ def test_inputs_use_observed_values_only():
     assert len(inputs["entry_dates"]) == 3
     assert inputs["unresolved_exposures_count"] == 2
     assert inputs["quote_coverage_pct"] == pytest.approx(50.0)
+    # Two sessions of marks become two equity points.
     assert len(inputs["daily_mtm_equity_series"]) == 2
 
 

@@ -25,6 +25,19 @@ FROZEN_COMMIT_SHA = "5a1354202e2c960c66b7003fce9cb80abd152008"
 FROZEN_MANIFEST_HASH = "602d28f804e840d046e7b51d020d5718dfd38a08d27d5324ec9d81bfbc4e53e4"
 
 
+def _current_build_sha() -> str:
+    """The executing build, stamped on every row so provenance is per-row truth."""
+    try:
+        from app.services.snapback_identity import build_sha
+
+        return build_sha()
+    except Exception:
+        return "UNKNOWN"
+
+
+_BUILD_SHA = _current_build_sha()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -56,7 +69,9 @@ class SnapbackObservationWarehouse:
             instrument_token  TEXT NOT NULL DEFAULT '',
             source            TEXT NOT NULL DEFAULT 'PROSPECTIVE_PAPER',
             strategy_commit   TEXT NOT NULL DEFAULT '""" + FROZEN_COMMIT_SHA + """',
-            manifest_hash     TEXT NOT NULL DEFAULT '""" + FROZEN_MANIFEST_HASH + """'
+            manifest_hash     TEXT NOT NULL DEFAULT '""" + FROZEN_MANIFEST_HASH + """',
+            runtime_build_sha TEXT NOT NULL DEFAULT '""" + _BUILD_SHA + """',
+            authoritative     INTEGER NOT NULL DEFAULT 1
         """
 
         conn = self._get_connection()
@@ -182,7 +197,9 @@ class SnapbackObservationWarehouse:
                 conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS decisions (
                         decision_id       TEXT PRIMARY KEY,
-                        opportunity_id    TEXT NOT NULL UNIQUE,
+                        opportunity_id    TEXT NOT NULL,
+                        phase             TEXT NOT NULL DEFAULT '',
+                        attempt           INTEGER NOT NULL DEFAULT 1,
                         decision          TEXT NOT NULL,
                         chosen_option_symbol TEXT NOT NULL DEFAULT '',
                         chosen_strike     REAL NOT NULL DEFAULT 0.0,
@@ -316,8 +333,99 @@ class SnapbackObservationWarehouse:
                     )
 
                 """)
+
+                # 12. quote_quality_events — append-only record of every quote the
+                # runtime required, including the ones it refused. Coverage is only
+                # measurable if refusals are stored as well as acceptances.
+                conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS quote_quality_events (
+                        event_id               TEXT PRIMARY KEY,
+                        opportunity_id         TEXT NOT NULL,
+                        phase                  TEXT NOT NULL DEFAULT '',
+                        leg                    TEXT NOT NULL DEFAULT '',
+                        contract_id            TEXT NOT NULL DEFAULT '',
+                        required_for_economics INTEGER NOT NULL DEFAULT 1,
+                        quote_present          INTEGER NOT NULL DEFAULT 0,
+                        bid                    REAL,
+                        ask                    REAL,
+                        age_ms                 INTEGER,
+                        accepted               INTEGER NOT NULL DEFAULT 0,
+                        reason_codes           TEXT NOT NULL DEFAULT '',
+                        {common_cols}
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_quote_events_opportunity "
+                    "ON quote_quality_events(opportunity_id)"
+                )
+
+                self._migrate_identity_columns(conn)
+                self._migrate_decisions_append_only(conn)
         finally:
             conn.close()
+
+    _IDENTITY_TABLES = (
+        "quote_quality_events",
+        "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
+        "decisions", "paper_fills", "hedge_rebalances", "daily_mtm",
+        "margin_snapshots", "costs", "outcomes",
+    )
+
+    def _migrate_identity_columns(self, conn) -> None:
+        """Add per-row provenance to databases created before it existed."""
+        for table in self._IDENTITY_TABLES:
+            try:
+                cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            except Exception:
+                continue
+            if not cols:
+                continue
+            if "runtime_build_sha" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN runtime_build_sha TEXT NOT NULL DEFAULT 'UNKNOWN'"
+                )
+            if "authoritative" not in cols:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 1"
+                )
+
+    def _migrate_decisions_append_only(self, conn) -> None:
+        """Rebuild `decisions` without UNIQUE(opportunity_id).
+
+        Decisions are an audit trail: a recovery or re-evaluation appends an event.
+        The old constraint forced callers to choose between deleting history and
+        failing the entry.
+        """
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='decisions'"
+            ).fetchone()
+        except Exception:
+            return
+        if not row:
+            return
+        sql = row[0] or ""
+        if "opportunity_id    TEXT NOT NULL UNIQUE" not in sql and "opportunity_id TEXT NOT NULL UNIQUE" not in sql:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_decisions_opportunity ON decisions(opportunity_id)"
+            )
+            return
+
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(decisions)")]
+        rebuilt = sql.replace("opportunity_id    TEXT NOT NULL UNIQUE", "opportunity_id    TEXT NOT NULL")
+        rebuilt = rebuilt.replace("opportunity_id TEXT NOT NULL UNIQUE", "opportunity_id TEXT NOT NULL")
+        rebuilt = rebuilt.replace("CREATE TABLE decisions", "CREATE TABLE decisions_rebuilt")
+        rebuilt = rebuilt.replace('CREATE TABLE "decisions"', "CREATE TABLE decisions_rebuilt")
+        conn.execute("DROP TABLE IF EXISTS decisions_rebuilt")
+        conn.execute(rebuilt)
+        col_list = ", ".join(cols)
+        conn.execute(f"INSERT INTO decisions_rebuilt ({col_list}) SELECT {col_list} FROM decisions")
+        conn.execute("DROP TABLE decisions")
+        conn.execute("ALTER TABLE decisions_rebuilt RENAME TO decisions")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_decisions_opportunity ON decisions(opportunity_id)"
+        )
+        log.info("snapback warehouse: decisions rebuilt as an append-only audit trail")
 
     def record_opportunity(
         self,
@@ -838,6 +946,53 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def record_quote_quality_event(
+        self,
+        event_id: str,
+        opportunity_id: str,
+        phase: str,
+        leg: str,
+        contract_id: str,
+        required_for_economics: int,
+        quote_present: int,
+        bid: Optional[float],
+        ask: Optional[float],
+        age_ms: Optional[int],
+        accepted: int,
+        reason_codes: str,
+        provider_timestamp: Optional[str] = None,
+        symbol: str = "",
+        source: str = "PROSPECTIVE_PAPER",
+    ) -> None:
+        """Append one quote attempt, accepted or refused."""
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO quote_quality_events (
+                        event_id, opportunity_id, phase, leg, contract_id,
+                        required_for_economics, quote_present, bid, ask, age_ms,
+                        accepted, reason_codes,
+                        observed_at, provider_timestamp, received_at, symbol,
+                        provider_symbol, expiry, strike, instrument_token, source,
+                        strategy_commit, manifest_hash, runtime_build_sha, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id, opportunity_id, phase, leg, contract_id,
+                        int(required_for_economics), int(quote_present), bid, ask, age_ms,
+                        int(accepted), reason_codes,
+                        now, provider_timestamp, now, symbol or contract_id,
+                        contract_id, "", 0.0, "", source,
+                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH, _BUILD_SHA,
+                        0 if source != "PROSPECTIVE_PAPER" else 1,
+                    ),
+                )
+        finally:
+            conn.close()
+
     def record_decision(
         self,
         decision_id: str,
@@ -860,7 +1015,7 @@ class SnapbackObservationWarehouse:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO decisions (
+                    INSERT OR REPLACE INTO decisions (
                         decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
                         chosen_delta, causal_beta, target_hedge_lots, reason,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
@@ -1071,7 +1226,7 @@ class SnapbackObservationWarehouse:
         """Query stored rows from any of the 11 warehouse tables."""
         valid_tables = {
             "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
-            "decisions", "paper_fills", "hedge_rebalances", "daily_mtm",
+            "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes"
         }
         if table_name not in valid_tables:
