@@ -124,7 +124,7 @@ def evaluate_authoritative_snapback_gate(
             max_mtm_drawdown_pct=0.0,
             top_1pct_pnl_share=0.0,
             unresolved_exposures_count=unresolved_exposures_count,
-            quote_coverage_pct=coverage_val,
+            quote_coverage_pct=quote_coverage_pct,
             checks=checks,
             reasons=reasons,
         )

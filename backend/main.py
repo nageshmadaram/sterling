@@ -117,9 +117,34 @@ async def lifespan(app: FastAPI):
     # if something actually runs after the close.
     from app.services.intraday_runner import auto_scan_loop as _intraday_scan
     intraday_task = asyncio.create_task(_intraday_scan(interval=300))
-    from app.services.snapback_runner import start as start_snapback_runner
-    snapback_runner_task = start_snapback_runner()
-    log.info("Snapback prospective unattended runner started (every 30s)")
+    # Startup invariant: the frozen prospective runner starts only when the evidence
+    # database is writable, the manifest verifies, and the Snapback config loaded from
+    # a reachable store with the frozen hash. A failure must be loud, never a silent
+    # "defaults OFF" runtime that looks alive but can never produce a signal.
+    from app.services.snapback_startup import run_startup_preflight
+    from app.services.snapback_health import record_error, clear_error
+
+    snapback_preflight = run_startup_preflight()
+    snapback_runner_task = None
+    if snapback_preflight.may_start_runner:
+        clear_error("startup_preflight_failed")
+        clear_error("recovery_required")
+        from app.services.snapback_runner import start as start_snapback_runner
+        snapback_runner_task = start_snapback_runner()
+        log.info("Snapback prospective unattended runner started (every 30s)")
+    else:
+        key = (
+            "recovery_required"
+            if snapback_preflight.status == "RECOVERY_REQUIRED"
+            else "startup_preflight_failed"
+        )
+        record_error(key, ", ".join(snapback_preflight.errors))
+        log.error(
+            "SNAPBACK PREFLIGHT %s — runner NOT started. Errors: %s. Details: %s",
+            snapback_preflight.status,
+            snapback_preflight.errors,
+            snapback_preflight.details,
+        )
 
     from app.services.snapback_ops_scheduler import start as start_snapback_ops
     snapback_ops_task = start_snapback_ops()

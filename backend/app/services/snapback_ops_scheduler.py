@@ -72,6 +72,7 @@ class SnapbackOpsScheduler:
     ) -> None:
         from app.services import snapback_backup
         from app.services.snapback_alerts import AlertDispatcher, LoggingAlertSink
+        from app.services.snapback_alert_telegram import CompositeAlertSink, TelegramAlertSink
 
         self.source_db = Path(
             source_db
@@ -107,7 +108,10 @@ class SnapbackOpsScheduler:
         self.verify_backup_fn = verify_backup_fn or snapback_backup.verify_backup
         self.report_fn = report_fn or self._default_report_fn
         self.health_fn = health_fn or self._default_health_fn
-        self.dispatcher = dispatcher or AlertDispatcher(sink=LoggingAlertSink())
+        # Logging always; Telegram additionally when a target is configured.
+        self.dispatcher = dispatcher or AlertDispatcher(
+            sink=CompositeAlertSink(LoggingAlertSink(), TelegramAlertSink())
+        )
         self.is_trading_day_fn = is_trading_day_fn or self._default_trading_day_fn
 
         self._last_backup_ok = True

@@ -38,6 +38,21 @@ class ExecutionControlCASConflictError(RuntimeError):
     pass
 
 
+def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
+    """Add missing columns to an existing table. Idempotent, and a no-op when the
+    table does not exist yet (CREATE TABLE above already carries the full schema)."""
+    try:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    except Exception:
+        return
+    if not existing:
+        return
+    for name, decl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+            log.info("db: added missing column %s.%s", table, name)
+
+
 def _create_tables(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS positions (
@@ -399,6 +414,10 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             closed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Legacy stores predate source_trade_id. Add it in place rather than failing the
+    # whole init(): an aborted init sets _available=False, and every config read —
+    # including the frozen Snapback config — then falls back to "defaults OFF".
+    _ensure_columns(conn, "calibration_trades", {"source_trade_id": "TEXT"})
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_calibration_trades_source ON calibration_trades(source_trade_id)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS execution_control (
@@ -634,6 +653,8 @@ def init() -> bool:
         conn = sqlite3.connect(_DB_PATH, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        # Wait for a concurrent writer instead of failing init with 'database is locked'.
+        conn.execute("PRAGMA busy_timeout=30000")
         _create_tables(conn)
         conn.close()
         _available = True

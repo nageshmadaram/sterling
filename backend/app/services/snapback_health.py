@@ -25,6 +25,8 @@ _HALTING_ERRORS = {
     "database_unavailable",
     "manifest_mismatch",
     "health_probe_failed",
+    "startup_preflight_failed",
+    "recovery_required",
 }
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -82,6 +84,7 @@ def build_prospective_health(
     last_eod_cycle: Optional[datetime] = None,
     unresolved_errors: Optional[Iterable[str]] = None,
     market_open: bool = True,
+    alert_transport_configured: bool = False,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Build the health object from observed component truth. Unknown is never green."""
@@ -158,6 +161,7 @@ def build_prospective_health(
         "processing_entries": processing,
         "open_positions": open_positions,
         "exit_pending": exit_pending,
+        "alert_transport_configured": bool(alert_transport_configured),
         "unresolved_errors": deduped,
         "generated_at": _iso(now),
     }
@@ -185,6 +189,16 @@ def _runtime_sha() -> Optional[str]:
     except Exception:  # pragma: no cover - environment dependent
         pass
     return None
+
+
+def _probe_alert_transport(uid: str = "default") -> bool:
+    """Whether an operational alert can reach a person. Unknown counts as false."""
+    try:
+        from app.services.snapback_alert_telegram import transport_configured
+
+        return bool(transport_configured(uid))
+    except Exception:
+        return False
 
 
 def _probe_broker(uid: str = "default") -> bool:
@@ -290,5 +304,6 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         last_eod_cycle=get_heartbeat("eod_cycle"),
         unresolved_errors=standing_errors,
         market_open=market_open,
+        alert_transport_configured=_probe_alert_transport(),
         now=now,
     )
