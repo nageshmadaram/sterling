@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from study.snapback_forward_gate import (
+
     build_gate_inputs,
     evaluate_forward_gate,
 )
@@ -26,6 +27,7 @@ def _records(n_trades=0, n_sessions=0, pnl=10.0):
                 "actual_futures_pnl": 0.0,
                 "actual_costs": 5.0,
                 "entry_ts": f"{session}T09:20:00+05:30",
+                **_AUTH_FIXTURE,
             }
         )
     return {
@@ -33,6 +35,10 @@ def _records(n_trades=0, n_sessions=0, pnl=10.0):
         "paper_positions": positions,
         "daily_mtm": [],
         "option_quotes": [],
+        "quote_quality_events": [
+            {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE}
+            for _ in range(max(n_trades, 1) * 4)
+        ],
     }
 
 
@@ -65,12 +71,12 @@ def test_inputs_use_observed_values_only():
     ]
     # Coverage is measured from required attempts, not from stored quote rows.
     records["quote_quality_events"] = [
-        {"required_for_economics": 1, "accepted": 1},
-        {"required_for_economics": 1, "accepted": 0},
+        {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE},
+        {"required_for_economics": 1, "accepted": 0, **_AUTH_FIXTURE},
     ]
     records["daily_mtm"] = [
-        {"session_date": "2026-09-01", "total_mtm": 100.0},
-        {"session_date": "2026-09-02", "total_mtm": -50.0},
+        {"session_date": "2026-09-01", "total_mtm": 100.0, **_AUTH_FIXTURE},
+        {"session_date": "2026-09-02", "total_mtm": -50.0, **_AUTH_FIXTURE},
     ]
 
     inputs = build_gate_inputs(records=records)
@@ -87,8 +93,8 @@ def test_inputs_use_observed_values_only():
 def test_equity_series_is_cumulative_not_per_session_marks():
     records = _records(n_trades=1, n_sessions=1)
     records["daily_mtm"] = [
-        {"session_date": "2026-09-01", "total_mtm": 100.0},
-        {"session_date": "2026-09-02", "total_mtm": 40.0},
+        {"session_date": "2026-09-01", "total_mtm": 100.0, **_AUTH_FIXTURE},
+        {"session_date": "2026-09-02", "total_mtm": 40.0, **_AUTH_FIXTURE},
     ]
 
     inputs = build_gate_inputs(records=records)
@@ -115,6 +121,20 @@ def test_verdict_is_one_of_exactly_three_values():
 
 def test_adapter_exposes_no_parameter_authority():
     import study.snapback_forward_gate as mod
+
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {"source": "PROSPECTIVE_PAPER", "authoritative": 1}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
 
     source = open(mod.__file__, encoding="utf-8").read()
 

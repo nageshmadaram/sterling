@@ -95,7 +95,7 @@ def _require_outcome_fields(outcome_data: Dict[str, Any]) -> Dict[str, float]:
 
 # Bumped whenever a stored column changes meaning. A file written under an older
 # version is not silently reinterpreted under the current one.
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 
 
 def resolve_authoritative_flag(*, source: str, requested: Optional[int] = None) -> int:
@@ -151,7 +151,7 @@ class SnapbackObservationWarehouse:
             strategy_commit   TEXT NOT NULL DEFAULT '""" + FROZEN_COMMIT_SHA + """',
             manifest_hash     TEXT NOT NULL DEFAULT '""" + FROZEN_MANIFEST_HASH + """',
             runtime_build_sha TEXT NOT NULL DEFAULT '""" + _BUILD_SHA + """',
-            authoritative     INTEGER NOT NULL DEFAULT 1
+            authoritative     INTEGER NOT NULL DEFAULT 0
         """
 
         conn = self._get_connection()
@@ -514,7 +514,7 @@ class SnapbackObservationWarehouse:
                         decision            TEXT NOT NULL,
                         reason_codes_json   TEXT NOT NULL DEFAULT '[]',
                         runtime_build_sha   TEXT NOT NULL DEFAULT '',
-                        authoritative       INTEGER NOT NULL DEFAULT 1
+                        authoritative       INTEGER NOT NULL DEFAULT 0
                     )
                 """)
                 conn.execute(
@@ -576,7 +576,7 @@ class SnapbackObservationWarehouse:
                         decision_codes_json   TEXT NOT NULL DEFAULT '[]',
                         provider_observed_at  TEXT,
                         recorded_at           TEXT NOT NULL DEFAULT '',
-                        authoritative         INTEGER NOT NULL DEFAULT 1,
+                        authoritative         INTEGER NOT NULL DEFAULT 0,
                         payload_hash          TEXT NOT NULL DEFAULT ''
                     )
                 """)
@@ -612,7 +612,7 @@ class SnapbackObservationWarehouse:
                         runtime_build_sha  TEXT NOT NULL DEFAULT '',
                         config_hash        TEXT NOT NULL DEFAULT '',
                         observed_at        TEXT NOT NULL DEFAULT '',
-                        authoritative      INTEGER NOT NULL DEFAULT 1,
+                        authoritative      INTEGER NOT NULL DEFAULT 0,
                         payload_hash       TEXT NOT NULL DEFAULT ''
                     )
                 """)
@@ -762,7 +762,7 @@ class SnapbackObservationWarehouse:
                 )
             if "authoritative" not in cols:
                 conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 1"
+                    f"ALTER TABLE {table} ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0"
                 )
 
     def _migrate_decisions_append_only(self, conn) -> None:
@@ -878,30 +878,53 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    # Every table the promotion gate or a report reads. Scanning only
+    # `opportunities` would leave the same contradiction undetected in the rows
+    # that actually carry the economics.
+    _AUTHORITY_TABLES = (
+        "opportunities", "outcomes", "costs", "daily_mtm",
+        "hedge_rebalances", "quote_quality_events", "paper_fills", "decisions",
+    )
+
+    def authority_scanned_tables(self) -> Tuple[str, ...]:
+        return self._AUTHORITY_TABLES
+
     def contradictory_authority_rows(self) -> List[Dict[str, Any]]:
-        """Rows whose authoritative flag disagrees with their source.
+        """Rows claiming an authority their source does not support.
 
-        Such a row is not necessarily miscounted — filter_authoritative() checks
-        the source too — but it is a database saying two things at once, and any
-        reader trusting the column alone would count replayed history as
-        prospective evidence.
+        A database saying two things at once is one query away from saying the
+        wrong one. Checked across every gate-relevant table, not only the one
+        where the defect happened to be seen first.
         """
-        from app.services.snapback_authority import NON_AUTHORITATIVE_SOURCES
+        from app.services.snapback_authority import AUTHORITATIVE_SOURCES
 
-        placeholders = ",".join("?" for _ in NON_AUTHORITATIVE_SOURCES)
+        offenders: List[Dict[str, Any]] = []
         conn = self._get_connection()
         try:
-            rows = conn.execute(
-                f"SELECT opportunity_id, symbol, source, authoritative, signal_timestamp "
-                f"FROM opportunities "
-                f"WHERE source IN ({placeholders}) AND authoritative = 1",
-                tuple(sorted(NON_AUTHORITATIVE_SOURCES)),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            return []
+            for table in self._AUTHORITY_TABLES:
+                try:
+                    rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+                except sqlite3.OperationalError:
+                    continue
+                for raw in rows:
+                    row = dict(raw)
+                    if "authoritative" not in row or "source" not in row:
+                        continue
+                    try:
+                        flag = int(row.get("authoritative") or 0)
+                    except (TypeError, ValueError):
+                        flag = 0
+                    source = str(row.get("source") or "")
+                    if flag == 1 and source not in AUTHORITATIVE_SOURCES:
+                        offenders.append({
+                            "table": table,
+                            "source": source,
+                            "authoritative": flag,
+                            "opportunity_id": row.get("opportunity_id", ""),
+                        })
         finally:
             conn.close()
-        return [dict(r) for r in rows]
+        return offenders
 
     def get_opportunity_by_id(self, opportunity_id: str) -> Optional[Dict[str, Any]]:
         """Fetch single opportunity row by opportunity_id."""
@@ -1218,15 +1241,16 @@ class SnapbackObservationWarehouse:
                         modeled_option_pnl, actual_option_pnl, modeled_futures_pnl, actual_futures_pnl,
                         modeled_costs, actual_costs, modeled_total_pnl, actual_total_pnl, observed_vs_model_error,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         outcome_id, opportunity_id, exit_reason, entry_ts, exit_ts,
                         modeled_option_pnl, actual_option_pnl, modeled_futures_pnl, actual_futures_pnl,
                         modeled_costs, actual_costs, modeled_total, actual_total, error,
                         now, now, now, symbol, symbol, "", 0.0, "", source,
-                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -1272,14 +1296,15 @@ class SnapbackObservationWarehouse:
                         candidate_id, opportunity_id, candidate_rank, option_type, dte,
                         strike_distance, theoretical_delta, is_chosen,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         candidate_id, opportunity_id, candidate_rank, option_type, dte,
                         strike_distance, theoretical_delta, int(is_chosen),
                         now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
-                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -1318,14 +1343,15 @@ class SnapbackObservationWarehouse:
                         quote_id, opportunity_id, bid, ask, bidqty, askqty, ltp, oi, iv, delta,
                         quote_age_ms, is_stale,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         quote_id, opportunity_id, bid, ask, bidqty, askqty, ltp, oi, iv, delta,
                         quote_age_ms, int(is_stale),
                         now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
-                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -1360,14 +1386,15 @@ class SnapbackObservationWarehouse:
                         quote_id, opportunity_id, futures_symbol, bid, ask, ltp, basis,
                         quote_age_ms, is_stale,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         quote_id, opportunity_id, futures_symbol, bid, ask, ltp, basis,
                         quote_age_ms, int(is_stale),
                         now, provider_timestamp or now, now, symbol, provider_symbol or futures_symbol, expiry, 0.0,
-                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -1949,14 +1976,15 @@ class SnapbackObservationWarehouse:
                         decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
                         chosen_delta, causal_beta, target_hedge_lots, reason,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         decision_id, opportunity_id, decision, chosen_option_symbol, chosen_strike,
                         chosen_delta, causal_beta, target_hedge_lots, reason,
                         now, provider_timestamp or now, now, symbol, symbol, "", chosen_strike,
-                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -1988,13 +2016,14 @@ class SnapbackObservationWarehouse:
                     INSERT INTO paper_fills (
                         fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
                         now, provider_timestamp or now, now, symbol, provider_symbol or symbol, expiry, strike,
-                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        instrument_token, source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -2023,13 +2052,14 @@ class SnapbackObservationWarehouse:
                     INSERT INTO hedge_rebalances (
                         rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
                         now, provider_timestamp or now, now, symbol, provider_symbol or symbol, "", 0.0,
-                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -2060,14 +2090,15 @@ class SnapbackObservationWarehouse:
                         mtm_id, session_date, opportunity_id, option_mtm, futures_mtm, total_mtm,
                         option_liquidation_bid, futures_liquidation_quote,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         mtm_id, session_date, opportunity_id, option_mtm, futures_mtm, total_mtm,
                         option_liquidation_bid, futures_liquidation_quote,
                         now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
-                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -2096,14 +2127,15 @@ class SnapbackObservationWarehouse:
                         snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
                         total_margin, available_capital,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
                         total_margin, available_capital,
                         now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
-                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -2139,14 +2171,15 @@ class SnapbackObservationWarehouse:
                         cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
                         total_statutory_costs,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         cost_id, opportunity_id, brokerage, stt, exchange_txn_fee, clearing_fee, gst, stamp_duty,
                         total_statutory_costs,
                         now, provider_timestamp or now, now, symbol, symbol, "", 0.0,
-                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", source, FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=source),
                     ),
                 )
         finally:
@@ -2481,13 +2514,14 @@ class SnapbackObservationWarehouse:
                     INSERT OR REPLACE INTO paper_fills (
                         fill_id, opportunity_id, order_side, fill_price, fill_quantity, slippage,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         f["fill_id"], opportunity_id, f["order_side"], f["fill_price"], f["fill_quantity"], f.get("slippage", 0.0),
                         now, f.get("provider_timestamp") or now, now, f["symbol"], f.get("provider_symbol") or f["symbol"], f.get("expiry", ""), f.get("strike", 0.0),
-                        f.get("instrument_token", ""), f.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        f.get("instrument_token", ""), f.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=f.get("source", "PROSPECTIVE_PAPER")),
                     ),
                 )
                 # 3. Hedge rebalance
@@ -2497,13 +2531,14 @@ class SnapbackObservationWarehouse:
                     INSERT OR REPLACE INTO hedge_rebalances (
                         rebalance_id, opportunity_id, prior_hedge_lots, new_hedge_lots, futures_fill_price, reason,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         h["rebalance_id"], opportunity_id, h["prior_hedge_lots"], h["new_hedge_lots"], h["futures_fill_price"], h.get("reason", ""),
                         now, h.get("provider_timestamp") or now, now, h["symbol"], h.get("provider_symbol") or h["symbol"], "", 0.0,
-                        "", h.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", h.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=h.get("source", "PROSPECTIVE_PAPER")),
                     ),
                 )
                 # 4. Costs — one immutable event per executed leg, in the SAME
@@ -2520,14 +2555,15 @@ class SnapbackObservationWarehouse:
                         snapshot_id, opportunity_id, option_margin_required, futures_margin_required,
                         total_margin, available_capital,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         m["snapshot_id"], opportunity_id, m["option_margin_required"], m["futures_margin_required"],
                         m["total_margin"], m["available_capital"],
                         now, m.get("provider_timestamp") or now, now, m["symbol"], m["symbol"], "", 0.0,
-                        "", m.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        "", m.get("source", "PROSPECTIVE_PAPER"), FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        resolve_authoritative_flag(source=m.get("source", "PROSPECTIVE_PAPER")),
                     ),
                 )
                 # 6. Paper position ledger

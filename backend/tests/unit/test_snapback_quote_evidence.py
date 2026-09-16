@@ -15,6 +15,7 @@ import pytest
 
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 from app.services.snapback_quote_evidence import (
+
     coverage_from_events,
     record_quote_attempt,
 )
@@ -120,6 +121,20 @@ def test_all_rejected_is_zero_coverage_not_perfect_coverage():
 
 def test_gate_uses_attempt_based_coverage(warehouse):
     from study.snapback_forward_gate import build_gate_inputs
+
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {"source": "PROSPECTIVE_PAPER", "authoritative": 1}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
 
     records = {
         "outcomes": [],

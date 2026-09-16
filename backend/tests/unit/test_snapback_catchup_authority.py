@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from app.services.snapback_authority import (
+
     CATCHUP_SOURCE,
     AUTHORITATIVE_SOURCE,
     classify_signal_authority,
@@ -132,7 +133,7 @@ def test_gate_input_excludes_non_authoritative_rows():
                 "actual_futures_pnl": 0.0,
                 "actual_costs": 5.0,
                 "entry_ts": "2026-09-17T09:20:00+05:30",
-                "authoritative": 1,
+                "authoritative": 1, "source": "PROSPECTIVE_PAPER",
                 "source": AUTHORITATIVE_SOURCE,
             },
             {
@@ -158,6 +159,20 @@ def test_gate_input_excludes_non_authoritative_rows():
 def test_gate_input_excludes_rows_from_a_different_build():
     from study.snapback_forward_gate import build_gate_inputs
 
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {"source": "PROSPECTIVE_PAPER", "authoritative": 1}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
+
     records = {
         "outcomes": [
             {
@@ -166,7 +181,7 @@ def test_gate_input_excludes_rows_from_a_different_build():
                 "actual_futures_pnl": 0.0,
                 "actual_costs": 5.0,
                 "entry_ts": "2026-09-17T09:20:00+05:30",
-                "authoritative": 1,
+                "authoritative": 1, "source": "PROSPECTIVE_PAPER",
                 "runtime_build_sha": "aaaa",
             },
             {
@@ -175,7 +190,7 @@ def test_gate_input_excludes_rows_from_a_different_build():
                 "actual_futures_pnl": 0.0,
                 "actual_costs": 5.0,
                 "entry_ts": "2026-09-18T09:20:00+05:30",
-                "authoritative": 1,
+                "authoritative": 1, "source": "PROSPECTIVE_PAPER",
                 "runtime_build_sha": "bbbb",
             },
         ],

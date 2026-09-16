@@ -81,27 +81,46 @@ def _num(row: Dict[str, Any], field: str, errors: List[str], who: str) -> Option
     return value
 
 
-def _was_hedged(outcome: Dict[str, Any]) -> bool:
+def _hedge_executions(records: Dict[str, List[Dict[str, Any]]]) -> Dict[str, int]:
+    """Count hedge entry/exit fills per trade from execution artifacts.
+
+    P&L is not evidence that a leg executed. A hedge that opened and closed flat
+    nets to zero, and inferring "no hedge" from that stopped its two cost events
+    being required — understating costs on exactly the trades where the hedge
+    did its job.
+    """
+    counts: Dict[str, int] = {}
+    for row in (records.get("paper_fills") or []):
+        fill = dict(row)
+        leg = str(fill.get("leg") or fill.get("order_side") or "").upper()
+        if "HEDGE" not in leg:
+            continue
+        opp = str(fill.get("opportunity_id") or "")
+        counts[opp] = counts.get(opp, 0) + 1
+    return counts
+
+
+def _was_hedged(outcome: Dict[str, Any], *, hedge_fills: int = 0) -> bool:
     """Whether this trade actually carried a futures hedge.
 
-    Read from the recorded outcome, never inferred from the presence of a hedge
-    cost — that would make an orphan hedge charge prove its own legitimacy.
+    Read from an explicit statement or an execution artifact. Never from
+    futures P&L: a flat hedge and no hedge produce the same number.
     """
     flag = outcome.get("hedged")
-    if flag is not None:
-        return bool(int(flag)) if str(flag).strip() not in ("", "None") else False
+    if flag is not None and str(flag).strip() not in ("", "None"):
+        try:
+            return bool(int(flag))
+        except (TypeError, ValueError):
+            return False
+
     lots = outcome.get("futures_lots_at_entry")
     if lots is not None:
         try:
             return int(lots) != 0
         except (TypeError, ValueError):
             return False
-    # No statement either way. Fall back to the futures leg's economics: a hedge
-    # that executed moves money.
-    try:
-        return float(outcome.get("actual_futures_pnl") or 0.0) != 0.0
-    except (TypeError, ValueError):
-        return False
+
+    return hedge_fills > 0
 
 
 def _cardinality_errors(
@@ -155,15 +174,35 @@ def build_promotion_input(
     allocation_capital: Optional[float] = None,
 ) -> PromotionInput:
     """Assemble gate input, refusing anything that cannot be reconciled."""
-    from app.services.snapback_authority import filter_authoritative
+    from app.services.snapback_authority import (
+        filter_authoritative, unknown_source_rows,
+    )
     from app.services.snapback_portfolio import build_equity_curve, equity_series
     from app.services.snapback_quote_evidence import coverage_from_events
 
     errors: List[str] = []
     expected_build = expected_identity.get("runtime_build_sha") or ""
 
-    outcomes = filter_authoritative(records.get("outcomes"))
-    cost_rows = [dict(r) for r in filter_authoritative(records.get("costs"))]
+    # Build identity is proved for every promotable row, not just outcomes. A
+    # 1.4 outcome priced by a 1.3 cost event is not one experiment, and the
+    # builder is supposed to prove that rather than assume a fresh database.
+    def _authoritative(key: str):
+        rows = records.get(key)
+        kept = filter_authoritative(rows, expected_build_sha=expected_build or None)
+        dropped = len(rows or []) - len(kept)
+        if dropped:
+            errors.append(
+                f"{key}: {dropped} row(s) excluded — wrong build, unknown source "
+                f"or missing authority"
+            )
+        for offender in unknown_source_rows(rows):
+            errors.append(
+                f"{key}: unknown evidence source {offender.get('source')!r}"
+            )
+        return kept
+
+    outcomes = _authoritative("outcomes")
+    cost_rows = [dict(r) for r in _authoritative("costs")]
     positions = [dict(r) for r in (records.get("paper_positions") or [])]
 
     # Costs by trade come from the LEDGER. A bug in outcome writing must not be able
@@ -185,8 +224,9 @@ def build_promotion_input(
     # double-charges, or an orphan attached to a leg that never executed. Each
     # changes the cost stress the gate applies without moving the sum enough to
     # be noticed.
+    hedge_fills = _hedge_executions(records)
     rebalance_counts: Dict[str, int] = {}
-    for row in filter_authoritative(records.get("hedge_rebalances")):
+    for row in _authoritative("hedge_rebalances"):
         opp = str(dict(row).get("opportunity_id") or "")
         rebalance_counts[opp] = rebalance_counts.get(opp, 0) + 1
 
@@ -221,7 +261,7 @@ def build_promotion_input(
             _cardinality_errors(
                 opp,
                 counts=phase_counts.get(opp, {}),
-                hedged=_was_hedged(outcome),
+                hedged=_was_hedged(outcome, hedge_fills=hedge_fills.get(opp, 0)),
                 rebalances=rebalance_counts.get(opp, 0),
             )
         )
@@ -258,12 +298,12 @@ def build_promotion_input(
     if unresolved:
         errors.append(f"unresolved exposures: {unresolved}")
 
-    coverage = coverage_from_events(filter_authoritative(records.get("quote_quality_events")))
+    coverage = coverage_from_events(_authoritative("quote_quality_events"))
     if trade_pnls and int(coverage.get("required") or 0) == 0:
         errors.append("no required quote attempts recorded for completed trades")
 
     curve = build_equity_curve(
-        daily_mtm=filter_authoritative(records.get("daily_mtm")),
+        daily_mtm=_authoritative("daily_mtm"),
         outcomes=outcomes,
         costs=cost_rows,
     )

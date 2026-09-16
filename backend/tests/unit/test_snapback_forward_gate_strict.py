@@ -11,6 +11,21 @@ import pytest
 
 from study.snapback_forward_gate import evaluate_forward_gate
 
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {"source": "PROSPECTIVE_PAPER", "authoritative": 1}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
+
+
 
 def _records(outcomes=None, **over):
     base = {
@@ -19,7 +34,7 @@ def _records(outcomes=None, **over):
         "daily_mtm": [],
         "option_quotes": [],
         "quote_quality_events": [
-            {"required_for_economics": 1, "accepted": 1} for _ in range(20)
+            {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE} for _ in range(20)
         ],
     }
     base.update(over)
@@ -34,7 +49,7 @@ def _good(i=0, pnl=10.0):
         "actual_futures_pnl": 0.0,
         "actual_costs": 5.0,
         "entry_ts": f"2026-09-{(i % 28) + 1:02d}T09:20:00+05:30",
-        "authoritative": 1,
+        "authoritative": 1, "source": "PROSPECTIVE_PAPER",
     }
 
 

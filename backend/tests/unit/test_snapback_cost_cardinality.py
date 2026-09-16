@@ -15,6 +15,24 @@ import pytest
 
 from study.snapback_promotion_inputs import PromotionInputError, build_promotion_input
 
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {
+    "source": "PROSPECTIVE_PAPER", "authoritative": 1,
+    "runtime_build_sha": "build-1",
+}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
+
+
 IDENTITY = {
     "experiment_id": "E1",
     "runtime_build_sha": "build-1",
@@ -31,7 +49,7 @@ def _cost(opp, phase, cost=10.0, cost_id=None):
         "phase": phase,
         "total_cost": cost,
         "runtime_build_sha": "build-1",
-        "authoritative": 1,
+        "authoritative": 1, "source": "PROSPECTIVE_PAPER",
     }
 
 
@@ -45,7 +63,7 @@ def _outcome(opp="OPP-1", *, costs=50.0, hedged=True):
         "entry_ts": "2026-10-01T09:20:00+05:30",
         "exit_ts": "2026-10-10T15:00:00+05:30",
         "runtime_build_sha": "build-1",
-        "authoritative": 1,
+        "authoritative": 1, "source": "PROSPECTIVE_PAPER",
         "hedged": 1 if hedged else 0,
     }
 
@@ -59,7 +77,7 @@ def _records(*, outcomes, costs, rebalances=None):
         "daily_mtm": [],
         "prospective_sessions": [],
         "quote_quality_events": [
-            {"required_for_economics": 1, "accepted": 1, "authoritative": 1}
+            {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE}
             for _ in range(10)
         ],
     }
@@ -149,8 +167,8 @@ def test_an_unhedged_trade_with_only_option_legs_is_accepted():
 
 def test_each_rebalance_needs_its_own_cost():
     rebalances = [
-        {"opportunity_id": "OPP-1", "rebalance_id": "RB-1", "authoritative": 1},
-        {"opportunity_id": "OPP-1", "rebalance_id": "RB-2", "authoritative": 1},
+        {"opportunity_id": "OPP-1", "rebalance_id": "RB-1", **_AUTH_FIXTURE},
+        {"opportunity_id": "OPP-1", "rebalance_id": "RB-2", **_AUTH_FIXTURE},
     ]
     costs = _complete_costs() + [_cost("OPP-1", "HEDGE_REBALANCE", 5.0)]
 
@@ -165,8 +183,8 @@ def test_each_rebalance_needs_its_own_cost():
 
 def test_matching_rebalance_costs_are_accepted():
     rebalances = [
-        {"opportunity_id": "OPP-1", "rebalance_id": "RB-1", "authoritative": 1},
-        {"opportunity_id": "OPP-1", "rebalance_id": "RB-2", "authoritative": 1},
+        {"opportunity_id": "OPP-1", "rebalance_id": "RB-1", **_AUTH_FIXTURE},
+        {"opportunity_id": "OPP-1", "rebalance_id": "RB-2", **_AUTH_FIXTURE},
     ]
     costs = _complete_costs() + [
         _cost("OPP-1", "HEDGE_REBALANCE", 5.0, cost_id="COST:RB-1"),

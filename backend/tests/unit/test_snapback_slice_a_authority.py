@@ -13,6 +13,21 @@ from datetime import datetime, timezone
 
 import pytest
 
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {"source": "PROSPECTIVE_PAPER", "authoritative": 1}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
+
+
 
 @pytest.fixture(autouse=True)
 def _decision_artifacts_present(monkeypatch):
@@ -152,7 +167,7 @@ def test_gate_uses_the_supplied_session_count_not_entry_dates():
             "actual_total_pnl": 10.0, "actual_option_pnl": 10.0,
             "actual_futures_pnl": 0.0, "actual_costs": 1.0,
             "entry_ts": "2026-09-17T09:20:00+05:30",  # all on one day
-            "authoritative": 1,
+            "authoritative": 1, "source": "PROSPECTIVE_PAPER",
         }
         for i in range(3)
     ]
@@ -160,7 +175,7 @@ def test_gate_uses_the_supplied_session_count_not_entry_dates():
     verdict = evaluate_forward_gate(
         records={"outcomes": outcomes, "paper_positions": [], "daily_mtm": [],
                  "option_quotes": [], "quote_quality_events": [
-                     {"required_for_economics": 1, "accepted": 1} for _ in range(20)
+                     {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE} for _ in range(20)
                  ]},
         observed_sessions=42,
     )
@@ -176,7 +191,7 @@ def _outcome(i=0):
     return {
         "opportunity_id": f"OPP-{i}", "actual_total_pnl": 10.0,
         "actual_option_pnl": 10.0, "actual_futures_pnl": 0.0, "actual_costs": 1.0,
-        "entry_ts": f"2026-09-{i + 1:02d}T09:20:00+05:30", "authoritative": 1,
+        "entry_ts": f"2026-09-{i + 1:02d}T09:20:00+05:30", "authoritative": 1, "source": "PROSPECTIVE_PAPER",
     }
 
 
@@ -218,8 +233,8 @@ def test_coverage_comes_from_attempts_when_present():
     inputs = build_gate_inputs(records={
         "outcomes": [], "paper_positions": [], "daily_mtm": [], "option_quotes": [],
         "quote_quality_events": [
-            {"required_for_economics": 1, "accepted": 1},
-            {"required_for_economics": 1, "accepted": 0},
+            {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE},
+            {"required_for_economics": 1, "accepted": 0, **_AUTH_FIXTURE},
         ],
     })
 

@@ -107,7 +107,10 @@ def evaluate_authoritative_snapback_gate(
     checks["daily_mtm_evidence_provided"] = has_mtm_evidence or not require_mtm_evidence
 
     if not (cost_evidence_valid and entry_dates_valid):
-        checks["independent_sessions_ge_60"] = unique_sessions >= 60
+        checks["independent_sessions_ge_60"] = (
+            int(entry_sessions_count) if entry_sessions_count is not None
+            else unique_sessions
+        ) >= 60
         checks["completed_trades_ge_300"] = n_trades >= 300
         checks["positive_lower_95_ci"] = False
         checks["positive_baseline_expectancy"] = False
@@ -155,7 +158,18 @@ def evaluate_authoritative_snapback_gate(
 
     pnls = np.array(trade_pnls, dtype=float)
     costs = np.array(statutory_costs, dtype=float)
-    unique_sessions = len(set(dates))
+
+    # The held-out session count comes from the session ledger, not from the
+    # number of distinct trade entry days. A fully observed session that
+    # produced no signal is still a held-out session; counting entry days
+    # silently shrinks the denominator the 60-session rule is measured against.
+    # Entry dates keep their own job below: they are what the CI clusters on.
+    entry_day_count = len(set(dates))
+    unique_sessions = (
+        int(entry_sessions_count)
+        if entry_sessions_count is not None
+        else entry_day_count
+    )
 
     net_expectancy = float(np.mean(pnls))
     

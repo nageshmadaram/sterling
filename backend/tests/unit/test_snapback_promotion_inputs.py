@@ -9,10 +9,28 @@ from __future__ import annotations
 import pytest
 
 from study.snapback_promotion_inputs import (
+
     PromotionInput,
     PromotionInputError,
     build_promotion_input,
 )
+
+# Authority is now explicit at the writer, so fixtures must declare it too: a row
+# with no `source` is deliberately not evidence any more.
+_AUTH_FIXTURE = {
+    "source": "PROSPECTIVE_PAPER", "authoritative": 1,
+    "runtime_build_sha": "build-1",
+}
+
+
+def _auth(row: dict, build: str = "") -> dict:
+    """Stamp a fixture row with a complete, self-consistent authority."""
+    out = dict(_AUTH_FIXTURE)
+    if build:
+        out["runtime_build_sha"] = build
+    out.update(row)
+    return out
+
 
 
 IDENTITY = {
@@ -35,7 +53,7 @@ def _outcome(i=0, pnl=100.0, costs=25.0, **over):
         "entry_ts": f"2026-10-{(i % 28) + 1:02d}T09:20:00+05:30",
         "exit_ts": f"2026-11-{(i % 28) + 1:02d}T15:20:00+05:30",
         "exit_reason": "PREMIUM_STOP",
-        "authoritative": 1,
+        "authoritative": 1, "source": "PROSPECTIVE_PAPER",
         "runtime_build_sha": "build-1",
     }
     row.update(over)
@@ -47,7 +65,7 @@ def _cost_rows(i=0, total=25.0, phases=("OPTION_ENTRY", "OPTION_EXIT")):
         {
             "cost_id": f"COST:{phase}-{i}", "opportunity_id": f"OPP-{i}",
             "execution_event_id": f"{phase}-{i}", "phase": phase,
-            "total_cost": total / len(phases), "authoritative": 1,
+            "total_cost": total / len(phases), "authoritative": 1, "source": "PROSPECTIVE_PAPER",
             "runtime_build_sha": "build-1",
         }
         for phase in phases
@@ -66,7 +84,7 @@ def _records(n=2, **over):
         "daily_mtm": [],
         "option_quotes": [],
         "quote_quality_events": [
-            {"required_for_economics": 1, "accepted": 1} for _ in range(40)
+            {"required_for_economics": 1, "accepted": 1, **_AUTH_FIXTURE} for _ in range(40)
         ],
         "prospective_sessions": [],
     }
