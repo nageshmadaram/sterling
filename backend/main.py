@@ -98,8 +98,18 @@ async def lifespan(app: FastAPI):
     # The loop is a no-op while the strategy is disabled, which is its default.
     # The loop reconciles against the broker before its first scan, so a restart
     # cannot open a second position in a contract it already holds.
-    from app.services.gamma_move_runner import auto_scan_loop as _gamma_move_scan
-    gamma_move_task = asyncio.create_task(_gamma_move_scan(interval=300))
+    # Family Mode runs exactly one strategy. Every other auto-runner stays stopped:
+    # fewer loops means fewer broker calls, less shared-state contention, and no way
+    # for an unrelated engine to put exposure on the family account by accident.
+    from app.services.snapback_family_mode import family_mode_enabled
+    _family_mode = family_mode_enabled()
+    if _family_mode:
+        log.warning("FAMILY MODE: only the Snapback prospective runtime will start")
+
+    gamma_move_task = None
+    if not _family_mode:
+        from app.services.gamma_move_runner import auto_scan_loop as _gamma_move_scan
+        gamma_move_task = asyncio.create_task(_gamma_move_scan(interval=300))
 
     # Adaptive Edge: underlyings -> contracts -> candidates, on a faster cadence
     # because the source is a scalping strategy. Safe to run unconditionally:
@@ -107,16 +117,20 @@ async def lifespan(app: FastAPI):
     # promotion gate refuses live execution regardless of the account's
     # paper/live setting, so this scans and paper-trades but cannot reach real
     # money until somebody promotes it deliberately.
-    from app.services.adaptive_edge_runner import auto_scan_loop as _adaptive_edge_scan
-    adaptive_edge_task = asyncio.create_task(_adaptive_edge_scan(interval=60))
+    adaptive_edge_task = None
+    if not _family_mode:
+        from app.services.adaptive_edge_runner import auto_scan_loop as _adaptive_edge_scan
+        adaptive_edge_task = asyncio.create_task(_adaptive_edge_scan(interval=60))
 
     # Intraday pack (pivot break / MA ribbon / VWAP SuperTrend): 5-minute rules,
     # so the loop runs on a 5-minute cadence rather than the engine default.
     # It also carries the session-end sweep: an intraday strategy holding
     # overnight is a different strategy, and `close_at_session_end` is only real
     # if something actually runs after the close.
-    from app.services.intraday_runner import auto_scan_loop as _intraday_scan
-    intraday_task = asyncio.create_task(_intraday_scan(interval=300))
+    intraday_task = None
+    if not _family_mode:
+        from app.services.intraday_runner import auto_scan_loop as _intraday_scan
+        intraday_task = asyncio.create_task(_intraday_scan(interval=300))
     # Startup invariant: the frozen prospective runner starts only when the evidence
     # database is writable, the manifest verifies, and the Snapback config loaded from
     # a reachable store with the frozen hash. A failure must be loud, never a silent
@@ -247,23 +261,26 @@ async def lifespan(app: FastAPI):
         await navigator_task
     except (Exception, BaseException):
         pass
-    gamma_move_task.cancel()
-    try:
-        await gamma_move_task
-    except (Exception, BaseException):
-        pass
+    if gamma_move_task is not None:
+        gamma_move_task.cancel()
+        try:
+            await gamma_move_task
+        except (Exception, BaseException):
+            pass
 
-    adaptive_edge_task.cancel()
-    try:
-        await adaptive_edge_task
-    except (Exception, BaseException):
-        pass
+    if adaptive_edge_task is not None:
+        adaptive_edge_task.cancel()
+        try:
+            await adaptive_edge_task
+        except (Exception, BaseException):
+            pass
 
-    intraday_task.cancel()
-    try:
-        await intraday_task
-    except (Exception, BaseException):
-        pass
+    if intraday_task is not None:
+        intraday_task.cancel()
+        try:
+            await intraday_task
+        except (Exception, BaseException):
+            pass
 
     from app.services.snapback_runner import stop as stop_snapback_runner
     stop_snapback_runner()

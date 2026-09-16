@@ -1009,18 +1009,34 @@ class SnapbackProspectiveCollector:
         modeled_costs = final_costs
         modeled_total = modeled_opt_pnl + modeled_fut_pnl - modeled_costs
 
-        self.warehouse.close_paper_position_state(opportunity_id)
-
-        return self.warehouse.record_outcome(
+        # Close and record economics in ONE transaction: a crash between them would
+        # erase the trade's P&L while removing it from the open book.
+        actual_total = actual_opt_pnl + actual_fut_pnl - final_costs
+        return self.warehouse.commit_paper_close_transaction(
             opportunity_id=opportunity_id,
-            symbol=symbol,
-            exit_reason=exit_reason,
-            entry_ts=entry_ts,
-            exit_ts=exit_ts,
-            modeled_option_pnl=modeled_opt_pnl,
-            actual_option_pnl=actual_opt_pnl,
-            modeled_futures_pnl=modeled_fut_pnl,
-            actual_futures_pnl=actual_fut_pnl,
-            modeled_costs=modeled_costs,
-            actual_costs=final_costs,
+            outcome_data={
+                "outcome_id": f"OUTCOME-{opportunity_id}",
+                "opportunity_id": opportunity_id,
+                "symbol": symbol,
+                "exit_reason": exit_reason,
+                "entry_ts": entry_ts,
+                "exit_ts": exit_ts,
+                "modeled_option_pnl": modeled_opt_pnl,
+                "actual_option_pnl": actual_opt_pnl,
+                "modeled_futures_pnl": modeled_fut_pnl,
+                "actual_futures_pnl": actual_fut_pnl,
+                "modeled_costs": modeled_costs,
+                "actual_costs": final_costs,
+                "modeled_total_pnl": modeled_total,
+                "actual_total_pnl": actual_total,
+                "observed_vs_model_error": actual_total - modeled_total,
+                "provider_timestamp": exit_ts,
+            },
+            cost_events=[{
+                "cost_id": f"COST-{opportunity_id}-EXIT",
+                "opportunity_id": opportunity_id,
+                "symbol": symbol,
+                "total_cost": exit_costs,
+                "provider_timestamp": exit_ts,
+            }],
         )

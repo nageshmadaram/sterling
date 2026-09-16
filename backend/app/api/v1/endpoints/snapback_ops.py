@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.core.auth import UserContext, get_current_user
 
 from app.services.snapback_family_ops import (
     get_family_evidence_verdict,
@@ -17,6 +19,17 @@ from app.services.snapback_health import get_prospective_health
 log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["snapback-ops"])
+
+
+def _allocated_capital():
+    """Declared evaluation capital, or None when it is not configured."""
+    try:
+        from app.services.snapback import get_config
+
+        capital = float(getattr(get_config("default"), "capital_inr", 0) or 0)
+        return capital or None
+    except Exception:
+        return None
 
 
 @router.get("/snapback/prospective/health")
@@ -43,7 +56,7 @@ async def prospective_health() -> dict:
 
 
 @router.get("/snapback/family/operations")
-async def family_operations() -> dict:
+async def family_operations(user: UserContext = Depends(get_current_user)) -> dict:
     """The Family Operations surface: health, mode, evidence, exposure and risk.
 
     Deliberately carries no strategy controls, and reports unknown economics as null
@@ -87,14 +100,21 @@ async def family_operations() -> dict:
         "broker_connected": bool(health.get("broker_connected")),
         "market_data_fresh": bool(health.get("market_data_fresh")),
         "runner_alive": bool(health.get("runner_alive")),
-        "backup_ok": bool(health.get("backup_ok", True)),
+        # Unknown backup state is UNKNOWN, never a reassuring true.
+        "backup_ok": health.get("backup_ok"),
         "alert_transport_configured": bool(health.get("alert_transport_configured", False)),
         "last_report": health.get("last_eod_cycle"),
         # Unknown economics stay unknown; never a fabricated zero.
-        "allocated_capital": None,
-        "net_pnl": evidence.get("net_pnl"),
-        "current_exposure": int(health.get("open_positions") or 0),
-        "open_positions": int(health.get("open_positions") or 0),
+        "allocated_capital": _allocated_capital(),
+        # Expectancy per trade and cumulative P&L are different numbers; do not
+        # label one as the other. Exposure is rupees, not a position count.
+        "cumulative_net_pnl": evidence.get("cumulative_net_pnl"),
+        "mean_net_pnl_per_trade": evidence.get("net_pnl"),
+        "current_exposure_inr": evidence.get("current_exposure_inr"),
+        "open_positions_count": int(health.get("open_positions") or 0),
+        "observed_sessions": evidence.get("total_sessions"),
+        "completed_trades": evidence.get("completed_trades"),
+        "build_sha": health.get("build_sha"),
         "exit_pending": int(health.get("exit_pending") or 0),
         "drawdown_pct": None,
         "new_trades_halted": halted,
@@ -106,10 +126,14 @@ async def family_operations() -> dict:
 
 
 @router.post("/snapback/family/stop-new-trades")
-async def family_stop_new_trades(reason: str = "family stop switch") -> dict:
+async def family_stop_new_trades(
+    reason: str = "family stop switch",
+    user: UserContext = Depends(get_current_user),
+) -> dict:
     """STOP ALL NEW TRADES. Halts new entries; exits and reconciliation continue."""
-    set_new_trades_halted(True, reason=reason)
+    set_new_trades_halted(True, reason=f"{reason} (actor={getattr(user, 'uid', 'unknown')})")
     return {
+        "actor": getattr(user, "uid", "unknown"),
         "new_trades_halted": True,
         "exits_still_processed": True,
         "reconciliation_still_processed": True,
@@ -120,10 +144,14 @@ async def family_stop_new_trades(reason: str = "family stop switch") -> dict:
 
 
 @router.post("/snapback/family/resume-new-trades")
-async def family_resume_new_trades(reason: str = "family resume") -> dict:
+async def family_resume_new_trades(
+    reason: str = "family resume",
+    user: UserContext = Depends(get_current_user),
+) -> dict:
     """Release the stop switch. Live entries still require the authoritative gate."""
-    set_new_trades_halted(False, reason=reason)
+    set_new_trades_halted(False, reason=f"{reason} (actor={getattr(user, 'uid', 'unknown')})")
     return {
+        "actor": getattr(user, "uid", "unknown"),
         "new_trades_halted": False,
         "reason": reason,
         "changed_at": datetime.now(timezone.utc).isoformat(),

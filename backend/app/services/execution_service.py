@@ -447,10 +447,15 @@ class CanonicalExecutionService:
             if not has_var_kwargs:
                 kwargs = {k: v for k, v in kwargs.items() if k in params}
 
-            if inspect.iscoroutinefunction(place_fn):
-                res = await place_fn(**kwargs)
-            else:
-                res = place_fn(**kwargs)
+            # The broker transport refuses writes that do not carry this capability,
+            # so an engine calling place_order directly cannot reach the account.
+            from app.services.snapback_family_mode import canonical_broker_capability
+
+            with canonical_broker_capability(request.signal_id or request.strategy_id or "canonical"):
+                if inspect.iscoroutinefunction(place_fn):
+                    res = await place_fn(**kwargs)
+                else:
+                    res = place_fn(**kwargs)
 
             if isinstance(res, dict):
                 order_id = str(res.get("order_id", ""))

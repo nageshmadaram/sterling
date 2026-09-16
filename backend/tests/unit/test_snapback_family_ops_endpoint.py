@@ -5,14 +5,20 @@ No strategy controls, and unknown economics are null rather than fabricated zero
 from __future__ import annotations
 
 from fastapi import FastAPI
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.api.v1.endpoints.snapback_ops import router
 
 
 def _app():
+    from app.core.auth import get_current_user
+
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
+    # Authentication itself is covered by test_snapback_family_controls_auth.py.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(uid="operator")
     return TestClient(app)
 
 
@@ -52,13 +58,13 @@ def test_family_view_exposes_only_operational_truth(monkeypatch):
     assert body["evidence"] == "INCONCLUSIVE"
     assert body["broker_connected"] is False
     assert body["runner_alive"] is True
-    assert body["open_positions"] == 0
+    assert body["open_positions_count"] == 0
     assert body["exit_pending"] == 0
 
     # Unknown economics stay unknown.
-    assert body["allocated_capital"] is None
-    assert body["net_pnl"] is None
+    assert body["cumulative_net_pnl"] is None
     assert body["drawdown_pct"] is None
+    assert body["current_exposure_inr"] is None
 
     # Live must be blocked tonight, and the screen must say so.
     assert body["live_blocked"] is True

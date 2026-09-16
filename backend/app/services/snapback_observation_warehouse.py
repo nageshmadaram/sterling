@@ -277,6 +277,14 @@ class SnapbackObservationWarehouse:
                         gst               REAL NOT NULL DEFAULT 0.0,
                         stamp_duty        REAL NOT NULL DEFAULT 0.0,
                         total_statutory_costs REAL NOT NULL DEFAULT 0.0,
+                        total_cost        REAL NOT NULL DEFAULT 0.0,
+                        phase             TEXT NOT NULL DEFAULT '',
+                        instrument        TEXT NOT NULL DEFAULT '',
+                        side              TEXT NOT NULL DEFAULT '',
+                        quantity          INTEGER NOT NULL DEFAULT 0,
+                        price             REAL NOT NULL DEFAULT 0.0,
+                        sebi_fee          REAL NOT NULL DEFAULT 0.0,
+                        cost_schedule_version TEXT NOT NULL DEFAULT '',
                         {common_cols}
                     )
                 """)
@@ -395,7 +403,25 @@ class SnapbackObservationWarehouse:
         "margin_snapshots", "costs", "outcomes",
     )
 
+    _COST_COLUMNS = {
+        "total_cost": "REAL NOT NULL DEFAULT 0.0",
+        "phase": "TEXT NOT NULL DEFAULT ''",
+        "instrument": "TEXT NOT NULL DEFAULT ''",
+        "side": "TEXT NOT NULL DEFAULT ''",
+        "quantity": "INTEGER NOT NULL DEFAULT 0",
+        "price": "REAL NOT NULL DEFAULT 0.0",
+        "sebi_fee": "REAL NOT NULL DEFAULT 0.0",
+        "cost_schedule_version": "TEXT NOT NULL DEFAULT ''",
+    }
+
     def _migrate_identity_columns(self, conn) -> None:
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(costs)")}
+            for name, decl in self._COST_COLUMNS.items():
+                if cols and name not in cols:
+                    conn.execute(f"ALTER TABLE costs ADD COLUMN {name} {decl}")
+        except Exception:
+            pass
         """Add per-row provenance to databases created before it existed."""
         for table in self._IDENTITY_TABLES:
             try:
@@ -969,6 +995,100 @@ class SnapbackObservationWarehouse:
                 )
         finally:
             conn.close()
+
+    def commit_paper_close_transaction(
+        self,
+        *,
+        opportunity_id: str,
+        outcome_data: Dict[str, Any],
+        cost_events: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Close a position and record its economics in ONE transaction.
+
+        Marking the position closed before the outcome exists means a crash in between
+        erases the trade's economics while removing it from the open book. Either every
+        row lands or none of them do, and the position stays where it was.
+        """
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:  # one transaction: any exception rolls the whole close back
+                for cost in (cost_events or []):
+                    conn.execute(
+                        """
+                        INSERT INTO costs (
+                            cost_id, opportunity_id, brokerage, stt, exchange_txn_fee,
+                            clearing_fee, gst, stamp_duty, total_cost,
+                            total_statutory_costs, phase, instrument, side, quantity,
+                            price, sebi_fee, cost_schedule_version,
+                            observed_at, provider_timestamp, received_at, symbol,
+                            provider_symbol, expiry, strike, instrument_token, source,
+                            strategy_commit, manifest_hash, runtime_build_sha, authoritative
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cost["cost_id"], cost.get("opportunity_id", opportunity_id),
+                            float(cost.get("brokerage", 0.0)), float(cost.get("stt", 0.0)),
+                            float(cost.get("exchange_txn_fee", 0.0)),
+                            float(cost.get("clearing_fee", 0.0)), float(cost.get("gst", 0.0)),
+                            float(cost.get("stamp_duty", 0.0)), float(cost.get("total_cost", 0.0)),
+                            float(cost.get("total_cost", 0.0)), cost.get("phase", ""),
+                            cost.get("instrument", ""), cost.get("side", ""),
+                            int(cost.get("quantity", 0) or 0), float(cost.get("price", 0.0)),
+                            float(cost.get("sebi_fee", 0.0)),
+                            cost.get("cost_schedule_version", ""),
+                            now, cost.get("provider_timestamp"), now,
+                            cost.get("symbol", ""), cost.get("provider_symbol", ""),
+                            cost.get("expiry", ""), float(cost.get("strike", 0.0)),
+                            cost.get("instrument_token", ""),
+                            cost.get("source", "PROSPECTIVE_PAPER"),
+                            FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH, _BUILD_SHA, 1,
+                        ),
+                    )
+
+                o = outcome_data
+                conn.execute(
+                    """
+                    INSERT INTO outcomes (
+                        outcome_id, opportunity_id, exit_reason, entry_ts, exit_ts,
+                        modeled_option_pnl, actual_option_pnl, modeled_futures_pnl,
+                        actual_futures_pnl, modeled_costs, actual_costs,
+                        modeled_total_pnl, actual_total_pnl, observed_vs_model_error,
+                        observed_at, provider_timestamp, received_at, symbol,
+                        provider_symbol, expiry, strike, instrument_token, source,
+                        strategy_commit, manifest_hash, runtime_build_sha, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        o["outcome_id"], o.get("opportunity_id", opportunity_id),
+                        o["exit_reason"], o["entry_ts"], o["exit_ts"],
+                        float(o.get("modeled_option_pnl", 0.0)), float(o.get("actual_option_pnl", 0.0)),
+                        float(o.get("modeled_futures_pnl", 0.0)), float(o.get("actual_futures_pnl", 0.0)),
+                        float(o.get("modeled_costs", 0.0)), float(o.get("actual_costs", 0.0)),
+                        float(o.get("modeled_total_pnl", 0.0)), float(o.get("actual_total_pnl", 0.0)),
+                        float(o.get("observed_vs_model_error", 0.0)),
+                        now, o.get("provider_timestamp"), now, o.get("symbol", ""),
+                        o.get("provider_symbol", ""), o.get("expiry", ""),
+                        float(o.get("strike", 0.0)), o.get("instrument_token", ""),
+                        o.get("source", "PROSPECTIVE_PAPER"),
+                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH, _BUILD_SHA, 1,
+                    ),
+                )
+
+                conn.execute(
+                    "UPDATE paper_positions SET status = 'CLOSED' WHERE opportunity_id = ?",
+                    (opportunity_id,),
+                )
+                conn.execute(
+                    "UPDATE opportunities SET status = 'CLOSED' WHERE opportunity_id = ?",
+                    (opportunity_id,),
+                )
+        finally:
+            conn.close()
+
+        result = dict(outcome_data)
+        result["status"] = "RECORDED"
+        return result
 
     def record_quote_quality_event(
         self,

@@ -448,6 +448,10 @@ class KiteClient(TradingExchangeAdapter):
         Kite has no per-order bracket, so stop_loss/take_profit are honored only
         when an explicit ``kite_order_type`` (SL/SL-M) + trigger is supplied —
         otherwise wire protection via GTT. ``post_only`` is unsupported by Kite."""
+        # Family Mode: broker writes must come from the canonical execution authority.
+        from app.services.snapback_family_mode import guard_broker_write
+        guard_broker_write("place_order")
+
         # Dropping this parameter let `post_only=True` fall into **kwargs and be
         # SILENTLY IGNORED: a caller asking for maker-only got an ordinary order
         # that can cross the spread and pay taker fees. Kite has no post-only, so
