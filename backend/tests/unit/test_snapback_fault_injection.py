@@ -215,6 +215,8 @@ def test_an_unsynchronised_clock_blocks_startup(monkeypatch):
         config_identity_fn=lambda: (True, []),
         database_fn=lambda: (True, {}),
         evidence_meta_fn=lambda: (True, {}),
+        dataset_start_fn=lambda: (True, {}),
+        evidence_authority_fn=lambda: (True, {}),
         calendar_fn=lambda: (True, {}),
         family_account_fn=lambda: (True, {}),
         allocation_capital_fn=lambda: (True, {}),

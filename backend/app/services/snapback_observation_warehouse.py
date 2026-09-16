@@ -98,6 +98,26 @@ def _require_outcome_fields(outcome_data: Dict[str, Any]) -> Dict[str, float]:
 EVIDENCE_SCHEMA_VERSION = 1
 
 
+def resolve_authoritative_flag(*, source: str, requested: Optional[int] = None) -> int:
+    """Decide the authoritative flag for one row.
+
+    Derived from the source, never defaulted by the schema. A replay source can
+    never be authoritative, whatever the caller asked for: the asymmetry is
+    deliberate, because wrongly including replayed history corrupts the sample
+    while wrongly excluding one signal only makes it smaller.
+    """
+    from app.services.snapback_authority import NON_AUTHORITATIVE_SOURCES
+
+    if str(source) in NON_AUTHORITATIVE_SOURCES:
+        return 0
+    if requested is None:
+        return 1
+    try:
+        return 1 if int(requested) == 1 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -808,6 +828,7 @@ class SnapbackObservationWarehouse:
         identity: Optional[Any] = None,
         policy_snapshot_hash: str = "",
         config_hash: str = "",
+        authoritative: Optional[int] = None,
     ) -> None:
         """Record underlying signal opportunity immutably.
 
@@ -816,6 +837,12 @@ class SnapbackObservationWarehouse:
         the canonical name.
         """
         ident = identity.as_row() if identity is not None else {}
+        # The column is derived from the source, never left to a schema default.
+        # A writer that simply omitted the flag used to produce an authoritative
+        # row, so omission conferred authority — the exact opposite of
+        # fail-closed. Where source and flag disagree the source wins: wrongly
+        # including replayed history costs more than wrongly excluding a signal.
+        authoritative = resolve_authoritative_flag(source=source, requested=authoritative)
 
         now = _now_iso()
         conn = self._get_connection()
@@ -831,8 +858,8 @@ class SnapbackObservationWarehouse:
                         instrument_token, source, strategy_commit, manifest_hash,
                         cash_exchange, cash_tradingsymbol, cash_instrument_token,
                         option_exchange, option_underlying_name,
-                        policy_snapshot_hash, config_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        policy_snapshot_hash, config_hash, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, signal_type, spot_price, signal_spot or spot_price, mean_target, breakout_level,
@@ -845,11 +872,36 @@ class SnapbackObservationWarehouse:
                         ident.get("cash_exchange", ""), ident.get("cash_tradingsymbol", ""),
                         int(ident.get("cash_instrument_token", 0) or 0),
                         ident.get("option_exchange", ""), ident.get("option_underlying_name", ""),
-                        policy_snapshot_hash, config_hash,
+                        policy_snapshot_hash, config_hash, authoritative,
                     ),
                 )
         finally:
             conn.close()
+
+    def contradictory_authority_rows(self) -> List[Dict[str, Any]]:
+        """Rows whose authoritative flag disagrees with their source.
+
+        Such a row is not necessarily miscounted — filter_authoritative() checks
+        the source too — but it is a database saying two things at once, and any
+        reader trusting the column alone would count replayed history as
+        prospective evidence.
+        """
+        from app.services.snapback_authority import NON_AUTHORITATIVE_SOURCES
+
+        placeholders = ",".join("?" for _ in NON_AUTHORITATIVE_SOURCES)
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                f"SELECT opportunity_id, symbol, source, authoritative, signal_timestamp "
+                f"FROM opportunities "
+                f"WHERE source IN ({placeholders}) AND authoritative = 1",
+                tuple(sorted(NON_AUTHORITATIVE_SOURCES)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+        return [dict(r) for r in rows]
 
     def get_opportunity_by_id(self, opportunity_id: str) -> Optional[Dict[str, Any]]:
         """Fetch single opportunity row by opportunity_id."""

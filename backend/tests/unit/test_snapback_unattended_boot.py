@@ -44,6 +44,8 @@ def test_the_template_carries_every_variable_the_boot_path_reads():
         "STERLING_SNAPBACK_BACKUP_ROOT", "STERLING_BIND_HOST",
         # Without this the stored Kite secret is encrypted with a published key.
         "STERLING_SECRET_KEY",
+        # Without this the authoritative-sample boundary cannot be enforced.
+        "STERLING_DATASET_START",
     ):
         assert re.search(rf"^{name}=", text, re.M), f"{name} missing from the template"
 

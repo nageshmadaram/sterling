@@ -42,7 +42,9 @@ class PreflightCheck:
 # A failure in one of these means the evidence file itself needs attention — a
 # restore, or a fresh database — rather than a configuration fix. The two states
 # tell an operator to do different things.
-_RECOVERY_CHECKS = frozenset({"database", "evidence_meta", "disk"})
+_RECOVERY_CHECKS = frozenset({
+    "database", "evidence_meta", "disk", "evidence_authority",
+})
 
 
 @dataclass
@@ -321,6 +323,55 @@ def _default_evidence_meta() -> Tuple[bool, Dict[str, Any]]:
     )
 
 
+def check_dataset_start() -> Tuple[bool, Dict[str, Any]]:
+    """The experiment must declare when its authoritative sample begins.
+
+    Without it, classify_signal_authority()'s `before_dataset_start` rule can
+    never fire, and the only thing keeping an older signal out of the sample is
+    the single-session recency check. That is one rule guarding a boundary that
+    decides whether the whole experiment is prospective.
+    """
+    raw = (os.environ.get("STERLING_DATASET_START") or "").strip()
+    if not raw:
+        return False, {"error": "STERLING_DATASET_START not set"}
+
+    from datetime import datetime as _dt
+
+    try:
+        moment = _dt.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False, {"error": f"STERLING_DATASET_START unparseable: {raw!r}"}
+
+    if moment.tzinfo is None:
+        return False, {
+            "error": f"STERLING_DATASET_START has no timezone: {raw!r}",
+        }
+
+    return True, {"dataset_start": moment.isoformat()}
+
+
+def _default_dataset_start() -> Tuple[bool, Dict[str, Any]]:
+    return check_dataset_start()
+
+
+def _default_evidence_authority() -> Tuple[bool, Dict[str, Any]]:
+    """No stored row may claim an authority its source denies."""
+    from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
+
+    try:
+        contradictions = SnapbackObservationWarehouse().contradictory_authority_rows()
+    except Exception as exc:  # noqa: BLE001
+        return False, {"error": f"authority_scan_failed:{exc}"}
+
+    if contradictions:
+        return False, {
+            "error": "rows claim authority their source denies",
+            "count": len(contradictions),
+            "examples": contradictions[:5],
+        }
+    return True, {"contradictions": 0}
+
+
 def _default_calendar() -> Tuple[bool, Dict[str, Any]]:
     from app.services.snapback_health import _probe_calendar
 
@@ -392,6 +443,8 @@ _CHECK_ORDER: Tuple[Tuple[str, str, bool], ...] = (
     ("config_identity", "config_identity_fn", True),
     ("database", "database_fn", True),
     ("evidence_meta", "evidence_meta_fn", True),
+    ("dataset_start", "dataset_start_fn", True),
+    ("evidence_authority", "evidence_authority_fn", True),
     ("calendar", "calendar_fn", True),
     ("family_account", "family_account_fn", True),
     ("allocation_capital", "allocation_capital_fn", True),
@@ -407,6 +460,8 @@ _DEFAULTS: Dict[str, Callable[[], Tuple[bool, Any]]] = {
     "config_identity_fn": _default_config_identity,
     "database_fn": _default_database,
     "evidence_meta_fn": _default_evidence_meta,
+    "dataset_start_fn": _default_dataset_start,
+    "evidence_authority_fn": _default_evidence_authority,
     "calendar_fn": _default_calendar,
     "family_account_fn": _default_family_account,
     "allocation_capital_fn": _default_allocation_capital,

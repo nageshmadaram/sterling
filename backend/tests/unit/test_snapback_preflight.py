@@ -32,6 +32,8 @@ def _passing_checks(**over):
         config_identity_fn=lambda: (True, []),
         database_fn=lambda: (True, {"schema_version": 1}),
         evidence_meta_fn=lambda: (True, {}),
+        dataset_start_fn=lambda: (True, {}),
+        evidence_authority_fn=lambda: (True, {}),
         calendar_fn=lambda: (True, {}),
         family_account_fn=lambda: (True, {}),
         allocation_capital_fn=lambda: (True, {"allocation_capital": 100_000.0}),
