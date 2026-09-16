@@ -408,3 +408,30 @@ def test_daily_report_never_declares_live_eligibility():
 
     assert "live_eligible" not in summary
     assert summary["evidence_status"] == "INCONCLUSIVE"
+
+
+def test_daily_package_includes_gate_and_health(tmp_path):
+    records = _empty_records()
+
+    summary = build_forward_summary(
+        records=records,
+        runtime_sha=RUNTIME_SHA,
+        strategy_manifest=MANIFEST_HASH,
+    )
+
+    artifacts = write_forward_report(
+        summary=summary,
+        records=records,
+        output_root=tmp_path,
+        report_date=date(2026, 9, 16),
+    )
+
+    assert artifacts.authoritative_gate.exists()
+    assert artifacts.operational_health.exists()
+
+    gate = json.loads(artifacts.authoritative_gate.read_text(encoding="utf-8"))
+
+    # Empty evidence must be INCONCLUSIVE with the exact missing requirements.
+    assert gate["verdict"] == "INCONCLUSIVE"
+    assert any("300" in m for m in gate["missing_requirements"])
+    assert any("60" in m for m in gate["missing_requirements"])

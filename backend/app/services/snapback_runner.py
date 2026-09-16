@@ -14,6 +14,7 @@ from datetime import datetime, time, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from app.core.logging import get_logger
+from app.services.snapback_family_ops import new_trades_halted
 from app.services.snapback_health import record_cycle
 from app.services.snapback import (
     _IST,
@@ -91,7 +92,12 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         mtm_processed = 0
 
         # 3. Phase A: Opening Entry Phase (09:15 - 09:45 IST, or catch-up if pending)
-        if OPENING_WINDOW_START <= curr_time <= OPENING_WINDOW_END or curr_time > OPENING_WINDOW_END:
+        # The family STOP switch blocks new exposure only; risk monitoring, exits and
+        # end-of-day reconciliation below continue untouched.
+        entries_halted = new_trades_halted()
+        if entries_halted:
+            log.warning("Snapback entries halted by family stop switch; exits continue")
+        elif OPENING_WINDOW_START <= curr_time <= OPENING_WINDOW_END or curr_time > OPENING_WINDOW_END:
             entries_processed = await process_prospective_pending_entries(client, cfg)
             record_cycle("entry_cycle")
 
@@ -109,6 +115,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             "status": "ok",
             "date": str(today),
             "entries_processed": entries_processed,
+            "entries_halted": entries_halted,
             "risk_processed": risk_processed,
             "mtm_processed": mtm_processed,
         }

@@ -52,6 +52,8 @@ class ForwardReportArtifacts:
     daily_mtm_csv: Path
     rejection_summary_csv: Path
     validation_report: Path
+    authoritative_gate: Optional[Path] = None
+    operational_health: Optional[Path] = None
 
 
 def _f(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -395,6 +397,35 @@ def write_forward_report(
     validation_report = directory / "validation_report.md"
     validation_report.write_text(_validation_markdown(summary, report_date), encoding="utf-8")
 
+    # Authoritative verdict over the same records. Diagnostic summary and economic
+    # verdict stay in separate files so neither can be mistaken for the other.
+    authoritative_gate = directory / "authoritative_gate.json"
+    try:
+        from study.snapback_forward_gate import evaluate_forward_gate
+
+        gate_payload = evaluate_forward_gate(records=records)
+    except Exception as exc:
+        gate_payload = {
+            "verdict": "INCONCLUSIVE",
+            "error": str(exc),
+            "missing_requirements": ["authoritative gate could not be evaluated"],
+        }
+    authoritative_gate.write_text(json.dumps(gate_payload, indent=2), encoding="utf-8")
+
+    operational_health = directory / "operational_health.json"
+    try:
+        from app.services.snapback_health import get_prospective_health
+
+        health_payload = get_prospective_health()
+    except Exception as exc:
+        health_payload = {
+            "status": "HALTED",
+            "healthy": False,
+            "unresolved_errors": ["health_probe_failed"],
+            "error": str(exc),
+        }
+    operational_health.write_text(json.dumps(health_payload, indent=2), encoding="utf-8")
+
     return ForwardReportArtifacts(
         directory=directory,
         run_manifest=run_manifest,
@@ -403,6 +434,8 @@ def write_forward_report(
         daily_mtm_csv=daily_mtm_csv,
         rejection_summary_csv=rejection_summary_csv,
         validation_report=validation_report,
+        authoritative_gate=authoritative_gate,
+        operational_health=operational_health,
     )
 
 
