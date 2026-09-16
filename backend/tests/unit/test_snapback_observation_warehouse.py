@@ -19,9 +19,11 @@ from app.services.snapback_prospective_collector import (
 )
 
 
+from app.services.snapback_instrument_identity import identity_from_instrument
+
+
 def _nifty_identity():
     """The provider identity a scan would have captured for NIFTY."""
-    from app.services.snapback_instrument_identity import identity_from_instrument
 
     return identity_from_instrument(
         {"tradingsymbol": "NIFTY 50", "instrument_token": 256265,
@@ -475,6 +477,18 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
 def test_stock_trade_counterfactual_uses_nifty_path(temp_warehouse, sample_config):
     """Adversarial Test 6: Stock trade counterfactual uses NIFTY index futures path and actual statutory costs."""
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    # The opportunity is what records the venue the contracts trade on, and the
+    # cost schedule refuses to guess one.
+    temp_warehouse.record_opportunity(
+        opportunity_id="OPP-RELIANCE-12345", symbol="RELIANCE",
+        signal_type="SNAPBACK_FADE_UP", spot_price=3000.0,
+        source="PROSPECTIVE_PAPER",
+        identity=identity_from_instrument(
+            {"tradingsymbol": "RELIANCE", "instrument_token": 738561,
+             "exchange": "NSE", "name": "RELIANCE"},
+            canonical_symbol="RELIANCE",
+        ),
+    )
 
     close_res = collector.close_opportunity(
         opportunity_id="OPP-RELIANCE-12345",
@@ -1649,6 +1663,7 @@ async def test_adapter_process_prospective_pending_entries_zero_lot_size_rejecte
     """Proves: Production adapter rejects candidate with lot_size=0 as INCONCLUSIVE and never defaults to 65."""
     from unittest.mock import AsyncMock
     from app.services.snapback import process_prospective_pending_entries_and_mtm
+
 
     monkeypatch.setattr(
         "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",

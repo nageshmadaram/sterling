@@ -50,12 +50,36 @@ def warehouse(monkeypatch):
         os.remove(path)
 
 
+class _NfoIdentity:
+    """Minimal broker identity: NSE cash, NFO derivatives."""
+
+    def as_row(self):
+        return {
+            "cash_exchange": "NSE",
+            "cash_tradingsymbol": "NIFTY",
+            "cash_instrument_token": 256265,
+            "option_exchange": "NFO",
+            "option_underlying_name": "NIFTY",
+        }
+
+
+_NFO_IDENTITY = _NfoIdentity()
+
+
 @pytest.fixture
 def cfg():
     return SnapbackConfig(enabled=True)
 
 
 def _open_position(wh, *, entry_dt: datetime, opp_id="OPP-LIFECYCLE"):
+    # In production a paper position only ever descends from a recorded
+    # opportunity, and the opportunity is what says which venue the contracts
+    # trade on. Seeding one keeps the fixture faithful to that order.
+    wh.record_opportunity(
+        opportunity_id=opp_id, symbol="NIFTY", signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0, source="PROSPECTIVE_PAPER",
+        identity=_NFO_IDENTITY,
+    )
     wh.save_paper_position(
         opportunity_id=opp_id,
         symbol="NIFTY",

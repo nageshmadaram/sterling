@@ -40,6 +40,19 @@ def _t(h, m, s=0):
 
 
 def _position(wh, opp="OPP-1", status="OPEN"):
+    # Costs are priced per exchange now, so the opportunity must say which venue
+    # the contracts trade on — as it always does in production.
+    from app.services.snapback_instrument_identity import identity_from_instrument
+
+    wh.record_opportunity(
+        opportunity_id=opp, symbol="NIFTY", signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0, source="PROSPECTIVE_PAPER",
+        identity=identity_from_instrument(
+            {"tradingsymbol": "NIFTY 50", "instrument_token": 256265,
+             "exchange": "NSE", "name": "NIFTY"},
+            canonical_symbol="NIFTY",
+        ),
+    )
     wh.save_paper_position(
         opportunity_id=opp, symbol="NIFTY", option_symbol="NIFTY26OCT25000PE",
         option_qty=25, option_entry_price=100.0, option_expiry="2026-10-29",
@@ -215,6 +228,8 @@ def test_the_observation_window_is_declared_in_policy():
 
 def test_finalization_records_the_phase_on_the_session(warehouse):
     from app.services.snapback_session_ledger import session_record
+
+
 
     _position(warehouse)
 

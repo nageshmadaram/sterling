@@ -35,6 +35,10 @@ from app.services.snapback_costs import (PHASE_HEDGE_ENTRY, PHASE_HEDGE_EXIT,
                                          PHASE_HEDGE_REBALANCE, PHASE_OPTION_ENTRY,
                                          PHASE_OPTION_EXIT, cost_event_for_execution,
                                          statutory_charges)
+from app.services.snapback_costs_v2 import (EXCHANGE_BFO, EXCHANGE_NFO,
+                                            cost_event_for_execution_v2,
+                                            exchange_for_instrument,
+                                            statutory_charges_v2)
 from app.services.snapback_market_data import (evaluate_execution_quote,
                                                is_stale_decision,
                                                spread_pct as canonical_spread_pct)
@@ -188,6 +192,25 @@ class SnapbackProspectiveCollector:
                 "opportunity_id": opportunity_id,
                 "status": "INCONCLUSIVE",
                 "reason": f"Opportunity {opportunity_id} not found in warehouse",
+            }
+
+        # Which derivatives venue this contract actually trades on. SENSEX and
+        # BANKEX options resolve on BFO, whose transaction charges differ from
+        # NFO's and whose futures carry none. Pricing a BSE contract at NSE
+        # rates understates cost, and the error looks like performance.
+        derivatives_exchange = exchange_for_instrument(
+            option_exchange=str(opp.get("option_exchange") or ""),
+            underlying=str(opp.get("symbol") or ""),
+        )
+        if derivatives_exchange is None:
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "INCONCLUSIVE",
+                "reason": (
+                    f"Opportunity {opportunity_id} has no recognised derivatives "
+                    f"exchange ({opp.get('option_exchange')!r}); refusing to guess "
+                    f"a cost schedule"
+                ),
             }
 
         if opp.get("status") not in ("PENDING_ENTRY", "PROCESSING_ENTRY"):
@@ -624,11 +647,13 @@ class SnapbackProspectiveCollector:
 
         # One versioned schedule for entry, rebalance and exit. STT is sell side only,
         # so the option BUY leg pays none of it.
-        opt_entry_charges = statutory_charges(
-            side="BUY", segment="OPTIONS", price=option_fill_price, quantity=option_qty,
+        opt_entry_charges = statutory_charges_v2(
+            exchange=derivatives_exchange, side="BUY", segment="OPTIONS",
+            price=option_fill_price, quantity=option_qty,
         )
-        fut_entry_charges = statutory_charges(
-            side="BUY", segment="FUTURES", price=futures_fill_price, quantity=actual_futures_qty,
+        fut_entry_charges = statutory_charges_v2(
+            exchange=derivatives_exchange, side="BUY", segment="FUTURES",
+            price=futures_fill_price, quantity=actual_futures_qty,
         )
         brokerage = opt_entry_charges["brokerage"] + fut_entry_charges["brokerage"]
         stt = opt_entry_charges["stt"] + fut_entry_charges["stt"]
@@ -722,18 +747,19 @@ class SnapbackProspectiveCollector:
                 "provider_timestamp": provider_ts,
             },
             cost_events=[
-                cost_event_for_execution(
+                cost_event_for_execution_v2(
                     execution_event_id=f"PAPERFILL-{opportunity_id}",
                     opportunity_id=opportunity_id, phase=PHASE_OPTION_ENTRY,
-                    exchange="NFO", segment="OPTIONS",
+                    exchange=derivatives_exchange, segment="OPTIONS",
                     instrument=chosen_cand.symbol, side="BUY",
                     quantity=option_qty, price=option_fill_price,
                 ),
             ] + ([
-                cost_event_for_execution(
+                cost_event_for_execution_v2(
                     execution_event_id=f"HEDGE-{opportunity_id}-ENTRY",
                     opportunity_id=opportunity_id, phase=PHASE_HEDGE_ENTRY,
-                    exchange="NFO", segment="FUTURES", instrument=futures_symbol,
+                    exchange=derivatives_exchange, segment="FUTURES",
+                    instrument=futures_symbol,
                     side="BUY", quantity=int(actual_futures_qty),
                     price=futures_fill_price,
                 ),
@@ -794,6 +820,25 @@ class SnapbackProspectiveCollector:
         }
 
 
+    def _derivatives_exchange(self, opportunity_id: str) -> str:
+        """The venue this opportunity's contracts trade on.
+
+        Raises rather than defaulting to NFO: a BSE contract priced at NSE rates
+        understates cost, and an understated cost is indistinguishable from
+        strategy performance.
+        """
+        opp = self.warehouse.get_opportunity_by_id(opportunity_id) or {}
+        exchange = exchange_for_instrument(
+            option_exchange=str(opp.get("option_exchange") or ""),
+            underlying=str(opp.get("symbol") or ""),
+        )
+        if exchange is None:
+            raise ValueError(
+                f"opportunity {opportunity_id} has no recognised derivatives "
+                f"exchange ({opp.get('option_exchange')!r})"
+            )
+        return exchange
+
     def rebalance_and_mtm(
         self,
         opportunity_id: str,
@@ -815,6 +860,7 @@ class SnapbackProspectiveCollector:
         peak_source: str = RUNNER_PEAK_SOURCE,
     ) -> Dict[str, Any]:
         """Bid/Ask-aware futures rebalancing and MTM calculation with realized P&L ledger."""
+        venue = self._derivatives_exchange(opportunity_id)
         now_ms = futures_quote_event.exchange_timestamp_ms if (futures_quote_event and futures_quote_event.exchange_timestamp_ms > 0) else int(time.time() * 1000)
         provider_ts = datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc).isoformat()
 
@@ -864,7 +910,8 @@ class SnapbackProspectiveCollector:
             traded_turnover = traded_qty * traded_price
             brokerage = 20.0
             stt = (
-                statutory_charges(
+                statutory_charges_v2(
+                    exchange=venue,
                     side="SELL", segment="FUTURES",
                     price=(traded_turnover / traded_qty) if traded_qty else 0.0,
                     quantity=traded_qty,
@@ -901,9 +948,9 @@ class SnapbackProspectiveCollector:
                 provider_timestamp=provider_ts,
             )
             # The executed leg owns its charge: no hedge moves without a cost event.
-            self.warehouse.record_cost_event(cost_event_for_execution(
+            self.warehouse.record_cost_event(cost_event_for_execution_v2(
                 execution_event_id=reb_id, opportunity_id=opportunity_id,
-                phase=PHASE_HEDGE_REBALANCE, exchange="NFO", segment="FUTURES",
+                phase=PHASE_HEDGE_REBALANCE, exchange=venue, segment="FUTURES",
                 instrument=str(getattr(futures_quote_event, "contract_id", "") or ""),
                 side="BUY", quantity=int(add_lots * futures_lot_size), price=fill_price,
             ))
@@ -930,9 +977,9 @@ class SnapbackProspectiveCollector:
                 reason=f"Decrease long futures hedge at bid ({current_futures_lots} -> {new_hedge_lots} lots, realized PnL: {closed_pnl:.2f})",
                 provider_timestamp=provider_ts,
             )
-            self.warehouse.record_cost_event(cost_event_for_execution(
+            self.warehouse.record_cost_event(cost_event_for_execution_v2(
                 execution_event_id=reb_id, opportunity_id=opportunity_id,
-                phase=PHASE_HEDGE_REBALANCE, exchange="NFO", segment="FUTURES",
+                phase=PHASE_HEDGE_REBALANCE, exchange=venue, segment="FUTURES",
                 instrument=str(getattr(futures_quote_event, "contract_id", "") or ""),
                 side="SELL", quantity=int(red_lots * futures_lot_size), price=fill_price,
             ))
@@ -1063,6 +1110,7 @@ class SnapbackProspectiveCollector:
         accumulated_costs: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Close paper position and calculate canonical Black-Scholes counterfactual model P&L over realized path."""
+        venue = self._derivatives_exchange(opportunity_id)
         actual_opt_pnl = (option_exit_bid - option_entry_price) * option_quantity
 
         # Rebalanced Futures Ledger: Realized P&L + Open Futures Liquidation P&L
@@ -1080,13 +1128,15 @@ class SnapbackProspectiveCollector:
             pos_acc = 0.0
 
         # Calculate exit statutory fees for option liquidation and futures liquidation
-        opt_exit_cost = statutory_charges(
+        opt_exit_cost = statutory_charges_v2(
+            exchange=venue,
             side="SELL", segment="OPTIONS", price=option_exit_bid, quantity=option_quantity,
         )["total"]
 
         fut_liq_qty = open_qty if pos else futures_quantity
         if fut_liq_qty > 0:
-            fut_exit_cost = statutory_charges(
+            fut_exit_cost = statutory_charges_v2(
+                exchange=venue,
                 side="SELL", segment="FUTURES", price=futures_exit_bid, quantity=fut_liq_qty,
             )["total"]
         else:
@@ -1148,19 +1198,19 @@ class SnapbackProspectiveCollector:
             # One immutable event per executed exit leg; the ledger, not this call,
             # decides what the trade cost.
             cost_events=[
-                cost_event_for_execution(
+                cost_event_for_execution_v2(
                     execution_event_id=f"OPTIONEXIT-{opportunity_id}",
                     opportunity_id=opportunity_id, phase=PHASE_OPTION_EXIT,
-                    exchange="NFO", segment="OPTIONS",
+                    exchange=venue, segment="OPTIONS",
                     instrument=str(pos.get("option_symbol") or symbol) if pos else symbol,
                     side="SELL", quantity=int(option_quantity),
                     price=float(option_exit_bid),
                 ),
             ] + ([
-                cost_event_for_execution(
+                cost_event_for_execution_v2(
                     execution_event_id=f"HEDGEEXIT-{opportunity_id}",
                     opportunity_id=opportunity_id, phase=PHASE_HEDGE_EXIT,
-                    exchange="NFO", segment="FUTURES",
+                    exchange=venue, segment="FUTURES",
                     instrument=str(pos.get("futures_symbol") or "") if pos else "",
                     side="SELL", quantity=int(fut_liq_qty),
                     price=float(futures_exit_bid),
