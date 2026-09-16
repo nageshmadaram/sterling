@@ -40,8 +40,15 @@ The historical replay engine was quarantined rather than repaired.
 
 ## Identity
 
+A release record cannot contain the SHA of the commit that contains it: writing
+the SHA in changes the commit, which changes the SHA. The immutable tag is the
+canonical release-to-commit binding, and this file names the tag rather than
+chasing its own hash.
+
 ```
-runtime-1.6 release SHA        <filled at tag time>
+release identity               tag: runtime-1.6
+                               exact commit: git rev-parse runtime-1.6^{commit}
+release-candidate source       branch runtime-1.6-evidence
 parent runtime-1.5 SHA         9a706f5848ed087b947b690161c02208a249955e
 
 strategy SHA                   5a1354202e2c960c66b7003fce9cb80abd152008
