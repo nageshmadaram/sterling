@@ -21,7 +21,10 @@ done < <(grep -E '^STERLING_[A-Z_]+=' .env)
 
 mkdir -p logs
 
+# Loopback by default. Binding every interface on a home network exposes an
+# authenticated broker session to whatever else is on the Wi-Fi; opening it is a
+# deliberate act, so it takes STERLING_BIND_HOST.
 exec ./.venv/bin/uvicorn main:app \
-  --host 0.0.0.0 \
+  --host "${STERLING_BIND_HOST:-127.0.0.1}" \
   --port 8000 \
   --workers 1
