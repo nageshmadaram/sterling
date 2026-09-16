@@ -45,10 +45,37 @@ def _reconciliation_clean(uid: str = "default") -> bool:
             # No live account bound: nothing to reconcile against, paper only.
             return True
 
-        from app.services.snapback_reconciliation import latest_reconciliation
+        from app.services.snapback_family_account import configured_binding
+        from app.services.snapback_reconciliation import (
+            latest_reconciliation, snapshot_is_fresh,
+        )
 
-        snapshot = latest_reconciliation()
-        return bool(snapshot is None or snapshot.clean)
+        account_id = configured_binding().account_id
+        snapshot = latest_reconciliation(account_id=account_id)
+
+        # Absent is not clean. "We have never checked" and "we checked and the
+        # books agree" were previously the same answer, which behind the
+        # economic gate is a live race: a restarted process with PASSED
+        # evidence and a connected broker could read LIVE_ELIGIBLE before any
+        # reconciliation had run.
+        if snapshot is None:
+            log.info("Readiness: no reconciliation snapshot for %s yet", account_id)
+            return False
+
+        # Reconciling a different account proves nothing about this one.
+        if str(snapshot.account_id) != str(account_id):
+            log.warning(
+                "Readiness: reconciliation snapshot is for %s, not the bound %s",
+                snapshot.account_id, account_id,
+            )
+            return False
+
+        # A stale snapshot describes a book that may have moved since.
+        if not snapshot_is_fresh(snapshot):
+            log.info("Readiness: reconciliation snapshot is stale")
+            return False
+
+        return snapshot.clean is True
     except Exception as exc:
         log.warning("Readiness: reconciliation state unavailable: %s", exc)
         return False

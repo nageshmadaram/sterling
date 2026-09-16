@@ -42,7 +42,15 @@ class ReconciliationMismatch:
     details: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+class PositionStoreUnreadable(RuntimeError):
+    """Sterling's own inventory could not be read.
+
+    Distinct from "Sterling holds nothing": treating one as the other makes
+    every real broker position look like an unknown external one.
+    """
+
+
+@dataclass
 class ReconciliationSnapshot:
     clean: bool
     account_id: str
@@ -92,6 +100,7 @@ async def reconcile_account(
     account_id: str,
     sterling_positions: Sequence[Any],
     sterling_intents: Sequence[Any],
+    protection_for: Optional[Any] = None,
 ) -> ReconciliationSnapshot:
     """Compare the broker's positions, orders and trades with Sterling's own view."""
     observed_at = datetime.now(timezone.utc).isoformat()
@@ -224,6 +233,34 @@ async def reconcile_account(
                 instrument=key.split(":")[-1], details={"order_ids": ids},
             ))
 
+    # A live option position with no working protection is the single most
+    # expensive thing this function can fail to notice. Only an ACTIVE
+    # protective order counts: SUBMITTING, MODIFY_PENDING and RECONCILING all
+    # mean we do not know the broker is holding one.
+    if protection_for is not None:
+        for position in broker_positions:
+            row = dict(position)
+            symbol = str(row.get("tradingsymbol") or row.get("symbol") or "")
+            try:
+                quantity = int(row.get("quantity") or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if not symbol or quantity == 0:
+                continue
+            try:
+                protection = protection_for(symbol)
+            except Exception as exc:  # noqa: BLE001 - unknown is unprotected
+                protection = None
+                log.warning("Reconciliation: protection lookup failed for %s: %s",
+                            symbol, exc)
+            state = str((protection or {}).get("state") or "")
+            if state != "ACTIVE":
+                mismatches.append(ReconciliationMismatch(
+                    code=PROTECTION_MISSING, severity=CRITICAL,
+                    instrument=symbol, broker_quantity=quantity,
+                    details={"protection_state": state or "NONE"},
+                ))
+
     return ReconciliationSnapshot(
         clean=not mismatches,
         account_id=account_id,
@@ -253,16 +290,13 @@ async def reconcile_family_account(warehouse=None) -> ReconciliationSnapshot:
             ),),
         )
 
-    if warehouse is None:
-        from app.services.snapback_prospective_collector import SnapbackObservationWarehouse
-
-        warehouse = SnapbackObservationWarehouse()
-
-    try:
-        positions = [dict(p) for p in (warehouse.get_active_paper_positions() or [])]
-    except Exception as exc:
-        log.warning("Reconciliation: Sterling positions unreadable: %s", exc)
-        positions = []
+    # The live book, not the paper warehouse. Comparing the broker against
+    # prospective paper positions would report a real live position as an
+    # unknown external one and a paper position as a missing broker one — the
+    # reconciliation would be confidently wrong in both directions.
+    uid = _family_uid()
+    positions = _canonical_live_positions(uid)
+    intents = _unresolved_intents(uid, account_id)
 
     client = None
     try:
@@ -272,19 +306,127 @@ async def reconcile_family_account(warehouse=None) -> ReconciliationSnapshot:
 
     return _remember(await reconcile_account(
         client=client, account_id=account_id,
-        sterling_positions=positions, sterling_intents=[],
+        sterling_positions=positions, sterling_intents=intents,
+        protection_for=lambda symbol: _protection_state(uid, symbol),
     ))
 
 
+def _protection_state(uid: str, option_symbol: str) -> Optional[Dict[str, Any]]:
+    """What the protection registry believes is guarding this symbol."""
+    from app.services.kite_engine import protection
+
+    plan = protection.plan_for_symbol(uid, option_symbol)
+    if plan is None:
+        return None
+    return {
+        "state": "ACTIVE" if getattr(plan, "gtt_id", None) else "NONE",
+        "quantity": int(getattr(plan, "quantity", 0) or 0),
+    }
+
+
+def _family_uid() -> str:
+    import os
+
+    return os.environ.get("STERLING_FAMILY_USER_ID", "") or "default"
+
+
+def _canonical_live_positions(uid: str) -> List[Dict[str, Any]]:
+    """Sterling's own live inventory, from the canonical position store.
+
+    An unreadable store is not an empty one: returning [] would assert Sterling
+    holds nothing, and every real broker position would then look external.
+    """
+    from app.services.kite_engine import positions as kite_positions
+
+    reason = ""
+    try:
+        reason = kite_positions.unreadable_reason(uid) or ""
+    except Exception:  # noqa: BLE001
+        reason = ""
+    if reason:
+        raise PositionStoreUnreadable(reason)
+
+    rows: List[Dict[str, Any]] = []
+    for p in kite_positions.open_positions(uid) or []:
+        rows.append({
+            "tradingsymbol": getattr(p, "symbol", ""),
+            "symbol": getattr(p, "symbol", ""),
+            "quantity": int(getattr(p, "qty", 0) or 0),
+            "exchange": getattr(p, "exchange", ""),
+            "status": getattr(p, "status", ""),
+        })
+    return rows
+
+
+def _unresolved_intents(uid: str, account_id: str) -> List[Dict[str, Any]]:
+    """Orders Sterling believes may be working.
+
+    Passing an empty list asserts "nothing is in flight", which is exactly the
+    claim that cannot be made without consulting the order journal.
+    """
+    from app.services.kite_engine import order_journal
+
+    rows: List[Dict[str, Any]] = []
+    for intent in order_journal.unresolved(uid, account_id) or []:
+        rows.append({
+            "intent_key": getattr(intent, "intent_key", ""),
+            "order_id": getattr(intent, "order_id", "") or "",
+            "state": getattr(intent, "state", ""),
+            "tradingsymbol": getattr(intent, "tradingsymbol", ""),
+            "quantity": int(getattr(intent, "quantity", 0) or 0),
+        })
+    return rows
+
+
+# A snapshot older than roughly one reconciliation cycle describes a book that
+# may have moved since. Past this, the honest answer is "unknown", not "clean".
+RECONCILIATION_TTL_SECONDS = 60
+
 _LATEST: Optional[ReconciliationSnapshot] = None
+_BY_ACCOUNT: Dict[str, ReconciliationSnapshot] = {}
 
 
-def latest_reconciliation() -> Optional[ReconciliationSnapshot]:
-    """The most recent snapshot this process produced, or None if never run."""
+def snapshot_is_fresh(
+    snapshot: Optional[ReconciliationSnapshot],
+    *,
+    now: Optional[datetime] = None,
+    ttl_seconds: int = RECONCILIATION_TTL_SECONDS,
+) -> bool:
+    """Whether this snapshot still describes the present.
+
+    A timestamp without a timezone is not trusted: it could be hours out in
+    either direction, and a clean-looking stale snapshot is the worst case.
+    """
+    if snapshot is None:
+        return False
+    try:
+        observed = datetime.fromisoformat(str(snapshot.observed_at))
+    except (TypeError, ValueError):
+        return False
+    if observed.tzinfo is None:
+        return False
+
+    moment = now or datetime.now(timezone.utc)
+    return (moment - observed).total_seconds() <= ttl_seconds
+
+
+def latest_reconciliation(
+    account_id: Optional[str] = None,
+) -> Optional[ReconciliationSnapshot]:
+    """The most recent snapshot, optionally for one exact account.
+
+    Asking about an account this process has never reconciled returns None.
+    Reconciling somebody else's book proves nothing about this one, so the
+    account-scoped lookup never falls back to the global one.
+    """
+    if account_id:
+        return _BY_ACCOUNT.get(str(account_id))
     return _LATEST
 
 
 def _remember(snapshot: ReconciliationSnapshot) -> ReconciliationSnapshot:
     global _LATEST
     _LATEST = snapshot
+    if snapshot.account_id:
+        _BY_ACCOUNT[str(snapshot.account_id)] = snapshot
     return snapshot

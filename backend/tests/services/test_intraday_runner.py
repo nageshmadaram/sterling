@@ -7,7 +7,15 @@ Zerodha no longer holds.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
+
+# The contract's expiry must stay a fixed number of days AHEAD of whenever the
+# suite runs. Pinning a literal date made this file pass until the clock reached
+# it, at which point DTE became 0, the delta solve degenerated and the stop fell
+# back to the 30% floor — a failure with nothing to do with the code under test.
+_EXPIRY = (date.today() + timedelta(days=5)).isoformat()
 
 from app.engines.intraday import IntradayConfig
 from app.engines.intraday.position import ContractRef, IntradayPosition
@@ -75,7 +83,7 @@ class FakeClient:
         if exchange != "NFO":
             return []
         return [{"tradingsymbol": query, "name": "NIFTY", "instrument_token": 1234,
-                 "instrument_type": "CE", "strike": 24800.0, "expiry": "2026-09-17",
+                 "instrument_type": "CE", "strike": 24800.0, "expiry": _EXPIRY,
                  "lot_size": 75, "tick_size": 0.05}]
 
 
@@ -123,7 +131,7 @@ def armed_row(**over) -> dict:
         "symbol": "NIFTY", "state": "armed", "blockers": [], "spot": 24800.0,
         "timeframe": "5m",
         "contract": {"symbol": "NIFTY26SEP24800CE", "strike": 24800.0,
-                     "option_type": "CE", "expiry": "2026-09-17", "dte": 5,
+                     "option_type": "CE", "expiry": _EXPIRY, "dte": 5,
                      "lot_size": 75, "token": 1234, "exchange": "NFO",
                      "tick_size": 0.05},
         "quote": {"premium": 100.0, "spread_pct": 0.5, "blockers": []},
