@@ -154,3 +154,4 @@ backups/
 data/snapback/
 artifacts/snapback_forward/
 backend/data/snapback/
+artifacts/snapback_shadow_replay/

@@ -725,6 +725,53 @@ def extract_raw_quote_event(contract_id: str, quote_dict: dict) -> Optional[RawQ
     )
 
 
+async def _causal_daily_bars(client, symbol: str, upto: date, *, cache: dict) -> list:
+    """Daily candles for `symbol` truncated at `upto` (inclusive).
+
+    Truncation is what keeps the hedge causal: beta at entry may only use sessions
+    that had already closed when the signal fired.
+    """
+    key = f"NSE:{symbol}"
+    rows = cache.get(key)
+    if rows is None:
+        instruments = cache.get("__nse__")
+        if instruments is None:
+            instruments = await client.search_instruments("", "NSE", limit=1_000_000)
+            cache["__nse__"] = instruments
+        token = 0
+        for inst_row in instruments or []:
+            if str(getattr(inst_row, "tradingsymbol", "") or (inst_row or {}).get("tradingsymbol", "")) == symbol:
+                token = int(getattr(inst_row, "instrument_token", 0) or (inst_row or {}).get("instrument_token", 0) or 0)
+                break
+        if not token:
+            cache[key] = []
+            return []
+        from app.schemas.instruments import InstrumentMeta
+        meta = InstrumentMeta(underlying=symbol, tick_size=0.05, strike_step=1.0,
+                              exchange_currency="INR", index_name=symbol,
+                              has_options=True, exchange="zerodha",
+                              zerodha_token=token)
+        rows = await client.get_candles(meta, "1D", LOOKBACK_BARS) or []
+        cache[key] = rows
+
+    cutoff = upto.isoformat()
+    out = []
+    for bar in rows:
+        if isinstance(bar, dict):
+            ts = bar.get("timestamp_ms") or bar.get("time")
+        else:
+            ts = getattr(bar, "timestamp_ms", None) or getattr(bar, "time", None)
+        if ts is None:
+            continue
+        try:
+            bar_day = datetime.fromtimestamp(float(ts) / 1000.0, tz=_IST).date().isoformat()
+        except Exception:
+            continue
+        if bar_day <= cutoff:
+            out.append(bar)
+    return out
+
+
 async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> int:
     """Phase A: Process pending T+1 entries during opening window (09:15-09:45 IST) or on tick."""
     processed = 0
@@ -740,6 +787,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
             return 0
 
         chain_cache: dict[str, list] = {}
+        daily_bar_cache: dict[str, list] = {}
         for opp in pending:
             opp_id = opp["opportunity_id"]
             symbol = opp["symbol"]
@@ -890,16 +938,23 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 else:
                     causal_beta = None
                     try:
-                        from app.services.ohlcv_store import get_daily_bars
                         from app.engines.snapback.hedge import rolling_beta
-                        stock_candles = get_daily_bars(symbol)
-                        nifty_candles = get_daily_bars("NIFTY")
+                        stock_candles = await _causal_daily_bars(client, symbol, sig_date, cache=daily_bar_cache)
+                        nifty_candles = await _causal_daily_bars(client, "NIFTY 50", sig_date, cache=daily_bar_cache)
+                        if not nifty_candles:
+                            nifty_candles = await _causal_daily_bars(client, "NIFTY", sig_date, cache=daily_bar_cache)
                         if stock_candles and nifty_candles:
                             stock_b = to_bars(stock_candles)
                             nifty_b = to_bars(nifty_candles)
                             betas_map = rolling_beta(stock_b, nifty_b)
                             sig_date_str = sig_date.strftime("%Y-%m-%d")
                             causal_beta = betas_map.get(sig_date_str)
+                            if causal_beta is None and betas_map:
+                                # Beta as it stood at the signal: the most recent
+                                # session on or before it, never a later one.
+                                prior = [d for d in betas_map if d <= sig_date_str]
+                                if prior:
+                                    causal_beta = betas_map[max(prior)]
                     except Exception as beta_exc:
                         log.warning("Failed to compute rolling_beta for %s on %s: %s", symbol, sig_date, beta_exc)
 
