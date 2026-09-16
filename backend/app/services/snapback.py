@@ -24,6 +24,7 @@ import math
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
 from typing import Any, Optional
 
 from app.core.logging import get_logger
@@ -34,6 +35,8 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
 from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.services.snapback_hedge_contract import HedgeContractError, select_hedge_future
+from app.services.snapback_entry_observation import record_attempt, session_continuity
+from app.services.snapback_instrument_identity import IdentityError, identity_from_opportunity
 from app.engines.snapback.policy import (RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS,
                                           runner_should_exit_for_expiry)
 from app.engines.snapback.pricing import bs_delta, bs_price
@@ -852,6 +855,40 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 processed += 1
                 continue
 
+            # An opportunity fills at most once, ever.
+            if collector.warehouse.opportunity_already_filled(opp_id):
+                log.debug("Skipping %s: already filled", opp_id)
+                continue
+
+            # The opening window must have been observed continuously. A backend that
+            # started at 09:40 cannot know whether a qualifying quote existed at 09:18,
+            # so it must not fill on the first quote it happens to see.
+            session_open_dt = datetime.combine(
+                curr_date, dt_time(9, 15)
+            ).replace(tzinfo=_IST)
+            continuity = session_continuity(
+                collector.warehouse,
+                session_date=str(curr_date),
+                session_open=session_open_dt,
+                now=datetime.now(_IST),
+            )
+            if not continuity.continuous:
+                record_attempt(
+                    collector.warehouse,
+                    opportunity_id=opp_id,
+                    session_date=str(curr_date),
+                    continuous=False,
+                    decision=continuity.reasons[0],
+                    reason_codes=continuity.reasons,
+                )
+                collector.warehouse.update_opportunity_status(opp_id, continuity.reasons[0])
+                log.warning(
+                    "Skipping T+1 fill for %s: opening window not continuously observed (%s)",
+                    opp_id, ", ".join(continuity.reasons),
+                )
+                processed += 1
+                continue
+
             # Atomically lock opportunity using lease token (guards against duplicate processing)
             locked, lease_token = collector.warehouse.try_lock_pending_opportunity(opp_id)
             if not locked:
@@ -859,9 +896,26 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 continue
 
             try:
-                # Fetch genuine spot price (fail-closed if missing)
-                spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                # Address the broker with the identity captured on Day-T. Rebuilding
+                # "NSE:{symbol}" is wrong for SENSEX (BSE/BFO) and for any index whose
+                # provider symbol differs from its canonical name.
+                try:
+                    identity = identity_from_opportunity(opp)
+                except IdentityError as ident_exc:
+                    log.warning("Skipping T+1 fill for %s: %s", opp_id, ident_exc)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE_IDENTITY")
+                    collector.warehouse.record_decision(
+                        decision_id=f"DECISION-{opp_id}-IDENTITY-{now_ms_for_decision()}",
+                        opportunity_id=opp_id, symbol=symbol,
+                        decision="INCONCLUSIVE_IDENTITY", reason=str(ident_exc),
+                        provider_timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+                    processed += 1
+                    continue
+
+                spot_key = identity.cash_quote_key()
+                spot_quotes = await client.get_quote([spot_key])
+                q_spot_raw = (spot_quotes or {}).get(spot_key) or {}
                 spot_price = float(q_spot_raw.get("last_price") or 0.0)
                 if spot_price <= 0 or not math.isfinite(spot_price):
                     log.warning("Skipping T+1 fill for %s: missing or non-finite current spot price", opp_id)
@@ -870,7 +924,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     continue
 
                 # Resolve option candidates from Kite instrument dump
-                option_exchange = "NFO"
+                option_exchange = identity.option_exchange
                 rows = chain_cache.get(option_exchange)
                 if rows is None:
                     rows = await client.search_instruments("", option_exchange, limit=1_000_000)
@@ -1029,7 +1083,7 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     quantity=int(fut_lot_size or 0),
                 )
 
-                collector.execute_pending_entry(
+                entry_result = collector.execute_pending_entry(
                     opportunity_id=opp_id,
                     cfg=cfg,
                     available_capital=frozen_capital,
@@ -1044,6 +1098,17 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     execution_timestamp_ms=int(time.time() * 1000),
                     entry_iv=iv_proxy,
                     processing_token=lease_token,
+                )
+
+                # Append the resolved attempt: the refusals before a fill are what
+                # make "first executable quote" a measurable claim.
+                record_attempt(
+                    collector.warehouse,
+                    opportunity_id=opp_id,
+                    session_date=str(curr_date),
+                    continuous=True,
+                    decision=str((entry_result or {}).get("status") or "UNKNOWN"),
+                    reason_codes=[str((entry_result or {}).get("reason") or "")],
                 )
                 processed += 1
 

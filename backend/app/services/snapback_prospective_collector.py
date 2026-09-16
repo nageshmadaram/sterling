@@ -95,8 +95,13 @@ class SnapbackProspectiveCollector:
         signal: Optional[SnapbackSignal],
         cfg: SnapbackConfig,
         source: str = "PROSPECTIVE_PAPER",
+        identity: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Day T Close: Persist canonical SnapbackSignal as PENDING_ENTRY in warehouse."""
+        """Day T Close: Persist canonical SnapbackSignal as PENDING_ENTRY in warehouse.
+
+        `identity` is the broker identity observed while scanning. Storing it here is
+        what lets the T+1 path address the right exchange without guessing.
+        """
         if signal is None:
             return {
                 "status": "NO_SIGNAL",
@@ -133,6 +138,7 @@ class SnapbackProspectiveCollector:
             status=status,
             provider_timestamp=provider_ts,
             source=source,
+            identity=identity,
         )
 
         log.info(f"Recorded signal at Day T close: {opportunity_id} ({status})")

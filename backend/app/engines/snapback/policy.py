@@ -39,6 +39,9 @@ class SnapbackExecutionPolicy:
     max_quote_age_ms: int = 2_000
     max_future_clock_skew_ms: int = 250
     entry_window_end_minutes: int = 30
+    # Three missed 30-second runner cycles. Longer than this and the opening window
+    # was not continuously observed, whatever the next quote looks like.
+    entry_observation_max_gap_ms: int = 90_000
     option_slippage_bps: float = 20.0
     futures_slippage_bps: float = 5.0
     max_hedge_discretization_error_pct: float = 50.0

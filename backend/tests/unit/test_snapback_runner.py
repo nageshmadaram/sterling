@@ -15,6 +15,37 @@ from app.services.snapback_prospective_collector import SnapbackProspectiveColle
 from app.services.snapback import process_prospective_pending_entries, process_prospective_daily_mtm_and_exits
 from app.services.snapback_runner import tick, _is_nse_trading_day
 
+
+def _nifty_identity():
+    """The provider identity a scan would have captured for NIFTY."""
+    from app.services.snapback_instrument_identity import identity_from_instrument
+
+    return identity_from_instrument(
+        {"tradingsymbol": "NIFTY 50", "instrument_token": 256265,
+         "exchange": "NSE", "name": "NIFTY"},
+        canonical_symbol="NIFTY",
+    )
+
+
+
+@pytest.fixture(autouse=True)
+def _observed_opening_window(monkeypatch):
+    """These tests exercise fill mechanics, not observation continuity.
+
+    The continuity proof is covered by test_snapback_entry_observation_window.py; here
+    the opening window is presented as continuously observed so the invariant under
+    test is the one that decides.
+    """
+    from app.services.snapback_entry_observation import ContinuityVerdict
+
+    monkeypatch.setattr(
+        "app.services.snapback.session_continuity",
+        lambda *a, **k: ContinuityVerdict(continuous=True, reasons=[]),
+        raising=False,
+    )
+
+
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -37,6 +68,7 @@ def build_mock_client():
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -116,7 +148,7 @@ async def test_unattended_paper_entry_without_ui(temp_warehouse, sample_config, 
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Target T+1 time: 2026-09-16 09:20 IST (03:50 UTC)
@@ -178,7 +210,7 @@ async def test_restart_resilience_at_0925(temp_warehouse, sample_config, monkeyp
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Simulating backend restart at 09:25:00 IST (03:55:00 UTC)
@@ -199,6 +231,7 @@ async def test_restart_resilience_at_0925(temp_warehouse, sample_config, monkeyp
     # Align quote timestamp with 09:25:00 IST (09:24:59 IST)
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -261,7 +294,7 @@ async def test_double_tick_opening_window_idempotency(temp_warehouse, sample_con
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
@@ -316,7 +349,7 @@ async def test_eod_position_phase_double_execution_idempotency(temp_warehouse, s
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
@@ -354,6 +387,7 @@ async def test_eod_position_phase_double_execution_idempotency(temp_warehouse, s
     # Align mock quote timestamps with 15:15:00 IST (09:44:59 UTC / 15:14:59 IST)
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -481,6 +515,7 @@ async def test_crash_after_processing_entry_recovers_deterministically(temp_ware
 
     opp_id = "OPP-CRASH-TEST-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -537,6 +572,7 @@ async def test_option_crosses_premium_stop_intraday_then_recovers(temp_warehouse
 
     opp_id = "OPP-STOP-RECOVER-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -638,6 +674,7 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
 
     opp_id = "OPP-EOD-TIMING-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -766,6 +803,7 @@ async def test_crash_after_partial_option_fill_recovers_cleanly(temp_warehouse, 
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
     opp_id = "OPP-CRASH-PARTIAL-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -827,6 +865,7 @@ async def test_concurrent_process_blocked_by_active_lease(temp_warehouse):
     """Adversarial Test 2: Two concurrent processes -> active lease blocks second process until TTL expires."""
     opp_id = "OPP-CONCURRENT-LEASE-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -863,6 +902,7 @@ async def test_intraday_price_hits_runner_mult_before_session_15_not_promoted(te
 
     opp_id = "OPP-RUNNER-MULT-INTRADAY-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -935,6 +975,7 @@ async def test_intraday_stop_calculates_real_futures_pnl_when_futures_moved(temp
 
     opp_id = "OPP-INTRADAY-FUT-PNL-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -1008,6 +1049,7 @@ async def test_stalled_worker_lease_loss_fails_commit(temp_warehouse, sample_con
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
     opp_id = "OPP-LEASE-LOSS-COMMIT-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -1074,6 +1116,7 @@ async def test_session_15_runner_peak_initialization_not_contaminated_by_prerunn
 
     opp_id = "OPP-RUNNER-PEAK-CLEAN-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -1140,6 +1183,7 @@ async def test_calendar_next_trading_day_failure_marks_calendar_error(temp_wareh
     """Adversarial Test 7: Calendar failure during entry execution -> marks CALENDAR_ERROR (fail closed)."""
     opp_id = "OPP-CAL-FAIL-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -1186,6 +1230,7 @@ async def test_intraday_exit_latches_pending_exit_and_closes_on_next_tick_even_i
 
     opp_id = "OPP-INVALID-FUT-EXIT-001"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -1310,7 +1355,7 @@ async def _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeyp
         level=24400.0,
         strength="MODERATE",
     )
-    opp_id = collector.record_signal_at_close(signal=sig, cfg=sample_config)["opportunity_id"]
+    opp_id = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())["opportunity_id"]
 
     t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
@@ -1331,6 +1376,7 @@ async def _open_position_for_freeze_tests(temp_warehouse, sample_config, monkeyp
 def _quotes_at(ist_stamp: str, option_bid: float = 100.0, option_ask: float = 102.0):
     return {
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,

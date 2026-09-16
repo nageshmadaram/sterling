@@ -150,6 +150,11 @@ class SnapbackObservationWarehouse:
                         status            TEXT NOT NULL DEFAULT 'PENDING_ENTRY',
                         processing_token  TEXT NOT NULL DEFAULT '',
                         processing_started_at_ms INTEGER NOT NULL DEFAULT 0,
+                        cash_exchange     TEXT NOT NULL DEFAULT '',
+                        cash_tradingsymbol TEXT NOT NULL DEFAULT '',
+                        cash_instrument_token INTEGER NOT NULL DEFAULT 0,
+                        option_exchange   TEXT NOT NULL DEFAULT '',
+                        option_underlying_name TEXT NOT NULL DEFAULT '',
                         {common_cols}
                     )
                 """)
@@ -170,6 +175,11 @@ class SnapbackObservationWarehouse:
                     "signal_rv": "REAL NOT NULL DEFAULT 0.0",
                     "signal_side": "TEXT NOT NULL DEFAULT ''",
                     "signal_timestamp": "TEXT NOT NULL DEFAULT ''",
+                    "cash_exchange": "TEXT NOT NULL DEFAULT ''",
+                    "cash_tradingsymbol": "TEXT NOT NULL DEFAULT ''",
+                    "cash_instrument_token": "INTEGER NOT NULL DEFAULT 0",
+                    "option_exchange": "TEXT NOT NULL DEFAULT ''",
+                    "option_underlying_name": "TEXT NOT NULL DEFAULT ''",
                 }
                 for col_name, col_def in col_migrations.items():
                     if col_name not in existing_cols:
@@ -442,6 +452,49 @@ class SnapbackObservationWarehouse:
                     )
                 """)
 
+                # 14. entry_attempts — every T+1 entry evaluation, accepted or not.
+                # "First executable quote" is only meaningful if the refusals before
+                # it were recorded too.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS entry_attempts (
+                        attempt_id          TEXT PRIMARY KEY,
+                        opportunity_id      TEXT NOT NULL,
+                        session_date        TEXT NOT NULL,
+                        attempt_sequence    INTEGER NOT NULL,
+                        attempted_at        TEXT NOT NULL,
+                        monitoring_continuous_from_open INTEGER NOT NULL DEFAULT 0,
+                        underlying_quote_event_id TEXT NOT NULL DEFAULT '',
+                        option_quote_event_id     TEXT NOT NULL DEFAULT '',
+                        futures_quote_event_id    TEXT NOT NULL DEFAULT '',
+                        candidate_set_id    TEXT NOT NULL DEFAULT '',
+                        decision            TEXT NOT NULL,
+                        reason_codes_json   TEXT NOT NULL DEFAULT '[]',
+                        runtime_build_sha   TEXT NOT NULL DEFAULT '',
+                        authoritative       INTEGER NOT NULL DEFAULT 1
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_entry_attempts_opportunity "
+                    "ON entry_attempts(opportunity_id, attempt_sequence)"
+                )
+
+                for column, decl in (
+                    ("entry_window_open_at", "TEXT"),
+                    ("entry_monitor_started_at", "TEXT"),
+                    ("entry_last_heartbeat_at", "TEXT"),
+                    ("entry_monitor_continuous", "INTEGER NOT NULL DEFAULT 0"),
+                    ("entry_gap_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("entry_max_gap_ms", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    try:
+                        cols = {r[1] for r in conn.execute("PRAGMA table_info(prospective_sessions)")}
+                        if cols and column not in cols:
+                            conn.execute(
+                                f"ALTER TABLE prospective_sessions ADD COLUMN {column} {decl}"
+                            )
+                    except Exception:
+                        pass
+
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
         finally:
@@ -550,8 +603,16 @@ class SnapbackObservationWarehouse:
         status: str = "PENDING_ENTRY",
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
+        identity: Optional[Any] = None,
     ) -> None:
-        """Record underlying signal opportunity immutably."""
+        """Record underlying signal opportunity immutably.
+
+        `identity` is the broker identity observed at signal time. It is stored with
+        the opportunity so the entry path never has to rebuild a provider symbol from
+        the canonical name.
+        """
+        ident = identity.as_row() if identity is not None else {}
+
         now = _now_iso()
         conn = self._get_connection()
         try:
@@ -563,15 +624,22 @@ class SnapbackObservationWarehouse:
                         stretch_atr, signal_iv, signal_rv, signal_side, signal_timestamp,
                         ema_50, ema_200, trend, is_valid, rejection_reason, status,
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
-                        instrument_token, source, strategy_commit, manifest_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        instrument_token, source, strategy_commit, manifest_hash,
+                        cash_exchange, cash_tradingsymbol, cash_instrument_token,
+                        option_exchange, option_underlying_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, signal_type, spot_price, signal_spot or spot_price, mean_target, breakout_level,
                         stretch_atr, signal_iv, signal_rv, signal_side, signal_timestamp or provider_timestamp or now,
                         ema_50, ema_200, trend, int(is_valid), rejection_reason, status,
-                        now, provider_timestamp or now, now, symbol, symbol, "", 0.0, "", source,
-                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH
+                        now, provider_timestamp or now, now, symbol,
+                        (ident.get("cash_tradingsymbol") or symbol), "", 0.0,
+                        str(ident.get("cash_instrument_token") or ""), source,
+                        FROZEN_COMMIT_SHA, FROZEN_MANIFEST_HASH,
+                        ident.get("cash_exchange", ""), ident.get("cash_tradingsymbol", ""),
+                        int(ident.get("cash_instrument_token", 0) or 0),
+                        ident.get("option_exchange", ""), ident.get("option_underlying_name", ""),
                     ),
                 )
         finally:
@@ -1147,6 +1215,75 @@ class SnapbackObservationWarehouse:
         result["status"] = "RECORDED"
         return result
 
+    def record_entry_attempt(
+        self,
+        *,
+        attempt_id: str,
+        opportunity_id: str,
+        session_date: str,
+        attempt_sequence: int,
+        attempted_at: str,
+        monitoring_continuous_from_open: bool,
+        decision: str,
+        reason_codes: Optional[List[str]] = None,
+        underlying_quote_event_id: str = "",
+        option_quote_event_id: str = "",
+        futures_quote_event_id: str = "",
+        candidate_set_id: str = "",
+        authoritative: int = 1,
+    ) -> None:
+        """Append one entry evaluation. Never overwrites an earlier attempt."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO entry_attempts (
+                        attempt_id, opportunity_id, session_date, attempt_sequence,
+                        attempted_at, monitoring_continuous_from_open,
+                        underlying_quote_event_id, option_quote_event_id,
+                        futures_quote_event_id, candidate_set_id, decision,
+                        reason_codes_json, runtime_build_sha, authoritative
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        attempt_id, opportunity_id, session_date, int(attempt_sequence),
+                        attempted_at, 1 if monitoring_continuous_from_open else 0,
+                        underlying_quote_event_id, option_quote_event_id,
+                        futures_quote_event_id, candidate_set_id, decision,
+                        json.dumps(list(reason_codes or [])), _BUILD_SHA, int(authoritative),
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def opportunity_already_filled(self, opportunity_id: str) -> bool:
+        """Whether this opportunity already produced a fill. One fill, ever."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM entry_attempts "
+                    "WHERE opportunity_id = ? AND decision = 'FILLED'",
+                    (opportunity_id,),
+                ).fetchone()
+                return bool(row and int(row[0]) > 0)
+        finally:
+            conn.close()
+
+    def next_attempt_sequence(self, opportunity_id: str) -> int:
+        conn = self._get_connection()
+        try:
+            with conn:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(attempt_sequence), 0) FROM entry_attempts "
+                    "WHERE opportunity_id = ?",
+                    (opportunity_id,),
+                ).fetchone()
+                return int(row[0] or 0) + 1
+        finally:
+            conn.close()
+
     def record_quote_quality_event(
         self,
         event_id: str,
@@ -1429,7 +1566,7 @@ class SnapbackObservationWarehouse:
             "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes", "paper_positions",
-            "prospective_sessions", "scan_symbol_decisions",
+            "prospective_sessions", "scan_symbol_decisions", "entry_attempts",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")

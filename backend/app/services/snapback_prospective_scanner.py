@@ -200,8 +200,26 @@ async def finalize_session_signals(
                 latest_closed_session=session_date,
                 dataset_start=dataset_start(),
             )
+            # Capture the provider identity while the instrument row is in hand.
+            identity = None
+            if item is not None:
+                from app.services.snapback_instrument_identity import identity_from_instrument
+
+                identity = identity_from_instrument(
+                    {
+                        "tradingsymbol": getattr(item, "tradingsymbol", ""),
+                        "instrument_token": getattr(item, "token", 0),
+                        "exchange": getattr(item, "cash_exchange", "")
+                        or ("BSE" if str(getattr(item, "option_exchange", "")) == "BFO" else "NSE"),
+                        "name": getattr(item, "name", ""),
+                    },
+                    canonical_symbol=getattr(item, "name", "") or sig.symbol,
+                )
+
             collector = SnapbackProspectiveCollector(warehouse=warehouse)
-            collector.record_signal_at_close(sig, cfg, source=verdict.source)
+            collector.record_signal_at_close(
+                sig, cfg, source=verdict.source, identity=identity,
+            )
             if verdict.authoritative:
                 authoritative += 1
         except Exception as exc:

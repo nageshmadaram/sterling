@@ -11,9 +11,41 @@ from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.models import SnapbackSignal
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 from app.services.snapback_prospective_collector import (
+
+
+
     OptionCandidateInfo,
     SnapbackProspectiveCollector,
 )
+
+
+def _nifty_identity():
+    """The provider identity a scan would have captured for NIFTY."""
+    from app.services.snapback_instrument_identity import identity_from_instrument
+
+    return identity_from_instrument(
+        {"tradingsymbol": "NIFTY 50", "instrument_token": 256265,
+         "exchange": "NSE", "name": "NIFTY"},
+        canonical_symbol="NIFTY",
+    )
+
+
+
+@pytest.fixture(autouse=True)
+def _observed_opening_window(monkeypatch):
+    """These tests exercise fill mechanics, not observation continuity.
+
+    The continuity proof is covered by test_snapback_entry_observation_window.py; here
+    the opening window is presented as continuously observed so the invariant under
+    test is the one that decides.
+    """
+    from app.services.snapback_entry_observation import ContinuityVerdict
+
+    monkeypatch.setattr(
+        "app.services.snapback.session_continuity",
+        lambda *a, **k: ContinuityVerdict(continuous=True, reasons=[]),
+        raising=False,
+    )
 
 
 @pytest.fixture
@@ -129,6 +161,7 @@ def test_warehouse_zero_outcomes_returns_inconclusive(temp_warehouse):
 def test_warehouse_immutable_inserts_reject_duplicates(temp_warehouse):
     opp_id = "OPP-DUP-TEST"
     temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
         opportunity_id=opp_id,
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
@@ -141,6 +174,7 @@ def test_warehouse_immutable_inserts_reject_duplicates(temp_warehouse):
 
     with pytest.raises(sqlite3.IntegrityError):
         temp_warehouse.record_opportunity(
+        identity=_nifty_identity(),
             opportunity_id=opp_id,
             symbol="NIFTY",
             signal_type="SNAPBACK_FADE_UP",
@@ -161,7 +195,7 @@ def test_collector_record_signal_no_signal_returns_no_signal(temp_warehouse, sam
 
 def test_collector_record_signal_day_t_close_persists_pending_entry(temp_warehouse, sample_config, sample_fade_up_signal):
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-    res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config, identity=_nifty_identity())
 
     assert res["status"] == "PENDING_ENTRY"
     opp_id = res["opportunity_id"]
@@ -178,7 +212,7 @@ def test_collector_record_signal_day_t_close_persists_pending_entry(temp_warehou
 def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sample_fade_up_signal):
     """Adversarial Test 2: CE candidate for fade_up PE signal must be rejected."""
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Day T+1 execution timestamp: 2026-09-16T03:45:00Z (09:15 IST open)
@@ -242,7 +276,7 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
 def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_up_signal):
     """Adversarial Test 3: Session timing enforcement (Day T close fill blocked, late fill INCONCLUSIVE)."""
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Signal is dated 2026-09-15
@@ -287,7 +321,7 @@ def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_
 def test_tampered_config_rejected(temp_warehouse, sample_fade_up_signal):
     """Adversarial Test 4: Tampered/modified SnapbackConfig parameter is rejected."""
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=SnapbackConfig())
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=SnapbackConfig(), identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Modified config (min_dte changed to 10)
@@ -316,7 +350,7 @@ def test_tampered_config_rejected(temp_warehouse, sample_fade_up_signal):
 def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample_fade_up_signal):
     """Adversarial Test 5: Futures rebalance fills increases at ask, decreases at bid, retains realized P&L."""
     collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
-    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sample_fade_up_signal, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -534,7 +568,7 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         strength="MODERATE",
     )
 
-    rec_res = collector.record_signal_at_close(signal=fri_signal_1, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=fri_signal_1, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
     assert opp_id != ""
 
@@ -609,7 +643,7 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         level=24400.0,
         strength="MODERATE",
     )
-    opp_id_2 = collector.record_signal_at_close(signal=fri_signal_2, cfg=sample_config)["opportunity_id"]
+    opp_id_2 = collector.record_signal_at_close(signal=fri_signal_2, cfg=sample_config, identity=_nifty_identity())["opportunity_id"]
     mon_late_dt = datetime(2026, 9, 21, 6, 0, 0, tzinfo=timezone.utc)
     mon_late_ms = int(mon_late_dt.timestamp() * 1000)
 
@@ -693,7 +727,7 @@ def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -785,7 +819,7 @@ def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -928,7 +962,7 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
         level=51800.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig1, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig1, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -1008,7 +1042,7 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
         theoretical_delta=-0.70,
         lot_size=0,
     )
-    opp_id_invalid = collector.record_signal_at_close(signal=sig2, cfg=sample_config)["opportunity_id"]
+    opp_id_invalid = collector.record_signal_at_close(signal=sig2, cfg=sample_config, identity=_nifty_identity())["opportunity_id"]
     exec_res_invalid = collector.execute_pending_entry(
         available_capital=50_000_000.0,
         hedge_margin_observed=1_000.0,
@@ -1047,7 +1081,7 @@ def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     now_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -1195,7 +1229,7 @@ def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # 08:30 IST on 2026-09-16 (03:00 UTC) is before 09:15 IST open
@@ -1274,7 +1308,7 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # 2. T+1 entry at 09:20 IST on 2026-09-16 (03:50 UTC)
@@ -1527,7 +1561,7 @@ async def test_adapter_process_prospective_pending_entries_unusual_lot_size(temp
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     # Target T+1 date: 2026-09-16 09:20 IST (03:50 UTC)
@@ -1548,6 +1582,7 @@ async def test_adapter_process_prospective_pending_entries_unusual_lot_size(temp
 
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,
@@ -1638,7 +1673,7 @@ async def test_adapter_process_prospective_pending_entries_zero_lot_size_rejecte
         level=24400.0,
         strength="MODERATE",
     )
-    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config, identity=_nifty_identity())
     opp_id = rec_res["opportunity_id"]
 
     t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
@@ -1656,6 +1691,7 @@ async def test_adapter_process_prospective_pending_entries_zero_lot_size_rejecte
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24510.0},
+        "NSE:NIFTY 50": {"last_price": 24510.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24511.0,
             "buy_price": 24510.0,

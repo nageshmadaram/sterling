@@ -108,6 +108,21 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         except Exception as gap_exc:
             log.debug("Snapback stop-gap probe failed: %s", gap_exc)
 
+        # Entry observation runs from the opening bell, whether or not anything is
+        # pending: continuity is a property of the window, not of a trade.
+        try:
+            from app.services.snapback_entry_observation import (
+                heartbeat_entry_monitor, start_entry_monitor,
+            )
+            from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+
+            if OPENING_WINDOW_START <= curr_time <= MARKET_WINDOW_END:
+                obs_warehouse = SnapbackObservationWarehouse()
+                start_entry_monitor(obs_warehouse, session_date=str(today), at=now_ist)
+                heartbeat_entry_monitor(obs_warehouse, session_date=str(today), at=now_ist)
+        except Exception as obs_exc:
+            log.warning("Snapback entry observation heartbeat failed: %s", obs_exc)
+
         entries_halted = new_trades_halted() or stop_gap
         if entries_halted:
             log.warning("Snapback entries halted by family stop switch; exits continue")
