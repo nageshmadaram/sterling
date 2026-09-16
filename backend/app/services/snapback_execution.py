@@ -71,49 +71,11 @@ def assert_plan_revision(*, current_revision: int, expected_revision: int) -> No
         )
 
 
-async def submit_plan(
-    *,
-    plan: SnapbackExecutionPlan,
-    expected_revision: int,
-    idempotency_key: str,
-    broker_client=None,
-    uid: str = "default",
-) -> Any:
-    """Route one armed plan through the canonical execution authority.
-
-    Every admission check — evidence, readiness, health, reconciliation, risk — is
-    performed by the canonical service and the family gate it calls. This function
-    adds no second opinion.
-    """
-    from app.services.execution_service import (
-        CanonicalExecutionService, ExecutionRequest, ExposureEffect,
-    )
-
-    assert_plan_revision(
-        current_revision=plan.revision, expected_revision=expected_revision,
-    )
-
-    request = ExecutionRequest(
-        uid=uid,
-        account_id=plan.account_id,
-        strategy_id="snapback",
-        generation_id=plan.config_hash,
-        signal_id=plan.opportunity_id,
-        exchange=plan.option_exchange,
-        symbol=plan.option_symbol,
-        side="BUY",
-        quantity=plan.option_quantity,
-        exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
-        order_type="LIMIT",
-        price=plan.max_option_price,
-        capital_required=plan.cash_required,
-        payload={
-            "product": "NRML",
-            "idempotency_key": idempotency_key,
-            "plan_id": plan.plan_id,
-        },
-    )
-
-    return await CanonicalExecutionService().submit_order(
-        request=request, broker_client=broker_client,
-    )
+# submit_plan() lived here. It was never called in production, submitted only the
+# option leg, and passed no RiskApproval, so the canonical service would have
+# refused it at the broker boundary anyway. An unsafe, plausible-looking entry
+# point sitting beside a safe one invites the wrong call site.
+#
+# The single live path is app/services/snapback_live_executor.py: it revalidates,
+# reconciles, obtains a real risk approval, hedges the CONFIRMED fill and
+# establishes protection before a position counts as open.

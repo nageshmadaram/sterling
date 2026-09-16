@@ -285,6 +285,31 @@ class PlanStore:
         armed["idempotent_replay"] = False
         return armed
 
+    def consume(self, plan_id: str, *, actor: str = "executor") -> Dict[str, Any]:
+        """Mark an armed plan as spent.
+
+        Consumption is what stops a retry opening a second position, so it is
+        recorded durably rather than held in the executor's memory.
+        """
+        plan = self.get(plan_id)
+        if plan is None:
+            raise PlanConflictError(f"plan {plan_id} does not exist")
+
+        revision = int(plan["revision"]) + 1
+        now = _now_iso()
+        conn = self._connect()
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE snapback_plans SET status = ?, revision = ?, "
+                    "updated_at = ? WHERE plan_id = ?",
+                    (STATUS_CONSUMED, revision, now, plan_id),
+                )
+                self._record_event(conn, plan_id, "CONSUMED", revision, actor, {})
+        finally:
+            conn.close()
+        return self.get(plan_id) or {}
+
     def cancel(self, plan_id: str, *, reason: str, actor: str = "system") -> Dict[str, Any]:
         plan = self.get(plan_id)
         if plan is None:
