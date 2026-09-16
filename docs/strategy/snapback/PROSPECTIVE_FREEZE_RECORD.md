@@ -1,3 +1,9 @@
+> **Superseded for runtime identity.** The strategy identity below is unchanged
+> and still authoritative. The executable runtime moved to
+> `snapback-prospective-runtime-1.1` (build `92b860d40c93b7aa775646ba0b89b55db10de359`)
+> after P0 evidence and capital hardening — see `PROSPECTIVE_RUNTIME_RECORD.md`.
+> The tag `snapback-prospective-freeze-1.0` is immutable and has not been moved.
+
 # Snapback Prospective Freeze Record
 
 Runtime tag:
