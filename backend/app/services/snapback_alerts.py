@@ -139,6 +139,24 @@ def derive_operational_alerts(
             f"{health.get('processing_entries')} entry lease(s) have not completed. An entry may be half-processed.",
         )
 
+    if health.get("stop_monitor_gap"):
+        add(
+            "stop_observation_gap",
+            CRITICAL,
+            "Stop monitoring gap",
+            "An open position is not being observed, so a stop breach could pass "
+            "unseen. New entries are blocked until observation resumes.",
+        )
+
+    if health.get("stop_monitor_gap"):
+        add(
+            "stop_observation_gap",
+            CRITICAL,
+            "Stop monitoring gap",
+            "An open position is not being observed, so a stop breach could pass "
+            "unseen. New entries are blocked until observation resumes.",
+        )
+
     if not backup_ok:
         add(
             "backup_failed",

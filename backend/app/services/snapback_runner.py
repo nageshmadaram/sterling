@@ -95,7 +95,20 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         # 3. Phase A: Opening Entry Phase (09:15 - 09:45 IST, or catch-up if pending)
         # The family STOP switch blocks new exposure only; risk monitoring, exits and
         # end-of-day reconciliation below continue untouched.
-        entries_halted = new_trades_halted()
+        # An exposed position that is not being observed means a stop breach could
+        # pass unseen. New exposure waits until observation is healthy again.
+        stop_gap = False
+        try:
+            from app.services.snapback_stop_monitor import get_stop_monitor
+
+            gaps = get_stop_monitor().data_gaps()
+            if gaps:
+                stop_gap = True
+                log.warning("Snapback MARKET_DATA_GAP for %s; entries halted", gaps)
+        except Exception as gap_exc:
+            log.debug("Snapback stop-gap probe failed: %s", gap_exc)
+
+        entries_halted = new_trades_halted() or stop_gap
         if entries_halted:
             log.warning("Snapback entries halted by family stop switch; exits continue")
         elif OPENING_WINDOW_START <= curr_time <= OPENING_WINDOW_END or curr_time > OPENING_WINDOW_END:

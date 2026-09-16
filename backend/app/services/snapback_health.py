@@ -127,6 +127,8 @@ def build_prospective_health(
         errors.append("calendar_unavailable")
 
     stale_state = dict(stale_state or {})
+    if stale_state.get("stop_monitor_gap"):
+        errors.append("stop_observation_gap")
     if stale_state.get("exit_pending_stale"):
         errors.append("exit_pending_unresolved")
     if stale_state.get("processing_entry_stale"):
@@ -172,6 +174,8 @@ def build_prospective_health(
         "open_positions": open_positions,
         "exit_pending": exit_pending,
         "alert_transport_configured": bool(alert_transport_configured),
+        "stop_monitor_gap": bool(stale_state.get("stop_monitor_gap", False)),
+        "stop_monitor_gap_positions": stale_state.get("stop_monitor_gap_positions", []),
         "exit_pending_stale": bool(stale_state.get("exit_pending_stale", False)),
         "processing_entry_stale": bool(stale_state.get("processing_entry_stale", False)),
         "oldest_exit_pending_age_s": stale_state.get("oldest_exit_pending_age_s"),
@@ -220,7 +224,16 @@ def _probe_stale_state(warehouse) -> Dict[str, Any]:
     try:
         from app.services.snapback_stale import stale_lifecycle_state
 
-        return stale_lifecycle_state(warehouse)
+        state = stale_lifecycle_state(warehouse)
+        try:
+            from app.services.snapback_stop_monitor import get_stop_monitor
+
+            gaps = get_stop_monitor().data_gaps()
+            state["stop_monitor_gap"] = bool(gaps)
+            state["stop_monitor_gap_positions"] = gaps
+        except Exception:
+            state["stop_monitor_gap"] = True
+        return state
     except Exception as exc:
         log.warning("Snapback health: stale lifecycle probe failed: %s", exc)
         return {"exit_pending_stale": True, "processing_entry_stale": True}

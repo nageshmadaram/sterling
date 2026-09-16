@@ -47,6 +47,24 @@ async def _warm_client(user_id: str):
     return None
 
 
+def _snapback_tick(tick: dict) -> dict:
+    """Shape a Kite binary tick into the stop monitor's quote view."""
+    depth = (tick or {}).get("depth") or {}
+    buy_levels = depth.get("buy") or []
+    sell_levels = depth.get("sell") or []
+    buy = buy_levels[0] if buy_levels else {}
+    sell = sell_levels[0] if sell_levels else {}
+    return {
+        "tradingsymbol": tick.get("tradingsymbol") or tick.get("symbol") or "",
+        "instrument_token": tick.get("instrument_token"),
+        "bid": buy.get("price"),
+        "ask": sell.get("price"),
+        "bid_quantity": buy.get("quantity") or 0,
+        "ask_quantity": sell.get("quantity") or 0,
+        "exchange_timestamp": tick.get("exchange_timestamp") or tick.get("timestamp"),
+    }
+
+
 def _make_broadcaster(user_id: str):
     async def _broadcast(ticks: List[dict]) -> None:
         # Feed the tick-driven exit monitor FIRST (C/D) — a trail breach must
@@ -88,6 +106,20 @@ def _make_broadcaster(user_id: str):
                 await id_runner.on_ticks(user_id, ticks)
         except Exception as exc:  # never let this kill the tick loop
             log.debug("Intraday on_ticks failed for %s: %s", user_id, exc)
+        # Snapback stop observation. A 30-second REST poll cannot see a breach that
+        # opens and closes between two polls, so the frozen stop rules run on ticks.
+        try:
+            from app.services.snapback_stop_monitor import get_stop_monitor
+
+            sb_monitor = get_stop_monitor()
+            for tick in ticks or []:
+                try:
+                    sb_monitor.on_tick(_snapback_tick(tick))
+                except Exception as tick_exc:
+                    log.debug("Snapback stop monitor tick failed: %s", tick_exc)
+        except Exception as exc:
+            log.debug("Snapback stop monitor unavailable for %s: %s", user_id, exc)
+
         try:
             from app.api.v1.endpoints.stream import stream_manager
             await stream_manager.broadcast_to_channel(
