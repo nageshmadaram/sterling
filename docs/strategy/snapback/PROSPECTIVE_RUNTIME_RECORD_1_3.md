@@ -25,7 +25,7 @@ index-futures hedge.
 snapback-prospective-freeze-1.0    9e989dd910995deb5e77385b983e5992c58883c0
 snapback-prospective-runtime-1.1   136a9b7195cdb7047d3707fada98e3f53fde6765
 snapback-prospective-runtime-1.2   572972ac679610d5474f9a0e1a170b8ee6b7e65a
-snapback-prospective-runtime-1.3   <this commit>
+snapback-prospective-runtime-1.3   the commit this document was committed in
 ```
 
 `runtime-1.2` is kept deliberately. It records exactly where the preflight
@@ -99,7 +99,11 @@ persists without `refresh_token_enc` and unattended renewal can never work.
 
 ```
 runtime tag        snapback-prospective-runtime-1.3
-build SHA          <this commit>
+build SHA          resolve with:
+                     git rev-parse snapback-prospective-runtime-1.3^{commit}
+                   A document cannot state the hash of the commit that contains
+                   it, so the tag is the authority and this file points at it.
+                   STERLING_EXPECTED_BUILD_SHA must equal that value exactly.
 experiment id      prospective_runtime_1_3
 evidence database  data/snapback/prospective_runtime_1_3.db
 evidence schema    user_version = 1
