@@ -1175,8 +1175,10 @@ async def test_calendar_next_trading_day_failure_marks_calendar_error(temp_wareh
 
 
 @pytest.mark.asyncio
-async def test_intraday_exit_with_invalid_futures_quote_skips_exit_cycle(temp_warehouse, sample_config, monkeypatch):
-    """Adversarial Test 8: Intraday stop triggered but futures exit quote is invalid -> skips exit cycle without closing."""
+async def test_intraday_exit_latches_pending_exit_and_closes_on_next_tick_even_if_option_recovers(temp_warehouse, sample_config, monkeypatch):
+    """Adversarial Test 8: Intraday stop triggered but futures exit quote is invalid -> latches EXIT_PENDING.
+    On next tick (11:00:30), option recovers above stop but fresh futures quote arrives -> trade STILL closes with original stop reason.
+    """
     monkeypatch.setattr(
         "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
         lambda *a, **k: temp_warehouse
@@ -1213,33 +1215,67 @@ async def test_intraday_exit_with_invalid_futures_quote_skips_exit_cycle(temp_wa
         status="OPEN",
     )
 
-    now_dt = datetime(2026, 9, 16, 6, 0, 0, tzinfo=timezone.utc)
+    now_dt = datetime(2026, 9, 16, 5, 30, 0, tzinfo=timezone.utc) # 11:00:00 IST
     monkeypatch.setattr("time.time", lambda: now_dt.timestamp())
 
-    # Option drops to 40.0 (triggers PREMIUM_STOP), but Futures returns non-finite / invalid quote (bid=0.0)
-    mock_client = AsyncMock()
-    mock_client.get_quote = AsyncMock(return_value={
+    # Tick 1 (11:00:00 IST): Option drops to 40.0 (triggers PREMIUM_STOP), but Futures returns invalid quote (bid=0.0)
+    mock_client1 = AsyncMock()
+    mock_client1.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24650.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
             "buy_quantity": 100, "sell_quantity": 100,
             "depth": {"buy": [{"price": 40.0, "quantity": 100}], "sell": [{"price": 41.0, "quantity": 100}]},
-            "timestamp": "2026-09-16T11:30:00+05:30", "oi": 50000,
+            "timestamp": "2026-09-16T11:00:00+05:30", "oi": 50000,
         },
         "NFO:NIFTY26OCTFUT": {
             "last_price": 0.0, "buy_price": 0.0, "sell_price": 0.0, # INVALID QUOTE!
-            "timestamp": "2026-09-16T11:30:00+05:30",
+            "timestamp": "2026-09-16T11:00:00+05:30",
         },
     })
 
     from app.services.snapback import process_prospective_intraday_risk
-    processed = await process_prospective_intraday_risk(mock_client, sample_config)
-    assert processed == 1
+    processed1 = await process_prospective_intraday_risk(mock_client1, sample_config)
+    assert processed1 == 1
 
-    # Position MUST remain OPEN (exit skipped due to invalid futures exit quote)
-    pos = temp_warehouse.get_paper_position(opp_id)
-    assert pos["status"] == "OPEN"
-    outcomes = temp_warehouse.get_records_by_table("outcomes")
-    assert len(outcomes) == 0
+    # Position MUST transition to EXIT_PENDING with pending_exit_reason = "PREMIUM_STOP"
+    pos1 = temp_warehouse.get_paper_position(opp_id)
+    assert pos1["status"] == "EXIT_PENDING"
+    assert pos1["pending_exit_reason"] == "PREMIUM_STOP"
+    assert pos1["pending_exit_option_bid"] == 40.0
+    outcomes1 = temp_warehouse.get_records_by_table("outcomes")
+    assert len(outcomes1) == 0 # Not closed yet because futures quote was invalid
+
+    # Tick 2 (11:00:30 IST): Option bid recovers to 200.0 (well above stop!), but Futures quote is now VALID!
+    tick2_dt = datetime(2026, 9, 16, 5, 30, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: tick2_dt.timestamp())
+
+    mock_client2 = AsyncMock()
+    mock_client2.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24650.0},
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 200.0, "buy_price": 200.0, "sell_price": 201.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 200.0, "quantity": 100}], "sell": [{"price": 201.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T11:00:30+05:30", "oi": 50000,
+        },
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24650.0, "buy_price": 24650.0, "sell_price": 24652.0, # VALID QUOTE!
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24650.0, "quantity": 100}], "sell": [{"price": 24652.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T11:00:30+05:30", "oi": 500000,
+        },
+    })
+
+    processed2 = await process_prospective_intraday_risk(mock_client2, sample_config)
+    assert processed2 == 1
+
+    # Position MUST now be CLOSED and outcome recorded with ORIGINAL stop reason ("PREMIUM_STOP")
+    pos2 = temp_warehouse.get_paper_position(opp_id)
+    assert pos2["status"] == "CLOSED"
+    outcomes2 = temp_warehouse.get_records_by_table("outcomes")
+    assert len(outcomes2) == 1
+    assert outcomes2[0]["exit_reason"] == "PREMIUM_STOP"
+
 
 

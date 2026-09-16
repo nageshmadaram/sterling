@@ -1070,6 +1070,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
     processed = 0
     try:
         from app.services.snapback_prospective_collector import SnapbackProspectiveCollector
+        from app.services.snapback_market_data import evaluate_quote_quality
         collector = SnapbackProspectiveCollector()
 
         active_positions = collector.warehouse.get_active_paper_positions()
@@ -1084,43 +1085,69 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
             opt_sym = pos["option_symbol"]
             fut_sym = pos["futures_symbol"]
             try:
-                opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
-                q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
-                opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
-
-                spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
-                curr_spot = float(q_spot_raw.get("last_price") or 0.0)
-
-                if not opt_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
-                    continue
-
-                from app.services.snapback_market_data import evaluate_quote_quality
-                q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
-                if not q_opt_eval.accepted_for_execution:
-                    continue
-
-                entry_price = float(pos["option_entry_price"])
-                curr_bid = opt_ev.best_bid
-                is_runner = bool(pos.get("is_runner"))
-                exit_reason = None
-
-                if is_runner:
-                    peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
-                    if peak_bid > float(pos.get("peak_option_bid") or 0.0):
-                        collector.warehouse.update_paper_position_peak_bid(
-                            opportunity_id=opp_id,
-                            peak_option_bid=peak_bid,
-                            is_runner=1,
-                        )
-                    runner_trail_pct = float(getattr(cfg, "runner_trail_pct", 25.0) or 25.0)
-                    trail_price = peak_bid * (1.0 - runner_trail_pct / 100.0)
-                    if curr_bid <= trail_price:
-                        exit_reason = "RUNNER_TRAIL_STOP"
+                is_already_pending = (pos.get("status") == "EXIT_PENDING") or bool(pos.get("pending_exit_reason"))
+                if is_already_pending:
+                    exit_reason = pos.get("pending_exit_reason") or "PREMIUM_STOP"
+                    curr_bid = float(pos.get("pending_exit_option_bid") or pos.get("option_entry_price"))
+                    curr_spot = float(pos.get("entry_spot") or 0.0)
+                    try:
+                        spot_quotes = await client.get_quote([f"NSE:{symbol}"])
+                        q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                        spot_val = float(q_spot_raw.get("last_price") or 0.0)
+                        if spot_val > 0 and math.isfinite(spot_val):
+                            curr_spot = spot_val
+                    except Exception:
+                        pass
                 else:
-                    stop_price = entry_price * (1.0 - cfg.premium_stop_pct / 100.0)
-                    if curr_bid <= stop_price:
-                        exit_reason = "PREMIUM_STOP"
+                    opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
+                    q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
+                    opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
+
+                    spot_quotes = await client.get_quote([f"NSE:{symbol}"])
+                    q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                    curr_spot = float(q_spot_raw.get("last_price") or 0.0)
+
+                    if not opt_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
+                        continue
+
+                    q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
+                    if not q_opt_eval.accepted_for_execution:
+                        continue
+
+                    entry_price = float(pos["option_entry_price"])
+                    curr_bid = opt_ev.best_bid
+                    is_runner = bool(pos.get("is_runner"))
+                    exit_reason = None
+
+                    if is_runner:
+                        peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
+                        if peak_bid > float(pos.get("peak_option_bid") or 0.0):
+                            collector.warehouse.update_paper_position_peak_bid(
+                                opportunity_id=opp_id,
+                                peak_option_bid=peak_bid,
+                                is_runner=1,
+                            )
+                        runner_trail_pct = float(getattr(cfg, "runner_trail_pct", 25.0) or 25.0)
+                        trail_price = peak_bid * (1.0 - runner_trail_pct / 100.0)
+                        if curr_bid <= trail_price:
+                            exit_reason = "RUNNER_TRAIL_STOP"
+                    else:
+                        stop_price = entry_price * (1.0 - cfg.premium_stop_pct / 100.0)
+                        if curr_bid <= stop_price:
+                            exit_reason = "PREMIUM_STOP"
+
+                    if exit_reason:
+                        # LATCH: immediately persist EXIT_PENDING status so position can NEVER recover to OPEN strategy evaluation
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        collector.warehouse.set_paper_position_pending_exit(
+                            opportunity_id=opp_id,
+                            pending_exit_reason=exit_reason,
+                            pending_exit_option_bid=curr_bid,
+                            pending_exit_ts=now_iso,
+                        )
+                        pos["status"] = "EXIT_PENDING"
+                        pos["pending_exit_reason"] = exit_reason
+                        pos["pending_exit_option_bid"] = curr_bid
 
                 if exit_reason:
                     # Fetch live futures quote and validate quote quality before completing intraday exit
@@ -1132,12 +1159,12 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                             fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
                             q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=receive_now_ms) if fut_ev else None
                             if not fut_ev or not q_fut_eval or not q_fut_eval.accepted_for_execution or fut_ev.best_bid <= 0:
-                                log.warning("Skipping intraday exit for %s: missing or invalid futures exit quote for %s", opp_id, fut_sym)
+                                log.warning("Intraday exit pending for %s (%s): missing or invalid futures exit quote for %s", opp_id, exit_reason, fut_sym)
                                 processed += 1
                                 continue
                             futures_exit_bid = fut_ev.best_bid
                         except Exception as fut_exc:
-                            log.warning("Failed to fetch live futures exit quote for %s: %s", opp_id, fut_exc)
+                            log.warning("Failed to fetch live futures exit quote for %s (%s): %s", opp_id, exit_reason, fut_exc)
                             processed += 1
                             continue
 
@@ -1158,7 +1185,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         entry_dte=entry_dte_val,
                         exit_dte=entry_dte_val,
                         iv_proxy=float(pos.get("entry_iv") or 0.20),
-                        option_entry_price=entry_price,
+                        option_entry_price=float(pos["option_entry_price"]),
                         option_exit_bid=curr_bid,
                         futures_entry_price=float(pos.get("avg_futures_entry_price") or 0.0),
                         futures_exit_bid=futures_exit_bid,

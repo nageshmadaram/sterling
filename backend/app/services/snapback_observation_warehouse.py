@@ -119,6 +119,9 @@ class SnapbackObservationWarehouse:
                         "peak_option_bid": "REAL NOT NULL DEFAULT 0.0",
                         "sessions_held": "INTEGER NOT NULL DEFAULT 1",
                         "is_runner": "INTEGER NOT NULL DEFAULT 0",
+                        "pending_exit_reason": "TEXT DEFAULT NULL",
+                        "pending_exit_option_bid": "REAL NOT NULL DEFAULT 0.0",
+                        "pending_exit_ts": "TEXT DEFAULT NULL",
                     }
                     for col_name, col_def in pos_migrations.items():
                         if col_name not in pos_cols:
@@ -306,6 +309,9 @@ class SnapbackObservationWarehouse:
                         entry_dte               INTEGER NOT NULL,
                         entry_iv                REAL NOT NULL,
                         causal_beta             REAL NOT NULL,
+                        pending_exit_reason     TEXT DEFAULT NULL,
+                        pending_exit_option_bid REAL NOT NULL DEFAULT 0.0,
+                        pending_exit_ts         TEXT DEFAULT NULL,
                         status                  TEXT NOT NULL DEFAULT 'OPEN'
                     )
 
@@ -515,6 +521,31 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def set_paper_position_pending_exit(
+        self,
+        opportunity_id: str,
+        pending_exit_reason: str,
+        pending_exit_option_bid: float,
+        pending_exit_ts: str,
+    ) -> None:
+        """Mark paper position status as EXIT_PENDING and latch exit trigger details."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE paper_positions
+                    SET status = 'EXIT_PENDING',
+                        pending_exit_reason = ?,
+                        pending_exit_option_bid = ?,
+                        pending_exit_ts = ?
+                    WHERE opportunity_id = ?
+                """,
+                    (pending_exit_reason, pending_exit_option_bid, pending_exit_ts, opportunity_id),
+                )
+        finally:
+            conn.close()
+
     def update_paper_position_peak_bid(
         self,
         opportunity_id: str,
@@ -551,18 +582,18 @@ class SnapbackObservationWarehouse:
             conn.close()
 
     def get_active_paper_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Fetch all active paper positions with status = 'OPEN'."""
+        """Fetch all active paper positions with status IN ('OPEN', 'EXIT_PENDING')."""
         conn = self._get_connection()
         try:
             with conn:
                 if symbol:
                     rows = conn.execute(
-                        "SELECT * FROM paper_positions WHERE status = 'OPEN' AND symbol = ?",
+                        "SELECT * FROM paper_positions WHERE status IN ('OPEN', 'EXIT_PENDING') AND symbol = ?",
                         (symbol,)
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT * FROM paper_positions WHERE status = 'OPEN'"
+                        "SELECT * FROM paper_positions WHERE status IN ('OPEN', 'EXIT_PENDING')"
                     ).fetchall()
                 return [dict(r) for r in rows]
         finally:
