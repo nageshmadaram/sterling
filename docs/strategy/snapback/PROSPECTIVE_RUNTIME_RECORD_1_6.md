@@ -63,7 +63,8 @@ No strategy logic, parameter, filter, or hash changed in this release.
 
 ```
 EvidenceClass                  MODELLED < OBSERVED_MARKET < BROKER_SHADOW < BROKER_EXECUTED
-candidate-universe schema      v1  (strike/tick_size float, expiry ISO string)
+candidate-universe schema      v2  (strike/tick_size float, expiry ISO string;
+                                    incomplete/non-positive contract metadata rejected)
 candidate hash algorithm       sha256 over canonical JSON, numerics as f"{v:.4f}",
                                sorted, eligibility bounds included in the payload
 selector version               snapback_delta_closed_form_v1
@@ -75,10 +76,18 @@ lifecycle schema               1
 evidence store schema          1
 ```
 
-Candidate-universe v1 is frozen deliberately. Converting to `Decimal`/`date`
-would add migration risk to a tested, deterministic hash contract without making
-any evidence more truthful. A v2 may do it later; v1 hashes must stay
-reproducible forever.
+Candidate-universe v1 was deterministic, but the pre-release live-path audit
+found one violation of the release's own evidence rule: a missing/zero exchange
+`tick_size` was silently repaired to `0.05`, and blank/non-positive identity
+fields could survive into the candidate set. No authoritative prospective sample
+had been accepted yet, so runtime 1.6 advances the universe contract to v2 rather
+than freezing a known fabrication. v2 keeps the same stored field shapes but
+rejects incomplete contract metadata instead of repairing it. v1 hashes remain
+reproducible, but are not runtime-1.6 authoritative evidence.
+
+The same hardening pass made prospective tick rows refuse a missing/zero
+`instrument_token` and a naive `received_ts`; neither may be silently rewritten
+as token `0` or interpreted in the machine's local timezone.
 
 ## Selector fixtures
 
@@ -140,6 +149,7 @@ answerable; it does not answer it.
 | `d51b5c4a1` | live evidence acceptance harness |
 | `b586ca34d` | kitelake fno-fut expectation |
 | `b8badac0a` | evidence auditor + fail-closed operator controls |
+| `8c49034a5` | fail closed on incomplete contract/tick identity before live acceptance |
 
 ### Two un-backfillable gaps closed
 
@@ -207,7 +217,12 @@ evidence auditor CLI           verified, text and --json
 backup manifest                sha256 -c VERIFIED against the mounted lake
 ```
 
-Remote CI: PR #179, all checks green at the release head.
+The counts above are the last complete local gate before the final hardening
+commit. The hardening commit itself must rerun the affected backend and kitelake
+tests plus remote CI before release; this record must not imply a green result
+that has not been observed yet.
+
+Remote CI: PR #179; release requires all checks green at the final head.
 
 ## Backups
 
@@ -222,16 +237,22 @@ manifest   41f1f2c398f45a901bbce598b5305d172bd81dd4ca49839ca83d924b43b49c09
 
 ## Known limitations
 
-1. **The live acceptance run has not happened.** The harness exists and its
-   grading logic is tested, but nothing here has met a real Kite socket. Runtime
-   1.2 and 1.3 were both tagged on green suites and both were wrong, each time
-   because nothing had run the built artifact against reality. Until
-   `acceptance-*.json` reports `overall: PASS`, the five-level depth assumption
-   and the exchange-timestamp semantics are unconfirmed against the vendor.
-2. **The recorder has never run in the live path.** It is wired as a library
-   with unit and integration coverage; it has not observed a real opportunity.
-3. **Listedness is unmeasured.** See above.
-4. **CI has no kitelake job**, so `kitelake/tests` is verified locally only.
+1. **The live acceptance run has not passed.** A pre-open invocation reached the
+   real Kite instrument master and reproduced a real candidate hash, then stopped
+   at the spot quote because the daily access token had expired. FULL-mode depth
+   and timestamp semantics therefore remain unconfirmed against the vendor until
+   `acceptance-*.json` reports `overall: PASS` using a current token during market
+   hours.
+2. **The recorder/lifecycle journal is not yet proven on the production live
+   opportunity path.** Unit and integration tests prove its behaviour, but the
+   pre-release audit found no production import of `SnapbackEvidenceRecorder` and
+   no production use of `evidence_tick_row`; those hooks must be traced/closed or
+   explicitly resolved before the release tag. A recorder that real opportunities
+   never call does not satisfy runtime 1.6's purpose.
+3. **Listedness is unmeasured for real Snapback opportunities.** The acceptance
+   master proves the universe can be built from reality; an acceptance probe is
+   not a frozen strategy signal with its real `assumed_iv`.
+4. **CI has no kitelake job**, so `kitelake/tests` must still be verified locally.
 5. **`OPTION_PARTIALLY_FILLED` is not a distinct state**; partials re-enter
    `OPTION_FILL_PENDING` with cumulative quantity in the payload.
 6. **The state machine lives in `snapback_evidence_recorder.py`**, not a separate
