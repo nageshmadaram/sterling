@@ -100,6 +100,8 @@ def compute_config_hash(cfg: Any = None) -> str:
     else:
         payload = dict(getattr(cfg, "__dict__", {}) or {})
     
+    payload["enabled"] = False  # Runtime operational flag does not alter strategy mathematics
+    
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 

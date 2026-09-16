@@ -506,8 +506,6 @@ class SnapbackProspectiveCollector:
         option_fill_price = chosen_quote.best_ask * (1.0 + slippage_pct)
         futures_fill_price = futures_quote_event.best_ask * (1.0 + slippage_pct)
 
-        self.warehouse.update_opportunity_status(opportunity_id, "OPEN_POSITION")
-
         decision_id = f"DECISION-{opportunity_id}"
         self.warehouse.record_decision(
             decision_id=decision_id,
@@ -592,7 +590,7 @@ class SnapbackProspectiveCollector:
             provider_timestamp=provider_ts,
         )
 
-        # 8. Save active paper position state ledger
+        # 8. Save active paper position state ledger FIRST
         self.warehouse.save_paper_position(
             opportunity_id=opportunity_id,
             symbol=symbol,
@@ -617,6 +615,9 @@ class SnapbackProspectiveCollector:
             is_runner=0,
             status="OPEN",
         )
+
+        # 9. Atomically mark opportunity as OPEN_POSITION strictly AFTER position ledger is committed
+        self.warehouse.update_opportunity_status(opportunity_id, "OPEN_POSITION")
 
 
         return {

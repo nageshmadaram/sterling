@@ -371,18 +371,18 @@ class SnapbackObservationWarehouse:
             conn.close()
 
     def get_pending_opportunities(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Fetch all opportunities that are valid and pending T+1 entry execution."""
+        """Fetch all opportunities with status PENDING_ENTRY or PROCESSING_ENTRY (for recovery)."""
         conn = self._get_connection()
         try:
             with conn:
                 if symbol:
                     rows = conn.execute(
-                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status = 'PENDING_ENTRY' AND symbol = ?",
+                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status IN ('PENDING_ENTRY', 'PROCESSING_ENTRY') AND symbol = ?",
                         (symbol,)
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status = 'PENDING_ENTRY'"
+                        "SELECT * FROM opportunities WHERE is_valid = 1 AND status IN ('PENDING_ENTRY', 'PROCESSING_ENTRY')"
                     ).fetchall()
                 return [dict(r) for r in rows]
         finally:
@@ -564,12 +564,16 @@ class SnapbackObservationWarehouse:
             conn.close()
 
     def close_paper_position_state(self, opportunity_id: str) -> None:
-        """Mark paper position status as CLOSED in state ledger."""
+        """Mark paper position status and opportunity status as CLOSED in state ledger."""
         conn = self._get_connection()
         try:
             with conn:
                 conn.execute(
                     "UPDATE paper_positions SET status = 'CLOSED' WHERE opportunity_id = ?",
+                    (opportunity_id,)
+                )
+                conn.execute(
+                    "UPDATE opportunities SET status = 'CLOSED' WHERE opportunity_id = ?",
                     (opportunity_id,)
                 )
         finally:
@@ -1116,20 +1120,45 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
-    def try_lock_pending_opportunity(self, opportunity_id: str) -> bool:
-        """Atomically transition opportunity from PENDING_ENTRY to PROCESSING_ENTRY.
+    def try_lock_pending_opportunity(self, opportunity_id: str, force_recover: bool = False) -> bool:
+        """Atomically transition opportunity to PROCESSING_ENTRY.
         
         Guards against duplicate processing when runner ticks or manual triggers coincide.
+        If force_recover is True, allows relocking a stranded PROCESSING_ENTRY row.
         Returns True if the lock was acquired, False if already locked or non-pending.
         """
         conn = self._get_connection()
         try:
             with conn:
-                cur = conn.execute(
-                    "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status = 'PENDING_ENTRY'",
-                    (opportunity_id,)
-                )
+                if force_recover:
+                    cur = conn.execute(
+                        "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status IN ('PENDING_ENTRY', 'PROCESSING_ENTRY')",
+                        (opportunity_id,)
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE opportunities SET status = 'PROCESSING_ENTRY' WHERE opportunity_id = ? AND status = 'PENDING_ENTRY'",
+                        (opportunity_id,)
+                    )
                 return cur.rowcount > 0
+        finally:
+            conn.close()
+
+    def recover_stranded_processing_entries(self, opportunity_id: Optional[str] = None) -> int:
+        """Reset stranded PROCESSING_ENTRY rows back to PENDING_ENTRY following a crash."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                if opportunity_id:
+                    cur = conn.execute(
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY' WHERE opportunity_id = ? AND status = 'PROCESSING_ENTRY'",
+                        (opportunity_id,)
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE opportunities SET status = 'PENDING_ENTRY' WHERE status = 'PROCESSING_ENTRY'"
+                    )
+                return cur.rowcount
         finally:
             conn.close()
 

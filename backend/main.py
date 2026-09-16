@@ -235,6 +235,16 @@ async def lifespan(app: FastAPI):
         await intraday_task
     except (Exception, BaseException):
         pass
+
+    from app.services.snapback_runner import stop as stop_snapback_runner
+    stop_snapback_runner()
+    if snapback_runner_task and not snapback_runner_task.done():
+        snapback_runner_task.cancel()
+        try:
+            await snapback_runner_task
+        except (Exception, BaseException):
+            pass
+
     ticker_watchdog_task.cancel()
     try:
         await ticker_watchdog_task

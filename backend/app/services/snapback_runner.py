@@ -18,6 +18,7 @@ from app.services.snapback import (
     _IST,
     get_config,
     process_prospective_pending_entries,
+    process_prospective_intraday_risk,
     process_prospective_daily_mtm_and_exits,
 )
 
@@ -29,18 +30,23 @@ _lock = asyncio.Lock()
 
 OPENING_WINDOW_START = time(9, 15)
 OPENING_WINDOW_END = time(9, 45)
-DAILY_MTM_WINDOW_START = time(15, 0)
-DAILY_MTM_WINDOW_END = time(15, 45)
+MARKET_WINDOW_START = time(9, 15)
+MARKET_WINDOW_END = time(15, 30)
+EOD_WINDOW_START = time(15, 25)
+EOD_WINDOW_END = time(15, 30)
 
 
 def _is_nse_trading_day(d: Any) -> bool:
-    """Check if given date is an active NSE trading day using official calendar."""
+    """Check if given date is an active NSE trading day using official calendar.
+    
+    Fails closed (returns False) if calendar lookup fails or is unavailable.
+    """
     try:
         from app.services.navigator.calendar import is_trading_day
         return bool(is_trading_day(d))
-    except Exception:
-        # Fallback to plain weekday check if date is outside covered calendar bounds
-        return d.weekday() < 5
+    except Exception as exc:
+        log.error("NSE trading calendar check failed for %s: %s", d, exc)
+        return False  # Fail closed: DO NOT fall back to weekday < 5
 
 
 async def tick(uid: str = "default") -> Dict[str, Any]:
@@ -53,7 +59,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         today = now_ist.date()
         curr_time = now_ist.time()
 
-        # 1. Weekend / Holiday Check
+        # 1. Weekend / Holiday Check (Fail closed)
         if not _is_nse_trading_day(today):
             return {"status": "market_closed_weekend_or_holiday", "date": str(today)}
 
@@ -77,20 +83,26 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             return {"status": "kite_disconnected_or_unavailable"}
 
         entries_processed = 0
+        risk_processed = 0
         mtm_processed = 0
 
         # 3. Phase A: Opening Entry Phase (09:15 - 09:45 IST, or catch-up if pending)
         if OPENING_WINDOW_START <= curr_time <= OPENING_WINDOW_END or curr_time > OPENING_WINDOW_END:
             entries_processed = await process_prospective_pending_entries(client, cfg)
 
-        # 4. Phase B: Daily Position Phase (MTM / Rebalance / Exits)
-        if curr_time >= DAILY_MTM_WINDOW_START:
+        # 4. Phase B: Intraday Risk Monitor (Market hours 09:15 - 15:30 IST)
+        if MARKET_WINDOW_START <= curr_time <= MARKET_WINDOW_END:
+            risk_processed = await process_prospective_intraday_risk(client, cfg)
+
+        # 5. Phase C: EOD Closing Window Phase (15:25 - 15:30 IST / EOD)
+        if curr_time >= EOD_WINDOW_START:
             mtm_processed = await process_prospective_daily_mtm_and_exits(client, cfg)
 
         return {
             "status": "ok",
             "date": str(today),
             "entries_processed": entries_processed,
+            "risk_processed": risk_processed,
             "mtm_processed": mtm_processed,
         }
 

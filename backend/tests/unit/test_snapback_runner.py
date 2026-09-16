@@ -28,7 +28,7 @@ def temp_warehouse():
 
 @pytest.fixture
 def sample_config():
-    return SnapbackConfig()
+    return SnapbackConfig(enabled=True)
 
 
 def build_mock_client():
@@ -463,3 +463,281 @@ async def test_runner_never_invokes_broker_order_execution():
                     found_calls.add(node.func.id)
 
     assert len(found_calls) == 0, f"Runner unlawfully contains broker order calls: {found_calls}"
+
+
+@pytest.mark.asyncio
+async def test_crash_after_processing_entry_recovers_deterministically(temp_warehouse, sample_config, monkeypatch):
+    """Operational Test 1: Crash after PROCESSING_ENTRY -> restart recovers deterministically."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackProspectiveCollector",
+        lambda *a, **k: collector
+    )
+
+    t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
+    sig_dt = datetime(2026, 9, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    opp_id = "OPP-CRASH-TEST-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        signal_timestamp=sig_dt.isoformat(),
+        signal_side="fade_up",
+    )
+
+    # Simulate crash mid-flight: status left as PROCESSING_ENTRY
+    temp_warehouse.update_opportunity_status(opp_id, "PROCESSING_ENTRY")
+
+    mock_client = build_mock_client()
+    mock_acct = MagicMock()
+    mock_acct.connected = True
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.get_active", lambda uid: mock_acct)
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", AsyncMock(return_value=mock_client))
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return t1_dt.astimezone(tz)
+            return t1_dt
+
+    monkeypatch.setattr("app.services.snapback_runner.get_config", lambda uid="default": sample_config)
+    monkeypatch.setattr("app.services.snapback.get_config", lambda uid="default": sample_config)
+
+    monkeypatch.setattr("app.services.snapback_runner.datetime", FixedDateTime)
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
+    monkeypatch.setattr("app.services.snapback_prospective_collector.datetime", FixedDateTime)
+
+    # Run pending entries (recovers stranded PROCESSING_ENTRY)
+    processed = await process_prospective_pending_entries(mock_client, sample_config)
+
+    print("DECISIONS:", temp_warehouse.get_records_by_table("decisions"))
+    assert processed == 1
+    opp_after = temp_warehouse.get_opportunity_by_id(opp_id)
+    assert opp_after["status"] == "OPEN_POSITION"
+
+    pos = temp_warehouse.get_paper_position(opp_id)
+    assert pos is not None
+    assert pos["symbol"] == "NIFTY"
+
+
+@pytest.mark.asyncio
+async def test_option_crosses_premium_stop_intraday_then_recovers(temp_warehouse, sample_config, monkeypatch):
+    """Operational Test 2: Option crosses premium stop intraday then recovers -> stop remains triggered."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackProspectiveCollector",
+        lambda *a, **k: collector
+    )
+
+    opp_id = "OPP-STOP-RECOVER-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="OPEN_POSITION",
+    )
+
+    # Save active paper position (entry_price = 100.0, stop_pct = 50.0 -> stop_price = 50.0)
+    temp_warehouse.save_paper_position(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        option_symbol="NIFTY26OCT25000PE",
+        option_qty=75,
+        option_entry_price=100.0,
+        option_expiry="2026-10-26",
+        option_strike=25000.0,
+        futures_symbol="NIFTY26OCTFUT",
+        futures_lot_size=65,
+        current_futures_lots=1,
+        avg_futures_entry_price=24510.0,
+        realized_futures_pnl=0.0,
+        entry_spot=24500.0,
+        entry_timestamp="2026-09-15T09:20:00+05:30",
+        entry_dte=45,
+        entry_iv=0.20,
+        causal_beta=1.0,
+        peak_option_bid=100.0,
+        status="OPEN",
+    )
+
+    monkeypatch.setattr("app.services.snapback_runner.get_config", lambda uid="default": sample_config)
+    monkeypatch.setattr("app.services.snapback.get_config", lambda uid="default": sample_config)
+
+    now_dt = datetime(2026, 9, 16, 6, 0, 0, tzinfo=timezone.utc)
+    q_time = "2026-09-16T11:30:00+05:30"
+
+    # Step 1: Intraday price drops to 40.0 (crosses 50.0 stop)
+    mock_client_stop = AsyncMock()
+    mock_client_stop.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 40.0, "quantity": 100}], "sell": [{"price": 41.0, "quantity": 100}]},
+            "timestamp": q_time, "oi": 50000,
+        },
+    })
+
+    from app.services.snapback import process_prospective_intraday_risk
+    processed = await process_prospective_intraday_risk(mock_client_stop, sample_config)
+    assert processed == 1
+
+    opp_stopped = temp_warehouse.get_opportunity_by_id(opp_id)
+    assert opp_stopped["status"] == "CLOSED"
+
+    outcomes_stopped = temp_warehouse.get_records_by_table("outcomes")
+    assert len(outcomes_stopped) > 0
+    assert outcomes_stopped[0]["exit_reason"] == "PREMIUM_STOP"
+
+    # Step 2: Price recovers to 120.0 later in session
+    mock_client_recover = AsyncMock()
+    mock_client_recover.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 120.0, "buy_price": 120.0, "sell_price": 121.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 120.0, "quantity": 100}], "sell": [{"price": 121.0, "quantity": 100}]},
+            "timestamp": q_time, "oi": 50000,
+        },
+    })
+
+    # Run intraday risk & daily MTM again
+    await process_prospective_intraday_risk(mock_client_recover, sample_config)
+    await process_prospective_daily_mtm_and_exits(mock_client_recover, sample_config)
+
+    # Position MUST remain CLOSED with PREMIUM_STOP
+    opp_final = temp_warehouse.get_opportunity_by_id(opp_id)
+    assert opp_final["status"] == "CLOSED"
+    outcomes_final = temp_warehouse.get_records_by_table("outcomes")
+    assert len(outcomes_final) == 1
+    assert outcomes_final[0]["exit_reason"] == "PREMIUM_STOP"
+
+
+@pytest.mark.asyncio
+async def test_1500_price_differs_from_closing_window_price(temp_warehouse, sample_config, monkeypatch):
+    """Operational Test 3: 15:00 price != closing-window price -> only closing-window observation becomes daily MTM."""
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    opp_id = "OPP-EOD-TIMING-001"
+    temp_warehouse.record_opportunity(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        signal_type="SNAPBACK_FADE_UP",
+        spot_price=24500.0,
+        status="OPEN_POSITION",
+    )
+
+    temp_warehouse.save_paper_position(
+        opportunity_id=opp_id,
+        symbol="NIFTY",
+        option_symbol="NIFTY26OCT25000PE",
+        option_qty=75,
+        option_entry_price=100.0,
+        option_expiry="2026-10-26",
+        option_strike=25000.0,
+        futures_symbol="NIFTY26OCTFUT",
+        futures_lot_size=65,
+        current_futures_lots=1,
+        avg_futures_entry_price=24510.0,
+        realized_futures_pnl=0.0,
+        entry_spot=24500.0,
+        entry_timestamp="2026-09-15T09:20:00+05:30",
+        entry_dte=45,
+        entry_iv=0.20,
+        causal_beta=1.0,
+        peak_option_bid=100.0,
+        status="OPEN",
+    )
+
+    # Step 1: 15:00 IST tick (price = 110.0, outside closing window 15:25-15:30 IST)
+    dt_1500 = datetime(2026, 9, 16, 9, 30, 0, tzinfo=timezone.utc)  # 15:00 IST
+
+    class FixedDateTime1500(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return dt_1500.astimezone(tz)
+            return dt_1500
+
+    monkeypatch.setattr("app.services.snapback_runner.get_config", lambda uid="default": sample_config)
+    monkeypatch.setattr("app.services.snapback.get_config", lambda uid="default": sample_config)
+
+    monkeypatch.setattr("app.services.snapback_runner.datetime", FixedDateTime1500)
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime1500)
+
+    mock_client_1500 = AsyncMock()
+    mock_client_1500.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24510.0, "buy_price": 24510.0, "sell_price": 24512.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24510.0, "quantity": 100}], "sell": [{"price": 24512.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:00:00+05:30", "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 110.0, "buy_price": 110.0, "sell_price": 111.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 110.0, "quantity": 100}], "sell": [{"price": 111.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:00:00+05:30", "oi": 50000,
+        },
+    })
+
+    mock_acct = MagicMock()
+    mock_acct.connected = True
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.get_active", lambda uid: mock_acct)
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", AsyncMock(return_value=mock_client_1500))
+
+    res_1500 = await tick(uid="default")
+    assert res_1500["status"] == "ok"
+    assert res_1500["mtm_processed"] == 0
+    # No daily MTM recorded at 15:00 IST
+    mtms_1500 = temp_warehouse.get_records_by_table("daily_mtm")
+    assert len(mtms_1500) == 0
+
+    # Step 2: 15:28 IST tick (price = 125.0, inside closing window 15:25-15:30 IST)
+    dt_1528 = datetime(2026, 9, 16, 9, 58, 0, tzinfo=timezone.utc)  # 15:28 IST
+
+    class FixedDateTime1528(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return dt_1528.astimezone(tz)
+            return dt_1528
+
+    monkeypatch.setattr("app.services.snapback_runner.datetime", FixedDateTime1528)
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime1528)
+
+    mock_client_1528 = AsyncMock()
+    mock_client_1528.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24500.0},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24510.0, "buy_price": 24510.0, "sell_price": 24512.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24510.0, "quantity": 100}], "sell": [{"price": 24512.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:28:00+05:30", "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 125.0, "buy_price": 125.0, "sell_price": 126.0,
+            "buy_quantity": 100, "sell_quantity": 100,
+            "depth": {"buy": [{"price": 125.0, "quantity": 100}], "sell": [{"price": 126.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T15:28:00+05:30", "oi": 50000,
+        },
+    })
+    monkeypatch.setattr("app.services.exchanges.kite.accounts.acquire_client", AsyncMock(return_value=mock_client_1528))
+
+    res_1528 = await tick(uid="default")
+    assert res_1528["status"] == "ok"
+    assert res_1528["mtm_processed"] == 1
+
+    # Exactly 1 daily MTM record created with closing-window option bid = 125.0
+    mtms_1528 = temp_warehouse.get_records_by_table("daily_mtm")
+    assert len(mtms_1528) == 1
+    assert float(mtms_1528[0]["option_liquidation_bid"]) == 125.0
