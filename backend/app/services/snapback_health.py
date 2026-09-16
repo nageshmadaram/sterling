@@ -87,6 +87,7 @@ def build_prospective_health(
     alert_transport_configured: bool = False,
     stale_state: Optional[Dict[str, Any]] = None,
     family_account: Optional[Dict[str, Any]] = None,
+    alert_outbox: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Build the health object from observed component truth. Unknown is never green."""
@@ -126,6 +127,12 @@ def build_prospective_health(
         errors.append("market_data_stale")
     if not calendar_ok:
         errors.append("calendar_unavailable")
+
+    outbox_state = dict(alert_outbox or {})
+    if int(outbox_state.get("alert_outbox_dead") or 0) > 0:
+        # An alert nobody received is worse than no alerting at all: the system looks
+        # quiet precisely when it is not.
+        errors.append("alert_delivery_failed")
 
     stale_state = dict(stale_state or {})
     if stale_state.get("stop_monitor_gap"):
@@ -176,6 +183,7 @@ def build_prospective_health(
         "exit_pending": exit_pending,
         "alert_transport_configured": bool(alert_transport_configured),
         **dict(family_account or {}),
+        **outbox_state,
         "stop_monitor_gap": bool(stale_state.get("stop_monitor_gap", False)),
         "stop_monitor_gap_positions": stale_state.get("stop_monitor_gap_positions", []),
         "exit_pending_stale": bool(stale_state.get("exit_pending_stale", False)),
@@ -249,6 +257,17 @@ def _probe_alert_transport(uid: str = "default") -> bool:
         return bool(transport_configured(uid))
     except Exception:
         return False
+
+
+def _probe_alert_outbox() -> Dict[str, Any]:
+    """Outbox depth and last delivery outcome. Unknown counts as failed delivery."""
+    try:
+        from app.services.snapback_alert_outbox import AlertOutbox
+
+        return AlertOutbox().health()
+    except Exception as exc:
+        log.warning("Snapback health: alert outbox probe failed: %s", exc)
+        return {"alert_outbox_pending": 0, "alert_outbox_dead": 1}
 
 
 def _probe_family_account(uid: str = "default") -> Dict[str, Any]:
@@ -379,6 +398,7 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         market_open=market_open,
         alert_transport_configured=_probe_alert_transport(),
         family_account=_probe_family_account(uid),
+        alert_outbox=_probe_alert_outbox(),
         stale_state=_probe_stale_state(warehouse),
         now=now,
     )

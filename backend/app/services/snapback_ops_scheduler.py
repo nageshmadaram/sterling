@@ -75,6 +75,7 @@ class SnapbackOpsScheduler:
         from app.services import snapback_backup
         from app.services.snapback_alerts import AlertDispatcher, LoggingAlertSink
         from app.services.snapback_alert_telegram import CompositeAlertSink, TelegramAlertSink
+        from app.services.snapback_alerts import OutboxAlertSink
 
         self.source_db = Path(
             source_db
@@ -111,8 +112,10 @@ class SnapbackOpsScheduler:
         self.report_fn = report_fn or self._default_report_fn
         self.health_fn = health_fn or self._default_health_fn
         # Logging always; Telegram additionally when a target is configured.
+        # Logging is immediate; delivery is durable. The Telegram transport is driven
+        # by the outbox worker, which records what actually happened.
         self.dispatcher = dispatcher or AlertDispatcher(
-            sink=CompositeAlertSink(LoggingAlertSink(), TelegramAlertSink())
+            sink=CompositeAlertSink(LoggingAlertSink(), OutboxAlertSink())
         )
         self.is_trading_day_fn = is_trading_day_fn or self._default_trading_day_fn
         self.session_evidence_complete_fn = (
@@ -362,6 +365,42 @@ class SnapbackOpsScheduler:
 
     # ------------------------------------------------------------------ helpers
 
+    async def deliver_alerts(self) -> None:
+        """Drain the outbox, recording each delivery outcome honestly."""
+        try:
+            from app.services.snapback_alert_outbox import AlertOutbox, morning_login_alert
+            from app.services.snapback_alert_telegram import TelegramAlertSink
+
+            outbox = AlertOutbox()
+            now_ist = datetime.now(_IST)
+
+            try:
+                health = self.health_fn()
+            except Exception:
+                health = {}
+            morning_login_alert(
+                outbox,
+                broker_connected=bool(health.get("broker_connected")),
+                now=now_ist,
+                trading_session=now_ist.date().isoformat(),
+            )
+
+            sink = TelegramAlertSink()
+
+            async def send(payload: dict) -> str:
+                from types import SimpleNamespace
+
+                alert = SimpleNamespace(**payload)
+                if not sink.targets_configured():
+                    # No transport is not delivery; leave it queued and visible.
+                    raise RuntimeError("no Telegram target configured")
+                await sink.deliver(alert)
+                return f"telegram:{payload.get('code')}"
+
+            await outbox.process(send=send, now=datetime.now(timezone.utc))
+        except Exception as exc:
+            log.warning("Snapback ops: alert delivery failed: %s", exc)
+
     def _stale_state(self, health: dict) -> dict:
         """Stuck EXIT_PENDING / PROCESSING_ENTRY, preferring the health snapshot."""
         if health and "exit_pending_stale" in health:
@@ -425,6 +464,7 @@ async def run_forever() -> None:
         try:
             scheduler.poll_health()
             scheduler.run_due()
+            await scheduler.deliver_alerts()
         except asyncio.CancelledError:
             log.info("Snapback operations scheduler cancelled")
             raise

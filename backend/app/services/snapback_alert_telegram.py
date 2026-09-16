@@ -79,6 +79,13 @@ class TelegramAlertSink:
             except Exception as exc:
                 log.warning("Snapback alerts: Telegram delivery failed: %s", exc)
 
+    def targets_configured(self) -> bool:
+        return transport_configured(self.user_id)
+
+    async def deliver(self, alert: Any) -> None:
+        """Await actual delivery, so a failure is a failure the caller can see."""
+        await self._deliver(format_alert_html(alert, system_status=self._status()))
+
     def send(self, alert: Any) -> None:
         try:
             targets = _targets(self.user_id)
@@ -118,6 +125,13 @@ class CompositeAlertSink:
 
     def __init__(self, *sinks: Any) -> None:
         self.sinks = list(sinks)
+
+    def targets_configured(self) -> bool:
+        return transport_configured(self.user_id)
+
+    async def deliver(self, alert: Any) -> None:
+        """Await actual delivery, so a failure is a failure the caller can see."""
+        await self._deliver(format_alert_html(alert, system_status=self._status()))
 
     def send(self, alert: Any) -> None:
         for sink in self.sinks:

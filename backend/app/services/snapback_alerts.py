@@ -272,6 +272,34 @@ class AlertDispatcher:
         return result
 
 
+class OutboxAlertSink:
+    """Persist the alert for durable delivery instead of firing and forgetting.
+
+    The dispatcher's job ends at "this fault is recorded"; whether a human received
+    it is the outbox worker's fact to establish.
+    """
+
+    def __init__(self, outbox=None, *, trading_session: Optional[str] = None) -> None:
+        self._outbox = outbox
+        self.trading_session = trading_session
+
+    @property
+    def outbox(self):
+        if self._outbox is None:
+            from app.services.snapback_alert_outbox import AlertOutbox
+
+            self._outbox = AlertOutbox()
+        return self._outbox
+
+    def send(self, alert: Any) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        session = self.trading_session or datetime.now(
+            timezone(timedelta(hours=5, minutes=30))
+        ).date().isoformat()
+        self.outbox.enqueue(alert, trading_session=session)
+
+
 class LoggingAlertSink:
     """Default sink: write alerts to the application log."""
 

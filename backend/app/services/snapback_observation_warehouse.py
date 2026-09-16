@@ -621,6 +621,34 @@ class SnapbackObservationWarehouse:
                     )
                 """)
 
+                # 18. operational_alert_outbox — creating an alert and delivering it
+                # are different facts. A scheduled async send that never completed
+                # must never look like a notification somebody received.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS operational_alert_outbox (
+                        alert_id            TEXT PRIMARY KEY,
+                        dedupe_key          TEXT NOT NULL,
+                        code                TEXT NOT NULL,
+                        severity            TEXT NOT NULL,
+                        trading_session     TEXT,
+                        opportunity_id      TEXT,
+                        payload_json        TEXT NOT NULL,
+                        created_at          TEXT NOT NULL,
+                        available_after     TEXT NOT NULL,
+                        attempt_count       INTEGER NOT NULL DEFAULT 0,
+                        last_attempt_at     TEXT,
+                        last_error          TEXT,
+                        delivered_at        TEXT,
+                        delivery_message_id TEXT,
+                        status              TEXT NOT NULL DEFAULT 'PENDING',
+                        payload_hash        TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_alert_outbox_dedupe "
+                    "ON operational_alert_outbox(dedupe_key)"
+                )
+
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
         finally:
@@ -2052,7 +2080,7 @@ class SnapbackObservationWarehouse:
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes", "paper_positions",
             "prospective_sessions", "scan_symbol_decisions", "entry_attempts",
-            "beta_snapshots", "promotion_records",
+            "beta_snapshots", "promotion_records", "operational_alert_outbox",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")
