@@ -599,6 +599,30 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def opportunity_status_counts(self) -> Dict[str, int]:
+        """Return the number of opportunities per status (operational health read)."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM opportunities GROUP BY status"
+                ).fetchall()
+                return {str(r["status"]): int(r["n"]) for r in rows}
+        finally:
+            conn.close()
+
+    def paper_position_status_counts(self) -> Dict[str, int]:
+        """Return the number of paper positions per status (operational health read)."""
+        conn = self._get_connection()
+        try:
+            with conn:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM paper_positions GROUP BY status"
+                ).fetchall()
+                return {str(r["status"]): int(r["n"]) for r in rows}
+        finally:
+            conn.close()
+
     def close_paper_position_state(self, opportunity_id: str) -> None:
         """Mark paper position status and opportunity status as CLOSED in state ledger."""
         conn = self._get_connection()

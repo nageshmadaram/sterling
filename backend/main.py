@@ -366,6 +366,10 @@ def create_app() -> FastAPI:
     from app.api.v1.endpoints.simulation import router as simulation_router
     app.include_router(simulation_router, prefix="/api/v1")
 
+    # Snapback prospective operations (health only; no strategy or execution surface).
+    from app.api.v1.endpoints.snapback_ops import router as snapback_ops_router
+    app.include_router(snapback_ops_router, prefix="/api/v1")
+
     return app
 
 
