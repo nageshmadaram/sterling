@@ -115,6 +115,7 @@ class SelectionResult:
     selected_tradingsymbol: Optional[str] = None
     selected_exchange: Optional[str] = None
     selected_lot_size: Optional[int] = None
+    selected_tick_size: Optional[float] = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +137,7 @@ class SelectionResult:
             "selected_tradingsymbol": self.selected_tradingsymbol,
             "selected_exchange": self.selected_exchange,
             "selected_lot_size": self.selected_lot_size,
+            "selected_tick_size": self.selected_tick_size,
         }
 
 
@@ -173,6 +175,7 @@ def select_snapback_contract(
     listed = LISTED_UNKNOWN
     token = symbol = exchange = None
     lot_size = None
+    tick_size = None
 
     if candidates is not None:
         listed = LISTED_NO
@@ -188,6 +191,7 @@ def select_snapback_contract(
                 symbol = getattr(c, "tradingsymbol", None)
                 exchange = getattr(c, "exchange", None)
                 lot_size = getattr(c, "lot_size", None)
+                tick_size = getattr(c, "tick_size", None)
                 break
 
     return SelectionResult(
@@ -209,4 +213,5 @@ def select_snapback_contract(
         selected_tradingsymbol=str(symbol) if symbol is not None else None,
         selected_exchange=str(exchange) if exchange is not None else None,
         selected_lot_size=int(lot_size) if lot_size is not None else None,
+        selected_tick_size=float(tick_size) if tick_size is not None else None,
     )

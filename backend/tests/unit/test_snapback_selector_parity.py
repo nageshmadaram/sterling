@@ -32,8 +32,18 @@ from app.services.snapback_contract_selection import (
     select_snapback_contract,
 )
 
+#: The fixtures are the contract, so they must not be quietly regenerated to
+#: match a selector that moved. Update this only alongside a deliberate,
+#: explained change to the frozen selection rule — which also means a new rule
+#: hash and a new strategy identity.
+FIXTURE_SHA256 = "a2c81c975b87f8971cea3d2084cad78bcff97c696e3c51afd69ef8b46a1ae536"
+
+FIXTURE_PATH = (
+    pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "snapback_selector_parity.json"
+)
+
 FIXTURES = json.loads(
-    (pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "snapback_selector_parity.json").read_text()
+    FIXTURE_PATH.read_text()
 )
 ROWS = FIXTURES["rows"]
 
@@ -50,6 +60,19 @@ def _inputs(row):
         dte_days=row["dte"],
         strike_step=spec.strike_step,
         expiry="2026-10-29",
+    )
+
+
+def test_the_fixture_file_itself_has_not_been_regenerated():
+    """Regression laundering: moving the selector, then moving the fixtures."""
+    import hashlib
+
+    digest = hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest()
+
+    assert digest == FIXTURE_SHA256, (
+        "the parity fixtures changed. If the selector moved, revert the selector. "
+        "Only update FIXTURE_SHA256 for a deliberate change to the frozen rule, "
+        "which requires a new rule hash and a new strategy identity."
     )
 
 
