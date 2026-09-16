@@ -359,6 +359,30 @@ class SnapbackObservationWarehouse:
                     "ON quote_quality_events(opportunity_id)"
                 )
 
+                # 13. prospective_sessions — one durable record per trading session, so
+                # a quiet market and a broken scanner are never the same observation.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS prospective_sessions (
+                        session_date            TEXT PRIMARY KEY,
+                        experiment_id           TEXT NOT NULL DEFAULT '',
+                        runtime_build_sha       TEXT NOT NULL DEFAULT '',
+                        calendar_version        TEXT NOT NULL DEFAULT '',
+                        universe_expected       INTEGER NOT NULL DEFAULT 0,
+                        universe_scanned        INTEGER NOT NULL DEFAULT 0,
+                        symbol_failures         INTEGER NOT NULL DEFAULT 0,
+                        scanner_started_at      TEXT,
+                        scanner_completed_at    TEXT,
+                        scanner_status          TEXT NOT NULL DEFAULT 'PENDING',
+                        market_gate_status      TEXT NOT NULL DEFAULT '',
+                        signals_authoritative   INTEGER NOT NULL DEFAULT 0,
+                        entry_phase_status      TEXT NOT NULL DEFAULT 'PENDING',
+                        eod_phase_status        TEXT NOT NULL DEFAULT 'PENDING',
+                        package_status          TEXT NOT NULL DEFAULT 'PENDING',
+                        evidence_gap_codes_json TEXT NOT NULL DEFAULT '[]',
+                        observed_at             TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
         finally:
@@ -1228,6 +1252,7 @@ class SnapbackObservationWarehouse:
             "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes", "paper_positions",
+            "prospective_sessions", "scan_symbol_decisions",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")

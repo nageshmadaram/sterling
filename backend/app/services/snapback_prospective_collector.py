@@ -30,6 +30,7 @@ from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
 from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trading_day, next_trading_day, session_bounds_ist
 from app.services.snapback_capacity import evaluate_capacity
+from app.engines.snapback.policy import RUNNER_PEAK_SOURCE, update_runner_peak
 from app.services.snapback_costs import statutory_charges
 from app.services.snapback_health import record_cycle
 from app.services.snapback_market_data import evaluate_quote_quality
@@ -712,6 +713,7 @@ class SnapbackProspectiveCollector:
         prior_avg_futures_entry_price: float = 0.0,
         option_quote_event: Optional[RawQuoteEvent] = None,
         cfg: Optional[SnapbackConfig] = None,
+        peak_source: str = RUNNER_PEAK_SOURCE,
     ) -> Dict[str, Any]:
         """Bid/Ask-aware futures rebalancing and MTM calculation with realized P&L ledger."""
         now_ms = futures_quote_event.exchange_timestamp_ms if (futures_quote_event and futures_quote_event.exchange_timestamp_ms > 0) else int(time.time() * 1000)
@@ -869,10 +871,14 @@ class SnapbackProspectiveCollector:
             else:
                 exit_reason = "HOLDING_HORIZON_EXPIRED"
 
-        # Rule C: 25% Runner Trail Stop (while in RUNNER state)
+        # Rule C: 25% Runner Trail Stop (while in RUNNER state). The peak advances
+        # only from a completed close mark, matching the validated rule.
         elif is_runner:
-            if option_bid > peak_option_bid:
-                peak_option_bid = option_bid
+            raised = update_runner_peak(
+                peak=peak_option_bid, observed_bid=option_bid, source=peak_source,
+            )
+            if raised > peak_option_bid:
+                peak_option_bid = raised
             elif option_bid <= peak_option_bid * 0.75:
                 exit_reason = "RUNNER_TRAIL_STOP"
 

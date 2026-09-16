@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from app.core.logging import get_logger
 from app.services.snapback_family_ops import new_trades_halted
 from app.services.snapback_health import record_cycle
+from app.services.snapback_prospective_scanner import SCAN_AFTER_CLOSE, finalize_session_signals
 from app.services.snapback import (
     _IST,
     get_config,
@@ -111,6 +112,30 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             mtm_processed = await process_prospective_daily_mtm_and_exits(client, cfg)
             record_cycle("eod_cycle")
 
+        # 6. Phase D: unattended Day-T signal finalisation, after the official close.
+        # A signal must exist because the session closed, not because a browser was
+        # open. Idempotent: a session already recorded complete is not rescanned.
+        session_scanned = False
+        if curr_time >= SCAN_AFTER_CLOSE:
+            try:
+                from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+                from app.services.snapback_session_ledger import session_is_complete
+
+                warehouse = SnapbackObservationWarehouse()
+                if not session_is_complete(warehouse, str(today)):
+                    scan_result = await finalize_session_signals(
+                        session_date=today, client=client, warehouse=warehouse, uid=uid,
+                    )
+                    session_scanned = True
+                    record_cycle("signal_scan")
+                    log.info(
+                        "Snapback session scan %s: %s (%s/%s scanned, %s signals)",
+                        today, scan_result.status, scan_result.universe_scanned,
+                        scan_result.universe_expected, scan_result.signals_authoritative,
+                    )
+            except Exception as scan_exc:
+                log.exception("Snapback session scan failed for %s: %s", today, scan_exc)
+
         return {
             "status": "ok",
             "date": str(today),
@@ -118,6 +143,7 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
             "entries_halted": entries_halted,
             "risk_processed": risk_processed,
             "mtm_processed": mtm_processed,
+            "session_scanned": session_scanned,
         }
 
 

@@ -33,6 +33,9 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
                                   to_bars)
 from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import RawQuoteEvent
+from app.services.snapback_hedge_contract import HedgeContractError, select_hedge_future
+from app.engines.snapback.policy import (RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS,
+                                          runner_should_exit_for_expiry)
 from app.engines.snapback.pricing import bs_delta, bs_price
 from app.services.snapback_capacity import observed_hedge_margin
 from app.services.snapback_health import record_cycle
@@ -693,11 +696,9 @@ async def scan_once(uid: str) -> dict:
         st.scanned = len(universe)
         st.last_scan_ms = ist_now_ms()
 
-        # Run prospective collector cycle for T+1 entries and daily open position MTM
-        try:
-            await process_prospective_pending_entries_and_mtm(client, cfg)
-        except Exception as collector_cycle_exc:
-            log.warning("Prospective collector cycle error: %s", collector_cycle_exc)
+        # The interactive scan observes only. Entry, risk and end-of-day processing
+        # belong to the autonomous runner: a browser refresh must never advance a
+        # position's lifecycle at a time unrelated to the authoritative runtime.
     except Exception as exc:                                       # noqa: BLE001
         st.last_error = str(exc)
         stale_rows = []
@@ -875,24 +876,6 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     rows = await client.search_instruments("", option_exchange, limit=1_000_000)
                     chain_cache[option_exchange] = rows
 
-                # Resolve actual front-month NIFTY futures contract
-                fut_pick = pick_futures_contract(rows or [], name="NIFTY", exchange="NFO", expiry_preference="near", today=ist_today())
-                if not fut_pick:
-                    log.warning("Skipping T+1 fill for %s: unable to resolve front-month NIFTY futures contract from NFO dump", opp_id)
-                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
-                    processed += 1
-                    continue
-
-                futures_symbol = fut_pick.tradingsymbol
-                fut_quotes = await client.get_quote([f"NFO:{futures_symbol}"])
-                q_fut_raw = (fut_quotes or {}).get(f"NFO:{futures_symbol}") or {}
-                fut_event = extract_raw_quote_event(futures_symbol, q_fut_raw)
-                if not fut_event:
-                    log.warning("Skipping T+1 fill for %s: missing genuine futures exchange quote event for %s", opp_id, futures_symbol)
-                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
-                    processed += 1
-                    continue
-
                 chain = chain_rows_for(rows or [], symbol, ist_today())
                 if not chain:
                     collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
@@ -960,8 +943,49 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     if q_ev:
                         opt_quote_events[sym_short] = q_ev
 
-                # Lot sizes from actual selected option and futures contracts
-                fut_lot_size = int(getattr(fut_pick, "lot_size", 0) or 0)
+                # The hedge is selected AFTER the option, and must outlive it. A
+                # near-month future can expire while a 40-60 DTE option is still open,
+                # which would silently leave the position unhedged.
+                candidate_expiries = []
+                for cand in cand_infos:
+                    try:
+                        candidate_expiries.append(date.fromisoformat(str(cand.expiry)[:10]))
+                    except Exception:
+                        continue
+                if not candidate_expiries:
+                    collector.warehouse.update_opportunity_status(opp_id, "NO_FILL")
+                    processed += 1
+                    continue
+
+                try:
+                    hedge = select_hedge_future(
+                        rows or [], option_expiry=max(candidate_expiries), name="NIFTY",
+                    )
+                except HedgeContractError as hedge_exc:
+                    log.warning("Skipping T+1 fill for %s: %s", opp_id, hedge_exc)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE_HEDGE_CONTRACT")
+                    collector.warehouse.record_decision(
+                        decision_id=f"DECISION-{opp_id}-HEDGE-{now_ms_for_decision()}",
+                        opportunity_id=opp_id,
+                        symbol=symbol,
+                        decision="INCONCLUSIVE_HEDGE_CONTRACT",
+                        reason=str(hedge_exc),
+                        provider_timestamp=datetime.now(timezone.utc).isoformat(),
+                    )
+                    processed += 1
+                    continue
+
+                futures_symbol = hedge.tradingsymbol
+                fut_quotes = await client.get_quote([f"NFO:{futures_symbol}"])
+                q_fut_raw = (fut_quotes or {}).get(f"NFO:{futures_symbol}") or {}
+                fut_event = extract_raw_quote_event(futures_symbol, q_fut_raw)
+                if not fut_event:
+                    log.warning("Skipping T+1 fill for %s: missing genuine futures exchange quote event for %s", opp_id, futures_symbol)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    processed += 1
+                    continue
+
+                fut_lot_size = int(hedge.lot_size or 0)
 
                 # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
                 _INDEX_CANONICAL_BETA = 1.0
@@ -1157,7 +1181,11 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
 
                 exit_reason = mtm_res.get("exit_reason")
                 should_close = bool(exit_reason)
-                if not should_close and rem_dte <= 1:
+                if not should_close and runner_should_exit_for_expiry(
+                    remaining_calendar_days=rem_dte
+                ):
+                    # Canonical buffer: RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS, shared with
+                    # the backtest rather than re-stated here.
                     should_close = True
                     exit_reason = "EXPIRY_APPROACHING"
 
@@ -1267,13 +1295,10 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                     exit_reason = None
 
                     if is_runner:
-                        peak_bid = max(float(pos.get("peak_option_bid") or entry_price), curr_bid)
-                        if peak_bid > float(pos.get("peak_option_bid") or 0.0):
-                            collector.warehouse.update_paper_position_peak_bid(
-                                opportunity_id=opp_id,
-                                peak_option_bid=peak_bid,
-                                is_runner=1,
-                            )
+                        # The trail is measured against the stored end-of-day peak. An
+                        # intraday tick may trigger the give-back but must never raise
+                        # the peak, or the trail ratchets against the position.
+                        peak_bid = float(pos.get("peak_option_bid") or entry_price)
                         runner_trail_pct = float(getattr(cfg, "runner_trail_pct", 25.0) or 25.0)
                         trail_price = peak_bid * (1.0 - runner_trail_pct / 100.0)
                         if curr_bid <= trail_price:
@@ -1360,7 +1385,23 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
     return processed
 
 
+def now_ms_for_decision() -> int:
+    return int(time.time() * 1000)
+
+
+def _deprecated(fn):
+    fn.__deprecated__ = True
+    return fn
+
+
+@_deprecated
 async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfig) -> None:
+    """DEPRECATED: never call from an interactive path.
+
+    Combining the entry and end-of-day phases behind one call is what allowed a UI
+    scan to mutate the position lifecycle. The autonomous runner calls the phases
+    individually, each in its own window.
+    """
     """Master entrypoint: process pending entries followed by intraday risk and daily MTM."""
     await process_prospective_pending_entries(client, cfg)
     await process_prospective_intraday_risk(client, cfg)
