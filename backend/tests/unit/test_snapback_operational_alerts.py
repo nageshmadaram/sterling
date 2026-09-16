@@ -287,3 +287,17 @@ def test_alert_transport_failure_does_not_crash_monitoring():
 
     assert result.failed == 1
     assert result.sent == 0
+
+
+def test_evidence_report_failure_is_critical():
+    alerts = derive_operational_alerts(
+        health=_healthy(),
+        backup_ok=True,
+        report_ok=False,
+    )
+
+    assert any(
+        a.code == "evidence_report_failed"
+        and a.severity == "CRITICAL"
+        for a in alerts
+    )

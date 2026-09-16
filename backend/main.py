@@ -121,6 +121,10 @@ async def lifespan(app: FastAPI):
     snapback_runner_task = start_snapback_runner()
     log.info("Snapback prospective unattended runner started (every 30s)")
 
+    from app.services.snapback_ops_scheduler import start as start_snapback_ops
+    snapback_ops_task = start_snapback_ops()
+    log.info("Snapback operations scheduler started (health every 60s, post-market chain after 15:40 IST)")
+
     log.info("ATM PI auto-arm loop started (every 30s)")
     log.info("Adaptive Edge auto scan loop started (every 60s)")
 
@@ -242,6 +246,15 @@ async def lifespan(app: FastAPI):
         snapback_runner_task.cancel()
         try:
             await snapback_runner_task
+        except (Exception, BaseException):
+            pass
+
+    from app.services.snapback_ops_scheduler import stop as stop_snapback_ops
+    stop_snapback_ops()
+    if snapback_ops_task and not snapback_ops_task.done():
+        snapback_ops_task.cancel()
+        try:
+            await snapback_ops_task
         except (Exception, BaseException):
             pass
 

@@ -29,6 +29,7 @@ from app.engines.snapback.manifest import create_frozen_manifest, verify_manifes
 from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
 from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trading_day, next_trading_day, session_bounds_ist
+from app.services.snapback_health import record_cycle
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
@@ -673,6 +674,10 @@ class SnapbackProspectiveCollector:
                 if not fut_q.accepted_for_execution or futures_quote_event.best_bid <= 0 or futures_quote_event.best_ask <= 0:
                     log.warning("Skipping MTM/rebalance for %s: futures quote quality rejected", opportunity_id)
                     return {"opportunity_id": opportunity_id, "status": "SKIPPED_QUOTE_QUALITY", "reason": "Futures quote quality rejected"}
+
+        # Observability only: the quotes used below passed execution-quality validation.
+        if cfg and (option_quote_event or futures_quote_event):
+            record_cycle("market_data")
 
         # Load persisted position state from warehouse if available
         pos = self.warehouse.get_paper_position(opportunity_id)

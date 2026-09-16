@@ -34,6 +34,7 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
 from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.pricing import bs_delta, bs_price
+from app.services.snapback_health import record_cycle
 
 log = get_logger(__name__)
 
@@ -992,6 +993,9 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
                     log.warning("Skipping MTM/exit cycle for %s: quote quality evaluation rejected", opp_id)
                     continue
 
+                # Observability only: a real quote passed execution-quality validation.
+                record_cycle("market_data")
+
                 opt_type_str = "PE" if "PE" in opt_sym else "CE"
                 opt_strike_val = float(pos.get("option_strike") or 0.0)
                 entry_dte_val = int(pos.get("entry_dte") or 45)
@@ -1118,6 +1122,9 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                     q_opt_eval = evaluate_quote_quality(opt_ev, cfg, now_ms=receive_now_ms)
                     if not q_opt_eval.accepted_for_execution:
                         continue
+
+                    # Observability only: a real quote passed execution-quality validation.
+                    record_cycle("market_data")
 
                     entry_price = float(pos["option_entry_price"])
                     curr_bid = opt_ev.best_bid

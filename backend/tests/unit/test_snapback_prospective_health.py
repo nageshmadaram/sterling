@@ -247,15 +247,35 @@ def test_health_endpoint_never_converts_probe_exception_to_green(monkeypatch):
     assert "health_probe_failed" in body["detail"]["unresolved_errors"]
 
 
-def test_calendar_probe_respects_fail_closed_false(monkeypatch):
+def test_calendar_closed_day_is_not_calendar_failure(monkeypatch):
     monkeypatch.setattr(
-        "app.services.snapback_runner._is_nse_trading_day",
+        "app.services.navigator.calendar.is_trading_day",
         lambda _d: False,
     )
 
     from app.services.snapback_health import _probe_calendar
 
-    assert _probe_calendar() is False
+    available, trading_day = _probe_calendar()
+
+    assert available is True
+    assert trading_day is False
+
+
+def test_calendar_exception_fails_closed(monkeypatch):
+    def broken(_d):
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(
+        "app.services.navigator.calendar.is_trading_day",
+        broken,
+    )
+
+    from app.services.snapback_health import _probe_calendar
+
+    available, trading_day = _probe_calendar()
+
+    assert available is False
+    assert trading_day is False
 
 
 def test_live_manifest_probe_cannot_be_hardcoded_green(monkeypatch):

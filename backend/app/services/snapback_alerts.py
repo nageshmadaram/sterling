@@ -46,6 +46,7 @@ def derive_operational_alerts(
     *,
     health: Dict[str, Any],
     backup_ok: bool,
+    report_ok: bool = True,
     exit_pending_stale: bool = False,
     processing_entry_stale: bool = False,
     daily_loss_breached: bool = False,
@@ -94,7 +95,11 @@ def derive_operational_alerts(
             "Sterling is not connected to the broker. Log in to the broker to restore market data and paper execution.",
         )
 
-    if not health.get("market_data_fresh", True) or "market_data_stale" in errors:
+    # Stale data is only a fault while the market is open; a quiet evening is not one.
+    market_open = bool(health.get("market_open", True))
+    if "market_data_stale" in errors or (
+        not health.get("market_data_fresh", True) and market_open
+    ):
         add(
             "market_data_stale",
             WARNING,
@@ -140,6 +145,14 @@ def derive_operational_alerts(
             CRITICAL,
             "Evidence backup failed",
             "The daily backup of the prospective evidence database did not complete. The evidence is currently unprotected.",
+        )
+
+    if not report_ok:
+        add(
+            "evidence_report_failed",
+            CRITICAL,
+            "Evidence report failed",
+            "The daily Snapback prospective evidence report could not be generated. Do not treat today's evidence package as complete.",
         )
 
     if daily_loss_breached:

@@ -201,15 +201,23 @@ def _probe_broker(uid: str = "default") -> bool:
         return False
 
 
-def _probe_calendar() -> bool:
-    """Return the fail-closed calendar verdict for today. An unavailable calendar is False."""
-    try:
-        from app.services import snapback_runner
+def _probe_calendar(d=None) -> tuple[bool, bool]:
+    """Return (calendar_available, is_trading_day_today).
 
-        return bool(snapback_runner._is_nse_trading_day(datetime.now(_IST).date()))
+    A closed market (weekend or NSE holiday) is a normal answer, not a calendar
+    failure. Only an exception from the calendar service is a failure, and it
+    fails closed.
+    """
+    from app.services.navigator import calendar as calendar_mod
+
+    d = d or datetime.now(_IST).date()
+
+    try:
+        trading_day = bool(calendar_mod.is_trading_day(d))
+        return True, trading_day
     except Exception as exc:
         log.warning("Snapback health: calendar probe failed: %s", exc)
-        return False
+        return False, False
 
 
 def _probe_manifest() -> tuple[bool, list[str]]:
@@ -250,7 +258,8 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         database_ok = False
 
     last_tick = get_heartbeat("runner_tick")
-    market_open = _market_open_now(now_ist)
+    calendar_ok, trading_day = _probe_calendar(now_ist.date())
+    market_open = calendar_ok and trading_day and _market_open_now(now_ist)
     last_quote = get_heartbeat("market_data")
     market_data_fresh = bool(
         last_quote and (now - last_quote).total_seconds() <= 180
@@ -271,7 +280,7 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         mode="PAPER",
         broker_connected=_probe_broker(uid),
         market_data_fresh=market_data_fresh,
-        calendar_ok=_probe_calendar(),
+        calendar_ok=calendar_ok,
         database_ok=database_ok,
         runner_alive=last_tick is not None,
         last_runner_tick=last_tick,
