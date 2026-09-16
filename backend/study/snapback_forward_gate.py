@@ -1,10 +1,11 @@
 """Adapter: frozen prospective evidence -> the existing authoritative economic gate.
 
 This module only selects and shapes observed records. It has no authority to alter
-any strategy parameter, and it does not implement a second gate: the verdict comes
-from ``evaluate_authoritative_snapback_gate()``.
+any strategy parameter, and it does not implement a second gate: it reaches the
+gate exclusively through ``snapback_authoritative_gate.evaluate_with_verdict``,
+which applies the mapping so this module cannot apply a different one.
 
-Verdict mapping:
+Verdict vocabulary (defined in the authority, reproduced here for readers):
     PASSED        every authoritative check passed
     INCONCLUSIVE  the sample is too small to decide (<60 sessions or <300 trades)
     FAILED        a sufficient sample failed an authoritative check
@@ -230,9 +231,12 @@ def evaluate_forward_gate(
     sessions = observed_sessions if observed_sessions is not None else entry_sessions
     trades = len(inputs["trade_pnls"])
 
-    from study.snapback_authoritative_gate import evaluate_authoritative_snapback_gate as _gate
+    from study.snapback_authoritative_gate import evaluate_with_verdict
 
-    result = _gate(
+    payload = evaluate_with_verdict(
+        data_quality_ok=not data_quality_errors,
+        min_sessions=MIN_SESSIONS,
+        min_trades=MIN_TRADES,
         trade_pnls=inputs["trade_pnls"],
         entry_dates=inputs["entry_dates"],
         statutory_costs=inputs["statutory_costs"],
@@ -245,29 +249,12 @@ def evaluate_forward_gate(
         entry_sessions_count=sessions,
     )
 
-    payload = result.as_dict()
     payload["total_sessions"] = sessions
     payload["entry_date_count"] = entry_sessions
-    sample_sufficient = (
-        sessions >= MIN_SESSIONS
-        and payload.get("completed_trades", trades) >= MIN_TRADES
-    )
-
-    if payload.get("promoted"):
-        verdict = "PASSED"
-    elif not sample_sufficient:
-        verdict = "INCONCLUSIVE"
-    else:
-        verdict = "FAILED"
-
-    if data_quality_errors:
-        # Broken or missing evidence can never be a decision.
-        verdict = "INCONCLUSIVE"
-
+    # The verdict came from the authority; this module does not map it itself.
     payload["data_quality_ok"] = not data_quality_errors
     payload["data_quality_errors"] = data_quality_errors
     payload["allocation_capital_budget"] = allocation_capital_budget
-    payload["verdict"] = verdict
     payload["missing_requirements"] = _missing_requirements(
         sessions=sessions,
         trades=payload.get("completed_trades", trades),

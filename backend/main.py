@@ -135,10 +135,14 @@ async def lifespan(app: FastAPI):
     # database is writable, the manifest verifies, and the Snapback config loaded from
     # a reachable store with the frozen hash. A failure must be loud, never a silent
     # "defaults OFF" runtime that looks alive but can never produce a signal.
-    from app.services.snapback_startup import run_startup_preflight
+    from app.services.snapback_preflight import run_preflight
     from app.services.snapback_health import record_error, clear_error
 
-    snapback_preflight = run_startup_preflight()
+    # The composed check, not the narrow config-only one. Splitting them made a
+    # contradiction possible: /health/ready could answer 503 on a bad clock, a
+    # full disk, a schema mismatch or the wrong experiment's database while the
+    # runner started anyway and wrote evidence under exactly those conditions.
+    snapback_preflight = run_preflight()
     snapback_runner_task = None
     if snapback_preflight.may_start_runner:
         clear_error("startup_preflight_failed")
@@ -154,10 +158,10 @@ async def lifespan(app: FastAPI):
         )
         record_error(key, ", ".join(snapback_preflight.errors))
         log.error(
-            "SNAPBACK PREFLIGHT %s — runner NOT started. Errors: %s. Details: %s",
+            "SNAPBACK PREFLIGHT %s — runner NOT started. Failed checks: %s. Details: %s",
             snapback_preflight.status,
             snapback_preflight.errors,
-            snapback_preflight.details,
+            {c.code: c.details for c in snapback_preflight.required_failures},
         )
 
     from app.services.snapback_ops_scheduler import start as start_snapback_ops

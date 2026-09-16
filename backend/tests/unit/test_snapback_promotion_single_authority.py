@@ -16,8 +16,6 @@ BACKEND = Path(__file__).resolve().parents[2]
 ALLOWED_GATE_CALLERS = {
     "app/services/snapback_promotion.py",
     "study/snapback_authoritative_gate.py",
-    # Test-facing shim: delegates for scripts, never a production authority.
-    "study/snapback_forward_gate.py",
 }
 
 

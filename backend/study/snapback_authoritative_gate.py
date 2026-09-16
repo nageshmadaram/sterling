@@ -14,6 +14,30 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 
+# Verdict vocabulary. One definition, because two copies of a decision rule drift
+# and the one that drifts is the one nobody is watching.
+PASSED = "PASSED"
+FAILED = "FAILED"
+INCONCLUSIVE = "INCONCLUSIVE"
+
+
+def verdict_for(
+    *, promoted: bool, sample_sufficient: bool, data_quality_ok: bool = True,
+) -> str:
+    """Map a gate result onto the operator-facing verdict.
+
+    Broken or missing evidence outranks everything: it can never be a decision,
+    in either direction.
+    """
+    if not data_quality_ok:
+        return INCONCLUSIVE
+    if promoted:
+        return PASSED
+    if not sample_sufficient:
+        return INCONCLUSIVE
+    return FAILED
+
+
 @dataclass
 class AuthoritativeGateVerdict:
     promoted: bool
@@ -244,3 +268,28 @@ def evaluate_authoritative_snapback_gate(
         checks=checks,
         reasons=reasons,
     )
+
+
+def evaluate_with_verdict(**kwargs) -> Dict[str, Any]:
+    """The gate plus its verdict, as one call.
+
+    This is the only way a non-authority module reaches the gate: it cannot
+    apply its own mapping, and it cannot forget the data-quality override.
+    """
+    data_quality_ok = bool(kwargs.pop("data_quality_ok", True))
+    min_sessions = int(kwargs.pop("min_sessions", 60))
+    min_trades = int(kwargs.pop("min_trades", 300))
+    sessions = int(kwargs.get("entry_sessions_count") or 0)
+
+    payload = evaluate_authoritative_snapback_gate(**kwargs).as_dict()
+
+    sample_sufficient = (
+        sessions >= min_sessions
+        and int(payload.get("completed_trades") or 0) >= min_trades
+    )
+    payload["verdict"] = verdict_for(
+        promoted=bool(payload.get("promoted")),
+        sample_sufficient=sample_sufficient,
+        data_quality_ok=data_quality_ok,
+    )
+    return payload

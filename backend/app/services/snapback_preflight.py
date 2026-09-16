@@ -39,6 +39,12 @@ class PreflightCheck:
     details: Any = None
 
 
+# A failure in one of these means the evidence file itself needs attention — a
+# restore, or a fresh database — rather than a configuration fix. The two states
+# tell an operator to do different things.
+_RECOVERY_CHECKS = frozenset({"database", "evidence_meta", "disk"})
+
+
 @dataclass
 class PreflightResult:
     passed: bool
@@ -48,9 +54,41 @@ class PreflightResult:
     def failures(self) -> List[PreflightCheck]:
         return [c for c in self.checks if not c.passed]
 
+    @property
+    def required_failures(self) -> List[PreflightCheck]:
+        return [c for c in self.checks if c.required and not c.passed]
+
+    @property
+    def errors(self) -> List[str]:
+        return [c.code for c in self.required_failures]
+
+    @property
+    def may_start_runner(self) -> bool:
+        """The runner and /health/ready read the same answer.
+
+        Split, they could contradict each other: readiness 503 on a bad clock or
+        the wrong experiment's database while the runner started anyway and wrote
+        evidence under exactly those conditions.
+        """
+        return self.passed
+
+    @property
+    def status(self) -> str:
+        if self.passed:
+            return "READY"
+        if any(c.code in _RECOVERY_CHECKS for c in self.required_failures):
+            return "RECOVERY_REQUIRED"
+        return "HALTED"
+
+    @property
+    def details(self) -> Dict[str, Any]:
+        return {c.code: c.details for c in self.checks}
+
     def as_dict(self) -> Dict[str, Any]:
         return {
             "passed": self.passed,
+            "status": self.status,
+            "may_start_runner": self.may_start_runner,
             "failed_checks": [c.code for c in self.failures],
             "checks": [
                 {

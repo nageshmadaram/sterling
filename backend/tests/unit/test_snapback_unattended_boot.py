@@ -217,7 +217,7 @@ def test_main_seeds_before_the_runner_starts():
     source = (REPO / "backend" / "main.py").read_text(encoding="utf-8")
 
     seed_at = source.index("seed_from_env")
-    preflight_at = source.index("run_startup_preflight()")
+    preflight_at = source.index("run_preflight()")
 
     assert seed_at < preflight_at
 

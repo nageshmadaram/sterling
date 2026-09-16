@@ -153,17 +153,17 @@ class PromotionService:
             entry_sessions_count=inputs.observed_sessions,
         ).as_dict()
 
+        from study.snapback_authoritative_gate import verdict_for
+
         sample_sufficient = (
             inputs.observed_sessions >= self.MIN_SESSIONS
             and inputs.completed_trades >= self.MIN_TRADES
         )
-
-        if verdict_payload.get("promoted"):
-            verdict = PASSED
-        elif not sample_sufficient:
-            verdict = INCONCLUSIVE
-        else:
-            verdict = FAILED
+        # One mapping, shared with study/snapback_forward_gate.py.
+        verdict = verdict_for(
+            promoted=bool(verdict_payload.get("promoted")),
+            sample_sufficient=sample_sufficient,
+        )
 
         missing: List[str] = []
         if inputs.observed_sessions < self.MIN_SESSIONS:

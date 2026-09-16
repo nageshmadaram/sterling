@@ -81,6 +81,71 @@ def _num(row: Dict[str, Any], field: str, errors: List[str], who: str) -> Option
     return value
 
 
+def _was_hedged(outcome: Dict[str, Any]) -> bool:
+    """Whether this trade actually carried a futures hedge.
+
+    Read from the recorded outcome, never inferred from the presence of a hedge
+    cost — that would make an orphan hedge charge prove its own legitimacy.
+    """
+    flag = outcome.get("hedged")
+    if flag is not None:
+        return bool(int(flag)) if str(flag).strip() not in ("", "None") else False
+    lots = outcome.get("futures_lots_at_entry")
+    if lots is not None:
+        try:
+            return int(lots) != 0
+        except (TypeError, ValueError):
+            return False
+    # No statement either way. Fall back to the futures leg's economics: a hedge
+    # that executed moves money.
+    try:
+        return float(outcome.get("actual_futures_pnl") or 0.0) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _cardinality_errors(
+    opp: str, *, counts: Dict[str, int], hedged: bool, rebalances: int,
+) -> List[str]:
+    """Exactly one cost event per executed leg, and no event without a leg."""
+    from app.services.snapback_costs import COST_PHASES
+
+    errors: List[str] = []
+
+    expected = {
+        "OPTION_ENTRY": 1,
+        "OPTION_EXIT": 1,
+        "HEDGE_ENTRY": 1 if hedged else 0,
+        "HEDGE_EXIT": 1 if hedged else 0,
+        "HEDGE_REBALANCE": rebalances,
+    }
+
+    for phase, want in expected.items():
+        got = counts.get(phase, 0)
+        if got == want:
+            continue
+        if got == 0:
+            errors.append(f"{opp}: missing {phase} cost event (expected {want})")
+        elif want == 0:
+            errors.append(
+                f"{opp}: orphan {phase} cost event ({got}) for a leg that did not execute"
+            )
+        else:
+            errors.append(
+                f"{opp}: {phase} cost events {got} do not match executed legs {want}"
+            )
+
+    for phase, got in counts.items():
+        if phase in expected:
+            continue
+        if phase not in COST_PHASES:
+            errors.append(f"{opp}: unknown cost phase {phase!r} ({got} events)")
+        elif got != 1:
+            errors.append(f"{opp}: {phase} cost events {got} are not a single leg")
+
+    return errors
+
+
 def build_promotion_input(
     *,
     records: Dict[str, List[Dict[str, Any]]],
@@ -104,12 +169,26 @@ def build_promotion_input(
     # Costs by trade come from the LEDGER. A bug in outcome writing must not be able
     # to make costs disappear from the 2x/3x stress.
     ledger: Dict[str, float] = {}
+    phase_counts: Dict[str, Dict[str, int]] = {}
     for row in cost_rows:
         opp = str(row.get("opportunity_id") or "")
         try:
             ledger[opp] = ledger.get(opp, 0.0) + float(row.get("total_cost") or 0.0)
         except (TypeError, ValueError):
             errors.append(f"{opp}: non-numeric cost event")
+        phase = str(row.get("phase") or "")
+        phase_counts.setdefault(opp, {})
+        phase_counts[opp][phase] = phase_counts[opp].get(phase, 0) + 1
+
+    # G24: one executed leg, one cost event. Summing per trade catches a wrong
+    # total but not a missing leg whose cost was small, a duplicate that
+    # double-charges, or an orphan attached to a leg that never executed. Each
+    # changes the cost stress the gate applies without moving the sum enough to
+    # be noticed.
+    rebalance_counts: Dict[str, int] = {}
+    for row in filter_authoritative(records.get("hedge_rebalances")):
+        opp = str(dict(row).get("opportunity_id") or "")
+        rebalance_counts[opp] = rebalance_counts.get(opp, 0) + 1
 
     trade_pnls: List[float] = []
     trade_costs: List[float] = []
@@ -137,6 +216,15 @@ def build_promotion_input(
         if opp not in ledger:
             errors.append(f"{opp}: no cost events for a completed trade")
             continue
+
+        errors.extend(
+            _cardinality_errors(
+                opp,
+                counts=phase_counts.get(opp, {}),
+                hedged=_was_hedged(outcome),
+                rebalances=rebalance_counts.get(opp, 0),
+            )
+        )
 
         ledger_costs = ledger[opp]
         if outcome_costs is not None and abs(outcome_costs - ledger_costs) > ABS_TOLERANCE:
