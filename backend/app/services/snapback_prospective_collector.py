@@ -29,6 +29,8 @@ from app.engines.snapback.manifest import create_frozen_manifest, verify_manifes
 from app.engines.snapback.models import SnapbackSignal
 from app.engines.snapback.pricing import RISK_FREE, bs_price
 from app.services.navigator.calendar import IST, entry_delay_cutoff_ist, is_trading_day, next_trading_day, session_bounds_ist
+from app.services.snapback_capacity import evaluate_capacity
+from app.services.snapback_costs import statutory_charges
 from app.services.snapback_health import record_cycle
 from app.services.snapback_market_data import evaluate_quote_quality
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
@@ -154,7 +156,8 @@ class SnapbackProspectiveCollector:
         option_quote_events: Dict[str, RawQuoteEvent],
         causal_beta: float,
         futures_lot_size: int,
-        available_capital: float = 1_000_000.0,
+        available_capital: Optional[float] = None,
+        hedge_margin_observed: Optional[float] = None,
         slippage_pct: float = 0.0005,
         execution_timestamp_ms: Optional[int] = None,
         entry_iv: float = 0.20,
@@ -523,16 +526,68 @@ class SnapbackProspectiveCollector:
 
         opt_turnover = option_qty * option_fill_price
         fut_turnover = actual_futures_qty * futures_fill_price
-        brokerage = 40.0
-        stt = opt_turnover * 0.00125
-        exchange_txn_fee = (opt_turnover * 0.0005) + (fut_turnover * 0.00002)
-        gst = 0.18 * (brokerage + exchange_txn_fee)
-        stamp_duty = opt_turnover * 0.00003
-        total_costs = brokerage + stt + exchange_txn_fee + gst + stamp_duty
+
+        # One versioned schedule for entry, rebalance and exit. STT is sell side only,
+        # so the option BUY leg pays none of it.
+        opt_entry_charges = statutory_charges(
+            side="BUY", segment="OPTIONS", price=option_fill_price, quantity=option_qty,
+        )
+        fut_entry_charges = statutory_charges(
+            side="BUY", segment="FUTURES", price=futures_fill_price, quantity=actual_futures_qty,
+        )
+        brokerage = opt_entry_charges["brokerage"] + fut_entry_charges["brokerage"]
+        stt = opt_entry_charges["stt"] + fut_entry_charges["stt"]
+        exchange_txn_fee = opt_entry_charges["exchange_txn"] + fut_entry_charges["exchange_txn"]
+        gst = opt_entry_charges["gst"] + fut_entry_charges["gst"]
+        stamp_duty = opt_entry_charges["stamp_duty"] + fut_entry_charges["stamp_duty"]
+        total_costs = opt_entry_charges["total"] + fut_entry_charges["total"]
 
         option_margin = opt_turnover
-        futures_margin = fut_turnover * 0.12
+        # Broker-observed hedge margin when available; the old flat 12% of notional was
+        # a guess, and a guessed constraint cannot prove a book was fundable.
+        futures_margin = (
+            float(hedge_margin_observed)
+            if hedge_margin_observed is not None
+            else fut_turnover * 0.12
+        )
         total_margin = option_margin + futures_margin
+
+        # Capacity: an unaffordable lot is NO_CAPACITY, not a paper trade.
+        open_positions = self.warehouse.get_active_paper_positions() or []
+        capacity = evaluate_capacity(
+            capital=float(available_capital) if available_capital else None,
+            reserved_margin=sum(
+                float(dict(p).get("option_entry_price") or 0.0) * int(dict(p).get("option_qty") or 0)
+                for p in open_positions
+            ),
+            option_premium_cash=opt_turnover,
+            hedge_margin=hedge_margin_observed if hedge_margin_observed is not None else futures_margin,
+            fee_reserve=total_costs,
+            open_positions=len(open_positions),
+            max_open_positions=int(getattr(cfg, "max_open_positions", 0) or 0),
+            underlying=symbol,
+            open_underlyings={str(dict(p).get("symbol") or "") for p in open_positions},
+        )
+        if not capacity.allowed:
+            self.warehouse.update_opportunity_status(opportunity_id, capacity.status)
+            self.warehouse.record_decision(
+                decision_id=f"DECISION-{opportunity_id}-CAPACITY-{now_ms}",
+                opportunity_id=opportunity_id,
+                symbol=symbol,
+                decision=capacity.status,
+                reason=(
+                    f"{capacity.status}: required {capacity.required_capital}, "
+                    f"available {capacity.available_capital}, reasons={capacity.reasons}"
+                ),
+                provider_timestamp=provider_ts,
+            )
+            return {
+                "opportunity_id": opportunity_id,
+                "status": capacity.status,
+                "reason": ", ".join(capacity.reasons),
+                "required_capital": capacity.required_capital,
+                "available_capital": capacity.available_capital,
+            }
 
         self.warehouse.commit_paper_entry_transaction(
             opportunity_id=opportunity_id,
@@ -707,7 +762,14 @@ class SnapbackProspectiveCollector:
             traded_price = fut_ask if new_hedge_lots > current_futures_lots else fut_bid
             traded_turnover = traded_qty * traded_price
             brokerage = 20.0
-            stt = traded_turnover * 0.000125 if new_hedge_lots < current_futures_lots else 0.0
+            stt = (
+                statutory_charges(
+                    side="SELL", segment="FUTURES",
+                    price=(traded_turnover / traded_qty) if traded_qty else 0.0,
+                    quantity=traded_qty,
+                )["stt"]
+                if new_hedge_lots < current_futures_lots else 0.0
+            )
             exchange_txn_fee = traded_turnover * 0.00002
             gst = 0.18 * (brokerage + exchange_txn_fee)
             stamp_duty = traded_turnover * 0.00002 if new_hedge_lots > current_futures_lots else 0.0
@@ -899,21 +961,15 @@ class SnapbackProspectiveCollector:
             pos_acc = 0.0
 
         # Calculate exit statutory fees for option liquidation and futures liquidation
-        opt_exit_turnover = option_quantity * option_exit_bid
-        opt_exit_brokerage = 20.0
-        opt_exit_stt = opt_exit_turnover * 0.00125
-        opt_exit_exch = opt_exit_turnover * 0.0005
-        opt_exit_gst = 0.18 * (opt_exit_brokerage + opt_exit_exch)
-        opt_exit_cost = opt_exit_brokerage + opt_exit_stt + opt_exit_exch + opt_exit_gst
+        opt_exit_cost = statutory_charges(
+            side="SELL", segment="OPTIONS", price=option_exit_bid, quantity=option_quantity,
+        )["total"]
 
         fut_liq_qty = open_qty if pos else futures_quantity
         if fut_liq_qty > 0:
-            fut_exit_turnover = fut_liq_qty * futures_exit_bid
-            fut_exit_brokerage = 20.0
-            fut_exit_stt = fut_exit_turnover * 0.000125
-            fut_exit_exch = fut_exit_turnover * 0.00002
-            fut_exit_gst = 0.18 * (fut_exit_brokerage + fut_exit_exch)
-            fut_exit_cost = fut_exit_brokerage + fut_exit_stt + fut_exit_exch + fut_exit_gst
+            fut_exit_cost = statutory_charges(
+                side="SELL", segment="FUTURES", price=futures_exit_bid, quantity=fut_liq_qty,
+            )["total"]
         else:
             fut_exit_cost = 0.0
 

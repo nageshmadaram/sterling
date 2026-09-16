@@ -282,6 +282,22 @@ class SnapbackOpsScheduler:
 
     # ------------------------------------------------------------------ helpers
 
+    def _stale_state(self, health: dict) -> dict:
+        """Stuck EXIT_PENDING / PROCESSING_ENTRY, preferring the health snapshot."""
+        if health and "exit_pending_stale" in health:
+            return {
+                "exit_pending_stale": health.get("exit_pending_stale"),
+                "processing_entry_stale": health.get("processing_entry_stale"),
+            }
+        try:
+            from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
+            from app.services.snapback_stale import stale_lifecycle_state
+
+            return stale_lifecycle_state(SnapbackObservationWarehouse())
+        except Exception as exc:
+            log.warning("Snapback ops: stale lifecycle probe failed: %s", exc)
+            return {"exit_pending_stale": True, "processing_entry_stale": True}
+
     def _dispatch(
         self,
         health: dict,
@@ -294,12 +310,15 @@ class SnapbackOpsScheduler:
         from app.services.snapback_alerts import derive_operational_alerts
 
         try:
+            # Derived from the ledger, not hardcoded: these alerts existed but could
+            # never fire while their inputs were pinned to False.
+            stale = self._stale_state(health)
             alerts = derive_operational_alerts(
                 health=health,
                 backup_ok=backup_ok,
                 report_ok=report_ok,
-                exit_pending_stale=False,
-                processing_entry_stale=False,
+                exit_pending_stale=bool(stale.get("exit_pending_stale")),
+                processing_entry_stale=bool(stale.get("processing_entry_stale")),
             )
             dispatched = self.dispatcher.dispatch(alerts, now=now_ist)
             result.alert_sent = int(getattr(dispatched, "sent", 0) or 0)

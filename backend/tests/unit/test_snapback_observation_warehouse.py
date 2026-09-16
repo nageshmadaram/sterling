@@ -222,6 +222,8 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -247,6 +249,8 @@ def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_
     # 1. Fill attempt on same day close (2026-09-15) -> Blocked with INVALID_SESSION_TIMING
     same_day_ms = int(datetime(2026, 9, 15, 15, 30, 0, tzinfo=timezone.utc).timestamp() * 1000)
     res_same_day = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24500.0,
@@ -263,6 +267,8 @@ def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_
     # 2. Fill attempt 5 days late (2026-09-20) -> Marked INCONCLUSIVE (MISSED_T1_ENTRY_WINDOW)
     late_ms = int(datetime(2026, 9, 20, 9, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)
     res_late = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24500.0,
@@ -289,6 +295,8 @@ def test_tampered_config_rejected(temp_warehouse, sample_fade_up_signal):
     t1_ms = int(datetime(2026, 9, 16, 3, 45, 0, tzinfo=timezone.utc).timestamp() * 1000)
 
     res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=tampered_cfg,
         t1_spot_price=24510.0,
@@ -348,6 +356,8 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -568,6 +578,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
 
     # Monday opening window fill succeeds
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -625,6 +637,8 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
     )
 
     exec_res_late = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id_2,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -717,6 +731,8 @@ def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -807,6 +823,8 @@ def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -948,6 +966,8 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=52000.0,
@@ -990,6 +1010,8 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
     )
     opp_id_invalid = collector.record_signal_at_close(signal=sig2, cfg=sample_config)["opportunity_id"]
     exec_res_invalid = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id_invalid,
         cfg=sample_config,
         t1_spot_price=52000.0,
@@ -1063,6 +1085,8 @@ def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -1212,6 +1236,8 @@ def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,
@@ -1287,6 +1313,8 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
     )
 
     exec_res = collector.execute_pending_entry(
+        available_capital=50_000_000.0,
+        hedge_margin_observed=1_000.0,
         opportunity_id=opp_id,
         cfg=sample_config,
         t1_spot_price=24510.0,

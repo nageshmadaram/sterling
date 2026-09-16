@@ -5,6 +5,24 @@ from app.services.kite_engine import positions
 
 
 @pytest.fixture(autouse=True)
+def _allow_snapback_family_gate(monkeypatch):
+    """These tests predate the Snapback family gate and exercise other invariants.
+
+    The gate itself is covered by tests/unit/test_snapback_live_execution_gate.py; here
+    it is allowed through so the invariant under test is the one that decides.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.services.execution_service.snapback_live_gate_decision",
+        lambda **kw: SimpleNamespace(allowed=True, protective=False, reasons=[]),
+        raising=False,
+    )
+
+
+
+
+@pytest.fixture(autouse=True)
 def setup_db_for_test(tmp_path, monkeypatch):
     from app.services import live_safety
     db_file = str(tmp_path / "test_exec.db")

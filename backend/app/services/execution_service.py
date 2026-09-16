@@ -102,6 +102,51 @@ class ExecutionResult:
     revision: int = 0
 
 
+def snapback_live_gate_decision(**kwargs):
+    """Server-derived family gate decision for Snapback.
+
+    Every input is derived here, never taken from the caller's payload: evidence
+    verdict from the authoritative gate, readiness from the server, health from the
+    health probe, reconciliation from the broker state. A caller that claims to be
+    LIVE_ELIGIBLE is simply not believed.
+    """
+    from app.services.snapback_family_gate import evaluate_live_gate
+
+    return evaluate_live_gate(**kwargs)
+
+
+def _snapback_server_state(uid: str) -> dict:
+    """Derive the gate inputs. Anything unknown fails closed."""
+    verdict = "INCONCLUSIVE"
+    live_eligible = False
+    system_status = "HALTED"
+    broker_reconciled = False
+
+    try:
+        from app.services.snapback_family_ops import get_family_evidence_verdict
+
+        verdict = str(get_family_evidence_verdict().get("verdict") or "INCONCLUSIVE")
+    except Exception as exc:
+        log.warning("Snapback gate: evidence verdict unavailable: %s", exc)
+
+    try:
+        from app.services.snapback_readiness import readiness_state
+
+        state = readiness_state(uid)
+        live_eligible = state.state == "LIVE_ELIGIBLE"
+        system_status = state.system_status
+        broker_reconciled = state.broker_reconciled
+    except Exception as exc:
+        log.warning("Snapback gate: readiness unavailable: %s", exc)
+
+    return {
+        "evidence_verdict": verdict,
+        "live_eligible": live_eligible,
+        "system_status": system_status,
+        "broker_reconciled": broker_reconciled,
+    }
+
+
 class CanonicalExecutionService:
     """Single execution authority for all broker order placements."""
 
@@ -206,6 +251,49 @@ class CanonicalExecutionService:
                 return ExecutionResult(success=False, status="REJECTED", error="Risk approval proof mismatch or invalid (strategy_id/signal_id mismatch)")
         elif risk_approval is not None and not risk_approval.approved:
             return ExecutionResult(success=False, status="REJECTED", error="Risk check rejected")
+
+        # Snapback family gate: an exposure-increasing live Snapback order requires
+        # PASSED authoritative evidence, LIVE_ELIGIBLE state, RiskEngine approval, a
+        # HEALTHY system and a reconciled broker. Protective actions stay permitted.
+        if str(request.strategy_id or "").lower() == "snapback":
+            from app.services.snapback_family_gate import LiveIntent
+
+            if is_exposure_increasing:
+                intent = LiveIntent.ENTER
+            elif effective_effect in (ExposureEffect.CLOSE_POSITION, ExposureEffect.REDUCE_EXPOSURE):
+                intent = LiveIntent.EXIT
+            else:
+                intent = LiveIntent.RECONCILE
+
+            try:
+                state = _snapback_server_state(request.uid)
+                decision = snapback_live_gate_decision(
+                    intent=intent,
+                    evidence_verdict=state["evidence_verdict"],
+                    live_eligible=state["live_eligible"],
+                    risk_approved=bool(risk_approval and risk_approval.approved),
+                    system_status=state["system_status"],
+                    broker_reconciled=state["broker_reconciled"],
+                    operator_override=False,
+                )
+            except Exception as gate_exc:
+                log.error("Snapback family gate failed closed: %s", gate_exc)
+                return ExecutionResult(
+                    success=False,
+                    status="REJECTED_BY_FAMILY_GATE",
+                    error=f"Snapback family gate unavailable: {gate_exc}",
+                )
+
+            if not decision.allowed:
+                log.warning(
+                    "Snapback family gate blocked %s %s: %s",
+                    request.side, request.symbol, decision.reasons,
+                )
+                return ExecutionResult(
+                    success=False,
+                    status="REJECTED_BY_FAMILY_GATE",
+                    error="Snapback live gate: " + ", ".join(decision.reasons),
+                )
 
         allowed, reason = self.is_trading_allowed(
             uid=request.uid,

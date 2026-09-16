@@ -85,6 +85,7 @@ def build_prospective_health(
     unresolved_errors: Optional[Iterable[str]] = None,
     market_open: bool = True,
     alert_transport_configured: bool = False,
+    stale_state: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Build the health object from observed component truth. Unknown is never green."""
@@ -125,6 +126,12 @@ def build_prospective_health(
     if not calendar_ok:
         errors.append("calendar_unavailable")
 
+    stale_state = dict(stale_state or {})
+    if stale_state.get("exit_pending_stale"):
+        errors.append("exit_pending_unresolved")
+    if stale_state.get("processing_entry_stale"):
+        errors.append("pending_entry_stuck")
+
     # Preserve order, drop duplicates.
     deduped: List[str] = []
     for err in errors:
@@ -162,6 +169,10 @@ def build_prospective_health(
         "open_positions": open_positions,
         "exit_pending": exit_pending,
         "alert_transport_configured": bool(alert_transport_configured),
+        "exit_pending_stale": bool(stale_state.get("exit_pending_stale", False)),
+        "processing_entry_stale": bool(stale_state.get("processing_entry_stale", False)),
+        "oldest_exit_pending_age_s": stale_state.get("oldest_exit_pending_age_s"),
+        "oldest_processing_entry_age_s": stale_state.get("oldest_processing_entry_age_s"),
         "unresolved_errors": deduped,
         "generated_at": _iso(now),
     }
@@ -189,6 +200,17 @@ def _runtime_sha() -> Optional[str]:
     except Exception:  # pragma: no cover - environment dependent
         pass
     return None
+
+
+def _probe_stale_state(warehouse) -> Dict[str, Any]:
+    """Stuck entry leases and unliquidated exits. Unreadable fails closed."""
+    try:
+        from app.services.snapback_stale import stale_lifecycle_state
+
+        return stale_lifecycle_state(warehouse)
+    except Exception as exc:
+        log.warning("Snapback health: stale lifecycle probe failed: %s", exc)
+        return {"exit_pending_stale": True, "processing_entry_stale": True}
 
 
 def _probe_alert_transport(uid: str = "default") -> bool:
@@ -305,5 +327,6 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
         unresolved_errors=standing_errors,
         market_open=market_open,
         alert_transport_configured=_probe_alert_transport(),
+        stale_state=_probe_stale_state(warehouse),
         now=now,
     )

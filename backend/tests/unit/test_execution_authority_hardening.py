@@ -19,6 +19,24 @@ from app.services.db import ControlPlaneUnavailableError
 
 
 @pytest.fixture(autouse=True)
+def _allow_snapback_family_gate(monkeypatch):
+    """These tests predate the Snapback family gate and exercise other invariants.
+
+    The gate itself is covered by tests/unit/test_snapback_live_execution_gate.py; here
+    it is allowed through so the invariant under test is the one that decides.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "app.services.execution_service.snapback_live_gate_decision",
+        lambda **kw: SimpleNamespace(allowed=True, protective=False, reasons=[]),
+        raising=False,
+    )
+
+
+
+
+@pytest.fixture(autouse=True)
 def setup_db(tmp_path, monkeypatch):
     """Use temporary file-backed SQLite database for accurate multi-connection transaction testing."""
     db_file = tmp_path / "test_sterling.db"

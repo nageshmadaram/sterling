@@ -34,6 +34,7 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
 from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.pricing import bs_delta, bs_price
+from app.services.snapback_capacity import observed_hedge_margin
 from app.services.snapback_health import record_cycle
 from app.services.snapback_quote_evidence import record_quote_attempt
 
@@ -995,9 +996,20 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                         processed += 1
                         continue
 
+                # Frozen evaluation capital and broker-observed hedge margin. Neither
+                # is guessed: without them the entry is INCONCLUSIVE_CAPACITY.
+                frozen_capital = float(getattr(cfg, "capital_inr", 0) or 0) or None
+                hedge_margin = await observed_hedge_margin(
+                    client,
+                    tradingsymbol=futures_symbol,
+                    quantity=int(fut_lot_size or 0),
+                )
+
                 collector.execute_pending_entry(
                     opportunity_id=opp_id,
                     cfg=cfg,
+                    available_capital=frozen_capital,
+                    hedge_margin_observed=hedge_margin,
                     t1_spot_price=spot_price,
                     futures_quote_event=fut_event,
                     futures_symbol=futures_symbol,

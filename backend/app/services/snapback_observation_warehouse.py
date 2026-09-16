@@ -1227,7 +1227,7 @@ class SnapbackObservationWarehouse:
         valid_tables = {
             "opportunities", "contract_candidates", "option_quotes", "futures_quotes",
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
-            "margin_snapshots", "costs", "outcomes"
+            "margin_snapshots", "costs", "outcomes", "paper_positions",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")
