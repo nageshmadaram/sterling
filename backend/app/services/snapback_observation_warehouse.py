@@ -155,6 +155,8 @@ class SnapbackObservationWarehouse:
                         cash_instrument_token INTEGER NOT NULL DEFAULT 0,
                         option_exchange   TEXT NOT NULL DEFAULT '',
                         option_underlying_name TEXT NOT NULL DEFAULT '',
+                        policy_snapshot_hash TEXT NOT NULL DEFAULT '',
+                        config_hash       TEXT NOT NULL DEFAULT '',
                         {common_cols}
                     )
                 """)
@@ -180,6 +182,8 @@ class SnapbackObservationWarehouse:
                     "cash_instrument_token": "INTEGER NOT NULL DEFAULT 0",
                     "option_exchange": "TEXT NOT NULL DEFAULT ''",
                     "option_underlying_name": "TEXT NOT NULL DEFAULT ''",
+                    "policy_snapshot_hash": "TEXT NOT NULL DEFAULT ''",
+                    "config_hash": "TEXT NOT NULL DEFAULT ''",
                 }
                 for col_name, col_def in col_migrations.items():
                     if col_name not in existing_cols:
@@ -453,6 +457,7 @@ class SnapbackObservationWarehouse:
                         eod_phase_status        TEXT NOT NULL DEFAULT 'PENDING',
                         package_status          TEXT NOT NULL DEFAULT 'PENDING',
                         evidence_gap_codes_json TEXT NOT NULL DEFAULT '[]',
+                        decisions_recorded      INTEGER NOT NULL DEFAULT 0,
                         observed_at             TEXT NOT NULL DEFAULT ''
                     )
                 """)
@@ -490,6 +495,7 @@ class SnapbackObservationWarehouse:
                     ("entry_monitor_continuous", "INTEGER NOT NULL DEFAULT 0"),
                     ("entry_gap_count", "INTEGER NOT NULL DEFAULT 0"),
                     ("entry_max_gap_ms", "INTEGER NOT NULL DEFAULT 0"),
+                    ("decisions_recorded", "INTEGER NOT NULL DEFAULT 0"),
                 ):
                     try:
                         cols = {r[1] for r in conn.execute("PRAGMA table_info(prospective_sessions)")}
@@ -499,6 +505,87 @@ class SnapbackObservationWarehouse:
                             )
                     except Exception:
                         pass
+
+                # 15. scan_symbol_decisions — what every scanned symbol actually saw.
+                # "200 scanned, 0 signals" is an assertion until each symbol leaves a
+                # reconstructible record of the inputs it was judged on.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS scan_symbol_decisions (
+                        decision_id           TEXT PRIMARY KEY,
+                        session_date          TEXT NOT NULL,
+                        experiment_id         TEXT NOT NULL DEFAULT '',
+                        canonical_symbol      TEXT NOT NULL,
+                        cash_exchange         TEXT NOT NULL DEFAULT '',
+                        cash_tradingsymbol    TEXT NOT NULL DEFAULT '',
+                        cash_instrument_token INTEGER NOT NULL DEFAULT 0,
+                        runtime_build_sha     TEXT NOT NULL DEFAULT '',
+                        config_hash           TEXT NOT NULL DEFAULT '',
+                        rule_hash             TEXT NOT NULL DEFAULT '',
+                        execution_policy_hash TEXT NOT NULL DEFAULT '',
+                        bar_timestamp_ms      INTEGER NOT NULL DEFAULT 0,
+                        input_window_hash     TEXT NOT NULL DEFAULT '',
+                        bars_used             INTEGER NOT NULL DEFAULT 0,
+                        close                 REAL,
+                        ema                   REAL,
+                        atr                   REAL,
+                        stretch_atr           REAL,
+                        prior_high            REAL,
+                        prior_low             REAL,
+                        realized_vol          REAL,
+                        rv_percentile         REAL,
+                        market_gate_status    TEXT NOT NULL DEFAULT '',
+                        market_gate_passed    INTEGER NOT NULL DEFAULT 0,
+                        fade_up_fired         INTEGER NOT NULL DEFAULT 0,
+                        fade_down_fired       INTEGER NOT NULL DEFAULT 0,
+                        signal_emitted        INTEGER NOT NULL DEFAULT 0,
+                        emitted_signal_id     TEXT NOT NULL DEFAULT '',
+                        decision_codes_json   TEXT NOT NULL DEFAULT '[]',
+                        provider_observed_at  TEXT,
+                        recorded_at           TEXT NOT NULL DEFAULT '',
+                        authoritative         INTEGER NOT NULL DEFAULT 1,
+                        payload_hash          TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_scan_decisions_session "
+                    "ON scan_symbol_decisions(session_date)"
+                )
+
+                # 16. beta_snapshots — how each hedge beta was arrived at.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS beta_snapshots (
+                        beta_snapshot_id   TEXT PRIMARY KEY,
+                        opportunity_id     TEXT NOT NULL,
+                        symbol             TEXT NOT NULL,
+                        market_symbol      TEXT NOT NULL DEFAULT '',
+                        method             TEXT NOT NULL,
+                        status             TEXT NOT NULL DEFAULT 'OK',
+                        window_sessions    INTEGER NOT NULL DEFAULT 0,
+                        signal_session     TEXT NOT NULL DEFAULT '',
+                        beta_effective_session TEXT,
+                        window_start_session   TEXT,
+                        window_end_session     TEXT,
+                        aligned_observation_count INTEGER NOT NULL DEFAULT 0,
+                        raw_beta           REAL,
+                        clamped_beta       REAL,
+                        clamp_low          REAL NOT NULL DEFAULT 0.0,
+                        clamp_high         REAL NOT NULL DEFAULT 0.0,
+                        was_clamped        INTEGER NOT NULL DEFAULT 0,
+                        underlying_series_hash TEXT,
+                        market_series_hash     TEXT,
+                        aligned_returns_hash   TEXT,
+                        reason_codes_json  TEXT NOT NULL DEFAULT '[]',
+                        runtime_build_sha  TEXT NOT NULL DEFAULT '',
+                        config_hash        TEXT NOT NULL DEFAULT '',
+                        observed_at        TEXT NOT NULL DEFAULT '',
+                        authoritative      INTEGER NOT NULL DEFAULT 1,
+                        payload_hash       TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_beta_snapshots_opportunity "
+                    "ON beta_snapshots(opportunity_id)"
+                )
 
                 self._migrate_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
@@ -625,6 +712,8 @@ class SnapbackObservationWarehouse:
         provider_timestamp: Optional[str] = None,
         source: str = "PROSPECTIVE_PAPER",
         identity: Optional[Any] = None,
+        policy_snapshot_hash: str = "",
+        config_hash: str = "",
     ) -> None:
         """Record underlying signal opportunity immutably.
 
@@ -647,8 +736,9 @@ class SnapbackObservationWarehouse:
                         observed_at, provider_timestamp, received_at, symbol, provider_symbol, expiry, strike,
                         instrument_token, source, strategy_commit, manifest_hash,
                         cash_exchange, cash_tradingsymbol, cash_instrument_token,
-                        option_exchange, option_underlying_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        option_exchange, option_underlying_name,
+                        policy_snapshot_hash, config_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, signal_type, spot_price, signal_spot or spot_price, mean_target, breakout_level,
@@ -661,6 +751,7 @@ class SnapbackObservationWarehouse:
                         ident.get("cash_exchange", ""), ident.get("cash_tradingsymbol", ""),
                         int(ident.get("cash_instrument_token", 0) or 0),
                         ident.get("option_exchange", ""), ident.get("option_underlying_name", ""),
+                        policy_snapshot_hash, config_hash,
                     ),
                 )
         finally:
@@ -1305,6 +1396,119 @@ class SnapbackObservationWarehouse:
         finally:
             conn.close()
 
+    def record_scan_symbol_decision(self, **payload: Any) -> None:
+        """Append one scanned-symbol decision; a contradicting replay is refused."""
+        import hashlib as _hashlib
+        import json as _json
+
+        decision_id = payload["decision_id"]
+        # Recomputed here: a caller that edits a value and keeps the old hash must
+        # not be able to smuggle a contradiction past the integrity check.
+        payload_hash = _hashlib.sha256(
+            _json.dumps(
+                {k: v for k, v in payload.items()
+                 if k not in ("decision_id", "payload_hash")},
+                sort_keys=True, separators=(",", ":"), default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        payload = dict(payload, payload_hash=payload_hash)
+        now = _now_iso()
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                existing = conn.execute(
+                    "SELECT payload_hash FROM scan_symbol_decisions WHERE decision_id = ?",
+                    (decision_id,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["payload_hash"] or "") != payload_hash:
+                        raise EvidenceIntegrityError(
+                            f"scan decision {decision_id} already exists with different "
+                            "values; evidence is append-only"
+                        )
+                    return
+
+                columns = [
+                    "decision_id", "session_date", "experiment_id", "canonical_symbol",
+                    "cash_exchange", "cash_tradingsymbol", "cash_instrument_token",
+                    "runtime_build_sha", "config_hash", "rule_hash",
+                    "execution_policy_hash", "bar_timestamp_ms", "input_window_hash",
+                    "bars_used", "close", "ema", "atr", "stretch_atr", "prior_high",
+                    "prior_low", "realized_vol", "rv_percentile", "market_gate_status",
+                    "market_gate_passed", "fade_up_fired", "fade_down_fired",
+                    "signal_emitted", "emitted_signal_id", "decision_codes_json",
+                    "provider_observed_at", "recorded_at", "authoritative", "payload_hash",
+                ]
+                values = []
+                for column in columns:
+                    if column == "runtime_build_sha":
+                        values.append(_BUILD_SHA)
+                    elif column == "recorded_at":
+                        values.append(now)
+                    elif column == "authoritative":
+                        values.append(int(payload.get("authoritative", 1)))
+                    else:
+                        values.append(payload.get(column))
+
+                conn.execute(
+                    f"INSERT INTO scan_symbol_decisions ({', '.join(columns)}) "
+                    f"VALUES ({', '.join('?' for _ in columns)})",
+                    values,
+                )
+        finally:
+            conn.close()
+
+    def record_beta_snapshot_row(self, **payload: Any) -> None:
+        """Append one beta provenance artifact; a contradicting replay is refused."""
+        snapshot_id = payload["beta_snapshot_id"]
+        payload_hash = payload.get("payload_hash", "")
+        now = _now_iso()
+
+        conn = self._get_connection()
+        try:
+            with conn:
+                existing = conn.execute(
+                    "SELECT payload_hash FROM beta_snapshots WHERE beta_snapshot_id = ?",
+                    (snapshot_id,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["payload_hash"] or "") != payload_hash:
+                        raise EvidenceIntegrityError(
+                            f"beta snapshot {snapshot_id} already exists with different "
+                            "values; evidence is append-only"
+                        )
+                    return
+
+                columns = [
+                    "beta_snapshot_id", "opportunity_id", "symbol", "market_symbol",
+                    "method", "status", "window_sessions", "signal_session",
+                    "beta_effective_session", "window_start_session",
+                    "window_end_session", "aligned_observation_count", "raw_beta",
+                    "clamped_beta", "clamp_low", "clamp_high", "was_clamped",
+                    "underlying_series_hash", "market_series_hash",
+                    "aligned_returns_hash", "reason_codes_json", "runtime_build_sha",
+                    "config_hash", "observed_at", "authoritative", "payload_hash",
+                ]
+                values = []
+                for column in columns:
+                    if column == "runtime_build_sha":
+                        values.append(_BUILD_SHA)
+                    elif column == "observed_at":
+                        values.append(payload.get("observed_at") or now)
+                    elif column == "authoritative":
+                        values.append(int(payload.get("authoritative", 1)))
+                    else:
+                        values.append(payload.get(column))
+
+                conn.execute(
+                    f"INSERT INTO beta_snapshots ({', '.join(columns)}) "
+                    f"VALUES ({', '.join('?' for _ in columns)})",
+                    values,
+                )
+        finally:
+            conn.close()
+
     def record_quote_quality_event(
         self,
         event_id: str,
@@ -1623,6 +1827,7 @@ class SnapbackObservationWarehouse:
             "decisions", "paper_fills", "hedge_rebalances", "daily_mtm", "quote_quality_events",
             "margin_snapshots", "costs", "outcomes", "paper_positions",
             "prospective_sessions", "scan_symbol_decisions", "entry_attempts",
+            "beta_snapshots",
         }
         if table_name not in valid_tables:
             raise ValueError(f"Invalid table name: {table_name}")

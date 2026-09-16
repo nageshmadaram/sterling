@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -35,6 +36,9 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
 from app.engines.snapback.contracts import lots_for, moneyness_label
 from app.engines.snapback.intraday_models import DepthLevel, RawQuoteEvent
 from app.services.snapback_hedge_contract import HedgeContractError, select_hedge_future
+from app.services.snapback_beta_provenance import (canonical_index_beta,
+                                                   causal_beta_with_provenance,
+                                                   record_beta_snapshot)
 from app.services.snapback_entry_observation import record_attempt, session_continuity
 from app.services.snapback_market_data import (evaluate_underlying_context_quote,
                                                spread_pct as canonical_spread_pct)
@@ -108,8 +112,47 @@ def get_config(uid: str | None = None) -> SnapbackConfig:
         return SnapbackConfig(enabled=False)
 
 
+class FrozenExperimentConfigError(RuntimeError):
+    """The hypothesis cannot change while a prospective experiment is running."""
+
+
+def prospective_experiment_active() -> bool:
+    """Whether a frozen prospective experiment is collecting evidence right now.
+
+    An edit mid-experiment silently splits the sample into two strategies, and the
+    evidence then answers a question nobody asked.
+    """
+    explicit = (os.environ.get("STERLING_PROSPECTIVE_EXPERIMENT") or "").strip().lower()
+    if explicit in ("1", "true", "yes", "on"):
+        return True
+    if explicit in ("0", "false", "no", "off"):
+        return False
+
+    try:
+        from app.services.snapback_family_mode import family_mode_enabled
+
+        if family_mode_enabled():
+            return True
+    except Exception:
+        pass
+
+    # A dedicated prospective evidence database is itself a running experiment.
+    db_path = os.environ.get("STERLING_OBSERVATIONS_DB_PATH") or ""
+    return "prospective" in db_path.lower()
+
+
 def set_config(values: dict[str, Any], uid: str | None = None) -> SnapbackConfig:
-    """Persist a partial change. Validation is the engine's, not a second copy."""
+    """Persist a partial change. Validation is the engine's, not a second copy.
+
+    Refused outright while an experiment is active: operational control lives in the
+    family STOP switch, which halts new exposure without touching the hypothesis.
+    """
+    if prospective_experiment_active():
+        raise FrozenExperimentConfigError(
+            "Snapback configuration is frozen for the active prospective experiment; "
+            "use STOP NEW TRADES for operational control"
+        )
+
     from app.engines.snapback import validate
     cfg = validate(dict(values), base=get_config(uid))
     from app.services import db
@@ -1089,37 +1132,51 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                 fut_lot_size = int(hedge.lot_size or 0)
 
                 # Causal Beta Calculation: Only NIFTY itself defaults to 1.0; BANKNIFTY/FINNIFTY & stocks compute trailing rolling_beta
-                _INDEX_CANONICAL_BETA = 1.0
+                # Beta is persisted as provenance BEFORE it is used, and the entry
+                # then uses exactly the persisted number — no second computation.
+                sig_date_str = sig_date.strftime("%Y-%m-%d")
                 if symbol == "NIFTY":
-                    causal_beta = _INDEX_CANONICAL_BETA
+                    beta_snapshot = canonical_index_beta(
+                        symbol=symbol, signal_session=sig_date_str,
+                    )
                 else:
-                    causal_beta = None
                     try:
-                        from app.engines.snapback.hedge import rolling_beta
                         stock_candles = await _causal_daily_bars(client, symbol, sig_date, cache=daily_bar_cache)
                         nifty_candles = await _causal_daily_bars(client, "NIFTY 50", sig_date, cache=daily_bar_cache)
                         if not nifty_candles:
                             nifty_candles = await _causal_daily_bars(client, "NIFTY", sig_date, cache=daily_bar_cache)
-                        if stock_candles and nifty_candles:
-                            stock_b = to_bars(stock_candles)
-                            nifty_b = to_bars(nifty_candles)
-                            betas_map = rolling_beta(stock_b, nifty_b)
-                            sig_date_str = sig_date.strftime("%Y-%m-%d")
-                            causal_beta = betas_map.get(sig_date_str)
-                            if causal_beta is None and betas_map:
-                                # Beta as it stood at the signal: the most recent
-                                # session on or before it, never a later one.
-                                prior = [d for d in betas_map if d <= sig_date_str]
-                                if prior:
-                                    causal_beta = betas_map[max(prior)]
+                        beta_snapshot = causal_beta_with_provenance(
+                            to_bars(stock_candles) if stock_candles else None,
+                            to_bars(nifty_candles) if nifty_candles else None,
+                            signal_session=sig_date_str, symbol=symbol,
+                        )
                     except Exception as beta_exc:
-                        log.warning("Failed to compute rolling_beta for %s on %s: %s", symbol, sig_date, beta_exc)
+                        log.warning("Failed to compute causal beta for %s on %s: %s", symbol, sig_date, beta_exc)
+                        beta_snapshot = causal_beta_with_provenance(
+                            None, None, signal_session=sig_date_str, symbol=symbol,
+                        )
 
-                    if causal_beta is None or not math.isfinite(causal_beta) or causal_beta <= 0:
-                        log.warning("Skipping T+1 fill for %s: missing causal rolling beta for %s", opp_id, symbol)
-                        collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
-                        processed += 1
-                        continue
+                try:
+                    record_beta_snapshot(
+                        collector.warehouse, opportunity_id=opp_id, snapshot=beta_snapshot,
+                    )
+                except Exception as record_exc:
+                    log.warning("Could not persist beta provenance for %s: %s", opp_id, record_exc)
+
+                causal_beta = beta_snapshot.clamped_beta
+                if (
+                    beta_snapshot.status != "OK"
+                    or causal_beta is None
+                    or not math.isfinite(causal_beta)
+                    or causal_beta <= 0
+                ):
+                    log.warning(
+                        "Skipping T+1 fill for %s: %s (%s)",
+                        opp_id, beta_snapshot.status, beta_snapshot.reason_codes,
+                    )
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE_CAUSAL_BETA")
+                    processed += 1
+                    continue
 
                 # Frozen evaluation capital and broker-observed hedge margin. Neither
                 # is guessed: without them the entry is INCONCLUSIVE_CAPACITY.

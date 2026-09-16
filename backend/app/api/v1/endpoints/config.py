@@ -678,13 +678,20 @@ async def update_snapback_config(body: dict = Body(...),
     Unknown keys are refused rather than ignored: a silently dropped setting is
     worse than a 422, because the UI has no way to tell that it did not take.
     """
-    from app.services.snapback import set_config
+    from app.services.snapback import FrozenExperimentConfigError, set_config
     uid = getattr(user, "user_id", None) or getattr(user, "uid", None) or "default"
     values = {k: v for k, v in dict(body).items() if v is not None}
     if not values:
         raise HTTPException(status_code=422, detail="no settings to change")
     try:
         cfg = set_config(values, uid)
+    except FrozenExperimentConfigError as exc:
+        # The hypothesis is frozen while evidence is being collected. Operational
+        # control is STOP NEW TRADES, which does not touch the strategy.
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "SNAPBACK_CONFIG_FROZEN", "message": str(exc)},
+        ) from exc
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"config": cfg.as_dict(), "warnings": cfg.warnings()}

@@ -108,8 +108,41 @@ async def _scan_universe(*, client, cfg, session_date: date, warehouse) -> Dict[
                     failures += 1
                     return
                 scanned += 1
-                for sig in evaluate_symbol(raw, cfg, item.name, market_gate=market_gate):
+                emitted = list(evaluate_symbol(raw, cfg, item.name, market_gate=market_gate))
+                for sig in emitted:
                     signals.append((item, sig))
+
+                # Every scanned symbol leaves a decision, signal or not: a quiet
+                # market and a symbol nobody looked at must not look identical.
+                try:
+                    from app.services.snapback_instrument_identity import identity_from_instrument
+                    from app.services.snapback_scan_evidence import (
+                        build_symbol_decision, record_symbol_decision,
+                    )
+
+                    identity = identity_from_instrument(
+                        {
+                            "tradingsymbol": getattr(item, "tradingsymbol", ""),
+                            "instrument_token": getattr(item, "token", 0),
+                            "exchange": "BSE" if str(getattr(item, "option_exchange", "")) == "BFO" else "NSE",
+                            "name": getattr(item, "name", ""),
+                        },
+                        canonical_symbol=getattr(item, "name", ""),
+                    )
+                    record_symbol_decision(warehouse, build_symbol_decision(
+                        session_date=session_date.isoformat(),
+                        symbol=getattr(item, "name", ""),
+                        bars=to_bars(raw), cfg=cfg,
+                        market_gate_status=market_gate_status or "UNAVAILABLE",
+                        market_gate_passed=bool(market_gate),
+                        identity=identity, signals=emitted,
+                    ))
+                except Exception as evidence_exc:
+                    failures += 1
+                    log.warning(
+                        "Snapback scanner: decision evidence failed for %s: %s",
+                        getattr(item, "name", "?"), evidence_exc,
+                    )
             except Exception as exc:
                 failures += 1
                 log.warning("Snapback scanner: %s failed: %s", item.name, exc)

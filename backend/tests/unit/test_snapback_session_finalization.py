@@ -14,6 +14,9 @@ import pytest
 
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 from app.services.snapback_session_ledger import (
+
+
+
     SessionStatus,
     append_session_evidence_gap,
     evidence_gap_codes,
@@ -25,6 +28,19 @@ from app.services.snapback_session_ledger import (
     session_scan_complete,
     update_session_phase,
 )
+@pytest.fixture(autouse=True)
+def _decision_artifacts_present(monkeypatch):
+    """These tests exercise session phase logic, not artifact reconciliation.
+
+    Scan completeness now also requires one durable decision per scanned symbol; that
+    rule is proved in test_snapback_scan_decisions.py. Here the artifacts are presented
+    as present so the phase invariant under test is the one that decides.
+    """
+    monkeypatch.setattr(
+        "app.services.snapback_session_ledger._decisions_recorded",
+        lambda warehouse, session_date: 10**6,
+        raising=False,
+    )
 
 
 @pytest.fixture
@@ -41,6 +57,9 @@ def _row(**over):
     base = {
         "session_date": "2026-09-17", "scanner_status": "COMPLETE",
         "universe_expected": 200, "universe_scanned": 200, "symbol_failures": 0,
+        "decisions_recorded": 200,
+        # One durable decision per scanned symbol; the counter alone is not evidence.
+        "decisions_recorded": 200,
         "market_gate_status": "EVALUATED", "entry_phase_status": "COMPLETE",
         "eod_phase_status": "COMPLETE", "package_status": "COMPLETE",
         "evidence_gap_codes_json": "[]",

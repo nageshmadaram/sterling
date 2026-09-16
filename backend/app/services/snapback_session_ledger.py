@@ -32,6 +32,14 @@ def _build_sha() -> str:
         return "UNKNOWN"
 
 
+def _decisions_recorded(warehouse, session_date: str) -> int:
+    try:
+        rows = warehouse.get_records_by_table("scan_symbol_decisions")
+    except Exception:
+        return 0
+    return sum(1 for r in rows if str(dict(r).get("session_date")) == session_date)
+
+
 def record_session_scan(
     warehouse,
     *,
@@ -49,6 +57,8 @@ def record_session_scan(
 ) -> None:
     """Upsert the session's scan record. Re-scanning a session updates it."""
     now = datetime.now(timezone.utc).isoformat()
+    # The universe counter is a claim; the decision rows are the evidence.
+    decisions_recorded = _decisions_recorded(warehouse, session_date)
     conn = warehouse._get_connection()
     try:
         with conn:
@@ -59,8 +69,8 @@ def record_session_scan(
                     universe_expected, universe_scanned, symbol_failures,
                     scanner_started_at, scanner_completed_at, scanner_status,
                     market_gate_status, signals_authoritative, evidence_gap_codes_json,
-                    observed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    observed_at, decisions_recorded
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_date) DO UPDATE SET
                     experiment_id = excluded.experiment_id,
                     runtime_build_sha = excluded.runtime_build_sha,
@@ -74,14 +84,15 @@ def record_session_scan(
                     market_gate_status = excluded.market_gate_status,
                     signals_authoritative = excluded.signals_authoritative,
                     -- Gap codes accumulate; a rescan cannot erase an earlier gap.
-                    observed_at = excluded.observed_at
+                    observed_at = excluded.observed_at,
+                    decisions_recorded = excluded.decisions_recorded
                 """,
                 (
                     session_date, experiment_id, _build_sha(), calendar_version,
                     int(universe_expected), int(universe_scanned), int(symbol_failures),
                     scanner_started_at or now, now, status,
                     market_gate_status, int(signals_authoritative),
-                    json.dumps(list(evidence_gap_codes or [])), now,
+                    json.dumps(list(evidence_gap_codes or [])), now, decisions_recorded,
                 ),
             )
     finally:
@@ -182,6 +193,9 @@ def session_scan_complete(row: Dict[str, Any]) -> bool:
     if not expected or scanned < expected:
         return False
     if not str(row.get("market_gate_status") or ""):
+        return False
+    # The counter alone is not evidence: one durable decision per scanned symbol.
+    if int(row.get("decisions_recorded") or 0) < expected:
         return False
     return True
 

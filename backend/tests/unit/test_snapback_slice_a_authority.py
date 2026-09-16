@@ -14,6 +14,23 @@ from datetime import datetime, timezone
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _decision_artifacts_present(monkeypatch):
+    """These tests exercise session phase logic, not artifact reconciliation.
+
+    Scan completeness now also requires one durable decision per scanned symbol; that
+    rule is proved in test_snapback_scan_decisions.py. Here the artifacts are presented
+    as present so the phase invariant under test is the one that decides.
+    """
+    monkeypatch.setattr(
+        "app.services.snapback_session_ledger._decisions_recorded",
+        lambda warehouse, session_date: 10**6,
+        raising=False,
+    )
+
+
+
+
 # ------------------------------------------------------- session predicates
 
 
@@ -24,6 +41,8 @@ def _row(**over):
         "universe_expected": 200,
         "universe_scanned": 200,
         "symbol_failures": 0,
+        # One durable decision per scanned symbol; the counter alone is not evidence.
+        "decisions_recorded": 200,
         "market_gate_status": "EVALUATED",
         "entry_phase_status": "COMPLETE",
         "eod_phase_status": "COMPLETE",

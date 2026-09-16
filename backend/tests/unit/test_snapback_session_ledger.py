@@ -15,11 +15,27 @@ import pytest
 
 from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 from app.services.snapback_session_ledger import (
+
+
+
     SessionStatus,
     record_session_scan,
     session_is_complete,
     session_record,
 )
+@pytest.fixture(autouse=True)
+def _decision_artifacts_present(monkeypatch):
+    """These tests exercise session phase logic, not artifact reconciliation.
+
+    Scan completeness now also requires one durable decision per scanned symbol; that
+    rule is proved in test_snapback_scan_decisions.py. Here the artifacts are presented
+    as present so the phase invariant under test is the one that decides.
+    """
+    monkeypatch.setattr(
+        "app.services.snapback_session_ledger._decisions_recorded",
+        lambda warehouse, session_date: 10**6,
+        raising=False,
+    )
 
 
 @pytest.fixture
