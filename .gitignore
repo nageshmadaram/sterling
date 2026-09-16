@@ -148,3 +148,7 @@ skills/
 security-review/
 superpowers/
 ui-ux-pro-max-skill/
+
+# Snapback prospective evidence + backups (local only, never committed)
+backups/
+data/snapback/
