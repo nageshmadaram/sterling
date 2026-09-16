@@ -72,6 +72,7 @@ function MorePane({ activeTab, onTabChange }: { activeTab: MoreTab; onTabChange:
           return (
             <button
               key={t.id}
+              data-testid={`more-tab-${t.id}`}
               onClick={() => onTabChange(t.id)}
               style={{
                 padding: '10px 16px', border: 'none', background: 'transparent', cursor: 'pointer',

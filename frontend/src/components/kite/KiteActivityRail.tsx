@@ -21,6 +21,10 @@ const RAIL_ITEMS: Array<{ id: NavItem; label: string; icon: string }> = [
   { id: 'openingLeaders', label: 'Opening Leaders', icon: '🚀' },
   { id: 'backtest', label: 'Backtest', icon: '🔬' },
   { id: 'data', label: 'Data Lake', icon: '💾' },
+  // Without this entry MorePane — Family, Bids, Funds, Mutual Funds, Alerts — is
+  // reachable only by changing the default section in settings or by dispatching
+  // a kite-nav-click event. There is no way to click to it.
+  { id: 'more', label: 'More', icon: '⋯' },
 ];
 
 export function KiteActivityRail({
@@ -79,6 +83,7 @@ export function KiteActivityRail({
             <button
               key={item.id}
               type="button"
+              data-testid={`rail-${item.id}`}
               onClick={() => onNavClick(item.id)}
               title={item.label}
               aria-label={item.label}
