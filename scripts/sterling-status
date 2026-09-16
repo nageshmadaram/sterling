@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# One screen that says whether Sterling is safe to run today.
+#
+# Written for someone who does not read code. Every line is either a fact or a
+# plain-language instruction. If anything says BLOCKED, Sterling will not open
+# new positions, and the reason is printed underneath.
+set -uo pipefail
+
+STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
+export STERLING_ROOT
+export STERLING_SAFE_MODE_FILE="${STERLING_SAFE_MODE_FILE:-$STERLING_ROOT/data/safe_mode.json}"
+export STERLING_HEALTH_URL="${STERLING_HEALTH_URL:-http://127.0.0.1:8000}"
+
+"$PYTHON" - <<'PY'
+import json, os, subprocess, sys, urllib.error, urllib.request
+from datetime import date
+from pathlib import Path
+
+root = Path(os.environ["STERLING_ROOT"])
+sys.path.insert(0, str(root / "backend"))
+
+def line(label, value, note=""):
+    print(f"{label:<22}{value}" + (f"   {note}" if note else ""))
+
+def head(text):
+    print()
+    print(text)
+
+print("STERLING STATUS")
+print()
+
+# ─── identity ────────────────────────────────────────────────────────────────
+try:
+    sha = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    tag = subprocess.run(["git", "-C", str(root), "describe", "--tags", "--exact-match"],
+                         capture_output=True, text=True).stdout.strip()
+except Exception:
+    sha, tag = "unknown", ""
+line("Build", sha[:12])
+line("Release", tag or "(between releases)")
+
+# ─── safety switch ───────────────────────────────────────────────────────────
+from app.services.safe_mode import SafeModeService
+
+safe = SafeModeService(os.environ["STERLING_SAFE_MODE_FILE"]).read()
+head("SAFETY")
+line("Safe mode", "ON" if safe.active else "OFF")
+line("New trades", "BLOCKED" if safe.active else "allowed")
+line("Closing trades", "always allowed")
+if safe.active:
+    line("Because", safe.reason or "no reason recorded")
+    line("Conditions", ", ".join(safe.triggers) or "none recorded")
+
+# ─── the service ─────────────────────────────────────────────────────────────
+head("SERVICE")
+try:
+    url = f"{os.environ['STERLING_HEALTH_URL']}/api/v1/health/ready"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as fh:
+            payload = json.loads(fh.read())
+    except urllib.error.HTTPError as exc:
+        # A 503 here is Sterling refusing to start, and the body says why.
+        payload = json.loads(exc.read())
+    line("Backend", "RUNNING")
+    line("Ready", payload.get("status", "unknown"))
+    failed = payload.get("failed_checks") or []
+    if failed:
+        line("Blocked by", ", ".join(failed))
+        for check in payload.get("checks", []):
+            if check.get("code") in failed:
+                detail = check.get("details")
+                if isinstance(detail, list) and detail:
+                    line("", str(detail[0])[:60])
+except Exception:
+    line("Backend", "NOT RUNNING", "start it before trading")
+
+# ─── the lake ────────────────────────────────────────────────────────────────
+head("DATA")
+try:
+    from kitelake.volume import resolve_root
+    lake = Path(resolve_root())
+    line("Lake", "MOUNTED" if lake.exists() else "MISSING", str(lake))
+except Exception as exc:
+    lake = None
+    line("Lake", "MISSING", f"{type(exc).__name__}: plug in the drive")
+
+# ─── today's evidence ────────────────────────────────────────────────────────
+head("EVIDENCE TODAY")
+if lake and lake.exists():
+    try:
+        from study.snapback_evidence_audit import audit_date
+        sys.path.insert(0, str(root / "backend"))
+        report = audit_date(lake, date.today())
+        line("Opportunities", report["opportunities"])
+        line("Listed", report["selection"]["LISTED"])
+        line("Not listed", report["selection"]["NOT_LISTED"])
+        line("Unknown", report["selection"]["UNKNOWN"])
+        line("Blocked", report["blocked"])
+        line("Authoritative", report["economic_authoritative"])
+        line("Inconclusive", report["inconclusive"])
+    except Exception as exc:
+        line("Evidence", "UNREADABLE", f"{type(exc).__name__}")
+else:
+    line("Evidence", "UNAVAILABLE", "the lake is not mounted")
+
+# ─── the bottom line ─────────────────────────────────────────────────────────
+head("BOTTOM LINE")
+print("Economic gate         INCONCLUSIVE")
+print("                      Snapback has not passed its evidence gate.")
+print("                      It needs 300+ real trades across 60+ sessions.")
+print()
+if safe.active:
+    print("Live trading          BLOCKED — safe mode is on.")
+    print("                      Run: ./scripts/sterling-safe-mode status")
+else:
+    print("Live trading          BLOCKED — the strategy is unproven.")
+    print("                      Sterling records evidence; it does not yet")
+    print("                      have permission to risk meaningful money.")
+PY

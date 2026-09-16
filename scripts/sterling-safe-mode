@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Turn Sterling's safety switch on or off, and see why it is on.
+#
+# SAFE_MODE stops Sterling opening new positions. It never stops Sterling
+# closing them, repairing protection, or reconciling with the broker — those
+# always keep working, because a blocked exit would be more dangerous than the
+# problem that triggered safe mode.
+set -euo pipefail
+
+STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+STATE_FILE="${STERLING_SAFE_MODE_FILE:-$STERLING_ROOT/data/safe_mode.json}"
+PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  sterling-safe-mode status        show whether new trades are blocked, and why
+  sterling-safe-mode on [reason]   block new trades now
+  sterling-safe-mode off --ack     allow new trades again
+
+"off" requires --ack: it is your statement that you looked at the problem and
+fixed it. Sterling will refuse without it, on purpose.
+USAGE
+}
+
+run_python() {
+  "$PYTHON" - "$@" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(os.environ["STERLING_ROOT"], "backend"))
+from app.services.safe_mode import SafeModeService, SafeModeError, SafeModeTrigger
+
+action = sys.argv[1]
+service = SafeModeService(os.environ["STATE_FILE"])
+
+if action == "status":
+    state = service.read()
+    print(f"SAFE MODE         {'ON' if state.active else 'OFF'}")
+    print(f"New trades        {'BLOCKED' if state.active else 'allowed'}")
+    print("Closing trades    always allowed")
+    if state.active:
+        print(f"Since             {state.entered_at or 'unknown'}")
+        print(f"Because           {state.reason or 'no reason recorded'}")
+        print(f"Conditions        {', '.join(state.triggers) or 'none recorded'}")
+        print()
+        print("To allow new trades again, fix the condition above, then run:")
+        print("  ./scripts/sterling-safe-mode off --ack")
+    sys.exit(0)
+
+if action == "on":
+    reason = sys.argv[2] if len(sys.argv) > 2 else "turned on by operator"
+    state = service.engage(trigger=SafeModeTrigger.OPERATOR, reason=reason)
+    print("SAFE MODE is now ON. Sterling will not open new positions.")
+    print(f"Reason: {state.reason}")
+    sys.exit(0)
+
+if action == "off":
+    ack = "--ack" in sys.argv
+    try:
+        service.release(operator_ack=ack, note="released by operator")
+    except SafeModeError as exc:
+        print("REFUSED.")
+        print(str(exc))
+        sys.exit(1)
+    print("SAFE MODE is now OFF. Sterling may open new positions again.")
+    sys.exit(0)
+
+print(f"unknown action {action!r}")
+sys.exit(2)
+PY
+}
+
+case "${1:-}" in
+  status|on|off)
+    export STERLING_ROOT STATE_FILE
+    run_python "$@"
+    ;;
+  ""|-h|--help|help) usage ;;
+  *) usage; exit 2 ;;
+esac
