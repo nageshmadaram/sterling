@@ -11,11 +11,14 @@ Missing evidence is reported as UNKNOWN (None), never as zero.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import logging
 import math
 import os
+import shutil
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -391,6 +394,89 @@ def _validation_markdown(summary: Dict[str, Any], report_date: date) -> str:
     return "\n".join(lines)
 
 
+PACKAGE_CHECKSUM_FILE = "package_checksums.json"
+
+
+def publish_package(*, root: Path, name: str, build) -> Path:
+    """Build a package out of the way, then move it into place in one step.
+
+    A directory written in place is readable while it is half-written, and a
+    consumer cannot tell a partial package from a finished one. Building under
+    .staging/ and renaming means the final path never exists in an incomplete
+    state, and a build that raises leaves nothing behind to be mistaken for
+    evidence.
+    """
+    root = Path(root)
+    staging_root = root / ".staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staging = staging_root / f"{name}.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    final = root / name
+
+    try:
+        staging.mkdir(parents=True)
+        build(staging)
+        _write_package_checksums(staging)
+
+        if final.exists():
+            # Replace, never merge: a leftover file from a previous run would
+            # otherwise appear inside a package that did not produce it.
+            retired = staging_root / f"{name}.retired.{uuid.uuid4().hex[:8]}"
+            os.replace(str(final), str(retired))
+            shutil.rmtree(retired, ignore_errors=True)
+        os.replace(str(staging), str(final))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            staging_root.rmdir()
+        except OSError:
+            # Another publication is in flight; leaving its directory is correct.
+            pass
+
+    return final
+
+
+def _write_package_checksums(directory: Path) -> None:
+    files = {}
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file() or path.name == PACKAGE_CHECKSUM_FILE:
+            continue
+        files[str(path.relative_to(directory))] = _sha256_file(path)
+
+    (directory / PACKAGE_CHECKSUM_FILE).write_text(
+        json.dumps(
+            {"generated_at": datetime.now(timezone.utc).isoformat(), "files": files},
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_package(directory: Path) -> bool:
+    """True only when every listed file is present and unchanged."""
+    directory = Path(directory)
+    manifest_path = directory / PACKAGE_CHECKSUM_FILE
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    for name, expected in (manifest.get("files") or {}).items():
+        path = directory / name
+        if not path.is_file() or _sha256_file(path) != expected:
+            return False
+    return True
+
+
 def write_forward_report(
     *,
     summary: Dict[str, Any],
@@ -398,10 +484,42 @@ def write_forward_report(
     output_root: Path,
     report_date: date,
 ) -> ForwardReportArtifacts:
-    """Write the day's evidence artifacts under output_root/<report_date>/."""
-    directory = Path(output_root) / report_date.isoformat()
-    directory.mkdir(parents=True, exist_ok=True)
+    """Write the day's evidence artifacts under output_root/<report_date>/.
 
+    Built under .staging/ and moved into place, so a reader never sees a package
+    that is missing half its files.
+    """
+    def _build(directory: Path) -> None:
+        _write_forward_report_files(
+            summary=summary, records=records, directory=directory,
+            report_date=report_date,
+        )
+
+    directory = publish_package(
+        root=Path(output_root), name=report_date.isoformat(), build=_build,
+    )
+
+    return ForwardReportArtifacts(
+        directory=directory,
+        run_manifest=directory / "run_manifest.json",
+        evidence_summary=directory / "evidence_summary.json",
+        trades_csv=directory / "trades.csv",
+        daily_mtm_csv=directory / "daily_mtm.csv",
+        rejection_summary_csv=directory / "rejection_summary.csv",
+        validation_report=directory / "validation_report.md",
+        authoritative_gate=directory / "authoritative_gate.json",
+        operational_health=directory / "operational_health.json",
+    )
+
+
+def _write_forward_report_files(
+    *,
+    summary: Dict[str, Any],
+    records: Dict[str, List[Dict[str, Any]]],
+    directory: Path,
+    report_date: date,
+) -> None:
+    """Write every artifact into `directory`. Called only from publish_package."""
     run_manifest = directory / "run_manifest.json"
     run_manifest.write_text(
         json.dumps(
@@ -491,18 +609,6 @@ def write_forward_report(
         }
     operational_health.write_text(json.dumps(health_payload, indent=2), encoding="utf-8")
 
-    return ForwardReportArtifacts(
-        directory=directory,
-        run_manifest=run_manifest,
-        evidence_summary=evidence_summary,
-        trades_csv=trades_csv,
-        daily_mtm_csv=daily_mtm_csv,
-        rejection_summary_csv=rejection_summary_csv,
-        validation_report=validation_report,
-        authoritative_gate=authoritative_gate,
-        operational_health=operational_health,
-    )
-
 
 def generate_forward_report(
     *,
@@ -511,15 +617,23 @@ def generate_forward_report(
     report_date: Optional[date] = None,
     runtime_sha: Optional[str] = None,
     strategy_manifest: Optional[str] = None,
+    snapshot_db_path: Optional[Path] = None,
 ) -> ForwardReportArtifacts:
-    """Read the frozen prospective warehouse and write the day's evidence artifacts."""
+    """Read the frozen prospective warehouse and write the day's evidence artifacts.
+
+    `snapshot_db_path` names a verified point-in-time backup. Reading it instead of
+    the live file is what makes the report a single moment rather than a smear
+    across whatever was being written while it ran.
+    """
     from app.services.snapback_observation_warehouse import (
         FROZEN_MANIFEST_HASH,
         SnapbackObservationWarehouse,
     )
 
     if warehouse is None:
-        warehouse = SnapbackObservationWarehouse()
+        warehouse = SnapbackObservationWarehouse(
+            db_path=str(snapshot_db_path) if snapshot_db_path else None
+        )
     if runtime_sha is None:
         from app.services.snapback_health import _runtime_sha
 

@@ -133,6 +133,20 @@ class SnapbackOpsScheduler:
 
         return generate_forward_report(**kwargs)
 
+    # ------------------------------------------------------- loop isolation
+
+    async def run_due_async(self, *, now_ist: Optional[datetime] = None):
+        """Run the post-market chain on a worker thread.
+
+        The chain does seconds-to-minutes of synchronous SQLite and file work.
+        Awaited inline it stalls every other task in the process, including the
+        liveness endpoint and alert delivery.
+        """
+        return await asyncio.to_thread(self.run_due, now_ist=now_ist)
+
+    async def poll_health_async(self, *, now_ist: Optional[datetime] = None):
+        return await asyncio.to_thread(self.poll_health, now_ist=now_ist)
+
     @staticmethod
     def _default_health_fn() -> dict:
         from app.services.snapback_health import get_prospective_health
@@ -296,6 +310,7 @@ class SnapbackOpsScheduler:
 
         # 1. Backup + 2. checksum verification
         backup_ok = False
+        artifact = None
         try:
             artifact = self.backup_fn(
                 source_db=self.source_db,
@@ -312,17 +327,26 @@ class SnapbackOpsScheduler:
         result.backup_ok = backup_ok
         self._last_backup_ok = backup_ok
 
-        # 3. Daily evidence report
+        # 3. Daily evidence report, read from the verified snapshot.
+        #
+        # Reporting from the live database reads a file that is still being
+        # written: the numbers are real but they are not any single moment. An
+        # unverified snapshot is worse than none, because its report is
+        # indistinguishable from a good one.
         report_ok = False
-        try:
-            self.report_fn(
-                output_root=self.report_root,
-                report_date=session_date,
-            )
-            report_ok = True
-        except Exception as exc:
-            log.exception("Snapback ops: evidence report failed: %s", exc)
-            result.errors.append(f"report_failed:{exc}")
+        if not backup_ok:
+            result.errors.append("report_skipped_no_verified_snapshot")
+        else:
+            try:
+                self.report_fn(
+                    output_root=self.report_root,
+                    report_date=session_date,
+                    snapshot_db_path=Path(artifact.db_path),
+                )
+                report_ok = True
+            except Exception as exc:
+                log.exception("Snapback ops: evidence report failed: %s", exc)
+                result.errors.append(f"report_failed:{exc}")
         result.report_ok = report_ok
 
         # 4. Health + 5. alerts. Always runs, even when the steps above failed.
@@ -462,8 +486,8 @@ async def run_forever() -> None:
     log.info("Snapback operations scheduler started")
     while True:
         try:
-            scheduler.poll_health()
-            scheduler.run_due()
+            await scheduler.poll_health_async()
+            await scheduler.run_due_async()
             await scheduler.deliver_alerts()
         except asyncio.CancelledError:
             log.info("Snapback operations scheduler cancelled")
