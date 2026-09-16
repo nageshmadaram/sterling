@@ -245,3 +245,37 @@ def test_health_endpoint_never_converts_probe_exception_to_green(monkeypatch):
     assert body["detail"]["healthy"] is False
     assert body["detail"]["status"] == "HALTED"
     assert "health_probe_failed" in body["detail"]["unresolved_errors"]
+
+
+def test_calendar_probe_respects_fail_closed_false(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.snapback_runner._is_nse_trading_day",
+        lambda _d: False,
+    )
+
+    from app.services.snapback_health import _probe_calendar
+
+    assert _probe_calendar() is False
+
+
+def test_live_manifest_probe_cannot_be_hardcoded_green(monkeypatch):
+    from app.engines.snapback.manifest import create_frozen_manifest
+    from app.engines.snapback.config import SnapbackConfig
+
+    real_manifest = create_frozen_manifest(SnapbackConfig())
+
+    monkeypatch.setattr(
+        "app.engines.snapback.manifest.create_frozen_manifest",
+        lambda *_a, **_k: real_manifest,
+    )
+    monkeypatch.setattr(
+        "app.engines.snapback.manifest.verify_manifest_integrity",
+        lambda *_a, **_k: (False, ["forced_test_mismatch"]),
+    )
+
+    from app.services.snapback_health import _probe_manifest
+
+    ok, reasons = _probe_manifest()
+
+    assert ok is False
+    assert "forced_test_mismatch" in reasons

@@ -152,3 +152,4 @@ ui-ux-pro-max-skill/
 # Snapback prospective evidence + backups (local only, never committed)
 backups/
 data/snapback/
+artifacts/snapback_forward/

@@ -202,14 +202,28 @@ def _probe_broker(uid: str = "default") -> bool:
 
 
 def _probe_calendar() -> bool:
+    """Return the fail-closed calendar verdict for today. An unavailable calendar is False."""
     try:
-        from app.services.snapback_runner import _is_nse_trading_day
+        from app.services import snapback_runner
 
-        _is_nse_trading_day(datetime.now(_IST).date())
-        return True
+        return bool(snapback_runner._is_nse_trading_day(datetime.now(_IST).date()))
     except Exception as exc:
         log.warning("Snapback health: calendar probe failed: %s", exc)
         return False
+
+
+def _probe_manifest() -> tuple[bool, list[str]]:
+    """Verify the live config against the frozen Snapback manifest. Never assume green."""
+    from app.engines.snapback.config import SnapbackConfig
+    from app.engines.snapback import manifest as manifest_mod
+
+    try:
+        cfg = SnapbackConfig()
+        manifest = manifest_mod.create_frozen_manifest(cfg)
+        valid, reasons = manifest_mod.verify_manifest_integrity(manifest, cfg)
+        return bool(valid), list(reasons)
+    except Exception as exc:
+        return False, [f"manifest_probe_failed:{exc}"]
 
 
 def _market_open_now(now_ist: datetime) -> bool:
@@ -245,11 +259,15 @@ def get_prospective_health(uid: str = "default") -> Dict[str, Any]:
     with _lock:
         standing_errors = sorted(_errors.keys())
 
+    manifest_ok, manifest_reasons = _probe_manifest()
+    if not manifest_ok:
+        log.warning("Snapback health: manifest verification failed: %s", manifest_reasons)
+
     return build_prospective_health(
         warehouse=warehouse,
         runtime_sha=_runtime_sha(),
         strategy_manifest=FROZEN_MANIFEST_HASH,
-        manifest_ok=True,
+        manifest_ok=manifest_ok,
         mode="PAPER",
         broker_connected=_probe_broker(uid),
         market_data_fresh=market_data_fresh,

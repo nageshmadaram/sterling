@@ -14,6 +14,7 @@ from datetime import datetime, time, timezone, timedelta
 from typing import Any, Dict, Optional
 
 from app.core.logging import get_logger
+from app.services.snapback_health import record_cycle
 from app.services.snapback import (
     _IST,
     get_config,
@@ -55,6 +56,9 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         return {"status": "overlap_suppressed"}
 
     async with _lock:
+        # Observability only: the tick was entered, regardless of market or broker state.
+        record_cycle("runner_tick")
+
         now_ist = datetime.now(_IST)
         today = now_ist.date()
         curr_time = now_ist.time()
@@ -89,14 +93,17 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         # 3. Phase A: Opening Entry Phase (09:15 - 09:45 IST, or catch-up if pending)
         if OPENING_WINDOW_START <= curr_time <= OPENING_WINDOW_END or curr_time > OPENING_WINDOW_END:
             entries_processed = await process_prospective_pending_entries(client, cfg)
+            record_cycle("entry_cycle")
 
         # 4. Phase B: Intraday Risk Monitor (Market hours 09:15 - 15:30 IST)
         if MARKET_WINDOW_START <= curr_time <= MARKET_WINDOW_END:
             risk_processed = await process_prospective_intraday_risk(client, cfg)
+            record_cycle("intraday_risk_cycle")
 
         # 5. Phase C: EOD Closing Window Phase (15:25 - 15:30 IST / EOD)
         if EOD_WINDOW_START <= curr_time <= EOD_WINDOW_END:
             mtm_processed = await process_prospective_daily_mtm_and_exits(client, cfg)
+            record_cycle("eod_cycle")
 
         return {
             "status": "ok",
