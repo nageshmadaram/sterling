@@ -294,7 +294,9 @@ def _default_family_account() -> Tuple[bool, Dict[str, Any]]:
     from app.services.snapback_family_account import family_account_health
 
     health = family_account_health()
-    return bool(health.get("bound")), health
+    # Identity, not connectedness: a bound account whose broker session has not
+    # been opened yet is correct at 08:00, and must not read as unbound.
+    return bool(health.get("family_account_identity_ok")), health
 
 
 def _default_allocation_capital() -> Tuple[bool, Dict[str, Any]]:

@@ -242,3 +242,41 @@ def test_live_and_ready_are_separate_endpoints():
 
     ready = client.get("/health/ready")
     assert ready.status_code in (200, 503)
+
+
+def test_a_bound_family_account_passes_the_default_probe(monkeypatch):
+    """Regression: the probe read a key the health payload does not have, so a
+    correctly bound account reported as unbound and blocked readiness."""
+    from app.services import snapback_preflight
+
+    monkeypatch.setattr(
+        "app.services.snapback_family_account.family_account_health",
+        lambda *_a, **_k: {
+            "family_account_configured": True,
+            "family_account_identity_ok": True,
+            "family_account_id": "KITE-…1B68",
+        },
+    )
+
+    passed, details = snapback_preflight._default_family_account()
+
+    assert passed is True
+    assert details["family_account_id"] == "KITE-…1B68"
+
+
+def test_an_unresolvable_family_account_fails_the_default_probe(monkeypatch):
+    from app.services import snapback_preflight
+
+    monkeypatch.setattr(
+        "app.services.snapback_family_account.family_account_health",
+        lambda *_a, **_k: {
+            "family_account_configured": True,
+            "family_account_identity_ok": False,
+            "family_account_id": None,
+            "family_account_error": "not found",
+        },
+    )
+
+    passed, _ = snapback_preflight._default_family_account()
+
+    assert passed is False
