@@ -33,6 +33,27 @@ class ReadinessState:
     reasons: List[str] = field(default_factory=list)
 
 
+def _reconciliation_clean(uid: str = "default") -> bool:
+    """Whether the last reconciliation found the two books in agreement.
+
+    Unknown is never clean: if reconciliation cannot run, exposure stays blocked.
+    """
+    try:
+        from app.services.snapback_family_account import binding_configured
+
+        if not binding_configured():
+            # No live account bound: nothing to reconcile against, paper only.
+            return True
+
+        from app.services.snapback_reconciliation import latest_reconciliation
+
+        snapshot = latest_reconciliation()
+        return bool(snapshot is None or snapshot.clean)
+    except Exception as exc:
+        log.warning("Readiness: reconciliation state unavailable: %s", exc)
+        return False
+
+
 def readiness_state(uid: str = "default") -> ReadinessState:
     """Derive the current readiness. Unknown never becomes LIVE_ELIGIBLE."""
     reasons: List[str] = []
@@ -50,6 +71,7 @@ def readiness_state(uid: str = "default") -> ReadinessState:
     except Exception as exc:
         reasons.append(f"health_unavailable:{exc}")
 
+    # The verdict is the recorded PromotionService result, not a live re-evaluation.
     verdict = "INCONCLUSIVE"
     try:
         from app.services.snapback_family_ops import get_family_evidence_verdict
@@ -67,12 +89,21 @@ def readiness_state(uid: str = "default") -> ReadinessState:
         reasons.append(f"halt_state_unavailable:{exc}")
         halted_by_family = True
 
-    # Reconciliation is only claimed when nothing about the book is unknown.
-    broker_reconciled = broker_connected and not any(
+    # Reconciliation is only claimed when the broker's book and Sterling's agree.
+    books_agree = _reconciliation_clean(uid)
+    broker_reconciled = broker_connected and books_agree and not any(
         code in unresolved
         for code in ("position_reconciliation_mismatch", "recovery_required",
                      "startup_preflight_failed", "database_unavailable")
     )
+
+    if not books_agree:
+        state = RECONCILING
+        reasons.append("broker_books_disagree")
+        return ReadinessState(
+            state=state, system_status=system_status, evidence_verdict=verdict,
+            broker_reconciled=False, reasons=reasons,
+        )
 
     if any(code in unresolved for code in ("recovery_required", "position_reconciliation_mismatch")):
         state = RECONCILING

@@ -21,6 +21,21 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["snapback-ops"])
 
 
+def _reconciliation_view() -> dict:
+    """The last reconciliation result. Never run live on a page load."""
+    try:
+        from app.services.snapback_reconciliation import latest_reconciliation
+
+        snapshot = latest_reconciliation()
+        if snapshot is None:
+            # Unknown is not clean.
+            return {"clean": None, "mismatches": []}
+        payload = snapshot.as_dict()
+        return {"clean": payload["clean"], "mismatches": payload["mismatches"]}
+    except Exception:
+        return {"clean": None, "mismatches": []}
+
+
 def _allocated_capital():
     """Declared evaluation capital, or None when it is not configured."""
     try:
@@ -120,6 +135,8 @@ async def family_operations(user: UserContext = Depends(get_current_user)) -> di
         "new_trades_halted": halted,
         # LIVE stays blocked until the authoritative gate says PASSED.
         "live_blocked": verdict != "PASSED" or halted,
+        "reconciliation_clean": _reconciliation_view().get("clean"),
+        "reconciliation_mismatches": _reconciliation_view().get("mismatches", []),
         "unresolved_errors": health.get("unresolved_errors", []),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

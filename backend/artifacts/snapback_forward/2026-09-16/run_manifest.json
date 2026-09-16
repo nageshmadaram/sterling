@@ -1,0 +1,23 @@
+{
+  "report_date": "2026-09-16",
+  "runtime_sha": "d277fc53a9c5a900d6919df61ce5422f73fdb754",
+  "strategy_manifest": "602d28f804e840d046e7b51d020d5718dfd38a08d27d5324ec9d81bfbc4e53e4",
+  "generated_at": "2026-09-16T14:50:01.765945+00:00",
+  "record_counts": {
+    "prospective_sessions": 1,
+    "quote_quality_events": 0,
+    "opportunities": 1,
+    "contract_candidates": 0,
+    "option_quotes": 0,
+    "futures_quotes": 0,
+    "decisions": 0,
+    "paper_fills": 0,
+    "hedge_rebalances": 0,
+    "daily_mtm": 0,
+    "margin_snapshots": 0,
+    "costs": 0,
+    "outcomes": 0,
+    "paper_positions": 0
+  },
+  "report_kind": "DIAGNOSTIC_EVIDENCE_ONLY"
+}

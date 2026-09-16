@@ -1,0 +1,32 @@
+{
+  "promotion_id": "PROMO-ce86e65ed9577ef0",
+  "experiment_id": "prospective_runtime_1_1",
+  "gate_version": "authoritative_gate_v2",
+  "gate_input_hash": "ce86e65ed9577ef07190a5738ffe62c29a0087b31a132e3e83f61caab100bcad",
+  "source_snapshot_sha256": "",
+  "runtime_build_sha": "d277fc53a9c5a900d6919df61ce5422f73fdb754",
+  "config_hash": "6ecbeb53e9768a91",
+  "rule_hash": "e03ddf75f29463a8",
+  "execution_policy_hash": "cbc8c090e684c37c",
+  "cost_schedule_hash": "zerodha_fno_costs_2026_04",
+  "observed_sessions": 0,
+  "completed_trades": 0,
+  "verdict": "INCONCLUSIVE",
+  "promoted": false,
+  "data_quality_ok": true,
+  "reasons": [
+    "No completed trades in evaluation run"
+  ],
+  "checks": {
+    "cost_evidence_provided": true,
+    "entry_dates_provided": true,
+    "daily_mtm_evidence_provided": false,
+    "completed_trades_ge_300": false
+  },
+  "missing_requirements": [
+    "independent sessions 0 of 60 required",
+    "completed trades 0 of 300 required"
+  ],
+  "total_sessions": 0,
+  "evaluated_at": "2026-09-16T14:50:01.769636+00:00"
+}

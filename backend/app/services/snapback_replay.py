@@ -195,7 +195,7 @@ def run_intraday_causal_replay(
     from app.engines.snapback.intraday_models import SetupDecision
     from app.engines.snapback.intraday_economics import build_trade_plan
     from app.engines.snapback.intraday_lifecycle import create_initial_position, advance_position_lifecycle
-    from app.services.snapback_execution import AccountRiskManager
+    from app.services.snapback_replay_risk import AccountRiskManager
 
     risk_mgr = AccountRiskManager()
     trades: list[dict] = []

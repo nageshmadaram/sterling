@@ -1,9 +1,12 @@
-"""Unit tests for account risk reservation and capital manager."""
+"""Unit tests for the RESEARCH-ONLY replay risk simulator.
+
+Live risk is the canonical RiskEngine's; this model only constrains replays.
+"""
 
 import pytest
 from app.engines.snapback.config import SnapbackConfig
 from app.engines.snapback.intraday_models import TradePlan
-from app.services.snapback_execution import AccountRiskManager
+from app.services.snapback_replay_risk import AccountRiskManager
 
 
 def test_reserve_risk_success():

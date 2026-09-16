@@ -1,92 +1,119 @@
-"""Account risk reservation and order intent management for Snapback.
+"""Snapback live execution adapter.
 
-Enforces account-wide risk limits defined in Specification 03:
-- Settled session loss + open position risk + pending entry risk <= daily loss limit (2.0%).
-- Single-trade risk <= per-trade risk budget (0.5%).
-- Durable risk reservation created before broker submission and released only on terminal status.
+A thin layer over the canonical authorities. It deliberately owns no risk store of its
+own: the previous in-memory reservation dictionary described itself as durable
+while living in one process, so a restart forgot every reservation it had made.
+
+Reservations, approvals, journalling and broker submission all belong to
+CanonicalExecutionService and the canonical RiskEngine. The plan below is server-owned:
+the browser receives a plan_id and a revision, never a quantity, price, contract or
+account it can influence.
 """
+
 from __future__ import annotations
 
-import math
-import time
-from typing import Dict, List, Optional
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
-from app.engines.snapback.config import SnapbackConfig
-from app.engines.snapback.intraday_models import RiskReservation, TradePlan
+log = logging.getLogger(__name__)
 
 
-class AccountRiskManager:
-    """Manages risk reservations and enforces account-level caps."""
+class PlanRevisionError(RuntimeError):
+    """The plan changed since the operator last saw it."""
 
-    def __init__(self) -> None:
-        self._reservations: Dict[str, RiskReservation] = {}
 
-    def reserve_risk(
-        self,
-        plan: TradePlan,
-        account_id: str,
-        session_id: str,
-        cfg: SnapbackConfig,
-        available_cash: float,
-        settled_session_loss: float,
-        open_positions_risk: float,
-        *,
-        now_ms: Optional[int] = None,
-    ) -> Optional[RiskReservation]:
-        """Attempt to reserve cash and risk for an accepted TradePlan."""
-        if plan.quantity <= 0 or plan.feasibility_status != "FEASIBLE":
-            return None
+class PlanNotFoundError(RuntimeError):
+    """No such server-owned plan."""
 
-        if now_ms is None:
-            now_ms = int(time.time() * 1000)
 
-        # Calculate active pending risk for account/session
-        pending_risk = sum(
-            r.reserved_risk
-            for r in self._reservations.values()
-            if r.account_id == account_id and r.session_id == session_id and r.status == "ACTIVE" and r.expires_at_ms > now_ms
+@dataclass(frozen=True)
+class SnapbackExecutionPlan:
+    plan_id: str
+    opportunity_id: str
+    account_id: str
+
+    option_exchange: str
+    option_symbol: str
+    option_quantity: int
+
+    futures_exchange: str
+    futures_symbol: str
+    target_futures_quantity: int
+
+    max_option_price: float
+    hedge_price_limit: float
+
+    risk_amount: float
+    cash_required: float
+    margin_required: float
+
+    policy_snapshot_hash: str
+    config_hash: str
+
+    revision: int = 1
+
+    def as_client_view(self) -> Dict[str, Any]:
+        """What a browser may see: identity and revision, never authority."""
+        return {
+            "plan_id": self.plan_id,
+            "opportunity_id": self.opportunity_id,
+            "revision": self.revision,
+        }
+
+
+def assert_plan_revision(*, current_revision: int, expected_revision: int) -> None:
+    """Refuse to act on a plan the operator has not actually seen."""
+    if int(current_revision) != int(expected_revision):
+        raise PlanRevisionError(
+            f"plan revision {expected_revision} is stale; current revision is "
+            f"{current_revision}"
         )
 
-        session_loss_limit = available_cash * (cfg.scalp_daily_loss_pct / 100.0)
-        total_risk_committed = settled_session_loss + open_positions_risk + pending_risk
-        remaining_session_loss_allowance = max(0.0, session_loss_limit - total_risk_committed)
 
-        per_trade_risk_budget = available_cash * (cfg.scalp_risk_pct / 100.0)
-        allowed_risk_for_plan = min(per_trade_risk_budget, remaining_session_loss_allowance)
+async def submit_plan(
+    *,
+    plan: SnapbackExecutionPlan,
+    expected_revision: int,
+    idempotency_key: str,
+    broker_client=None,
+    uid: str = "default",
+) -> Any:
+    """Route one armed plan through the canonical execution authority.
 
-        if plan.risk_amount > allowed_risk_for_plan or plan.cash_required > available_cash:
-            return None
+    Every admission check — evidence, readiness, health, reconciliation, risk — is
+    performed by the canonical service and the family gate it calls. This function
+    adds no second opinion.
+    """
+    from app.services.execution_service import (
+        CanonicalExecutionService, ExecutionRequest, ExposureEffect,
+    )
 
-        reservation_id = f"res_{plan.plan_id}_{now_ms}"
-        reservation = RiskReservation(
-            reservation_id=reservation_id,
-            plan_id=plan.plan_id,
-            account_id=account_id,
-            reserved_cash=plan.cash_required,
-            reserved_risk=plan.risk_amount,
-            session_id=session_id,
-            created_at_ms=now_ms,
-            expires_at_ms=now_ms + 120000,  # 2 minute expiration window
-            status="ACTIVE",
-        )
+    assert_plan_revision(
+        current_revision=plan.revision, expected_revision=expected_revision,
+    )
 
-        self._reservations[reservation_id] = reservation
-        return reservation
+    request = ExecutionRequest(
+        uid=uid,
+        account_id=plan.account_id,
+        strategy_id="snapback",
+        generation_id=plan.config_hash,
+        signal_id=plan.opportunity_id,
+        exchange=plan.option_exchange,
+        symbol=plan.option_symbol,
+        side="BUY",
+        quantity=plan.option_quantity,
+        exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
+        order_type="LIMIT",
+        price=plan.max_option_price,
+        capital_required=plan.cash_required,
+        payload={
+            "product": "NRML",
+            "idempotency_key": idempotency_key,
+            "plan_id": plan.plan_id,
+        },
+    )
 
-    def release_reservation(self, reservation_id: str) -> bool:
-        """Release a risk reservation when intent terminates or fills."""
-        res = self._reservations.get(reservation_id)
-        if res and res.status == "ACTIVE":
-            self._reservations[reservation_id] = RiskReservation(
-                reservation_id=res.reservation_id,
-                plan_id=res.plan_id,
-                account_id=res.account_id,
-                reserved_cash=res.reserved_cash,
-                reserved_risk=res.reserved_risk,
-                session_id=res.session_id,
-                created_at_ms=res.created_at_ms,
-                expires_at_ms=res.expires_at_ms,
-                status="RELEASED",
-            )
-            return True
-        return False
+    return await CanonicalExecutionService().submit_order(
+        request=request, broker_client=broker_client,
+    )

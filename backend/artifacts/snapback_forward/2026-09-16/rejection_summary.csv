@@ -1,0 +1,4 @@
+count,rejection_reason
+1,NON_FROZEN_CONFIG
+0,stale_option_quote
+0,invalid_option_quote

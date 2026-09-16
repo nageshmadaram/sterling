@@ -110,6 +110,22 @@ async def tick(uid: str = "default") -> Dict[str, Any]:
         # 3. Phase A: Opening Entry Phase (09:15 - 09:45 IST, or catch-up if pending)
         # The family STOP switch blocks new exposure only; risk monitoring, exits and
         # end-of-day reconciliation below continue untouched.
+        # Reconcile the broker's book against Sterling's. Sterling does not own the
+        # account exclusively, so "flat" is a claim that must be checked.
+        try:
+            from app.services.snapback_family_account import binding_configured
+            from app.services.snapback_reconciliation import reconcile_family_account
+
+            if binding_configured():
+                snapshot = await reconcile_family_account()
+                if not snapshot.clean:
+                    log.warning(
+                        "Snapback reconciliation mismatches: %s",
+                        [m.code for m in snapshot.mismatches],
+                    )
+        except Exception as recon_exc:
+            log.warning("Snapback reconciliation failed: %s", recon_exc)
+
         # An exposed position that is not being observed means a stop breach could
         # pass unseen. New exposure waits until observation is healthy again.
         stop_gap = False
