@@ -76,7 +76,7 @@ class OptionCandidateInfo:
     theoretical_delta: float = 0.0
     provider_symbol: str = ""
     instrument_token: str = ""
-    lot_size: int = 65
+    lot_size: int = 0
 
 
 
@@ -152,7 +152,6 @@ class SnapbackProspectiveCollector:
         option_candidates: List[OptionCandidateInfo],
         option_quote_events: Dict[str, RawQuoteEvent],
         causal_beta: float,
-        option_lot_size: int,
         futures_lot_size: int,
         available_capital: float = 1_000_000.0,
         slippage_pct: float = 0.0005,
@@ -196,20 +195,20 @@ class SnapbackProspectiveCollector:
                 "reason": "Config parameters deviate from frozen SnapbackConfig specification",
             }
 
-        if option_lot_size <= 0 or futures_lot_size <= 0:
+        if futures_lot_size <= 0:
             self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
             self.warehouse.record_decision(
                 decision_id=f"DECISION-{opportunity_id}",
                 opportunity_id=opportunity_id,
                 symbol=opp.get("symbol", "UNKNOWN"),
                 decision="INCONCLUSIVE",
-                reason=f"Invalid contract lot size: option_lot_size={option_lot_size}, futures_lot_size={futures_lot_size}",
+                reason=f"Invalid futures contract lot size: futures_lot_size={futures_lot_size}",
                 provider_timestamp=provider_ts,
             )
             return {
                 "opportunity_id": opportunity_id,
                 "status": "INCONCLUSIVE",
-                "reason": f"Invalid contract lot size: option={option_lot_size}, futures={futures_lot_size}",
+                "reason": f"Invalid futures contract lot size: futures={futures_lot_size}",
             }
 
 
@@ -459,6 +458,24 @@ class SnapbackProspectiveCollector:
             }
 
         # 6. Index Futures Hedge Sizing & Discrete Error Check
+        option_lot_size = int(chosen_cand.lot_size or 0)
+        if option_lot_size <= 0:
+            log.warning(f"Opportunity {opportunity_id} rejected: chosen candidate {chosen_cand.symbol} has invalid lot_size={option_lot_size}")
+            self.warehouse.update_opportunity_status(opportunity_id, "INCONCLUSIVE")
+            self.warehouse.record_decision(
+                decision_id=f"DECISION-{opportunity_id}",
+                opportunity_id=opportunity_id,
+                symbol=symbol,
+                decision="INCONCLUSIVE",
+                reason=f"Selected option candidate {chosen_cand.symbol} has invalid lot size: {option_lot_size}",
+                provider_timestamp=provider_ts,
+            )
+            return {
+                "opportunity_id": opportunity_id,
+                "status": "INCONCLUSIVE",
+                "reason": f"Selected option candidate {chosen_cand.symbol} has invalid lot size: {option_lot_size}",
+            }
+
         chosen_delta_mag = abs(chosen_cand.theoretical_delta)
         option_qty = option_lot_size
 

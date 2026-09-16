@@ -32,6 +32,7 @@ from app.engines.snapback import (CONTRACT_VERSION, SnapbackConfig, STRATEGY_ID,
                                   TUPLE_FIELDS, descriptor, evaluate, evaluate_at,
                                   to_bars)
 from app.engines.snapback.contracts import lots_for, moneyness_label
+from app.engines.snapback.intraday_models import RawQuoteEvent
 from app.engines.snapback.pricing import bs_delta, bs_price
 
 log = get_logger(__name__)
@@ -820,7 +821,7 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                     cand_symbols: List[str] = []
                     for row in chain:
                         opt_t = str(row.get("option_type") or "").upper()
-                        if opt_t != ("call" if want_type == "CE" else "put") and opt_t != want_type:
+                        if opt_t.lower() != ("call" if want_type == "CE" else "put") and opt_t != want_type:
                             continue
                         dte = int(row.get("dte") or 0)
                         if not (cfg.min_dte <= dte <= cfg.max_dte):
@@ -847,6 +848,7 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                             theoretical_delta=cand_d_val,
                             provider_symbol=sym_name,
                             instrument_token=str(row.get("token") or ""),
+                            lot_size=int(row.get("lot_size") or 0),
                         ))
 
                     if not cand_symbols:
@@ -900,11 +902,11 @@ async def process_prospective_pending_entries_and_mtm(client, cfg: SnapbackConfi
                         option_candidates=cand_infos,
                         option_quote_events=opt_quote_events,
                         causal_beta=causal_beta,
-                        option_lot_size=0,  # Will be resolved per selected candidate in execute_pending_entry
                         futures_lot_size=fut_lot_size,
                         execution_timestamp_ms=int(time.time() * 1000),
                         entry_iv=iv_proxy,
                     )
+
                 except Exception as opp_exc:
                     log.debug("Pending prospective entry processing failed for %s: %s", opp_id, opp_exc)
 

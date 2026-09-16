@@ -206,6 +206,7 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
         dte=45,
         is_monthly=True,
         theoretical_delta=0.70,
+        lot_size=65,
     )
 
     opt_quote = RawQuoteEvent(
@@ -229,7 +230,6 @@ def test_fade_up_signal_ce_candidate_rejected(temp_warehouse, sample_config, sam
         option_candidates=[cand_ce],
         option_quote_events={"NIFTY26OCT25000CE": opt_quote},
         causal_beta=1.15,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=t1_ms,
     )
@@ -255,7 +255,6 @@ def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_
         option_candidates=[],
         option_quote_events={},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=same_day_ms,
     )
@@ -272,7 +271,6 @@ def test_session_timing_verification(temp_warehouse, sample_config, sample_fade_
         option_candidates=[],
         option_quote_events={},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=late_ms,
     )
@@ -299,12 +297,12 @@ def test_tampered_config_rejected(temp_warehouse, sample_fade_up_signal):
         option_candidates=[],
         option_quote_events={},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=t1_ms,
     )
 
     assert res["status"] == "NON_FROZEN_CONFIG"
+
 
 
 def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample_fade_up_signal):
@@ -334,6 +332,7 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         dte=45,
         is_monthly=True,
         theoretical_delta=-0.70,
+        lot_size=65,
     )
 
     opt_quote = RawQuoteEvent(
@@ -357,10 +356,10 @@ def test_bid_ask_aware_futures_rebalancing(temp_warehouse, sample_config, sample
         option_candidates=[cand_valid],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.65,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=now_ms,
     )
+
 
     assert exec_res["status"] == "OPEN_POSITION"
 
@@ -577,7 +576,6 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         option_candidates=[cand_valid],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=mon_open_ms,
     )
@@ -635,10 +633,10 @@ def test_friday_signal_fills_monday_opening_window(temp_warehouse, sample_config
         option_candidates=[cand_valid],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote_late},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=mon_late_ms,
     )
+
     assert exec_res_late["status"] == "INCONCLUSIVE"
     assert "Missed T+1" in exec_res_late["reason"]
 
@@ -727,7 +725,6 @@ def test_premium_stop_fires_correctly(temp_warehouse, sample_config):
         option_candidates=[cand],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=now_ms,
     )
@@ -818,10 +815,10 @@ def test_one_point_five_x_winner_becomes_runner_and_twenty_five_percent_giveback
         option_candidates=[cand],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=now_ms,
     )
+
     assert exec_res["status"] == "OPEN_POSITION"
 
     # Set sessions_held to 15 in warehouse DB position record
@@ -959,7 +956,6 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
         option_candidates=[cand_bn],
         option_quote_events={"BANKNIFTY26OCT52000PE": opt_quote},
         causal_beta=1.10,
-        option_lot_size=15,
         futures_lot_size=15,
         execution_timestamp_ms=now_ms,
     )
@@ -982,6 +978,16 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
         level=51800.0,
         strength="MODERATE",
     )
+    cand_bn_zero = OptionCandidateInfo(
+        symbol="BANKNIFTY26OCT52000PE",
+        expiry="2026-10-29",
+        strike=52000.0,
+        option_type="PE",
+        dte=45,
+        is_monthly=True,
+        theoretical_delta=-0.70,
+        lot_size=0,
+    )
     opp_id_invalid = collector.record_signal_at_close(signal=sig2, cfg=sample_config)["opportunity_id"]
     exec_res_invalid = collector.execute_pending_entry(
         opportunity_id=opp_id_invalid,
@@ -989,15 +995,15 @@ def test_selected_contract_lot_sizes_propagate_into_quantities(temp_warehouse, s
         t1_spot_price=52000.0,
         futures_quote_event=fut_event,
         futures_symbol="BANKNIFTY-I",
-        option_candidates=[cand_bn],
+        option_candidates=[cand_bn_zero],
         option_quote_events={"BANKNIFTY26OCT52000PE": opt_quote},
         causal_beta=1.10,
-        option_lot_size=0,
         futures_lot_size=15,
         execution_timestamp_ms=now_ms,
     )
     assert exec_res_invalid["status"] == "INCONCLUSIVE"
     assert "lot size" in exec_res_invalid["reason"]
+
 
 
 def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
@@ -1065,7 +1071,6 @@ def test_rebalance_fees_accumulate(temp_warehouse, sample_config):
         option_candidates=[cand],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=now_ms,
     )
@@ -1215,7 +1220,6 @@ def test_opening_window_lower_bound_rejected(temp_warehouse, sample_config):
         option_candidates=[cand],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=early_ms,
     )
@@ -1291,7 +1295,6 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
         option_candidates=[cand],
         option_quote_events={"NIFTY26OCT25000PE": opt_quote},
         causal_beta=1.0,
-        option_lot_size=65,
         futures_lot_size=65,
         execution_timestamp_ms=t1_ms,
     )
@@ -1464,6 +1467,229 @@ def test_production_wiring_end_to_end_lifecycle(temp_warehouse, sample_config):
     # Verify paper position status in DB is now CLOSED
     pos_closed = temp_warehouse.get_paper_position(opp_id)
     assert pos_closed["status"] == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_adapter_process_prospective_pending_entries_unusual_lot_size(temp_warehouse, sample_config, monkeypatch):
+    """Proves: Production adapter process_prospective_pending_entries_and_mtm reads lot_size=37 from Kite row, populates OptionCandidateInfo.lot_size=37, and opens paper position with option_qty=37."""
+    from unittest.mock import AsyncMock
+    from app.services.snapback import process_prospective_pending_entries_and_mtm
+
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    # 1. Record Day T signal on previous trading day close (2026-09-15 15:30 IST)
+    dt_t = datetime(2026, 9, 15, 10, 0, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000),
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    # Target T+1 date: 2026-09-16 09:20 IST (03:50 UTC)
+    t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return t1_dt.astimezone(tz)
+            return t1_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
+
+    mock_client = AsyncMock()
+
+    mock_client.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24510.0},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24511.0,
+            "buy_price": 24510.0,
+            "sell_price": 24512.0,
+            "buy_quantity": 100,
+            "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24510.0, "quantity": 100}], "sell": [{"price": 24512.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T09:19:59+05:30",
+            "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 101.0,
+            "buy_price": 100.0,
+            "sell_price": 102.0,
+            "buy_quantity": 50,
+            "sell_quantity": 50,
+            "depth": {"buy": [{"price": 100.0, "quantity": 50}], "sell": [{"price": 102.0, "quantity": 50}]},
+            "timestamp": "2026-09-16T09:19:59+05:30",
+            "oi": 60000,
+        },
+    })
+
+    mock_client.search_instruments = AsyncMock(return_value=[
+        {
+            "name": "NIFTY",
+            "tradingsymbol": "NIFTY26OCTFUT",
+            "instrument_name": "NIFTY26OCTFUT",
+            "segment": "NFO-FUT",
+            "instrument_type": "FUT",
+            "strike": 0.0,
+            "expiry": "2026-10-29",
+            "expiry_date": "2026-10-29",
+            "instrument_token": 67890,
+            "token": 67890,
+            "lot_size": 25,
+        },
+        {
+            "name": "NIFTY",
+            "tradingsymbol": "NIFTY26OCT25000PE",
+            "instrument_name": "NIFTY26OCT25000PE",
+            "segment": "NFO-OPT",
+            "instrument_type": "PE",
+            "option_type": "PE",
+            "strike": 25000.0,
+            "dte": 45,
+            "expiry_date": "2026-10-29",
+            "expiry": "2026-10-29",
+            "instrument_token": 12345,
+            "token": 12345,
+            "lot_size": 37,  # Deliberately unusual lot size
+        },
+    ])
+
+    await process_prospective_pending_entries_and_mtm(mock_client, sample_config)
+
+    pos = temp_warehouse.get_paper_position(opp_id)
+    assert pos is not None
+    assert pos["status"] == "OPEN"
+    assert int(pos["option_qty"]) == 37
+
+
+@pytest.mark.asyncio
+async def test_adapter_process_prospective_pending_entries_zero_lot_size_rejected(temp_warehouse, sample_config, monkeypatch):
+    """Proves: Production adapter rejects candidate with lot_size=0 as INCONCLUSIVE and never defaults to 65."""
+    from unittest.mock import AsyncMock
+    from app.services.snapback import process_prospective_pending_entries_and_mtm
+
+    monkeypatch.setattr(
+        "app.services.snapback_prospective_collector.SnapbackObservationWarehouse",
+        lambda *a, **k: temp_warehouse
+    )
+
+    collector = SnapbackProspectiveCollector(warehouse=temp_warehouse)
+
+    dt_t = datetime(2026, 9, 15, 10, 0, 0, tzinfo=timezone.utc)
+    sig = SnapbackSignal(
+        symbol="NIFTY",
+        side="fade_up",
+        direction="BEARISH",
+        option_type="PE",
+        timestamp_ms=int(dt_t.timestamp() * 1000),
+        entry=24500.0,
+        mean_target=24800.0,
+        stretch=1.8,
+        atr=180.0,
+        realized_vol=0.15,
+        assumed_iv=0.18,
+        level=24400.0,
+        strength="MODERATE",
+    )
+    rec_res = collector.record_signal_at_close(signal=sig, cfg=sample_config)
+    opp_id = rec_res["opportunity_id"]
+
+    t1_dt = datetime(2026, 9, 16, 3, 50, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("time.time", lambda: t1_dt.timestamp())
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return t1_dt.astimezone(tz)
+            return t1_dt
+
+    monkeypatch.setattr("app.services.snapback.datetime", FixedDateTime)
+
+    mock_client = AsyncMock()
+    mock_client.get_quote = AsyncMock(return_value={
+        "NSE:NIFTY": {"last_price": 24510.0},
+        "NFO:NIFTY26OCTFUT": {
+            "last_price": 24511.0,
+            "buy_price": 24510.0,
+            "sell_price": 24512.0,
+            "buy_quantity": 100,
+            "sell_quantity": 100,
+            "depth": {"buy": [{"price": 24510.0, "quantity": 100}], "sell": [{"price": 24512.0, "quantity": 100}]},
+            "timestamp": "2026-09-16T09:19:59+05:30",
+            "oi": 500000,
+        },
+        "NFO:NIFTY26OCT25000PE": {
+            "last_price": 101.0,
+            "buy_price": 100.0,
+            "sell_price": 102.0,
+            "buy_quantity": 50,
+            "sell_quantity": 50,
+            "depth": {"buy": [{"price": 100.0, "quantity": 50}], "sell": [{"price": 102.0, "quantity": 50}]},
+            "timestamp": "2026-09-16T09:19:59+05:30",
+            "oi": 60000,
+        },
+    })
+
+    mock_client.search_instruments = AsyncMock(return_value=[
+        {
+            "name": "NIFTY",
+            "tradingsymbol": "NIFTY26OCTFUT",
+            "instrument_name": "NIFTY26OCTFUT",
+            "segment": "NFO-FUT",
+            "instrument_type": "FUT",
+            "strike": 0.0,
+            "expiry": "2026-10-29",
+            "expiry_date": "2026-10-29",
+            "instrument_token": 67890,
+            "token": 67890,
+            "lot_size": 25,
+        },
+        {
+            "name": "NIFTY",
+            "tradingsymbol": "NIFTY26OCT25000PE",
+            "instrument_name": "NIFTY26OCT25000PE",
+            "segment": "NFO-OPT",
+            "instrument_type": "PE",
+            "option_type": "PE",
+            "strike": 25000.0,
+            "dte": 45,
+            "expiry_date": "2026-10-29",
+            "expiry": "2026-10-29",
+            "instrument_token": 12345,
+            "token": 12345,
+            "lot_size": 0,  # Missing or zero lot size
+        },
+    ])
+
+    await process_prospective_pending_entries_and_mtm(mock_client, sample_config)
+
+    opp = temp_warehouse.get_opportunity_by_id(opp_id)
+    assert opp["status"] == "INCONCLUSIVE"
+    pos = temp_warehouse.get_paper_position(opp_id)
+    assert pos is None
+
+
+
 
 
 
