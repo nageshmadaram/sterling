@@ -36,6 +36,7 @@ __all__ = [
     "CandidateUniverse",
     "CandidateUniverseError",
     "SOURCE_INSTRUMENT_MASTER",
+    "UNIVERSE_SCHEMA_VERSION",
     "build_candidate_universe",
     "universe_hash",
 ]
@@ -43,8 +44,10 @@ __all__ = [
 SOURCE_INSTRUMENT_MASTER = "KITE_INSTRUMENT_MASTER"
 
 #: Bumped whenever the eligibility rule or the hashed shape changes, so an old
-#: universe can never be silently compared against a new rule.
-UNIVERSE_SCHEMA_VERSION = 1
+#: universe can never be silently compared against a new rule. v2 tightens the
+#: evidence boundary: missing or non-positive contract metadata is rejected,
+#: never repaired with a default tick size or an empty identity field.
+UNIVERSE_SCHEMA_VERSION = 2
 
 
 class CandidateUniverseError(ValueError):
@@ -208,7 +211,7 @@ def build_candidate_universe(
 ) -> CandidateUniverse:
     """Filter a real instrument master down to what the frozen rule permits.
 
-    Rows missing an expiry, a strike, a lot size or a token are dropped rather
+    Rows missing any contract identity or execution metadata are dropped rather
     than repaired: a contract we cannot fully describe cannot be part of a proof
     that the selector had the right menu. An empty result raises, because "no
     eligible contracts" and "we failed to read the master" must not both arrive
@@ -236,7 +239,9 @@ def build_candidate_universe(
         if str(row.get("name") or row.get("underlying") or "").upper() != underlying.upper():
             continue
 
-        exchange = str(row.get("exchange") or "").upper()
+        exchange = str(row.get("exchange") or "").strip().upper()
+        segment = str(row.get("segment") or "").strip()
+        tradingsymbol = str(row.get("tradingsymbol") or "").strip()
         if allowed is not None and exchange not in allowed:
             continue
 
@@ -244,7 +249,27 @@ def build_candidate_universe(
         token = row.get("instrument_token")
         strike = row.get("strike")
         lot_size = row.get("lot_size")
-        if expiry is None or token is None or strike is None or lot_size is None:
+        tick_size = row.get("tick_size")
+        if (
+            expiry is None
+            or token is None
+            or strike is None
+            or lot_size is None
+            or tick_size is None
+            or not tradingsymbol
+            or not exchange
+            or not segment
+        ):
+            continue
+
+        try:
+            token_i = int(token)
+            strike_f = float(strike)
+            lot_i = int(lot_size)
+            tick_f = float(tick_size)
+        except (TypeError, ValueError):
+            continue
+        if token_i <= 0 or strike_f <= 0 or lot_i <= 0 or tick_f <= 0:
             continue
 
         try:
@@ -254,20 +279,17 @@ def build_candidate_universe(
         if not (min_dte <= dte <= max_dte):
             continue
 
-        try:
-            contract = CandidateContract(
-                instrument_token=int(token),
-                tradingsymbol=str(row.get("tradingsymbol") or ""),
-                exchange=exchange,
-                segment=str(row.get("segment") or ""),
-                instrument_type=option_type,
-                expiry=expiry,
-                strike=float(strike),
-                lot_size=int(lot_size),
-                tick_size=float(row.get("tick_size") or 0.05),
-            )
-        except (TypeError, ValueError):
-            continue
+        contract = CandidateContract(
+            instrument_token=token_i,
+            tradingsymbol=tradingsymbol,
+            exchange=exchange,
+            segment=segment,
+            instrument_type=option_type,
+            expiry=expiry,
+            strike=strike_f,
+            lot_size=lot_i,
+            tick_size=tick_f,
+        )
 
         if contract.instrument_token in seen:
             continue

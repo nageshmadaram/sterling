@@ -163,15 +163,28 @@ def evidence_tick_row(
 
     ``received_ts`` is supplied by the caller rather than taken here, so the
     recorded arrival time is when the socket handed the tick over, not when this
-    function happened to run.
+    function happened to run. Missing identity is refused instead of becoming
+    token 0, because a fake non-null token is worse than a rejected row.
     """
+    token = tick.get("instrument_token")
+    try:
+        token_i = int(token)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("instrument_token is required; a tick without identity is not evidence") from exc
+    if token_i <= 0:
+        raise ValueError("instrument_token must be positive; token 0 is not a contract identity")
+    if not isinstance(received_ts, datetime) or received_ts.tzinfo is None:
+        raise ValueError("received_ts must be an aware datetime; receipt time must not be inferred")
+    if not source:
+        raise ValueError("source is required; a row without source provenance is not evidence")
+
     meta = contract or {}
     depth = tick.get("depth") or {}
 
     row: dict[str, Any] = {
         "exchange_ts": _utc(tick.get("exchange_timestamp")),
         "received_ts": received_ts.astimezone(timezone.utc),
-        "instrument_token": int(tick.get("instrument_token") or 0),
+        "instrument_token": token_i,
         "tradingsymbol": meta.get("tradingsymbol"),
         "exchange": meta.get("exchange"),
         "segment": meta.get("segment"),

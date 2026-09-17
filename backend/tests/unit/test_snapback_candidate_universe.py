@@ -13,6 +13,7 @@ import pytest
 
 from app.services.snapback_candidate_universe import (
     SOURCE_INSTRUMENT_MASTER,
+    UNIVERSE_SCHEMA_VERSION,
     CandidateUniverseError,
     build_candidate_universe,
     universe_hash,
@@ -60,6 +61,10 @@ def _build(instruments, **over):
     return build_candidate_universe(**kw)
 
 
+def test_schema_v2_is_the_fail_closed_contract():
+    assert UNIVERSE_SCHEMA_VERSION == 2
+
+
 def test_the_whole_eligible_universe_is_kept_not_a_neighbourhood():
     universe = _build(_rows(range(24000, 26050, 50)))
 
@@ -103,11 +108,28 @@ def test_an_incomplete_row_is_dropped_not_repaired():
         {**_row(25300), "strike": None},
         {**_row(25400), "lot_size": None},
         {**_row(25500), "instrument_token": None},
+        {**_row(25600), "tick_size": None},
+        {**_row(25700), "tradingsymbol": ""},
+        {**_row(25800), "exchange": ""},
+        {**_row(25900), "segment": ""},
     ]
 
     universe = _build(rows)
 
     # A contract we cannot fully describe cannot prove the menu was right.
+    assert len(universe.contracts) == 4
+
+
+def test_non_positive_contract_metadata_is_dropped_not_defaulted():
+    rows = _rows() + [
+        _row(25200, tick_size=0),
+        _row(25300, lot_size=0),
+        _row(25400, token=0),
+        _row(0, token=25500),
+    ]
+
+    universe = _build(rows)
+
     assert len(universe.contracts) == 4
 
 

@@ -136,6 +136,25 @@ def test_an_unknown_provenance_is_refused():
         _row(evidence_class="REAL")
 
 
+def test_missing_instrument_token_is_refused_not_written_as_zero():
+    with pytest.raises(ValueError) as excinfo:
+        _row(tick=_tick(instrument_token=None))
+
+    assert "instrument_token" in str(excinfo.value)
+
+
+def test_zero_instrument_token_is_refused():
+    with pytest.raises(ValueError):
+        _row(tick=_tick(instrument_token=0))
+
+
+def test_received_timestamp_must_be_timezone_aware():
+    with pytest.raises(ValueError) as excinfo:
+        _row(received_ts=datetime(2026, 9, 17, 9, 20))
+
+    assert "received_ts" in str(excinfo.value)
+
+
 def test_identity_of_the_recording_code_is_carried():
     row = _row(
         opportunity_id="OPP-1",
@@ -177,4 +196,5 @@ def test_the_row_matches_the_schema():
 def test_received_ts_is_never_null():
     assert EVIDENCE_TICK_SCHEMA.field("received_ts").nullable is False
     assert EVIDENCE_TICK_SCHEMA.field("exchange_ts").nullable is True
+    assert EVIDENCE_TICK_SCHEMA.field("instrument_token").nullable is False
     assert EVIDENCE_TICK_SCHEMA.field("evidence_class").nullable is False
