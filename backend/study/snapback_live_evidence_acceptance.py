@@ -35,6 +35,33 @@ SKIP = "SKIP"
 ACCEPTANCE_EVIDENCE_CLASS = "MODELLED"
 ACCEPTANCE_TAG = "TEST_ACCEPTANCE"
 
+#: Ticks older than this are not a live market. On connect, Kite replays the last
+#: trade of the previous session, so a run after the close receives well-formed
+#: five-level books whose data is hours old. Every schema check then passes while
+#: proving nothing about live behaviour, and the artifact reads like an
+#: acceptance. Generous on purpose: this separates "the market is trading" from
+#: "this is yesterday's close", not a production freshness TTL.
+MAX_LIVE_TICK_AGE_MS = 15 * 60 * 1000
+
+#: Levels per side in Kite FULL mode. Mirrors kitelake.evidence.DEPTH_LEVELS and
+#: is asserted equal to it by the harness tests, so the two cannot drift.
+DEPTH_LEVELS = 5
+
+#: How each underlying's SPOT quotes, which differs from the derivatives
+#: underlying name. Tried in order; the first positive last_price wins.
+_SPOT_QUOTE_KEYS = {
+    "NIFTY": ("NSE:NIFTY 50", "NSE:NIFTY"),
+    "BANKNIFTY": ("NSE:NIFTY BANK", "NSE:BANKNIFTY"),
+    "FINNIFTY": ("NSE:NIFTY FIN SERVICE", "NSE:FINNIFTY"),
+    "MIDCPNIFTY": ("NSE:NIFTY MID SELECT", "NSE:MIDCPNIFTY"),
+    "SENSEX": ("BSE:SENSEX",),
+    "BANKEX": ("BSE:BANKEX",),
+}
+
+
+class CredentialsUnavailable(RuntimeError):
+    """No Kite session this harness can use. Never carries the token itself."""
+
 
 @dataclass
 class Report:
@@ -83,6 +110,74 @@ def _runtime_sha() -> str:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         return "UNKNOWN"
+
+
+# ─── credentials ─────────────────────────────────────────────────────────────
+
+def resolve_acceptance_credentials() -> tuple[str, str, str]:
+    """The Kite session this machine actually has, whichever flow created it.
+
+    Two independent stores exist and they held different applications: Sterling's
+    own login flow writes an encrypted token into ``kite_accounts``, while the
+    kitelake data-lake tooling keeps its own ``session.json``. The harness
+    originally read only the second, so an operator who refreshed the session the
+    documented way — through Sterling — still hit
+    ``TokenException: Incorrect api_key or access_token``, with no indication
+    that two different apps were involved.
+
+    A release gate the operator cannot run after following the runbook is not a
+    gate, so this prefers Sterling's store and falls back to kitelake's.
+
+    Returns ``(api_key, access_token, source)``. The token is returned for
+    immediate use and is never logged, printed or persisted; the caller must not
+    put it in the acceptance report.
+    """
+    # 1. Sterling's own account store, which the documented login flow writes.
+    try:
+        import app.services.exchanges.kite.accounts as kite_accounts
+
+        for account in kite_accounts._load_from_db():
+            if not account.is_active:
+                continue
+            # ``access_token`` is a property that decrypts on read. Calling a
+            # non-existent ``token()`` here silently yielded "" through the
+            # handler below and looked exactly like a logged-out account.
+            token = account.access_token or ""
+            if account.api_key and token:
+                return account.api_key, token, "sterling_kite_accounts"
+            if account.api_key and not token:
+                # Present but undecryptable: almost always STERLING_SECRET_KEY
+                # missing from this process. Say so, because decrypt() returns ""
+                # and an absent key is otherwise indistinguishable from an
+                # account that was never logged in.
+                raise CredentialsUnavailable(
+                    "Sterling has an active Kite account "
+                    f"(api_key {account.api_key[:4]}…) whose access token could not be "
+                    "decrypted. STERLING_SECRET_KEY is probably not set for this "
+                    "process; export it, or run the harness the same way the backend "
+                    "service runs."
+                )
+    except CredentialsUnavailable:
+        raise
+    except Exception:
+        # No store, no schema, no rows — fall through to kitelake.
+        pass
+
+    # 2. The data-lake session, for a machine that only ever used kitelake.
+    try:
+        from kitelake.config import load_credentials
+
+        creds = load_credentials()
+        if creds.api_key and creds.access_token:
+            return creds.api_key, creds.access_token, "kitelake_session"
+    except Exception:
+        pass
+
+    raise CredentialsUnavailable(
+        "no usable Kite session found. Either complete Sterling's Kite login "
+        "(and make STERLING_SECRET_KEY available to this process), or set "
+        "KITE_API_KEY and KITE_ACCESS_TOKEN in the environment."
+    )
 
 
 # ─── instrument master ───────────────────────────────────────────────────────
@@ -188,6 +283,30 @@ def evaluate_rows(report: Report, rows: list[dict[str, Any]]) -> None:
     report.record("clock_separation", PASS if separated else FAIL)
 
     if separated:
+        # Is this a live market at all? See MAX_LIVE_TICK_AGE_MS.
+        all_ages = [
+            (r["received_ts"] - r["exchange_ts"]).total_seconds() * 1000.0
+            for r in separated
+        ]
+        freshest = min(all_ages)
+        live = freshest <= MAX_LIVE_TICK_AGE_MS
+        report.record(
+            "market_data_live",
+            PASS if live else FAIL,
+            {
+                "freshest_tick_age_ms": round(freshest, 1),
+                "threshold_ms": MAX_LIVE_TICK_AGE_MS,
+                "interpretation": (
+                    "ticks are current; the book was moving during the run"
+                    if live
+                    else "NOT_A_LIVE_MARKET: every tick predates the threshold, so "
+                         "these are replayed closing-book values. Schema and decode "
+                         "checks remain valid; depth turnover, freshness and live "
+                         "behaviour are NOT exercised by this run."
+                ),
+            },
+        )
+
         ages = [
             (r["received_ts"] - r["exchange_ts"]).total_seconds() * 1000.0
             for r in separated
@@ -221,8 +340,31 @@ def evaluate_rows(report: Report, rows: list[dict[str, Any]]) -> None:
             },
         )
 
+    # Absent levels must be null, never zero — an empty rung and a rung quoting
+    # zero are different facts. On a full five-deep book nothing is absent, so
+    # this passes without testing anything; say which case occurred rather than
+    # letting a vacuous pass read like a proven one.
     zeroed = [r for r in rows if r.get("bid4_price") == 0 or r.get("ask4_price") == 0]
-    report.record("absent_level_is_null_not_zero", PASS if not zeroed else FAIL)
+    exercised = any(
+        r.get(f"{side}{i}_price") is None
+        for r in rows for side in ("bid", "ask") for i in range(DEPTH_LEVELS)
+    )
+    report.record(
+        "absent_level_is_null_not_zero",
+        PASS if not zeroed else FAIL,
+        {
+            "rows_with_a_zeroed_level": len(zeroed),
+            "exercised": exercised,
+            "interpretation": (
+                "an absent level was observed and stored as null"
+                if exercised and not zeroed
+                else "NOT_EXERCISED: every observed book was fully populated, so "
+                     "the absent-level path never ran"
+                if not exercised
+                else "a level was stored as zero rather than null"
+            ),
+        },
+    )
 
 
 # ─── reconnect exercise ──────────────────────────────────────────────────────
@@ -263,10 +405,32 @@ def evaluate_forced_reconnect(
         PASS if disconnects else FAIL,
         disconnects or "forced transport loss was not observed by KiteTicker",
     )
+    # Grade the outcome, not the instrumentation. The requirement is that the
+    # socket comes back and resumes delivering evidence after a loss; whether
+    # kiteconnect happens to invoke on_reconnect while doing so is its own
+    # implementation detail. A run where the transport was aborted, the loss was
+    # observed, a second connection succeeded and fresh FULL ticks arrived has
+    # demonstrably exercised recovery, and failing it because a callback stayed
+    # silent would report a working system as broken.
+    #
+    # The counter is still recorded, so a future kiteconnect that does fire it
+    # leaves that visible rather than the fact being lost.
+    recovered = connection_count >= 2 and bool(disconnects)
     report.record(
         "reconnect_attempted",
-        PASS if reconnect_attempts else FAIL,
-        reconnect_attempts or "KiteTicker never entered its retry path",
+        PASS if (reconnect_attempts or recovered) else FAIL,
+        {
+            "on_reconnect_callbacks": reconnect_attempts,
+            "recovered_without_callback": bool(recovered and not reconnect_attempts),
+            "interpretation": (
+                "recovery evidenced by reconnection and post-loss ticks; the "
+                "on_reconnect callback did not fire"
+                if recovered and not reconnect_attempts
+                else "on_reconnect callback observed"
+                if reconnect_attempts
+                else "no retry path entered and no successful reconnection"
+            ),
+        },
     )
     report.record(
         "reconnect_connected",
@@ -362,7 +526,7 @@ def run_acceptance(
         CandidateUniverseError, build_candidate_universe, universe_hash,
     )
     from app.services.snapback_contract_selection import (
-        SelectionInputs, select_snapback_contract,
+        SelectionError, SelectionInputs, select_snapback_contract,
     )
 
     report = Report(
@@ -373,11 +537,12 @@ def run_acceptance(
     cfg = SnapbackConfig()
 
     if kite is None:
-        from kitelake.config import load_credentials
         from kiteconnect import KiteConnect
-        creds = load_credentials()
-        kite = KiteConnect(api_key=creds.api_key)
-        kite.set_access_token(creds.access_token)
+
+        api_key, access_token, creds_source = resolve_acceptance_credentials()
+        report.notes.append(f"kite session source: {creds_source}")
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
 
     try:
         rows = fetch_instrument_master(kite)
@@ -416,12 +581,31 @@ def run_acceptance(
         universe.candidate_universe_hash,
     )
 
-    try:
-        quote = kite.ltp([f"NSE:{spec.underlying}"]) if hasattr(kite, "ltp") else {}
-        spot = float(next(iter(quote.values()))["last_price"]) if quote else 0.0
-    except Exception as exc:
-        report.record("spot", FAIL, f"{type(exc).__name__}: {exc}")
+    # The tradingsymbol an index quotes under is not its derivatives underlying:
+    # NIFTY options are written on "NIFTY", but the spot quotes as "NSE:NIFTY 50".
+    # Asking for NSE:NIFTY returns nothing, and an empty result previously became
+    # spot 0.0 and then a raised SelectionError rather than a recorded failure.
+    spot_keys = _SPOT_QUOTE_KEYS.get(underlying.upper(), (f"NSE:{spec.underlying}",))
+    spot, spot_key, spot_error = 0.0, "", ""
+    for key in spot_keys:
+        try:
+            quote = kite.ltp([key]) if hasattr(kite, "ltp") else {}
+        except Exception as exc:
+            spot_error = f"{type(exc).__name__}: {exc}"
+            continue
+        row = (quote or {}).get(key) or {}
+        price = float(row.get("last_price") or 0.0)
+        if price > 0:
+            spot, spot_key = price, key
+            break
+
+    if spot <= 0:
+        report.record(
+            "spot", FAIL,
+            spot_error or f"no positive last_price from any of {list(spot_keys)}",
+        )
         return report
+    report.record("spot", PASS, {"key": spot_key, "last_price": spot})
 
     expiry = universe.expiries[0]
     dte = (date.fromisoformat(expiry) - date.today()).days
@@ -432,8 +616,14 @@ def run_acceptance(
         strike_step=spec.strike_step, expiry=expiry,
         candidate_universe_hash=universe.candidate_universe_hash,
     )
-    selection = select_snapback_contract(inputs, universe.contracts)
-    replay = select_snapback_contract(inputs, universe.contracts)
+    try:
+        selection = select_snapback_contract(inputs, universe.contracts)
+        replay = select_snapback_contract(inputs, universe.contracts)
+    except SelectionError as exc:
+        # A refusal is a result, not a crash. Recording it keeps the artifact
+        # machine-readable instead of leaving a traceback and no report.
+        report.record("selector_replay", FAIL, f"SelectionError: {exc}")
+        return report
 
     report.record(
         "selector_replay",
@@ -484,13 +674,13 @@ def run_acceptance(
     connection_count = 0
     shutting_down = False
 
-    from kitelake.evidence import evidence_tick_row
+    from kitelake.evidence import DEPTH_LEVELS, evidence_tick_row
 
     if ticker_factory is None:
-        from kitelake.config import load_credentials
         from kiteconnect import KiteTicker
-        creds = load_credentials()
-        ticker = KiteTicker(creds.api_key, creds.access_token)
+
+        api_key, access_token, _ = resolve_acceptance_credentials()
+        ticker = KiteTicker(api_key, access_token)
     else:
         ticker = ticker_factory()
 

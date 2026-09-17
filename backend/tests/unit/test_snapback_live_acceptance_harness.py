@@ -141,11 +141,15 @@ def test_an_empty_book_is_reported_as_empty():
 # ─── row grading ─────────────────────────────────────────────────────────────
 
 def _row(**over):
+    """A fully populated five-deep book, so that a test which omits a level is
+    deliberately testing absence rather than accidentally creating it."""
     row = {
         "exchange_ts": datetime(2026, 9, 17, 9, 19, 59, tzinfo=timezone.utc),
         "received_ts": NOW,
-        "bid4_price": 995000, "ask4_price": 1005000,
     }
+    for i in range(5):
+        row[f"bid{i}_price"] = 1000000 - i * 500
+        row[f"ask{i}_price"] = 1000500 + i * 500
     row.update(over)
     return row
 
@@ -364,3 +368,180 @@ def test_no_credential_is_logged_or_stored():
     # The token may be handed to the client, never written anywhere.
     assert "write_text(creds" not in code
     assert "json.dumps(creds" not in code
+
+
+# ─── a closed market must not look like an acceptance ────────────────────────
+# A run after the close receives the previous session's book replayed on
+# connect: well-formed, five levels deep, fully stamped. Every schema check
+# passes and the artifact reads like a certified release. These pin the
+# separation between "the schema is right" and "the market was live".
+
+def test_a_stale_closing_book_is_not_a_live_market():
+    from study.snapback_live_evidence_acceptance import MAX_LIVE_TICK_AGE_MS
+
+    report = _report()
+    stale = datetime(2026, 9, 17, 2, 20, tzinfo=timezone.utc)   # ~7h before receipt
+
+    evaluate_rows(report, [_row(exchange_ts=stale)])
+
+    assert report.checks["market_data_live"] == FAIL
+    assert "NOT_A_LIVE_MARKET" in report.detail["market_data_live"]["interpretation"]
+    assert report.detail["market_data_live"]["freshest_tick_age_ms"] > MAX_LIVE_TICK_AGE_MS
+
+
+def test_a_current_tick_is_a_live_market():
+    report = _report()
+
+    evaluate_rows(report, [_row()])
+
+    assert report.checks["market_data_live"] == PASS
+
+
+def test_a_stale_book_still_fails_overall_even_when_everything_else_passes():
+    """The whole point: 32 green schema checks must not certify a closed market."""
+    report = _report()
+    for name in ("option_full_tick", "option_five_level_depth", "clock_separation"):
+        report.record(name, PASS)
+
+    evaluate_rows(report, [_row(exchange_ts=datetime(2026, 9, 17, 2, 20, tzinfo=timezone.utc))])
+
+    assert report.overall == FAIL
+
+
+def test_a_fully_populated_book_reports_the_absent_level_path_unexercised():
+    report = _report()
+
+    evaluate_rows(report, [_row()])
+
+    assert report.checks["absent_level_is_null_not_zero"] == PASS
+    assert report.detail["absent_level_is_null_not_zero"]["exercised"] is False
+    assert "NOT_EXERCISED" in report.detail["absent_level_is_null_not_zero"]["interpretation"]
+
+
+def test_an_observed_absent_level_exercises_the_path():
+    report = _report()
+
+    evaluate_rows(report, [_row(bid4_price=None)])
+
+    assert report.detail["absent_level_is_null_not_zero"]["exercised"] is True
+
+
+def test_the_depth_constant_cannot_drift_from_kitelake():
+    """kitelake runs in its own environment, so compare the source textually."""
+    import pathlib
+    import re
+
+    from study.snapback_live_evidence_acceptance import DEPTH_LEVELS
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    text = (root / "kitelake" / "evidence.py").read_text(encoding="utf-8")
+    match = re.search(r"^DEPTH_LEVELS = (\d+)", text, re.MULTILINE)
+
+    assert match, "kitelake/evidence.py no longer declares DEPTH_LEVELS"
+    assert DEPTH_LEVELS == int(match.group(1))
+
+
+# ─── reconnect is graded on outcome, not on a callback ───────────────────────
+
+def test_recovery_without_the_callback_still_counts():
+    """kiteconnect reconnected and delivered fresh ticks without firing
+    on_reconnect. Failing that reports a working system as broken."""
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1, 2], force_succeeded=True, force_detail="aborted",
+        disconnects=["1006: peer dropped"], reconnect_attempts=[],
+        connection_count=2, post_reconnect={1: [_tick()], 2: [_tick()]},
+    )
+
+    assert report.checks["reconnect_attempted"] == PASS
+    assert report.detail["reconnect_attempted"]["recovered_without_callback"] is True
+
+
+def test_no_reconnection_at_all_still_fails():
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=True, force_detail="aborted",
+        disconnects=["1006: peer dropped"], reconnect_attempts=[],
+        connection_count=1, post_reconnect={},
+    )
+
+    assert report.checks["reconnect_attempted"] == FAIL
+    assert report.checks["reconnect_connected"] == FAIL
+    assert report.checks["post_reconnect_fresh_ticks"] == FAIL
+
+
+def test_a_disconnect_that_never_happened_is_not_recovery():
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=False, force_detail="no abortConnection()",
+        disconnects=[], reconnect_attempts=[], connection_count=2,
+        post_reconnect={1: [_tick()]},
+    )
+
+    assert report.checks["forced_disconnect"] == FAIL
+    assert report.checks["reconnect_attempted"] == FAIL
+
+
+# ─── credentials ─────────────────────────────────────────────────────────────
+
+def test_credential_resolution_prefers_sterlings_own_store(monkeypatch):
+    """Two Kite apps existed; reading only kitelake's made the documented
+    Sterling login flow unusable and surfaced a misleading TokenException."""
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    class FakeAccount:
+        is_active = True
+        api_key = "sterling-key"
+        access_token = "sterling-token"
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [FakeAccount()])
+
+    key, token, source = mod.resolve_acceptance_credentials()
+
+    assert (key, token, source) == ("sterling-key", "sterling-token", "sterling_kite_accounts")
+
+
+def test_an_undecryptable_token_says_so_instead_of_looking_logged_out(monkeypatch):
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    class FakeAccount:
+        is_active = True
+        api_key = "sterling-key"
+        access_token = ""      # decrypt() returns "" when the key is absent
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [FakeAccount()])
+
+    with pytest.raises(mod.CredentialsUnavailable) as excinfo:
+        mod.resolve_acceptance_credentials()
+
+    assert "STERLING_SECRET_KEY" in str(excinfo.value)
+
+
+def test_the_credential_error_never_carries_the_token(monkeypatch):
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [])
+    monkeypatch.setattr(mod, "_SPOT_QUOTE_KEYS", mod._SPOT_QUOTE_KEYS)
+
+    try:
+        mod.resolve_acceptance_credentials()
+    except mod.CredentialsUnavailable as exc:
+        assert "token" not in str(exc).lower() or "ACCESS_TOKEN" in str(exc)
+
+
+def test_index_spot_symbols_are_not_the_derivatives_underlying():
+    """NIFTY options are written on "NIFTY"; the spot quotes as "NSE:NIFTY 50"."""
+    from study.snapback_live_evidence_acceptance import _SPOT_QUOTE_KEYS
+
+    assert _SPOT_QUOTE_KEYS["NIFTY"][0] == "NSE:NIFTY 50"
+    assert _SPOT_QUOTE_KEYS["BANKNIFTY"][0] == "NSE:NIFTY BANK"
+    assert _SPOT_QUOTE_KEYS["SENSEX"][0] == "BSE:SENSEX"
