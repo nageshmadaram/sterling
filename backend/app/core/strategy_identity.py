@@ -26,6 +26,28 @@ _HASH_LEN = 16
 #: Bumped whenever the shape of an authoritative row changes.
 EVIDENCE_SCHEMA_VERSION = "3"
 
+#: A — the frozen prospective strategy, never tuned after outcomes are seen.
+#: B — execution reality: spread, depth, fillability, slippage, margin.
+#: C — challengers. A challenger gets its own identity and must never overwrite
+#:     or pool with the Track-A lane it is challenging.
+VALID_TRACKS: frozenset[str] = frozenset({"A", "B", "C"})
+
+
+def challenger_id(base_mode_version: str, slug: str) -> str:
+    """``snapback_swing_v1`` + ``c01_dte30_45`` -> ``snapback_swing_v1_c01_dte30_45``.
+
+    The slug must say what changed. A challenger called ``c02`` is unreadable
+    six months later, which is when someone asks why two lanes disagree.
+    """
+    cleaned = slug.strip().lower()
+    if not cleaned:
+        raise IdentityError("a challenger needs a slug naming what it changed")
+    if not cleaned.startswith("c") or "_" not in cleaned:
+        raise IdentityError(
+            f"challenger slug {slug!r} must look like c01_<what_changed>"
+        )
+    return f"{base_mode_version}_{cleaned}"
+
 
 class IdentityError(ValueError):
     """The identity is incomplete or internally inconsistent."""
@@ -58,6 +80,16 @@ class StrategyModeIdentity:
 
     config_hash: str
     rule_hash: str
+
+    #: Which instruments the lane was allowed to look at. Two runs of identical
+    #: rules over different universes are different experiments: widening the
+    #: universe mid-sample adds opportunities the earlier trades never had, and
+    #: pooling them overstates the sample.
+    universe_hash: str = ""
+
+    #: Which track this identity belongs to. A challenger must never overwrite
+    #: or pool with the frozen prospective strategy it is challenging.
+    track: str = "A"
 
     evidence_schema_version: str = EVIDENCE_SCHEMA_VERSION
     #: The original spelling, when this lane was reached through a legacy alias.
@@ -110,6 +142,10 @@ class StrategyModeIdentity:
         payload["mode"] = self.mode.value
         return stable_hash(payload)
 
+    @property
+    def is_challenger(self) -> bool:
+        return self.track == "C"
+
     def as_row(self) -> dict[str, Any]:
         """The columns an authoritative evidence row must carry."""
         row = asdict(self)
@@ -131,6 +167,10 @@ def build_identity(
     rules: Mapping[str, Any] | None = None,
     config_hash: str | None = None,
     rule_hash: str | None = None,
+    universe: Any = None,
+    universe_hash: str | None = None,
+    track: str = "A",
+    challenger: str = "",
 ) -> StrategyModeIdentity:
     """Build an identity, canonicalising the mode and hashing the rules.
 
@@ -150,6 +190,14 @@ def build_identity(
         if rules is None:
             raise IdentityError("supply either rules or rule_hash")
         rule_hash = stable_hash(dict(rules))
+    if universe_hash is None:
+        universe_hash = stable_hash(sorted(universe)) if universe is not None else ""
+    if track not in VALID_TRACKS:
+        raise IdentityError(
+            f"track must be one of {sorted(VALID_TRACKS)}, got {track!r}"
+        )
+    if challenger:
+        mode_version = f"{mode_version}_{challenger}"
 
     return StrategyModeIdentity(
         strategy_id=strategy_id.strip().lower(),
@@ -160,5 +208,7 @@ def build_identity(
         release_tag=release_tag,
         config_hash=config_hash,
         rule_hash=rule_hash,
+        universe_hash=universe_hash,
+        track=track,
         legacy_mode=legacy,
     )

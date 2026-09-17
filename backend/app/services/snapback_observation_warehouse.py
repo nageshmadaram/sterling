@@ -775,6 +775,71 @@ class SnapbackObservationWarehouse:
                         updated_at                  TEXT NOT NULL
                     )
                 """)
+                # Identity registry. An identity that is computed but never
+                # recorded cannot be looked up later, so a report can say a row
+                # belongs to rule_hash abc123 and nobody can say what abc123 was.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS strategy_versions (
+                        strategy_version  TEXT NOT NULL,
+                        strategy_id       TEXT NOT NULL,
+                        rule_hash         TEXT NOT NULL,
+                        config_hash       TEXT NOT NULL,
+                        universe_hash     TEXT NOT NULL DEFAULT '',
+                        track             TEXT NOT NULL DEFAULT 'A',
+                        runtime_sha       TEXT NOT NULL,
+                        release_tag       TEXT NOT NULL DEFAULT '',
+                        first_seen_at     TEXT NOT NULL,
+                        PRIMARY KEY (strategy_id, strategy_version, rule_hash, config_hash)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS mode_versions (
+                        lane_key          TEXT NOT NULL,
+                        strategy_id       TEXT NOT NULL,
+                        mode              TEXT NOT NULL,
+                        mode_version      TEXT NOT NULL,
+                        identity_hash     TEXT NOT NULL,
+                        rule_hash         TEXT NOT NULL,
+                        track             TEXT NOT NULL DEFAULT 'A',
+                        timeline_json     TEXT NOT NULL DEFAULT '{}',
+                        first_seen_at     TEXT NOT NULL,
+                        PRIMARY KEY (lane_key, mode_version, identity_hash)
+                    )
+                """)
+                # Who did what, and what the system reported, as separate
+                # append-only trails. A health transition nobody recorded cannot
+                # be correlated with the trade that happened during it.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS operator_actions (
+                        action_id         TEXT PRIMARY KEY,
+                        action            TEXT NOT NULL,
+                        actor             TEXT NOT NULL DEFAULT '',
+                        detail            TEXT NOT NULL DEFAULT '',
+                        lane_key          TEXT NOT NULL DEFAULT '',
+                        runtime_build_sha TEXT NOT NULL DEFAULT 'UNKNOWN',
+                        occurred_at       TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS health_events (
+                        event_id          TEXT PRIMARY KEY,
+                        component         TEXT NOT NULL,
+                        status            TEXT NOT NULL,
+                        overall           TEXT NOT NULL DEFAULT '',
+                        detail            TEXT NOT NULL DEFAULT '',
+                        runtime_build_sha TEXT NOT NULL DEFAULT 'UNKNOWN',
+                        observed_at       TEXT NOT NULL
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_health_events_component "
+                    "ON health_events(component, observed_at)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS ix_operator_actions_time "
+                    "ON operator_actions(occurred_at)"
+                )
+
                 conn.execute(f"PRAGMA user_version = {EVIDENCE_SCHEMA_VERSION}")
 
                 self._migrate_identity_columns(conn)
@@ -974,6 +1039,92 @@ class SnapbackObservationWarehouse:
             "CREATE INDEX IF NOT EXISTS ix_decisions_opportunity ON decisions(opportunity_id)"
         )
         log.info("snapback warehouse: decisions rebuilt as an append-only audit trail")
+
+    def register_identity(self, identity: Any, timeline: Optional[Dict[str, Any]] = None) -> None:
+        """Record that this identity existed, once.
+
+        Idempotent by design: the same identity registered twice is the same
+        fact, not a conflict. What must never happen is an evidence row naming
+        a rule_hash the registry cannot explain.
+        """
+        now = _now_iso()
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO strategy_versions (strategy_version, "
+                    "strategy_id, rule_hash, config_hash, universe_hash, track, "
+                    "runtime_sha, release_tag, first_seen_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        identity.strategy_version, identity.strategy_id,
+                        identity.rule_hash, identity.config_hash,
+                        getattr(identity, "universe_hash", ""),
+                        getattr(identity, "track", "A"),
+                        identity.runtime_sha, identity.release_tag, now,
+                    ),
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO mode_versions (lane_key, strategy_id, "
+                    "mode, mode_version, identity_hash, rule_hash, track, "
+                    "timeline_json, first_seen_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        identity.lane_key, identity.strategy_id,
+                        identity.mode.value, identity.mode_version,
+                        identity.identity_hash, identity.rule_hash,
+                        getattr(identity, "track", "A"),
+                        json.dumps(timeline or {}, sort_keys=True, default=str), now,
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def record_operator_action(
+        self, *, action: str, actor: str = "", detail: str = "", lane_key: str = "",
+    ) -> str:
+        import uuid
+
+        action_id = f"OPACT-{uuid.uuid4().hex[:16]}"
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT INTO operator_actions (action_id, action, actor, detail, "
+                    "lane_key, runtime_build_sha, occurred_at) VALUES (?,?,?,?,?,?,?)",
+                    (action_id, action, actor, detail, lane_key, _BUILD_SHA, _now_iso()),
+                )
+        finally:
+            conn.close()
+        return action_id
+
+    def record_health_event(
+        self, *, component: str, status: str, overall: str = "", detail: str = "",
+    ) -> str:
+        import uuid
+
+        event_id = f"HEALTH-{uuid.uuid4().hex[:16]}"
+        conn = self._get_connection()
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT INTO health_events (event_id, component, status, overall, "
+                    "detail, runtime_build_sha, observed_at) VALUES (?,?,?,?,?,?,?)",
+                    (event_id, component, status, overall, detail, _BUILD_SHA, _now_iso()),
+                )
+        finally:
+            conn.close()
+        return event_id
+
+    def known_identity(self, identity_hash: str) -> Optional[Dict[str, Any]]:
+        """What a recorded identity_hash actually was."""
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT * FROM mode_versions WHERE identity_hash = ?", (identity_hash,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
 
     def record_opportunity(
         self,
