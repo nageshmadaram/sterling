@@ -21,6 +21,37 @@ _HOLIDAYS = frozenset(date.fromisoformat(d) for d in (
 ))
 
 
+#: Calendar years whose holiday list has been verified against the exchange
+#: circulars cited above. A date outside these years is not "probably a working
+#: day" — it is unknown, and every caller must fail closed on it.
+VERIFIED_YEARS = frozenset({2026})
+
+SUPPORTED_EXCHANGES = frozenset({"NSE", "NFO", "BSE", "BFO"})
+
+
+def calendar_covers(day: date) -> bool:
+    """Is ``day`` inside the verified holiday calendar?"""
+    return day.year in VERIFIED_YEARS
+
+
+def is_trading_day(day: date, exchange: str = "NFO") -> bool:
+    """Day-level session question, with no time-of-day component.
+
+    Raises when the calendar cannot answer, rather than returning ``False``:
+    "not a trading day" and "I do not know" lead to opposite decisions, and
+    collapsing them would let an unknown date silently shorten a holding
+    period.
+    """
+    if exchange.upper() not in SUPPORTED_EXCHANGES:
+        raise ValueError(f"unsupported session exchange: {exchange}")
+    if not calendar_covers(day):
+        raise LookupError(
+            f"holiday calendar does not cover {day.isoformat()}; verified years "
+            f"are {sorted(VERIFIED_YEARS)}"
+        )
+    return day.weekday() < 5 and day not in _HOLIDAYS
+
+
 def _local(now: datetime | None = None) -> datetime:
     value = now if now is not None else datetime.now(_IST)
     if value.tzinfo is None or value.utcoffset() is None:
@@ -45,7 +76,7 @@ def session_phase(now: datetime | None = None, *, exchange: str = "NFO",
                   cas_eligible: bool = False) -> str:
     t = _local(now)
     exchange = exchange.upper()
-    if t.year != 2026 or exchange not in {"NSE", "NFO", "BSE", "BFO"}:
+    if t.year not in VERIFIED_YEARS or exchange not in SUPPORTED_EXCHANGES:
         return "calendar_unknown"
     if t.weekday() >= 5 or t.date() in _HOLIDAYS:
         return "closed"
