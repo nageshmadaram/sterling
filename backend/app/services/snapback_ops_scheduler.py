@@ -321,6 +321,21 @@ class SnapbackOpsScheduler:
             backup_ok = bool(self.verify_backup_fn(artifact.db_path, artifact.checksum_path))
             if not backup_ok:
                 result.errors.append("backup_verification_failed")
+            else:
+                # Section 14.1 asks for the runtime databases and the release
+                # identity too. Additive on purpose: the evidence snapshot above
+                # is the verified one, and a failure here must not discard it.
+                try:
+                    from app.core.backup_manifest import augment_backup_directory
+
+                    extra = augment_backup_directory(
+                        artifact.directory, already_included=[artifact.db_path]
+                    )
+                    for name in extra.missing:
+                        result.errors.append(f"backup_database_absent:{name}")
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Snapback ops: backup not augmented: %s", exc)
+                    result.errors.append(f"backup_manifest_failed:{exc}")
         except Exception as exc:
             log.exception("Snapback ops: evidence backup failed: %s", exc)
             result.errors.append(f"backup_failed:{exc}")

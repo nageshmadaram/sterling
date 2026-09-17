@@ -26,7 +26,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Iterable, Mapping, Sequence
 
-from app.services.snapback_backup import sha256_file
+from app.services.snapback_backup import BackupIntegrityError, sha256_file
 
 #: Written relative to the repository root.
 BACKUP_MANIFEST_DIR: Final[str] = "data/backups/manifests"
@@ -62,6 +62,11 @@ def table_row_counts(db_path: Path | str) -> dict[str, int]:
         return counts
     finally:
         conn.close()
+
+
+def _is_sqlite_sidecar(name: str) -> bool:
+    """``foo.db-wal`` and friends describe a connection, not the data."""
+    return name.endswith(("-wal", "-shm", "-journal"))
 
 
 def schema_signature(db_path: Path | str) -> dict[str, str]:
@@ -199,8 +204,11 @@ def build_backup_manifest(
     # Any non-database file that travelled with the backup is checksummed too,
     # so a tampered freeze record is as visible as a tampered database.
     for extra in sorted(directory.iterdir()):
-        if extra.is_file() and extra.suffix != ".db" and extra.name != "manifest.json":
-            checksums[extra.name] = sha256_file(extra)
+        if not extra.is_file() or extra.name == "manifest.json":
+            continue
+        if extra.suffix == ".db" or _is_sqlite_sidecar(extra.name):
+            continue
+        checksums[extra.name] = sha256_file(extra)
 
     sha, tag, schema_versions = _release_facts()
     stamp = created_at or datetime.now(timezone.utc)
@@ -214,6 +222,212 @@ def build_backup_manifest(
         file_checksums=checksums,
         row_counts=counts,
         schema_signatures=schemas,
+    )
+
+
+#: Databases a full backup must contain, resolved from the environment.
+#: ``STERLING_BACKUP_DATABASES`` overrides it with a ``:``-separated list.
+#:
+#: Section 14.1 asks for evidence AND runtime databases. Backing up only the
+#: evidence store leaves the durable intent record — the thing restart recovery
+#: reads to decide whether an order was ever sent — outside the backup.
+DEFAULT_DATABASE_ENV: Final[str] = "STERLING_BACKUP_DATABASES"
+
+
+def declared_databases(root: Path | str | None = None) -> tuple[Path, ...]:
+    """Every database a full backup should contain, in a stable order.
+
+    Paths that do not exist are dropped here and reported by
+    :func:`create_full_backup` as a gap, rather than failing the whole backup:
+    a missing runtime database must not stop the evidence being protected.
+    """
+    import os
+
+    from app.core.release_manifest import repo_root
+
+    base = Path(root) if root is not None else repo_root()
+
+    declared = (os.environ.get(DEFAULT_DATABASE_ENV) or "").strip()
+    if declared:
+        candidates = [Path(part) for part in declared.split(":") if part.strip()]
+    else:
+        evidence = os.environ.get("STERLING_EVIDENCE_DB") or str(
+            base / "backend/snapback_observations.db"
+        )
+        candidates = [
+            Path(evidence),
+            base / "backend/sterling_paper.db",
+            base / "data/intents.db",
+        ]
+
+    seen: dict[str, Path] = {}
+    for path in candidates:
+        resolved = path.expanduser()
+        if resolved.exists() and resolved.name not in seen:
+            seen[resolved.name] = resolved
+    return tuple(seen.values())
+
+
+def snapshot_database(source: Path | str, destination: Path | str) -> str:
+    """Consistent online snapshot of one SQLite database. Returns its sha256.
+
+    SQLite's backup API rather than a byte copy: a copy taken while the runner
+    holds an open WAL connection is not a consistent database, and the copy
+    that is wrong is the one you only discover during a restore.
+    """
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(destination.suffix + ".partial")
+    partial.unlink(missing_ok=True)
+
+    try:
+        src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        # WAL databases can refuse a read-only open when shared memory cannot
+        # be attached. This path never writes to the source.
+        src = sqlite3.connect(str(source))
+    try:
+        dst = sqlite3.connect(str(partial))
+        try:
+            src.backup(dst)
+            integrity = dst.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    if integrity != "ok":
+        partial.unlink(missing_ok=True)
+        raise BackupIntegrityError(
+            f"snapshot of {source} failed integrity_check: {integrity}"
+        )
+
+    partial.replace(destination)
+
+    # The snapshot connection leaves -wal/-shm beside the copy. They describe a
+    # connection that no longer exists, and checksumming them into the manifest
+    # would fail every later restore-check for no real reason.
+    for sidecar in ("-wal", "-shm", "-journal"):
+        Path(str(destination) + sidecar).unlink(missing_ok=True)
+        Path(str(partial) + sidecar).unlink(missing_ok=True)
+
+    return sha256_file(destination)
+
+
+@dataclass(frozen=True)
+class FullBackup:
+    """Where a full backup landed, and what it could not include."""
+
+    directory: Path
+    manifest: "BackupManifest"
+    databases: tuple[str, ...]
+    missing: tuple[str, ...] = field(default_factory=tuple)
+
+
+def create_full_backup(
+    *,
+    backup_root: Path | str,
+    root: Path | str | None = None,
+    databases: Sequence[Path | str] | None = None,
+    now: datetime | None = None,
+) -> FullBackup:
+    """A backup that contains what section 14.1 asks for.
+
+    Databases, the release manifest and the schema versions travel together, so
+    a restored directory can say which build wrote it without reference to the
+    repository it came from.
+    """
+    from app.core.release_manifest import build_release_manifest, repo_root
+
+    base = Path(root) if root is not None else repo_root()
+    stamp = now or datetime.now(timezone.utc)
+    directory = Path(backup_root) / stamp.date().isoformat()
+    directory.mkdir(parents=True, exist_ok=True)
+
+    requested = (
+        [Path(p) for p in databases] if databases is not None else list(declared_databases(base))
+    )
+    missing = [str(p) for p in requested if not Path(p).exists()]
+    present = [Path(p) for p in requested if Path(p).exists()]
+
+    if not present:
+        raise FileNotFoundError(
+            f"no database to back up; requested: {', '.join(map(str, requested)) or 'none'}"
+        )
+
+    for source in present:
+        snapshot_database(source, directory / source.name)
+
+    # The release identity travels with the bytes. Restoring a backup and then
+    # asking the repository what build wrote it gives the CURRENT build, which
+    # is exactly the wrong answer.
+    (directory / "release.json").write_text(
+        json.dumps(build_release_manifest(), indent=2, sort_keys=True) + "\n"
+    )
+
+    manifest = build_backup_manifest(
+        directory,
+        created_at=stamp,
+        databases=[directory / source.name for source in present],
+    )
+    write_backup_manifest(manifest, root=base, backup_dir=directory)
+
+
+    return FullBackup(
+        directory=directory,
+        manifest=manifest,
+        databases=tuple(source.name for source in present),
+        missing=tuple(missing),
+    )
+
+
+def augment_backup_directory(
+    directory: Path | str,
+    *,
+    root: Path | str | None = None,
+    already_included: Sequence[Path | str] = (),
+    now: datetime | None = None,
+) -> FullBackup:
+    """Bring an existing backup directory up to the section 14.1 contents.
+
+    The scheduled backup snapshots the evidence database and verifies its
+    checksum. That path is left exactly as it is — it is the one that has been
+    proved — and this adds what section 14.1 also asks for: the remaining
+    declared databases and the release identity that wrote them.
+
+    Additive by design. A failure here must never invalidate an evidence backup
+    that already succeeded, so the caller records it as an error and keeps the
+    backup.
+    """
+    from app.core.release_manifest import build_release_manifest, repo_root
+
+    base = Path(root) if root is not None else repo_root()
+    target = Path(directory)
+    target.mkdir(parents=True, exist_ok=True)
+
+    done = {Path(p).name for p in already_included} | {
+        p.name for p in target.glob("*.db")
+    }
+
+    requested = list(declared_databases(base))
+    missing = [str(p) for p in requested if not Path(p).exists()]
+    added = [p for p in requested if p.exists() and p.name not in done]
+
+    for source in added:
+        snapshot_database(source, target / source.name)
+
+    (target / "release.json").write_text(
+        json.dumps(build_release_manifest(), indent=2, sort_keys=True) + "\n"
+    )
+
+    manifest = build_backup_manifest(target, created_at=now or datetime.now(timezone.utc))
+    write_backup_manifest(manifest, root=base, backup_dir=target)
+
+    return FullBackup(
+        directory=target,
+        manifest=manifest,
+        databases=tuple(sorted(p.name for p in target.glob("*.db"))),
+        missing=tuple(missing),
     )
 
 
@@ -418,7 +632,10 @@ __all__ = [
     "BackupManifest",
     "RestoreProof",
     "RestoreStatus",
+    "augment_backup_directory",
     "build_backup_manifest",
+    "create_full_backup",
+    "declared_databases",
     "latest_backup_dir",
     "manifest_path",
     "prove_restore",
@@ -426,6 +643,7 @@ __all__ = [
     "record_restore_proof",
     "render_restore_proof",
     "schema_signature",
+    "snapshot_database",
     "table_row_counts",
     "write_backup_manifest",
 ]

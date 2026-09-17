@@ -304,6 +304,11 @@ def build_lane_rows(
                     trades += 1
                 else:
                     non_promotable += 1
+            elif kind == "trade":
+                # A completed trade with no OBSERVED result. It is not a trade
+                # this lane may count, and it must not simply disappear from
+                # the report either.
+                non_promotable += 1
 
         sessions = len(
             {
@@ -339,6 +344,7 @@ def build_daily_report(
     session_row: Mapping[str, Any] | None,
     evidence_rows: Iterable[Mapping[str, Any]] = (),
     quote_coverage: Mapping[str, float | None] | None = None,
+    extra_gap_codes: Iterable[str] = (),
     release_tag: str | None = None,
     runtime_sha: str | None = None,
     generated_at: str | None = None,
@@ -358,6 +364,14 @@ def build_daily_report(
         from app.services.snapback_session_ledger import evidence_gap_codes
 
         gaps = tuple(evidence_gap_codes(row))
+
+    # Gaps found while READING the evidence are as disqualifying as gaps found
+    # while collecting it. A renamed table produces a report full of zeros that
+    # is indistinguishable from a quiet day unless the read failure is carried
+    # through to here.
+    for code in extra_gap_codes:
+        if code not in gaps:
+            gaps = (*gaps, code)
 
     session_coverage = _ratio(
         row.get("quotes_observed"), row.get("quotes_required")
@@ -423,30 +437,163 @@ def render_daily_report(report: DailyEvidenceReport) -> str:
     return "\n".join(lines)
 
 
-def load_session_rows(warehouse, session_date: str) -> tuple[Mapping[str, Any] | None, list[Mapping[str, Any]]]:
-    """Session ledger row plus that day's evidence rows, from the warehouse.
+#: The evidence tables the daily report reads, and how each maps onto the
+#: normalised row shape above. These names are checked against the live schema
+#: by :func:`load_session_rows`; a table that has been renamed is reported as
+#: an evidence gap rather than quietly contributing zero rows.
+#:
+#: ``date_columns`` are tried in order. The first non-empty one decides which
+#: session the row belongs to — an outcome belongs to the session it exited in,
+#: not the one it was opened in.
+SOURCE_TABLES: Final[Mapping[str, Mapping[str, Any]]] = {
+    "opportunities": {
+        "row_type": "signal",
+        "date_columns": ("signal_timestamp", "observed_at"),
+        "refusal_column": "rejection_reason",
+    },
+    "outcomes": {
+        "row_type": "trade",
+        "date_columns": ("exit_ts", "observed_at"),
+        # Only the OBSERVED figure. `modeled_total_pnl` is what the model
+        # believed; counting it would let a lane reach 300 "trades" without a
+        # single observed fill.
+        "pnl_column": "actual_total_pnl",
+    },
+    "paper_positions": {
+        "row_type": "position",
+        "date_columns": ("entry_timestamp",),
+        "status_column": "status",
+    },
+}
 
-    Errors are not swallowed into empty results: an unreadable warehouse must
-    surface as ``SYSTEM_ERROR``, which is what a ``None`` session row produces.
+#: Position statuses that mean the position is closed and accounted for.
+_CLOSED_STATUSES: Final[frozenset[str]] = frozenset(
+    {"closed", "exited", "squared_off", "settled"}
+)
+
+#: Position statuses that mean nobody can say where the exposure stands.
+_UNRESOLVED_STATUSES: Final[frozenset[str]] = frozenset(
+    {"unknown", "unresolved", "exit_pending", "pending_exit", "error"}
+)
+
+
+def _session_of(row: Mapping[str, Any], columns: Sequence[str]) -> str | None:
+    """The date part of the first populated timestamp column."""
+    for column in columns:
+        value = row.get(column)
+        if value in (None, ""):
+            continue
+        text = str(value)
+        # ISO stamps, "YYYY-MM-DD HH:MM:SS" and bare dates all start the same.
+        return text[:10] if len(text) >= 10 else None
+    return None
+
+
+def normalise_row(
+    row: Mapping[str, Any],
+    *,
+    table: str,
+    spec: Mapping[str, Any],
+) -> dict[str, Any]:
+    """One stored row in the shape :func:`build_lane_rows` reads.
+
+    The mapping is explicit per table rather than sniffed from column names.
+    Sniffing is what produced a report that read zero trades from a populated
+    store: the guess was reasonable and the schema simply did not match it.
+    """
+    out: dict[str, Any] = {
+        "lane_key": row.get("lane_key"),
+        "session_date": _session_of(row, spec.get("date_columns", ())),
+        "authoritative": row.get("authoritative", 0),
+        "evidence_class": row.get("evidence_class"),
+        "row_type": spec["row_type"],
+        "source_table": table,
+    }
+
+    refusal_column = spec.get("refusal_column")
+    if refusal_column:
+        out["refusal_reason"] = (str(row.get(refusal_column) or "").strip()) or None
+
+    pnl_column = spec.get("pnl_column")
+    if pnl_column:
+        out["trade_pnl"] = row.get(pnl_column)
+
+    status_column = spec.get("status_column")
+    if status_column:
+        status = str(row.get(status_column) or "").strip().lower()
+        out["opened"] = True
+        out["closed"] = status in _CLOSED_STATUSES
+        out["unresolved"] = status in _UNRESOLVED_STATUSES
+
+    return out
+
+
+def load_session_rows(
+    warehouse,
+    session_date: str,
+) -> tuple[Mapping[str, Any] | None, list[Mapping[str, Any]], list[str]]:
+    """Session ledger row, that day's normalised evidence rows, and any gaps.
+
+    The third return value is the reason this read cannot be trusted. A table
+    that is missing, unreadable or renamed produces a gap code, because a
+    report that silently returns zero rows from a broken read is worse than no
+    report: it reads exactly like a quiet day.
     """
     from app.services.snapback_session_ledger import session_record
 
+    gaps: list[str] = []
+
     try:
         session = session_record(warehouse, session_date)
-    except Exception:
+    except Exception as exc:
         session = None
+        gaps.append(f"session_ledger_unreadable:{type(exc).__name__}")
 
     rows: list[Mapping[str, Any]] = []
-    for table in ("prospective_trades", "scan_symbol_decisions"):
+    for table, spec in SOURCE_TABLES.items():
         try:
             fetched = warehouse.get_records_by_table(table)
-        except Exception:
+        except Exception as exc:
+            gaps.append(f"evidence_table_unreadable:{table}:{type(exc).__name__}")
             continue
+
         for raw in fetched:
             row = dict(raw)
-            if str(row.get("session_date") or "") == session_date:
-                rows.append(row)
-    return session, rows
+            normalised = normalise_row(row, table=table, spec=spec)
+            if normalised["session_date"] == session_date:
+                rows.append(normalised)
+
+    return session, rows, gaps
+
+
+def verify_source_tables(warehouse) -> tuple[str, ...]:
+    """Which declared source tables are absent from the live schema.
+
+    Called by the report so a renamed table surfaces as a gap. Without it the
+    rename is invisible: every read returns nothing, and every lane reads zero.
+    """
+    try:
+        conn = warehouse._get_connection()
+    except Exception as exc:
+        return (f"schema_unreadable:{type(exc).__name__}",)
+
+    try:
+        present = {
+            name
+            for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    except Exception as exc:
+        return (f"schema_unreadable:{type(exc).__name__}",)
+    finally:
+        conn.close()
+
+    return tuple(
+        f"evidence_table_missing:{table}"
+        for table in SOURCE_TABLES
+        if table not in present
+    )
 
 
 def unattributed_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:

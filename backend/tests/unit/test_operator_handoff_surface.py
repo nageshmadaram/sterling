@@ -135,3 +135,24 @@ def test_live_execution_is_disabled_at_code_level():
     from app.core.lane_registry import LIVE_EXECUTION_ENABLED
 
     assert LIVE_EXECUTION_ENABLED is False
+
+
+def test_status_passes_a_real_health_reading():
+    # With no health argument every component reports "did not report" and the
+    # system reads RECOVERY_REQUIRED forever. Failing closed is right; showing
+    # it permanently is how an operator learns to ignore the one line that
+    # matters.
+    body = STERLINGCTL.read_text()
+    assert "system_health()" in body
+    assert "operator_dashboard(health)" in body
+
+
+def test_backup_takes_the_full_section_14_contents():
+    body = STERLINGCTL.read_text()
+    assert "create_full_backup" in body
+
+
+def test_report_surfaces_a_broken_read_instead_of_zeros():
+    body = STERLINGCTL.read_text()
+    assert "verify_source_tables" in body
+    assert "extra_gap_codes" in body

@@ -49,7 +49,20 @@ run_py() { "$PYTHON" -c "import sys; sys.path.insert(0, '$STERLING_ROOT/backend'
 cmd_status() {
   run_py <<'PY'
 from app.core.operator_report import operator_dashboard, render_dashboard
-print(render_dashboard(operator_dashboard()))
+
+# Without a health reading every component reports "did not report" and the
+# system reads RECOVERY_REQUIRED forever. Failing closed is right; showing it
+# permanently is how an operator learns to ignore the one line that matters.
+try:
+    from app.services.snapback_system_health import system_health
+
+    health = system_health()
+except Exception as exc:
+    health = None
+    print(f"(health probes unavailable: {exc}; every component reads as failed)")
+    print()
+
+print(render_dashboard(operator_dashboard(health)))
 PY
 }
 
@@ -140,28 +153,33 @@ PY
 import os, sys
 from pathlib import Path
 
-from app.core.backup_manifest import build_backup_manifest, write_backup_manifest
-from app.services.snapback_backup import create_backup
+from app.core.backup_manifest import create_full_backup, manifest_path
 
 root = Path(os.environ["STERLING_ROOT"])
-source = Path(os.environ["STERLING_EVIDENCE_DB"])
 backup_root = Path(os.environ["STERLING_BACKUP_ROOT"])
 
-if not source.exists():
-    print(f"evidence database not found: {source}")
-    print("Set STERLING_EVIDENCE_DB to the database you want backed up.")
+try:
+    result = create_full_backup(backup_root=backup_root, root=root)
+except FileNotFoundError as exc:
+    print(str(exc))
+    print("Set STERLING_EVIDENCE_DB or STERLING_BACKUP_DATABASES.")
     sys.exit(2)
 
-artifact = create_backup(source_db=source, backup_root=backup_root)
-manifest = build_backup_manifest(artifact.directory)
-path = write_backup_manifest(manifest, root=root, backup_dir=artifact.directory)
-
+manifest = result.manifest
 rows = sum(sum(c.values()) for c in manifest.row_counts.values())
-print(f"backup    {artifact.db_path}")
-print(f"sha256    {artifact.checksum}")
-print(f"manifest  {path}")
+
+print(f"backup    {result.directory}")
+print(f"databases {', '.join(result.databases)}")
+print(f"manifest  {manifest_path(manifest, root)}")
 print(f"rows      {rows} across {len(manifest.row_counts)} database(s)")
 print(f"release   {manifest.release_tag} ({manifest.release_sha[:12]})")
+for name, checksum in sorted(manifest.file_checksums.items()):
+    print(f"  {checksum[:16]}  {name}")
+if result.missing:
+    print()
+    print("NOT backed up (declared but absent):")
+    for name in result.missing:
+        print(f"  {name}")
 print()
 print("restore_test_status is UNTESTED until `sterlingctl restore-check` passes.")
 PY
@@ -279,6 +297,7 @@ from app.core.evidence_completeness import (
     build_daily_report,
     load_session_rows,
     render_daily_report,
+    verify_source_tables,
 )
 
 session_date = os.environ.get("STERLING_REPORT_DATE") or date.today().isoformat()
@@ -288,24 +307,32 @@ session_date = os.environ.get("STERLING_REPORT_DATE") or date.today().isoformat(
 # reports "no signals" is exactly the failure this report exists to catch.
 db_path = os.environ.get("STERLING_EVIDENCE_DB", "")
 session_row, rows = (None, [])
+gaps = []
 if not db_path or not os.path.exists(db_path):
     print(f"(evidence database not found: {db_path or 'unset'})")
     print()
+    gaps.append("evidence_database_missing")
 else:
     try:
         from app.services.snapback_observation_warehouse import (
             SnapbackObservationWarehouse,
         )
 
-        session_row, rows = load_session_rows(
-            SnapbackObservationWarehouse(db_path), session_date
-        )
+        warehouse = SnapbackObservationWarehouse(db_path)
+        # A renamed or missing table would otherwise read as a quiet day.
+        gaps.extend(verify_source_tables(warehouse))
+        session_row, rows, read_gaps = load_session_rows(warehouse, session_date)
+        gaps.extend(read_gaps)
     except Exception as exc:
         print(f"(evidence store unreadable: {exc})")
         print()
+        gaps.append(f"evidence_store_unreadable:{type(exc).__name__}")
 
 report = build_daily_report(
-    session_date=session_date, session_row=session_row, evidence_rows=rows
+    session_date=session_date,
+    session_row=session_row,
+    evidence_rows=rows,
+    extra_gap_codes=gaps,
 )
 print(render_daily_report(report))
 PY
