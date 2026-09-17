@@ -17,6 +17,8 @@ from study.snapback_live_evidence_acceptance import (
     PASS,
     SKIP,
     Report,
+    _force_transport_disconnect,
+    evaluate_forced_reconnect,
     evaluate_rows,
     evaluate_ticks,
     inspect_tick,
@@ -192,6 +194,131 @@ def test_no_rows_is_a_failure():
     evaluate_rows(report, [])
 
     assert report.checks["row_conversion"] == FAIL
+
+
+# ─── forced reconnect ────────────────────────────────────────────────────────
+
+class _FakeTransport:
+    def __init__(self):
+        self.aborted = 0
+
+    def abortConnection(self):
+        self.aborted += 1
+
+
+class _FakeWs:
+    def __init__(self, transport=None):
+        self.transport = transport
+
+
+class _FakeTicker:
+    def __init__(self, transport=None):
+        self.ws = _FakeWs(transport)
+
+
+def test_forced_disconnect_aborts_transport_without_calling_ticker_close():
+    transport = _FakeTransport()
+    ticker = _FakeTicker(transport)
+    scheduled = []
+
+    def schedule(fn):
+        scheduled.append(fn)
+        fn()
+
+    ok, detail = _force_transport_disconnect(ticker, schedule=schedule)
+
+    assert ok is True
+    assert "abortConnection" in detail
+    assert len(scheduled) == 1
+    assert transport.aborted == 1
+
+
+def test_forced_disconnect_fails_closed_when_transport_cannot_be_aborted():
+    ok, detail = _force_transport_disconnect(_FakeTicker())
+
+    assert ok is False
+    assert "abortConnection" in detail
+
+
+def test_reconnect_pass_requires_disconnect_retry_second_connection_and_fresh_full_ticks():
+    report = _report()
+    post = {1: [_tick(5)], 2: [_tick(5)]}
+
+    evaluate_forced_reconnect(
+        report,
+        tokens=[1, 2],
+        force_succeeded=True,
+        force_detail="scheduled",
+        disconnects=["1006: connection lost"],
+        reconnect_attempts=[1],
+        connection_count=2,
+        post_reconnect=post,
+    )
+
+    assert report.checks["forced_disconnect"] == PASS
+    assert report.checks["disconnect_observed"] == PASS
+    assert report.checks["reconnect_attempted"] == PASS
+    assert report.checks["reconnect_connected"] == PASS
+    assert report.checks["post_reconnect_fresh_ticks"] == PASS
+    assert report.checks["post_reconnect_full_mode"] == PASS
+    assert report.overall == PASS
+
+
+def test_reconnect_fails_when_one_token_has_no_new_post_reconnect_tick():
+    report = _report()
+
+    evaluate_forced_reconnect(
+        report,
+        tokens=[1, 2],
+        force_succeeded=True,
+        force_detail="scheduled",
+        disconnects=["1006: connection lost"],
+        reconnect_attempts=[1],
+        connection_count=2,
+        post_reconnect={1: [_tick(5)], 2: []},
+    )
+
+    assert report.checks["post_reconnect_fresh_ticks"] == FAIL
+    assert report.overall == FAIL
+
+
+def test_reconnect_fails_when_subscription_returns_without_full_mode_depth():
+    report = _report()
+    thin = {"instrument_token": 1, "exchange_timestamp": NOW, "depth": {}}
+
+    evaluate_forced_reconnect(
+        report,
+        tokens=[1],
+        force_succeeded=True,
+        force_detail="scheduled",
+        disconnects=["1006: connection lost"],
+        reconnect_attempts=[1],
+        connection_count=2,
+        post_reconnect={1: [thin]},
+    )
+
+    assert report.checks["post_reconnect_fresh_ticks"] == PASS
+    assert report.checks["post_reconnect_full_mode"] == FAIL
+    assert report.overall == FAIL
+
+
+def test_reconnect_fails_when_retry_callback_never_runs():
+    report = _report()
+
+    evaluate_forced_reconnect(
+        report,
+        tokens=[1],
+        force_succeeded=True,
+        force_detail="scheduled",
+        disconnects=["1006: connection lost"],
+        reconnect_attempts=[],
+        connection_count=1,
+        post_reconnect={1: []},
+    )
+
+    assert report.checks["reconnect_attempted"] == FAIL
+    assert report.checks["reconnect_connected"] == FAIL
+    assert report.overall == FAIL
 
 
 # ─── safety properties ───────────────────────────────────────────────────────

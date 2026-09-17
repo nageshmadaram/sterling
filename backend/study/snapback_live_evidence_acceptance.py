@@ -8,8 +8,9 @@ times because nothing had run the built artifact against reality.
 
 So this runs against a real socket and writes a machine-readable verdict. It is
 read-only with respect to trading: it authenticates, reads the instrument master,
-computes a contract with the frozen selector, subscribes, and records. It places
-no order, and there is no code path here that could.
+computes a contract with the frozen selector, subscribes, deliberately forces one
+transport disconnect, verifies automatic resubscription with fresh ticks, and
+records. It places no order, and there is no code path here that could.
 
 Evidence written by this harness is marked TEST_ACCEPTANCE and must never enter
 the Track A economic sample.
@@ -223,6 +224,83 @@ def evaluate_rows(report: Report, rows: list[dict[str, Any]]) -> None:
     report.record("absent_level_is_null_not_zero", PASS if not zeroed else FAIL)
 
 
+# ─── reconnect exercise ──────────────────────────────────────────────────────
+
+def _force_transport_disconnect(ticker: Any, *, schedule: Any = None) -> tuple[bool, str]:
+    """Abort only the live TCP transport, leaving KiteTicker auto-retry enabled.
+
+    ``KiteTicker.close()`` calls ``stop_retry()`` and therefore cannot exercise
+    the reconnect path. The transport abort is scheduled onto Twisted's reactor
+    thread because the acceptance loop itself runs on the main thread.
+    """
+    ws = getattr(ticker, "ws", None)
+    transport = getattr(ws, "transport", None)
+    abort = getattr(transport, "abortConnection", None)
+    if not callable(abort):
+        return False, "ticker websocket transport has no abortConnection()"
+
+    if schedule is None:
+        from twisted.internet import reactor
+        schedule = reactor.callFromThread
+
+    try:
+        schedule(abort)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, "scheduled transport.abortConnection() without stopping auto-retry"
+
+
+def evaluate_forced_reconnect(
+    report: Report,
+    *,
+    tokens: list[int],
+    force_succeeded: bool,
+    force_detail: str,
+    disconnects: list[str],
+    reconnect_attempts: list[int],
+    connection_count: int,
+    post_reconnect: dict[int, list[dict[str, Any]]],
+) -> None:
+    """Require an exercised reconnect and fresh FULL ticks after resubscription."""
+    report.record(
+        "forced_disconnect",
+        PASS if force_succeeded else FAIL,
+        force_detail,
+    )
+    report.record(
+        "disconnect_observed",
+        PASS if disconnects else FAIL,
+        disconnects or "forced transport loss was not observed by KiteTicker",
+    )
+    report.record(
+        "reconnect_attempted",
+        PASS if reconnect_attempts else FAIL,
+        reconnect_attempts or "KiteTicker never entered its retry path",
+    )
+    report.record(
+        "reconnect_connected",
+        PASS if connection_count >= 2 else FAIL,
+        {"successful_connections": connection_count},
+    )
+
+    fresh_counts = {str(t): len(post_reconnect.get(t, [])) for t in tokens}
+    report.record(
+        "post_reconnect_fresh_ticks",
+        PASS if tokens and all(fresh_counts[str(t)] > 0 for t in tokens) else FAIL,
+        fresh_counts,
+    )
+
+    full_counts = {
+        str(t): sum(1 for tick in post_reconnect.get(t, []) if inspect_tick(tick)["has_depth"])
+        for t in tokens
+    }
+    report.record(
+        "post_reconnect_full_mode",
+        PASS if tokens and all(full_counts[str(t)] > 0 for t in tokens) else FAIL,
+        full_counts,
+    )
+
+
 # ─── the run ─────────────────────────────────────────────────────────────────
 
 def run_acceptance(
@@ -354,8 +432,12 @@ def run_acceptance(
     # ─── live socket ─────────────────────────────────────────────────────────
     tokens = [t for t in (option_token, hedge_token) if t]
     captured: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
+    post_reconnect: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
     built_rows: list[dict[str, Any]] = []
     disconnects: list[str] = []
+    reconnect_attempts: list[int] = []
+    connection_count = 0
+    shutting_down = False
 
     from kitelake.evidence import evidence_tick_row
 
@@ -369,10 +451,13 @@ def run_acceptance(
 
     def on_ticks(_ws, ticks):
         received = datetime.now(timezone.utc)
+        generation = connection_count
         for tick in ticks:
             token = tick.get("instrument_token")
             if token in captured:
                 captured[token].append(tick)
+                if generation >= 2:
+                    post_reconnect[token].append(tick)
                 try:
                     built_rows.append(evidence_tick_row(
                         tick, received_ts=received,
@@ -384,24 +469,46 @@ def run_acceptance(
                     report.notes.append(f"row build failed: {type(exc).__name__}: {exc}")
 
     def on_connect(ws, _response):
-        ws.subscribe(tokens)
-        ws.set_mode(ws.MODE_FULL, tokens)
+        nonlocal connection_count
+        connection_count += 1
+        # Only the first connection subscribes explicitly. On reconnect,
+        # KiteTicker's _on_open() must restore its stored subscriptions/modes.
+        # That is the behavior this acceptance gate exists to exercise.
+        if connection_count == 1:
+            ws.subscribe(tokens)
+            ws.set_mode(ws.MODE_FULL, tokens)
 
     def on_close(_ws, code, reason):
-        disconnects.append(f"{code}: {reason}")
+        if not shutting_down:
+            disconnects.append(f"{code}: {reason}")
+
+    def on_reconnect(_ws, attempts_count):
+        reconnect_attempts.append(int(attempts_count))
 
     ticker.on_ticks = on_ticks
     ticker.on_connect = on_connect
     ticker.on_close = on_close
+    ticker.on_reconnect = on_reconnect
 
     ticker.connect(threaded=True)
-    deadline = time.monotonic() + seconds
+    started = time.monotonic()
+    deadline = started + seconds
+    force_not_before = started + min(5.0, max(1.0, seconds * 0.1))
+    force_succeeded = False
+    force_detail = "forced disconnect was never attempted"
+
     while time.monotonic() < deadline:
-        time.sleep(1.0)
-    try:
-        ticker.close()
-    except Exception:
-        pass
+        now = time.monotonic()
+        if (
+            not force_succeeded
+            and now >= force_not_before
+            and tokens
+            and all(captured.get(t) for t in tokens)
+        ):
+            force_succeeded, force_detail = _force_transport_disconnect(ticker)
+            if not force_succeeded:
+                break
+        time.sleep(0.25)
 
     evaluate_ticks(report, "option", captured.get(option_token, []))
     if hedge_token:
@@ -410,8 +517,24 @@ def run_acceptance(
                   PASS if all(captured.get(t) for t in tokens) else FAIL,
                   {str(t): len(captured.get(t, [])) for t in tokens})
     evaluate_rows(report, built_rows)
-    report.record("reconnect", SKIP if not disconnects else PASS,
-                  disconnects or "no disconnect occurred during the window")
+    evaluate_forced_reconnect(
+        report,
+        tokens=tokens,
+        force_succeeded=force_succeeded,
+        force_detail=force_detail,
+        disconnects=disconnects,
+        reconnect_attempts=reconnect_attempts,
+        connection_count=connection_count,
+        post_reconnect=post_reconnect,
+    )
+
+    # Final shutdown is deliberate and must not be mistaken for the exercised
+    # disconnect. close() is correct here because no further reconnect is wanted.
+    shutting_down = True
+    try:
+        ticker.close()
+    except Exception:
+        pass
 
     # ─── persistence round trip ──────────────────────────────────────────────
     from app.services.snapback_evidence_store import SnapbackEvidenceStore
