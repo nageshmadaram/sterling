@@ -11,6 +11,11 @@ evidence and its own verdict, and none of that leaks sideways.
 Regenerate them with `./sterlingctl freeze`, read them with
 `./sterlingctl manifest`, and check for drift with `./sterlingctl verify`.
 
+These files are **not tracked in git**. They name the commit that is running, so
+a committed copy would be stale at the next commit and `verify` would report
+drift against itself. Freeze on the deployed build, and archive the manifest
+alongside the release — not in the source tree.
+
 ---
 
 ## 1. The mode contract

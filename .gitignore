@@ -167,7 +167,9 @@ artifacts/snapback_forward/
 backend/data/snapback/
 artifacts/snapback_shadow_replay/
 
-# Backup manifests are per-machine runtime artifacts: they describe a backup
-# that exists on one disk. The RELEASE manifest (data/manifests/release.json)
-# is the opposite — it is the frozen identity and belongs in the repository.
+# Manifests describe one deployment, not the source. The release manifest names
+# the commit that is running, so committing it would make it stale on the very
+# next commit and `sterlingctl verify` would report drift against itself. Freeze
+# it on the deployed build and archive it with the release.
 data/backups/
+data/manifests/
