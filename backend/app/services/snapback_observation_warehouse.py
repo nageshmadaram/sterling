@@ -95,7 +95,7 @@ def _require_outcome_fields(outcome_data: Dict[str, Any]) -> Dict[str, float]:
 
 # Bumped whenever a stored column changes meaning. A file written under an older
 # version is not silently reinterpreted under the current one.
-EVIDENCE_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 3
 
 
 def resolve_authoritative_flag(*, source: str, requested: Optional[int] = None) -> int:
@@ -697,6 +697,7 @@ class SnapbackObservationWarehouse:
                 conn.execute(f"PRAGMA user_version = {EVIDENCE_SCHEMA_VERSION}")
 
                 self._migrate_identity_columns(conn)
+                self._migrate_lane_identity_columns(conn)
                 self._migrate_decisions_append_only(conn)
         finally:
             conn.close()
@@ -731,6 +732,85 @@ class SnapbackObservationWarehouse:
         "turnover": "REAL NOT NULL DEFAULT 0.0",
         "payload_hash": "TEXT NOT NULL DEFAULT ''",
     }
+
+    #: Strategy-mode attribution, added by the five-mode taxonomy. Defaults are
+    #: EMPTY on purpose: a pre-existing row genuinely has no lane, and
+    #: back-filling one would invent an attribution nobody recorded. An empty
+    #: ``lane_key`` makes the row ineligible for every lane gate — see
+    #: ``app.core.evidence.eligible_for_lane``.
+    _LANE_IDENTITY_COLUMNS = {
+        "strategy_id": "TEXT NOT NULL DEFAULT ''",
+        "strategy_version": "TEXT NOT NULL DEFAULT ''",
+        "mode": "TEXT NOT NULL DEFAULT ''",
+        "mode_version": "TEXT NOT NULL DEFAULT ''",
+        "legacy_mode": "TEXT DEFAULT NULL",
+        "lane_key": "TEXT NOT NULL DEFAULT ''",
+        "identity_hash": "TEXT NOT NULL DEFAULT ''",
+        "evidence_class": "TEXT NOT NULL DEFAULT ''",
+        "release_tag": "TEXT NOT NULL DEFAULT ''",
+    }
+
+    #: The frozen horizon a position was opened under. Held on the position and
+    #: repeated on the outcome so a closed trade can be read without joining
+    #: back to a row that may have been archived.
+    _HORIZON_COLUMNS = {
+        "horizon_plan_id": "TEXT NOT NULL DEFAULT ''",
+        "expected_window_start": "TEXT DEFAULT NULL",
+        "expected_window_end": "TEXT DEFAULT NULL",
+        "hard_exit_at": "TEXT DEFAULT NULL",
+        "hard_exit_session": "TEXT DEFAULT NULL",
+        "calendar_version": "TEXT NOT NULL DEFAULT ''",
+        "mode_config_hash": "TEXT NOT NULL DEFAULT ''",
+    }
+
+    #: How the budget actually played out. ``sessions_held_at_exit`` is
+    #: deliberately NOT the existing ``paper_positions.sessions_held``: that one
+    #: is inclusive of both ends with a floor of 1 (see
+    #: ``snapback_prospective_collector.count_trading_sessions``), while this is
+    #: sessions elapsed since entry, 0 on the entry day. Two names because two
+    #: different numbers.
+    _HORIZON_OUTCOME_COLUMNS = {
+        "age_at_exit_seconds": "REAL DEFAULT NULL",
+        "sessions_held_at_exit": "INTEGER DEFAULT NULL",
+        "timeline_state_at_exit": "TEXT DEFAULT NULL",
+    }
+
+    #: Tables that carry a position's horizon, not merely its lane.
+    _HORIZON_TABLES = ("paper_positions", "outcomes")
+
+    @staticmethod
+    def _add_missing_columns(conn, table: str, columns: dict) -> None:
+        """Additive-only migration. Never rewrites or deletes an existing row."""
+        try:
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        except Exception:
+            return
+        if not existing:
+            return
+        for name, decl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    def _migrate_lane_identity_columns(self, conn) -> None:
+        """Give every evidence table a strategy-mode identity and a horizon.
+
+        Historical rows keep their values and gain empty lane columns. That is
+        the intended outcome: they stay readable, stay counted in coverage
+        reports, and stay out of every lane's economic gate.
+        """
+        for table in self._IDENTITY_TABLES:
+            self._add_missing_columns(conn, table, self._LANE_IDENTITY_COLUMNS)
+        for table in self._HORIZON_TABLES:
+            self._add_missing_columns(conn, table, self._LANE_IDENTITY_COLUMNS)
+            self._add_missing_columns(conn, table, self._HORIZON_COLUMNS)
+        self._add_missing_columns(conn, "outcomes", self._HORIZON_OUTCOME_COLUMNS)
+        for table in self._IDENTITY_TABLES + self._HORIZON_TABLES:
+            try:
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_lane ON {table}(lane_key)"
+                )
+            except Exception:
+                continue
 
     def _migrate_identity_columns(self, conn) -> None:
         try:

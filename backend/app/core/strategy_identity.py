@@ -24,7 +24,7 @@ from app.core.focus import FOCUSABLE
 _HASH_LEN = 16
 
 #: Bumped whenever the shape of an authoritative row changes.
-EVIDENCE_SCHEMA_VERSION = "2"
+EVIDENCE_SCHEMA_VERSION = "3"
 
 
 class IdentityError(ValueError):
