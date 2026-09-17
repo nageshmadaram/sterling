@@ -576,7 +576,7 @@ def test_a_blocked_expiry_calendar_does_not_fail_the_engineering_gate():
         report.record(name, PASS)
     report.record("candidate_universe", FAIL)      # no eligible DTE today
 
-    assert report.strategy_reality == FAIL
+    assert report.strategy_reality["status"] == "BLOCKED"
     assert report.engineering_gate == PASS
     assert report.vendor_assumptions == PROVEN
     # Sterling can be correct on a day Snapback cannot trade.
@@ -632,3 +632,108 @@ def test_an_uninducible_disconnect_is_a_harness_incompatibility():
     for name in ("disconnect_observed", "reconnect_attempted", "reconnect_connected",
                  "post_reconnect_fresh_ticks", "post_reconnect_full_mode"):
         assert report.checks[name] == SKIP
+
+
+# ─── a closed market must not mask a real vendor defect ──────────────────────
+
+def test_a_schema_contradiction_survives_a_closed_market():
+    """Liveness and schema correctness are separate questions.
+
+    An earlier version returned NOT_EXERCISED for any closed-market run, which
+    downgraded a genuine decoder contradiction into "not tested". A schema
+    defect is visible on a replayed closing book and stays a defect after hours.
+    """
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("market_data_live", FAIL)      # expected after hours
+    report.record("option_order_counts", FAIL)   # a real vendor/decoder defect
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
+
+
+def test_a_clean_schema_on_a_closed_market_is_only_not_exercised():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("option_order_counts", PASS)
+    report.record("market_data_live", FAIL)
+
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall == INCONCLUSIVE
+
+
+def test_a_clean_schema_on_a_live_market_is_proven():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("option_order_counts", PASS)
+    report.record("market_data_live", PASS)
+
+    assert report.vendor_assumptions == PROVEN
+    assert report.overall == PASS
+
+
+# ─── strategy reality is a finding, not a gate ───────────────────────────────
+
+def test_a_blocked_expiry_calendar_reports_blocked_not_fail():
+    from study.snapback_live_evidence_acceptance import BLOCKED
+
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("market_data_live", PASS)
+    report.record("clock_separation", PASS)
+    report.record("candidate_universe", FAIL,
+                  {"interpretation": "STRATEGY_REALITY: no listed monthly expiry"})
+
+    reality = report.strategy_reality
+    assert reality["status"] == BLOCKED
+    assert reality["findings"][0]["check"] == "candidate_universe"
+    assert reality["findings"][0]["result"] == "NO_ELIGIBLE_EXPIRY"
+    assert "no listed monthly expiry" in reality["findings"][0]["interpretation"]
+
+    # And it still does not stop the release.
+    assert report.engineering_gate == PASS
+    assert report.overall == PASS
+
+
+def test_a_tradeable_day_reports_executable():
+    from study.snapback_live_evidence_acceptance import EXECUTABLE
+
+    report = _report()
+    report.record("candidate_universe", PASS)
+    report.record("listedness", PASS)
+
+    reality = report.strategy_reality
+    assert reality["status"] == EXECUTABLE
+    assert reality["findings"] == []
+
+
+def test_an_unlisted_target_is_a_finding_with_its_own_result():
+    report = _report()
+    report.record("candidate_universe", PASS)
+    report.record("listedness", FAIL, {"interpretation": "computed strike absent"})
+
+    finding = report.strategy_reality["findings"][0]
+    assert finding["check"] == "listedness"
+    assert finding["result"] == "TARGET_NOT_LISTED"
+
+
+def test_strategy_reality_is_not_exercised_when_no_strategy_check_ran():
+    report = _report()
+    report.record("instrument_master", PASS)
+
+    assert report.strategy_reality["status"] == NOT_EXERCISED
+
+
+def test_the_artifact_carries_strategy_reality_as_a_structure():
+    report = _report()
+    report.record("candidate_universe", FAIL, {"interpretation": "no eligible expiry"})
+
+    blob = report.as_dict()
+
+    assert isinstance(blob["conclusions"]["strategy_reality"], dict)
+    assert blob["conclusions"]["strategy_reality"]["status"] == "BLOCKED"

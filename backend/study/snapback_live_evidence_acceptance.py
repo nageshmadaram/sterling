@@ -40,6 +40,13 @@ INCONCLUSIVE = "INCONCLUSIVE"
 PROVEN = "PROVEN"
 CONTRADICTED = "CONTRADICTED"
 
+#: Strategy reality is a finding, not a gate. A blocked expiry calendar says
+#: something about Snapback and nothing about the runtime, so it gets its own
+#: vocabulary rather than borrowing PASS/FAIL and inviting an operator to read
+#: it as a release failure.
+EXECUTABLE = "EXECUTABLE"
+BLOCKED = "BLOCKED"
+
 #: Which question each check answers. A run produces three conclusions, never
 #: one headline: whether the runtime is fit to release, whether the vendor
 #: behaves as the schema assumes, and what the frozen strategy could actually do
@@ -62,6 +69,13 @@ VENDOR_CHECKS = frozenset({
     "market_data_live",
 })
 STRATEGY_CHECKS = frozenset({"candidate_universe", "listedness"})
+
+#: What a non-passing strategy check means, in strategy terms rather than
+#: pass/fail terms.
+_STRATEGY_RESULTS = {
+    "candidate_universe": "NO_ELIGIBLE_EXPIRY",
+    "listedness": "TARGET_NOT_LISTED",
+}
 
 #: Ticks older than this are not a live market. On connect, Kite replays the last
 #: trade of the previous session, so a run after the close receives well-formed
@@ -135,23 +149,60 @@ class Report:
     def vendor_assumptions(self) -> str:
         """Does Kite behave as the evidence schema assumes?
 
-        NOT_EXERCISED when the market was closed: the schema checks still hold on
-        a replayed closing book, but nothing about live behaviour was tested, and
-        reporting that as PROVEN is how a green artifact comes to certify nothing.
+        Liveness and schema correctness are separate questions, and an earlier
+        version conflated them: any closed-market run returned NOT_EXERCISED,
+        which downgraded a genuine decoder contradiction — say order counts
+        missing from the payload — into "not tested". A schema defect is visible
+        on a replayed closing book and stays a defect after hours.
+
+        So the schema verdict is taken first, and only a clean schema can be
+        demoted by a dead market.
         """
-        verdict = self._verdict_over(VENDOR_CHECKS)
-        if self.checks.get("market_data_live") == FAIL:
+        schema = self._verdict_over(VENDOR_CHECKS - {"market_data_live"})
+
+        if schema == FAIL:
+            return CONTRADICTED
+        if schema == SKIP:
+            return SKIP
+        if schema == NOT_EXERCISED:
             return NOT_EXERCISED
-        return {PASS: PROVEN, FAIL: CONTRADICTED}.get(verdict, verdict)
+        # Schema looks right; but on a closing-book replay nothing about live
+        # behaviour was exercised.
+        if self.checks.get("market_data_live") != PASS:
+            return NOT_EXERCISED
+        return PROVEN
 
     @property
-    def strategy_reality(self) -> str:
+    def strategy_reality(self) -> dict[str, Any]:
         """What could the frozen strategy actually do today?
 
-        A blocked expiry calendar is a finding about Snapback, never a runtime
-        defect, so it must not be able to fail the engineering gate.
+        Reported as a finding rather than a verdict. Returning FAIL here made a
+        blocked expiry calendar look like something Sterling got wrong, when it
+        is a fact about the market and the frozen DTE rule.
         """
-        return self._verdict_over(STRATEGY_CHECKS)
+        seen = {k: v for k, v in self.checks.items() if k in STRATEGY_CHECKS}
+        findings = []
+        for name, verdict in sorted(seen.items()):
+            if verdict == PASS:
+                continue
+            detail = self.detail.get(name)
+            interpretation = (
+                detail.get("interpretation") if isinstance(detail, dict) else None
+            ) or (detail if isinstance(detail, str) else None)
+            findings.append({
+                "check": name,
+                "result": _STRATEGY_RESULTS.get(name, "REFUSED"),
+                "interpretation": interpretation or "see the check detail",
+            })
+
+        if not seen:
+            status = NOT_EXERCISED
+        elif findings:
+            status = BLOCKED if any(v == FAIL for v in seen.values()) else INCONCLUSIVE
+        else:
+            status = EXECUTABLE
+
+        return {"status": status, "findings": findings}
 
     @property
     def overall(self) -> str:
