@@ -80,7 +80,6 @@ class SterlingKiteEngine:
         trail = float(r.line(self.cfg.trail_target)[i])
         entry = float(c[i])
         self._positions[underlying] = _OpenPos(direction, entry, trail, trail, int(candles[i].timestamp_ms))
-        score = self._score(r, i)
         score = self._score(r, i, direction)
         return [Signal(
             underlying=underlying,
@@ -135,9 +134,6 @@ class SterlingKiteEngine:
     def has_position(self, underlying: str) -> bool:
         return underlying in self._positions
 
-    def _score(self, r, i: int) -> float:
-        # full three-way alignment is the entry condition; fixed high conviction.
-        return 85.0
     def _score(self, r, i: int, direction: str = "long") -> float:
         """Dynamic multi-factor quality score (70.0 - 95.0).
         Base score: 80.0 (baseline for fresh 3-line SuperTrend alignment).

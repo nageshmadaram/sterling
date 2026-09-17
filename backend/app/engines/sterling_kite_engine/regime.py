@@ -97,10 +97,8 @@ def compute_regime(opens, highs, lows, closes, cfg: SterlingKiteEngineConfig) ->
     # production scanner defaults to Heikin-Ashi. Raw OHLC remains distinct for
     # executable stop touches; synthetic HA extrema never prove a market fill.
     if cfg.candle_basis == "heikin_ashi":
-        _, basis_h, basis_l, basis_c = compute_heikin_ashi(o, h, l, c)
         basis_o, basis_h, basis_l, basis_c = compute_heikin_ashi(o, h, l, c)
     else:
-        basis_h, basis_l, basis_c = h, l, c
         basis_o, basis_h, basis_l, basis_c = o, h, l, c
 
     l_fast, t_fast = compute_supertrend(basis_h, basis_l, basis_c, cfg.fast[0], cfg.fast[1])
