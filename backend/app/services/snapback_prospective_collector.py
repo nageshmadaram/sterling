@@ -100,6 +100,10 @@ class SnapbackProspectiveCollector:
 
     def __init__(self, warehouse: Optional[SnapbackObservationWarehouse] = None):
         self.warehouse = warehouse or SnapbackObservationWarehouse()
+        #: The last execution-contract record produced by execute_pending_entry.
+        #: Evidence for the caller to persist; the collector's own decisions are
+        #: unaffected by whether anyone reads it.
+        self.last_execution_contract: Optional[Any] = None
 
     def record_signal_at_close(
         self,
@@ -162,6 +166,88 @@ class SnapbackProspectiveCollector:
             "mean_target": signal.mean_target,
             "is_frozen": is_frozen,
         }
+
+
+    def _record_execution_contract(
+        self,
+        *,
+        opportunity_id: str,
+        opp: Dict[str, Any],
+        cfg: SnapbackConfig,
+        ranked: List[tuple],
+        chosen_cand: Optional[OptionCandidateInfo],
+        option_quote_events: Dict[str, RawQuoteEvent],
+    ) -> Optional[Any]:
+        """Persist what the collector chose from the real chain, and what it rejected.
+
+        Observation only. It performs no selection and re-derives no eligibility:
+        the collector's own verdicts are passed in, so this cannot drift from the
+        rule it documents. A failure to record must never break an entry, so
+        everything here is best-effort and returns None on trouble — the evidence
+        is worth a great deal, and never more than an open position.
+        """
+        try:
+            from app.services.snapback_execution_contract import (
+                CandidateEvaluation, build_execution_contract_record,
+            )
+
+            evaluations = []
+            for cand, q_event, reason in ranked:
+                spread = None
+                if q_event is not None and getattr(q_event, "best_bid", None) and getattr(q_event, "best_ask", None):
+                    try:
+                        spread = canonical_spread_pct(q_event.best_bid, q_event.best_ask)
+                    except Exception:
+                        spread = None
+                eligible = reason == "ELIGIBLE"
+                evaluations.append(CandidateEvaluation(
+                    symbol=cand.symbol, expiry=cand.expiry, strike=float(cand.strike),
+                    option_type=cand.option_type, dte=int(cand.dte),
+                    is_monthly=bool(cand.is_monthly),
+                    theoretical_delta=float(cand.theoretical_delta),
+                    instrument_token=str(cand.instrument_token or ""),
+                    lot_size=int(cand.lot_size or 0),
+                    eligible=eligible,
+                    rejection_reasons=() if eligible else tuple(
+                        r.strip() for r in reason.split(";") if r.strip()
+                    ),
+                    best_bid=getattr(q_event, "best_bid", None) if q_event else None,
+                    best_ask=getattr(q_event, "best_ask", None) if q_event else None,
+                    spread_pct=spread,
+                    open_interest=getattr(q_event, "open_interest", None) if q_event else None,
+                    delta_distance=abs(abs(float(cand.theoretical_delta)) - float(cfg.target_delta)),
+                ))
+
+            chosen = None
+            if chosen_cand is not None:
+                chosen = next(
+                    (e for e in evaluations if e.symbol == chosen_cand.symbol), None
+                )
+
+            record = build_execution_contract_record(
+                opportunity_id=opportunity_id,
+                candidates=evaluations,
+                chosen=chosen,
+                theoretical_strike=opp.get("theoretical_strike"),
+                theoretical_expiry=opp.get("theoretical_expiry"),
+                target_delta=float(cfg.target_delta),
+                min_dte=int(cfg.min_dte), max_dte=int(cfg.max_dte),
+                max_spread_pct=float(cfg.max_spread_pct),
+                min_option_premium=float(cfg.min_option_premium),
+                min_option_oi=int(cfg.min_option_oi),
+                runtime_sha=str(opp.get("runtime_build_sha") or "unknown"),
+                strategy_sha=str(opp.get("strategy_sha") or "unknown"),
+                config_hash=str(opp.get("strategy_config_hash") or "unknown"),
+                rule_hash=str(opp.get("strategy_rule_hash") or "unknown"),
+                evaluated_at=datetime.now(timezone.utc),
+            )
+            self.last_execution_contract = record
+            return record
+        except Exception as exc:  # pragma: no cover - never break an entry
+            log.warning("execution contract evidence not recorded for %s: %s",
+                        opportunity_id, exc)
+            self.last_execution_contract = None
+            return None
 
     def execute_pending_entry(
         self,
@@ -430,6 +516,23 @@ class SnapbackProspectiveCollector:
         if eligible_tuples:
             eligible_tuples.sort(key=lambda x: x[2])
             chosen_cand, chosen_quote = eligible_tuples[0][0], eligible_tuples[0][1]
+
+        # Record the execution contract beside the theoretical target.
+        #
+        # These are two different decisions and must not be collapsed. The frozen
+        # closed-form rule produced a target strike at signal time; what is bought
+        # here is the eligible candidate from the REAL chain closest to
+        # target_delta, after the spread, premium, OI and DTE filters above. The
+        # distance between them is the execution-reality quantity runtime 1.6
+        # exists to measure, and it only exists if both are written down.
+        self._record_execution_contract(
+            opportunity_id=opportunity_id,
+            opp=opp,
+            cfg=cfg,
+            ranked=all_ranked_candidates,
+            chosen_cand=chosen_cand,
+            option_quote_events=option_quote_events,
+        )
 
         # Record ALL candidate rows & option quote snapshots in warehouse
         for rank, (cand, q_event, r_reason) in enumerate(all_ranked_candidates, start=1):

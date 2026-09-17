@@ -158,6 +158,11 @@ ui-ux-pro-max-skill/
 # Snapback prospective evidence + backups (local only, never committed)
 backups/
 data/snapback/
+
+# Live acceptance harness output: instrument-master snapshots and test
+# evidence. Regenerated per run, and never authoritative (TEST_ACCEPTANCE).
+data/evidence_acceptance/
+backend/data/evidence_acceptance/
 artifacts/snapback_forward/
 backend/data/snapback/
 artifacts/snapback_shadow_replay/

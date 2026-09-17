@@ -53,12 +53,23 @@ class TestScope:
     def test_every_tier_is_a_documented_preset(self, name: str) -> None:
         assert name in PRESETS
 
-    @pytest.mark.parametrize(
-        "name", ["fno-fut", "fno-opt", "derivatives-live", "everything"]
-    )
+    @pytest.mark.parametrize("name", ["fno-opt", "derivatives-live", "everything"])
     def test_out_of_scope_presets_are_gone(self, name: str) -> None:
         assert name not in PRESETS
         assert name in OUT_OF_SCOPE, "removal must come with a documented reason"
+
+    def test_fno_fut_is_supported(self) -> None:
+        """Futures were re-enabled; options remain unobtainable.
+
+        This used to assert that ``fno-fut`` had been removed, and kept failing
+        after the preset came back. The distinction is real and worth stating:
+        Kite serves continuous daily data for expired futures, so a futures
+        history can be built, while expired options return nothing at all and
+        no amount of downloading changes that.
+        """
+        assert "fno-fut" in PRESETS
+        assert "fno-fut" not in OUT_OF_SCOPE
+        assert "fno-opt" in OUT_OF_SCOPE
 
     @pytest.mark.parametrize("name", list(OUT_OF_SCOPE))
     def test_out_of_scope_explains_itself(self, name: str, master: pa.Table) -> None:

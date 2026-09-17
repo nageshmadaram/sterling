@@ -19,3 +19,7 @@ cryptography>=42.0.0
 websockets>=12.0
 pyarrow>=18.0.0
 pyjwt>=2.8.0
+
+# Live evidence acceptance harness (study/snapback_live_evidence_acceptance.py):
+# Kite login + FULL-mode WebSocket capture. Not used by the API at runtime.
+kiteconnect
