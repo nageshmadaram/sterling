@@ -4,13 +4,20 @@ A profitable book that the account could never have funded is not evidence. Capa
 is checked against the frozen capital, existing reserved margin, the real option
 premium cash, broker-observed hedge margin and a fee reserve — and an unknown input
 is INCONCLUSIVE_CAPACITY, never an assumption.
+
+Operational admission is checked here too.  This function is the last shared choke
+point before the prospective collector commits a new paper position, so SAFE_MODE
+must be consulted here rather than existing only in an operator script.  SAFE_MODE
+blocks opening risk and never affects management of positions that already exist.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Set
+from pathlib import Path
+from typing import List, Optional, Set
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +29,21 @@ class CapacityDecision:
     required_capital: Optional[float] = None
     available_capital: Optional[float] = None
     reasons: List[str] = field(default_factory=list)
+
+
+def _configured_safe_mode_state():
+    """Read the same durable SAFE_MODE file used by the operator scripts.
+
+    Missing state is NORMAL by the SafeModeService contract.  An unreadable or
+    unrecognised file is SAFE_MODE, so a corrupted switch cannot silently permit
+    new exposure.  The path can be overridden in tests and deployments with
+    STERLING_SAFE_MODE_FILE.
+    """
+    from app.services.safe_mode import SafeModeService
+
+    root = Path(os.environ.get("STERLING_ROOT") or Path(__file__).resolve().parents[3])
+    path = Path(os.environ.get("STERLING_SAFE_MODE_FILE") or (root / "data" / "safe_mode.json"))
+    return SafeModeService(path).read()
 
 
 def evaluate_capacity(
@@ -36,9 +58,26 @@ def evaluate_capacity(
     underlying: str,
     open_underlyings: Optional[Set[str]] = None,
 ) -> CapacityDecision:
-    """Decide whether one paper entry is fundable."""
+    """Decide whether one paper entry is fundable and operationally admissible."""
     reasons: List[str] = []
     open_underlyings = set(open_underlyings or set())
+
+    # Operational safety outranks economics.  Do this before capacity arithmetic
+    # so an operator-requested stop is reported as the reason the entry was blocked.
+    try:
+        safe_state = _configured_safe_mode_state()
+    except Exception as exc:  # fail closed: inability to read the switch is uncertainty
+        return CapacityDecision(
+            allowed=False,
+            status="SAFE_MODE",
+            reasons=[f"safe_mode_unavailable:{type(exc).__name__}"],
+        )
+    if safe_state.active:
+        return CapacityDecision(
+            allowed=False,
+            status="SAFE_MODE",
+            reasons=["safe_mode_active", *[f"trigger:{t}" for t in safe_state.triggers]],
+        )
 
     # Unknown inputs are never assumed. A guessed margin is a fabricated constraint.
     unknown: List[str] = []
