@@ -166,6 +166,17 @@ def lane_columns(lane_identity: Optional[Any], source: str) -> Dict[str, Any]:
     }
 
 
+def venue_columns(identity: Optional[Any]) -> Dict[str, Any]:
+    """Where this position's legs trade, from the identity observed at signal time."""
+    if identity is None:
+        return {"cash_exchange": "", "cash_tradingsymbol": "", "option_exchange": ""}
+    return {
+        "cash_exchange": getattr(identity, "cash_exchange", "") or "",
+        "cash_tradingsymbol": getattr(identity, "cash_tradingsymbol", "") or "",
+        "option_exchange": getattr(identity, "option_exchange", "") or "",
+    }
+
+
 def horizon_columns(plan: Optional[Any]) -> Dict[str, Any]:
     """The frozen horizon of one position, or empties when none was built."""
     if plan is None:
@@ -845,6 +856,16 @@ class SnapbackObservationWarehouse:
         "timeline_state_at_exit": "TEXT DEFAULT NULL",
     }
 
+    #: Where a position's legs actually trade, copied from the opportunity's
+    #: stored identity at entry so the MTM path never rebuilds "NFO:" + symbol.
+    #: Empty on rows written before this existed; the venue resolver falls back
+    #: to the opportunity row for those.
+    _VENUE_COLUMNS = {
+        "cash_exchange": "TEXT NOT NULL DEFAULT ''",
+        "cash_tradingsymbol": "TEXT NOT NULL DEFAULT ''",
+        "option_exchange": "TEXT NOT NULL DEFAULT ''",
+    }
+
     #: Tables that carry a position's horizon, not merely its lane.
     _HORIZON_TABLES = ("paper_positions", "outcomes")
 
@@ -874,6 +895,7 @@ class SnapbackObservationWarehouse:
             self._add_missing_columns(conn, table, self._LANE_IDENTITY_COLUMNS)
             self._add_missing_columns(conn, table, self._HORIZON_COLUMNS)
         self._add_missing_columns(conn, "outcomes", self._HORIZON_OUTCOME_COLUMNS)
+        self._add_missing_columns(conn, "paper_positions", self._VENUE_COLUMNS)
         for table in self._IDENTITY_TABLES + self._HORIZON_TABLES:
             try:
                 conn.execute(
@@ -1159,6 +1181,7 @@ class SnapbackObservationWarehouse:
         horizon_plan: Optional[Any] = None,
         lane_identity: Optional[Any] = None,
         source: str = "PROSPECTIVE_PAPER",
+        identity: Optional[Any] = None,
     ) -> None:
         """Persist active paper position state ledger.
 
@@ -1167,6 +1190,7 @@ class SnapbackObservationWarehouse:
         """
         horizon = horizon_columns(horizon_plan)
         lane = lane_columns(lane_identity, source)
+        venue = venue_columns(identity)
         conn = self._get_connection()
         try:
             with conn:
@@ -1181,8 +1205,9 @@ class SnapbackObservationWarehouse:
                         horizon_plan_id, expected_window_start, expected_window_end,
                         hard_exit_at, hard_exit_session, calendar_version, mode_config_hash,
                         strategy_id, strategy_version, mode, mode_version, legacy_mode,
-                        lane_key, identity_hash, evidence_class, release_tag
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        lane_key, identity_hash, evidence_class, release_tag,
+                        cash_exchange, cash_tradingsymbol, option_exchange
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
@@ -1196,7 +1221,8 @@ class SnapbackObservationWarehouse:
                         horizon["mode_config_hash"],
                         lane["strategy_id"], lane["strategy_version"], lane["mode"],
                         lane["mode_version"], lane["legacy_mode"], lane["lane_key"],
-                        lane["identity_hash"], lane["evidence_class"], lane["release_tag"]
+                        lane["identity_hash"], lane["evidence_class"], lane["release_tag"],
+                        venue["cash_exchange"], venue["cash_tradingsymbol"], venue["option_exchange"],
                     ),
                 )
         finally:
@@ -2662,6 +2688,7 @@ class SnapbackObservationWarehouse:
         processing_token: Optional[str] = None,
         horizon_plan: Optional[Any] = None,
         lane_identity: Optional[Any] = None,
+        identity: Optional[Any] = None,
     ) -> None:
         """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction.
 
@@ -2673,6 +2700,7 @@ class SnapbackObservationWarehouse:
         lane = lane_columns(
             lane_identity, str(paper_position_data.get("source") or "PROSPECTIVE_PAPER")
         )
+        venue = venue_columns(identity)
         now = _now_iso()
         conn = self._get_connection()
         try:
@@ -2767,8 +2795,9 @@ class SnapbackObservationWarehouse:
                         horizon_plan_id, expected_window_start, expected_window_end,
                         hard_exit_at, hard_exit_session, calendar_version, mode_config_hash,
                         strategy_id, strategy_version, mode, mode_version, legacy_mode,
-                        lane_key, identity_hash, evidence_class, release_tag
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        lane_key, identity_hash, evidence_class, release_tag,
+                        cash_exchange, cash_tradingsymbol, option_exchange
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         opportunity_id, p["symbol"], p["option_symbol"], p["option_qty"], p["option_entry_price"],
@@ -2783,6 +2812,7 @@ class SnapbackObservationWarehouse:
                         lane["strategy_id"], lane["strategy_version"], lane["mode"],
                         lane["mode_version"], lane["legacy_mode"], lane["lane_key"],
                         lane["identity_hash"], lane["evidence_class"], lane["release_tag"],
+                        venue["cash_exchange"], venue["cash_tradingsymbol"], venue["option_exchange"],
                     ),
                 )
                 # 7. Atomically mark opportunity as OPEN_POSITION and clear processing token (enforces lease token)

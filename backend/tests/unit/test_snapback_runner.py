@@ -619,6 +619,9 @@ async def test_option_crosses_premium_stop_intraday_then_recovers(temp_warehouse
     mock_client_stop = AsyncMock()
     mock_client_stop.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24500.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24500.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -648,6 +651,9 @@ async def test_option_crosses_premium_stop_intraday_then_recovers(temp_warehouse
     mock_client_recover = AsyncMock()
     mock_client_recover.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24500.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24500.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 120.0, "buy_price": 120.0, "sell_price": 121.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -729,6 +735,9 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
     mock_client_1500 = AsyncMock()
     mock_client_1500.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24500.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24500.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24510.0, "buy_price": 24510.0, "sell_price": 24512.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -772,6 +781,9 @@ async def test_1500_price_differs_from_closing_window_price(temp_warehouse, samp
     mock_client_1529 = AsyncMock()
     mock_client_1529.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24500.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24500.0},
         "NFO:NIFTY26OCTFUT": {
             "last_price": 24510.0, "buy_price": 24510.0, "sell_price": 24512.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -988,6 +1000,9 @@ async def test_intraday_price_hits_runner_mult_before_session_15_not_promoted(te
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24500.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24500.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 160.0, "buy_price": 160.0, "sell_price": 161.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -1059,6 +1074,9 @@ async def test_intraday_stop_calculates_real_futures_pnl_when_futures_moved(temp
     mock_client = AsyncMock()
     mock_client.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24650.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24650.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -1317,6 +1335,9 @@ async def test_intraday_exit_latches_pending_exit_and_closes_on_next_tick_even_i
     mock_client1 = AsyncMock()
     mock_client1.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24650.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24650.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 40.0, "buy_price": 40.0, "sell_price": 41.0,
             "buy_quantity": 100, "sell_quantity": 100,
@@ -1348,6 +1369,9 @@ async def test_intraday_exit_latches_pending_exit_and_closes_on_next_tick_even_i
     mock_client2 = AsyncMock()
     mock_client2.get_quote = AsyncMock(return_value={
         "NSE:NIFTY": {"last_price": 24650.0},
+        # The stored identity's provider symbol. Post-entry pricing now uses
+        # the same key the entry path used, instead of rebuilding "NSE:NIFTY".
+        "NSE:NIFTY 50": {"last_price": 24650.0},
         "NFO:NIFTY26OCT25000PE": {
             "last_price": 200.0, "buy_price": 200.0, "sell_price": 201.0,
             "buy_quantity": 100, "sell_quantity": 100,

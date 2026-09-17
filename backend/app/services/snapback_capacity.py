@@ -28,11 +28,14 @@ from typing import Any, List, Optional, Set
 
 log = logging.getLogger(__name__)
 
-# This is deliberately an execution/observation support list, not a strategy
-# universe. SENSEX remains in the frozen strategy and its opportunities remain in
-# the denominator; only opening exposure is blocked until BFO post-entry handling
-# is complete.
-_LIFECYCLE_UNSUPPORTED_UNDERLYINGS = frozenset({"SENSEX"})
+# An execution/observation support list, not a strategy universe. It is empty:
+# SENSEX was contained here while the post-entry lifecycle rebuilt NSE/NFO quote
+# keys from canonical names, which would have marked a BFO position against an
+# instrument that does not exist. That reconstruction is gone — every quote key
+# now comes from the identity stored at signal time (app.services.snapback_venue)
+# — so the containment has been lifted. Leaving it in place after its cause was
+# fixed would be a silently narrowed universe.
+_LIFECYCLE_UNSUPPORTED_UNDERLYINGS: frozenset[str] = frozenset()
 
 
 class ObservedHedgeMargin(float):

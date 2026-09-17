@@ -43,6 +43,12 @@ from app.services.snapback_entry_observation import record_attempt, session_cont
 from app.services.snapback_market_data import (evaluate_underlying_context_quote,
                                                spread_pct as canonical_spread_pct)
 from app.services.snapback_instrument_identity import IdentityError, identity_from_opportunity
+from app.services.snapback_venue import (
+    VenueUnknown,
+    quote_key,
+    resolve_position_venue,
+    venue_from_opportunity,
+)
 from app.engines.snapback.policy import (RUNNER_EXPIRY_BUFFER_CALENDAR_DAYS,
                                           runner_should_exit_for_expiry)
 from app.engines.snapback.pricing import bs_delta, bs_price
@@ -821,19 +827,26 @@ def extract_raw_quote_event(contract_id: str, quote_dict: dict) -> Optional[RawQ
     )
 
 
-async def _causal_daily_bars(client, symbol: str, upto: date, *, cache: dict) -> list:
-    """Daily candles for `symbol` truncated at `upto` (inclusive).
+async def _causal_daily_bars(
+    client, symbol: str, upto: date, *, cache: dict, exchange: str = "NSE"
+) -> list:
+    """Daily candles for `symbol` on `exchange`, truncated at `upto` (inclusive).
 
     Truncation is what keeps the hedge causal: beta at entry may only use sessions
     that had already closed when the signal fired.
+
+    ``exchange`` is passed rather than assumed. A SENSEX underlying is listed on
+    BSE, and searching NSE for it returns nothing — which previously surfaced as
+    an empty bar series, indistinguishable from a genuinely quiet instrument.
     """
-    key = f"NSE:{symbol}"
+    venue = str(exchange or "NSE").strip().upper()
+    key = quote_key(venue, symbol)
     rows = cache.get(key)
     if rows is None:
-        instruments = cache.get("__nse__")
+        instruments = cache.get(f"__{venue.lower()}__")
         if instruments is None:
-            instruments = await client.search_instruments("", "NSE", limit=1_000_000)
-            cache["__nse__"] = instruments
+            instruments = await client.search_instruments("", venue, limit=1_000_000)
+            cache[f"__{venue.lower()}__"] = instruments
         token = 0
         for inst_row in instruments or []:
             if str(getattr(inst_row, "tradingsymbol", "") or (inst_row or {}).get("tradingsymbol", "")) == symbol:
@@ -1138,8 +1151,16 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     continue
 
                 futures_symbol = hedge.tradingsymbol
-                fut_quotes = await client.get_quote([f"NFO:{futures_symbol}"])
-                q_fut_raw = (fut_quotes or {}).get(f"NFO:{futures_symbol}") or {}
+                try:
+                    venue = venue_from_opportunity(opp)
+                except VenueUnknown as venue_exc:
+                    log.warning("Skipping T+1 fill for %s: %s", opp_id, venue_exc)
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE_VENUE_IDENTITY")
+                    processed += 1
+                    continue
+                fut_key = venue.derivative_key(futures_symbol)
+                fut_quotes = await client.get_quote([fut_key])
+                q_fut_raw = (fut_quotes or {}).get(fut_key) or {}
                 fut_event = extract_raw_quote_event(futures_symbol, q_fut_raw)
                 if not fut_event:
                     log.warning("Skipping T+1 fill for %s: missing genuine futures exchange quote event for %s", opp_id, futures_symbol)
@@ -1159,7 +1180,10 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
                     )
                 else:
                     try:
-                        stock_candles = await _causal_daily_bars(client, symbol, sig_date, cache=daily_bar_cache)
+                        stock_candles = await _causal_daily_bars(
+                            client, symbol, sig_date, cache=daily_bar_cache,
+                            exchange=venue_from_opportunity(opp).cash_exchange,
+                        )
                         nifty_candles = await _causal_daily_bars(client, "NIFTY 50", sig_date, cache=daily_bar_cache)
                         if not nifty_candles:
                             nifty_candles = await _causal_daily_bars(client, "NIFTY", sig_date, cache=daily_bar_cache)
@@ -1258,6 +1282,7 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
 
         now_ms = int(time.time() * 1000)
         session_date = datetime.now(_IST).strftime("%Y-%m-%d")
+        venue_cache: dict = {}
 
         for pos in active_positions:
             if pos.get("status") == "EXIT_PENDING":
@@ -1276,16 +1301,27 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
             opt_sym = pos["option_symbol"]
             fut_sym = pos["futures_symbol"]
             try:
-                opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
-                q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
+                try:
+                    venue = resolve_position_venue(collector.warehouse, pos, cache=venue_cache)
+                except VenueUnknown as venue_exc:
+                    # A position whose venue is unknown cannot be marked at all.
+                    # Guessing NSE/NFO here is exactly how a BFO position gets
+                    # priced against an instrument that does not exist.
+                    log.warning("Skipping EOD MTM for %s: %s", opp_id, venue_exc)
+                    continue
+                opt_key = venue.derivative_key(opt_sym)
+                opt_quotes = await client.get_quote([opt_key])
+                q_opt_raw = (opt_quotes or {}).get(opt_key) or {}
                 opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
 
-                fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
-                q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
+                fut_key = venue.derivative_key(fut_sym)
+                fut_quotes = await client.get_quote([fut_key])
+                q_fut_raw = (fut_quotes or {}).get(fut_key) or {}
                 fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
 
-                spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                spot_key = venue.spot_key()
+                spot_quotes = await client.get_quote([spot_key])
+                q_spot_raw = (spot_quotes or {}).get(spot_key) or {}
                 curr_spot = float(q_spot_raw.get("last_price") or 0.0)
 
                 if not opt_ev or not fut_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
@@ -1443,6 +1479,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
             return 0
 
         receive_now_ms = int(time.time() * 1000)
+        venue_cache: dict = {}
 
         for pos in active_positions:
             opp_id = pos["opportunity_id"]
@@ -1450,26 +1487,34 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
             opt_sym = pos["option_symbol"]
             fut_sym = pos["futures_symbol"]
             try:
+                try:
+                    venue = resolve_position_venue(collector.warehouse, pos, cache=venue_cache)
+                except VenueUnknown as venue_exc:
+                    log.warning("Skipping intraday risk for %s: %s", opp_id, venue_exc)
+                    continue
                 is_already_pending = (pos.get("status") == "EXIT_PENDING") or bool(pos.get("pending_exit_reason"))
                 if is_already_pending:
                     exit_reason = pos.get("pending_exit_reason") or "PREMIUM_STOP"
                     curr_bid = float(pos.get("pending_exit_option_bid") or pos.get("option_entry_price"))
                     curr_spot = float(pos.get("entry_spot") or 0.0)
                     try:
-                        spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                        q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                        spot_key = venue.spot_key()
+                        spot_quotes = await client.get_quote([spot_key])
+                        q_spot_raw = (spot_quotes or {}).get(spot_key) or {}
                         spot_val = float(q_spot_raw.get("last_price") or 0.0)
                         if spot_val > 0 and math.isfinite(spot_val):
                             curr_spot = spot_val
                     except Exception:
                         pass
                 else:
-                    opt_quotes = await client.get_quote([f"NFO:{opt_sym}"])
-                    q_opt_raw = (opt_quotes or {}).get(f"NFO:{opt_sym}") or {}
+                    opt_key = venue.derivative_key(opt_sym)
+                    opt_quotes = await client.get_quote([opt_key])
+                    q_opt_raw = (opt_quotes or {}).get(opt_key) or {}
                     opt_ev = extract_raw_quote_event(opt_sym, q_opt_raw)
 
-                    spot_quotes = await client.get_quote([f"NSE:{symbol}"])
-                    q_spot_raw = (spot_quotes or {}).get(f"NSE:{symbol}") or {}
+                    spot_key = venue.spot_key()
+                    spot_quotes = await client.get_quote([spot_key])
+                    q_spot_raw = (spot_quotes or {}).get(spot_key) or {}
                     curr_spot = float(q_spot_raw.get("last_price") or 0.0)
 
                     if not opt_ev or curr_spot <= 0 or not math.isfinite(curr_spot):
@@ -1529,8 +1574,9 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                     futures_exit_bid = float(pos.get("avg_futures_entry_price") or 0.0)
                     if int(pos.get("current_futures_lots") or 0) > 0 and fut_sym:
                         try:
-                            fut_quotes = await client.get_quote([f"NFO:{fut_sym}"])
-                            q_fut_raw = (fut_quotes or {}).get(f"NFO:{fut_sym}") or {}
+                            fut_key = venue.derivative_key(fut_sym)
+                            fut_quotes = await client.get_quote([fut_key])
+                            q_fut_raw = (fut_quotes or {}).get(fut_key) or {}
                             fut_ev = extract_raw_quote_event(fut_sym, q_fut_raw)
                             q_fut_eval = evaluate_quote_quality(fut_ev, cfg, now_ms=receive_now_ms) if fut_ev else None
                             if not fut_ev or not q_fut_eval or not q_fut_eval.accepted_for_execution or fut_ev.best_bid <= 0:
