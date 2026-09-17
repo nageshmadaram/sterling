@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -24,6 +23,10 @@ SIGNAL_FADE_DOWN = "SIGNAL_FADE_DOWN"
 MARKET_GATE_REJECTED = "MARKET_GATE_REJECTED"
 RV_UNAVAILABLE = "RV_UNAVAILABLE"
 BAR_WINDOW_INCOMPLETE = "BAR_WINDOW_INCOMPLETE"
+
+
+class ScanEvidenceIdentityError(ValueError):
+    """A scan decision cannot be attributed to an experiment."""
 
 
 def _canonical(payload: Any) -> str:
@@ -57,6 +60,16 @@ def _f(value: Any) -> Optional[float]:
     return out if math.isfinite(out) else None
 
 
+def _experiment_id(explicit: Optional[str]) -> str:
+    value = str(explicit or os.environ.get("STERLING_EXPERIMENT_ID") or "").strip()
+    if not value:
+        raise ScanEvidenceIdentityError(
+            "STERLING_EXPERIMENT_ID is required; a scan decision without experiment "
+            "identity is not authoritative evidence"
+        )
+    return value
+
+
 def build_symbol_decision(
     *,
     session_date: str,
@@ -74,6 +87,7 @@ def build_symbol_decision(
     from app.engines.snapback.policy import EXECUTION_POLICY
     from app.engines.snapback.strategy import features, fires
 
+    experiment = _experiment_id(experiment_id)
     engine_features = features(bars, cfg)
     last = len(bars) - 1
 
@@ -88,7 +102,6 @@ def build_symbol_decision(
         rv = _f(engine_features.rv[last])
         if rv is None or rv <= 0:
             codes.append(RV_UNAVAILABLE)
-        # The same rule evaluation the strategy uses, never a re-stated threshold.
         fade_up = bool(fires(engine_features, last, "fade_up", cfg, bars))
         fade_down = bool(fires(engine_features, last, "fade_down", cfg, bars))
 
@@ -108,9 +121,7 @@ def build_symbol_decision(
 
     payload = {
         "session_date": session_date,
-        "experiment_id": experiment_id or os.environ.get(
-            "STERLING_EXPERIMENT_ID", "prospective_runtime_1_1"
-        ),
+        "experiment_id": experiment,
         "canonical_symbol": symbol,
         "cash_exchange": ident.get("cash_exchange", ""),
         "cash_tradingsymbol": ident.get("cash_tradingsymbol", ""),
