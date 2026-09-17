@@ -72,14 +72,35 @@ def _cost_rows(i=0, total=25.0, phases=("OPTION_ENTRY", "OPTION_EXIT")):
     ]
 
 
+def _opportunity(i=0, **over):
+    """The Day-T row every outcome must join back to.
+
+    Production always writes one via ``record_signal_at_close``, carrying the
+    signal's own ``assumed_iv``. Promotion now requires it, so that a trade
+    priced on a T+1 fallback vol can never enter the promotable sample.
+    """
+    row = {
+        "opportunity_id": f"OPP-{i}",
+        "symbol": "NIFTY",
+        "signal_iv": 0.18,
+        "authoritative": 1,
+        "source": "PROSPECTIVE_PAPER",
+        "runtime_build_sha": "build-1",
+    }
+    row.update(over)
+    return row
+
+
 def _records(n=2, **over):
-    outcomes, costs = [], []
+    outcomes, costs, opportunities = [], [], []
     for i in range(n):
         outcomes.append(_outcome(i))
         costs.extend(_cost_rows(i))
+        opportunities.append(_opportunity(i))
     base = {
         "outcomes": outcomes,
         "costs": costs,
+        "opportunities": opportunities,
         "paper_positions": [],
         "daily_mtm": [],
         "option_quotes": [],
@@ -227,3 +248,59 @@ def test_the_hash_ignores_evaluation_time():
 
     assert "evaluated_at" not in inputs.gate_input_hash
     assert len(inputs.gate_input_hash) == 64
+
+
+# ─── the Day-T join is load-bearing ──────────────────────────────────────────
+# These exist because the rule they guard had no negative test: every fixture
+# could have been made to pass by deleting the requirement. The old T+1
+# orchestration substituted `assumed_vrp * 0.15` when signal_iv was absent, so a
+# trade priced on a guessed vol could otherwise look fully authoritative.
+
+def test_an_outcome_with_no_day_t_opportunity_is_inadmissible():
+    records = _records(n=1)
+    records["opportunities"] = []
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("authoritative Day-T opportunity" in e for e in excinfo.value.errors)
+
+
+def test_a_zero_signal_iv_is_inadmissible():
+    """The schema defaults signal_iv to 0.0, which `or` used to convert to a vol."""
+    records = _records(n=1)
+    records["opportunities"] = [_opportunity(0, signal_iv=0.0)]
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("signal_iv" in e for e in excinfo.value.errors)
+
+
+@pytest.mark.parametrize("bad", [None, -0.1, float("nan"), float("inf")])
+def test_a_non_positive_or_non_finite_signal_iv_is_inadmissible(bad):
+    records = _records(n=1)
+    records["opportunities"] = [_opportunity(0, signal_iv=bad)]
+
+    with pytest.raises(PromotionInputError):
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+
+def test_an_opportunity_from_another_build_cannot_vouch_for_an_outcome():
+    records = _records(n=1)
+    records["opportunities"] = [_opportunity(0, runtime_build_sha="another-build")]
+
+    with pytest.raises(PromotionInputError):
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )

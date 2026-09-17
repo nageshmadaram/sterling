@@ -143,6 +143,13 @@ def evaluate_authoritative_snapback_gate(
     if not (cost_evidence_valid and entry_dates_valid):
         checks["independent_sessions_ge_60"] = sessions >= 60
         checks["completed_trades_ge_300"] = n_trades >= 300
+        # Name the sample shortfalls in the same words the populated path uses.
+        # Returning only a data-quality reason reads as though the 300-trade and
+        # 60-session thresholds had been satisfied, or did not apply.
+        if not checks["completed_trades_ge_300"]:
+            reasons.append(f"Completed trades {n_trades} < required 300")
+        if not checks["independent_sessions_ge_60"]:
+            reasons.append(f"Independent sessions {sessions} < required 60")
         checks["positive_lower_95_ci"] = False
         checks["positive_baseline_expectancy"] = False
         checks["positive_under_2x_costs"] = False
@@ -165,6 +172,14 @@ def evaluate_authoritative_snapback_gate(
         checks["positive_under_3x_costs"] = False
         checks["positive_without_top_1pct"] = False
         reasons.append("No completed trades in evaluation run")
+        # State the shortfalls explicitly, in the same words the populated path
+        # uses. An operator reading missing_requirements on an empty day must see
+        # how far the sample is from the gate, not only that it is empty — and a
+        # report that omits the thresholds reads as though they do not apply.
+        reasons.append(f"Completed trades {n_trades} < required 300")
+        checks["independent_sessions_ge_60"] = sessions >= 60
+        if not checks["independent_sessions_ge_60"]:
+            reasons.append(f"Independent sessions {sessions} < required 60")
         return _empty_verdict(
             n_trades=0,
             sessions=sessions,
