@@ -1,4 +1,4 @@
-"""Can this trade actually be funded?
+"""Can this trade actually be funded and safely observed for its full lifecycle?
 
 A profitable book that the account could never have funded is not evidence. Capacity
 is checked against the frozen capital, existing reserved margin, the real option
@@ -9,6 +9,13 @@ Operational admission is checked here too. This function is the last shared chok
 point before the prospective collector commits a new paper position, so SAFE_MODE
 must be consulted here rather than existing only in an operator script. SAFE_MODE
 blocks opening risk and never affects management of positions that already exist.
+
+Runtime 1.6 currently has one known lifecycle venue gap: SENSEX can be addressed
+correctly as BSE/BFO on entry, but the later MTM/intraday-risk orchestration still
+contains NSE/NFO quote reconstruction. Until that lifecycle is made identity-aware,
+opening a SENSEX paper position would create evidence Sterling cannot subsequently
+observe correctly. Such opportunities are therefore recorded but refused at
+admission; this is an operability constraint, not a change to the frozen signal.
 """
 
 from __future__ import annotations
@@ -20,6 +27,12 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 log = logging.getLogger(__name__)
+
+# This is deliberately an execution/observation support list, not a strategy
+# universe. SENSEX remains in the frozen strategy and its opportunities remain in
+# the denominator; only opening exposure is blocked until BFO post-entry handling
+# is complete.
+_LIFECYCLE_UNSUPPORTED_UNDERLYINGS = frozenset({"SENSEX"})
 
 
 class ObservedHedgeMargin(float):
@@ -76,6 +89,7 @@ def evaluate_capacity(
     """Decide whether one paper entry is fundable and operationally admissible."""
     reasons: List[str] = []
     open_underlyings = set(open_underlyings or set())
+    canonical_underlying = str(underlying or "").upper()
 
     try:
         safe_state = _configured_safe_mode_state()
@@ -90,6 +104,13 @@ def evaluate_capacity(
             allowed=False,
             status="SAFE_MODE",
             reasons=["safe_mode_active", *[f"trigger:{t}" for t in safe_state.triggers]],
+        )
+
+    if canonical_underlying in _LIFECYCLE_UNSUPPORTED_UNDERLYINGS:
+        return CapacityDecision(
+            allowed=False,
+            status="INCONCLUSIVE_LIFECYCLE_VENUE",
+            reasons=[f"post_entry_identity_routing_unverified:{canonical_underlying}"],
         )
 
     unknown: List[str] = []
