@@ -63,6 +63,37 @@ def _configured_safe_mode_state():
     return SafeModeService(path).read()
 
 
+def _lane_origination(lane_key: str) -> Optional[CapacityDecision]:
+    """Refuse the entry when its lane may not originate. ``None`` means allowed.
+
+    An unreadable lane registry is itself an unknown, so it refuses rather than
+    falling through to the funding arithmetic.
+    """
+    from app.core.horizon import UnknownMode
+    from app.core.lane_registry import UnknownLane, may_originate
+
+    strategy, _, mode = str(lane_key or "").partition(":")
+    try:
+        decision = may_originate(strategy, mode)
+    except (UnknownLane, UnknownMode, ValueError) as exc:
+        return CapacityDecision(
+            allowed=False,
+            status="LANE_UNKNOWN",
+            reasons=[f"unresolvable_lane:{lane_key}:{type(exc).__name__}"],
+        )
+    if decision.allowed:
+        return None
+    # may_originate reports an unknown lane as a refusal rather than raising, so
+    # map it back to its own status: "this lane does not exist" and "this lane
+    # exists and may not trade yet" send an operator to different places.
+    status = "LANE_UNKNOWN" if decision.reason == "UNKNOWN_LANE" else "LANE_NOT_ORIGINATING"
+    return CapacityDecision(
+        allowed=False,
+        status=status,
+        reasons=[decision.reason, decision.detail] if decision.detail else [decision.reason],
+    )
+
+
 def _margin_is_observed(value: object) -> bool:
     """Production requires broker provenance; pytest fixtures may use plain floats.
 
@@ -85,8 +116,17 @@ def evaluate_capacity(
     max_open_positions: int,
     underlying: str,
     open_underlyings: Optional[Set[str]] = None,
+    lane_key: Optional[str] = None,
 ) -> CapacityDecision:
-    """Decide whether one paper entry is fundable and operationally admissible."""
+    """Decide whether one paper entry is fundable and operationally admissible.
+
+    ``lane_key`` is the ``strategy:mode`` lane the entry belongs to. When given,
+    the lane's origination gate is consulted here — focus, rule-definedness and
+    lane state — so a lane that must not trade is refused at the same choke
+    point as SAFE_MODE rather than in each caller. It is optional only because
+    the arithmetic below is exercised directly by tests that have no lane; the
+    one production caller always supplies it.
+    """
     reasons: List[str] = []
     open_underlyings = set(open_underlyings or set())
     canonical_underlying = str(underlying or "").upper()
@@ -105,6 +145,11 @@ def evaluate_capacity(
             status="SAFE_MODE",
             reasons=["safe_mode_active", *[f"trigger:{t}" for t in safe_state.triggers]],
         )
+
+    if lane_key is not None:
+        decision = _lane_origination(lane_key)
+        if decision is not None:
+            return decision
 
     if canonical_underlying in _LIFECYCLE_UNSUPPORTED_UNDERLYINGS:
         return CapacityDecision(

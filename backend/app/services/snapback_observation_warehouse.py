@@ -118,6 +118,54 @@ def resolve_authoritative_flag(*, source: str, requested: Optional[int] = None) 
         return 0
 
 
+def evidence_class_for(source: str) -> str:
+    """Which kind of claim a row of this source is making.
+
+    Derived from the source for the same reason the authoritative flag is: a
+    caller that simply omitted it would otherwise get to choose, and the class
+    decides whether the row can reach a promotion gate at all.
+    """
+    from app.core.evidence import EvidenceClass
+    from app.services.snapback_authority import (
+        AUTHORITATIVE_SOURCE,
+        CATCHUP_SOURCE,
+        SHADOW_SOURCE,
+    )
+
+    return {
+        AUTHORITATIVE_SOURCE: EvidenceClass.PAPER.value,
+        CATCHUP_SOURCE: EvidenceClass.REPLAY.value,
+        SHADOW_SOURCE: EvidenceClass.REPLAY.value,
+    }.get(str(source), "")
+
+
+def lane_columns(lane_identity: Optional[Any], source: str) -> Dict[str, Any]:
+    """The lane columns for one row.
+
+    ``None`` yields empty strings, not a guessed lane. A row whose writer could
+    not name its lane is unattributed, and unattributed rows are excluded from
+    every lane gate rather than assigned to a plausible one.
+    """
+    if lane_identity is None:
+        return {
+            "strategy_id": "", "strategy_version": "", "mode": "",
+            "mode_version": "", "legacy_mode": None, "lane_key": "",
+            "identity_hash": "", "release_tag": "",
+            "evidence_class": evidence_class_for(source),
+        }
+    return {
+        "strategy_id": lane_identity.strategy_id,
+        "strategy_version": lane_identity.strategy_version,
+        "mode": lane_identity.mode.value,
+        "mode_version": lane_identity.mode_version,
+        "legacy_mode": lane_identity.legacy_mode,
+        "lane_key": lane_identity.lane_key,
+        "identity_hash": lane_identity.identity_hash,
+        "release_tag": lane_identity.release_tag,
+        "evidence_class": evidence_class_for(source),
+    }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -909,6 +957,7 @@ class SnapbackObservationWarehouse:
         policy_snapshot_hash: str = "",
         config_hash: str = "",
         authoritative: Optional[int] = None,
+        lane_identity: Optional[Any] = None,
     ) -> None:
         """Record underlying signal opportunity immutably.
 
@@ -923,6 +972,7 @@ class SnapbackObservationWarehouse:
         # fail-closed. Where source and flag disagree the source wins: wrongly
         # including replayed history costs more than wrongly excluding a signal.
         authoritative = resolve_authoritative_flag(source=source, requested=authoritative)
+        lane = lane_columns(lane_identity, source)
 
         now = _now_iso()
         conn = self._get_connection()
@@ -938,8 +988,10 @@ class SnapbackObservationWarehouse:
                         instrument_token, source, strategy_commit, manifest_hash,
                         cash_exchange, cash_tradingsymbol, cash_instrument_token,
                         option_exchange, option_underlying_name,
-                        policy_snapshot_hash, config_hash, authoritative
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        policy_snapshot_hash, config_hash, authoritative,
+                        strategy_id, strategy_version, mode, mode_version, legacy_mode,
+                        lane_key, identity_hash, evidence_class, release_tag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, signal_type, spot_price, signal_spot or spot_price, mean_target, breakout_level,
@@ -953,6 +1005,9 @@ class SnapbackObservationWarehouse:
                         int(ident.get("cash_instrument_token", 0) or 0),
                         ident.get("option_exchange", ""), ident.get("option_underlying_name", ""),
                         policy_snapshot_hash, config_hash, authoritative,
+                        lane["strategy_id"], lane["strategy_version"], lane["mode"],
+                        lane["mode_version"], lane["legacy_mode"], lane["lane_key"],
+                        lane["identity_hash"], lane["evidence_class"], lane["release_tag"],
                     ),
                 )
         finally:

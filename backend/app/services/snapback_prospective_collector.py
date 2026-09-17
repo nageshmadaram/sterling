@@ -16,6 +16,7 @@ Strict Specification & Contract Enforcement (PROSPECTIVE CAPTURE 1.0.2):
 """
 from __future__ import annotations
 
+import os
 import math
 import time
 from dataclasses import dataclass, field
@@ -64,6 +65,60 @@ def count_trading_sessions(start_date: date, end_date: date) -> int:
             count += 1
         curr += timedelta(days=1)
     return max(1, count)
+
+
+def release_tag() -> str:
+    """The immutable release this evidence belongs to, or "" if unset."""
+    return (os.environ.get("STERLING_RELEASE_TAG") or "").strip()
+
+
+def current_lane_identity(cfg: SnapbackConfig):
+    """The lane identity to stamp on rows written now, or ``None``.
+
+    ``None`` when the release tag or the build SHA is unknown. That is the
+    honest answer, not a failure to try: an authoritative row has to name the
+    immutable release that produced it, and without one the row genuinely
+    cannot be attributed. It is still recorded — it simply stays out of every
+    lane's economic gate until the release is tagged.
+    """
+    from app.core.horizon import UnknownMode
+    from app.engines.snapback.lanes import identity_for
+    from app.services.snapback_observation_warehouse import _current_build_sha
+
+    tag = release_tag()
+    sha = _current_build_sha()
+    if not tag or not sha or sha.upper() == "UNKNOWN":
+        log.warning(
+            "lane identity unavailable (release_tag=%r build_sha=%r); rows will be "
+            "recorded unattributed and excluded from every lane gate", tag, sha,
+        )
+        return None
+    try:
+        return identity_for(
+            getattr(cfg, "trading_mode", "swing"),
+            runtime_sha=sha,
+            release_tag=tag,
+            cfg=cfg,
+        )
+    except (UnknownMode, ValueError) as exc:
+        log.warning("lane identity unavailable: %s", exc)
+        return None
+
+
+def _lane_key_for(cfg: SnapbackConfig) -> str:
+    """Canonical lane for the engine's configured trading_mode.
+
+    An unrecognised mode yields a deliberately unresolvable key rather than a
+    guess: capacity turns that into LANE_UNKNOWN and refuses the entry, which
+    is the right answer for evidence that could not be attributed anyway.
+    """
+    from app.core.horizon import UnknownMode, canonical_mode
+
+    raw = str(getattr(cfg, "trading_mode", "") or "")
+    try:
+        return f"snapback:{canonical_mode(raw).value}"
+    except UnknownMode:
+        return f"snapback:{raw or 'unset'}"
 
 
 def verify_frozen_config(cfg: SnapbackConfig) -> bool:
@@ -154,6 +209,7 @@ class SnapbackProspectiveCollector:
             provider_timestamp=provider_ts,
             source=source,
             identity=identity,
+            lane_identity=current_lane_identity(cfg),
         )
 
         log.info(f"Recorded signal at Day T close: {opportunity_id} ({status})")
@@ -790,6 +846,10 @@ class SnapbackProspectiveCollector:
             max_open_positions=int(getattr(cfg, "max_open_positions", 0) or 0),
             underlying=symbol,
             open_underlyings={str(dict(p).get("symbol") or "") for p in open_positions},
+            # The lane this entry belongs to. Passing it here puts focus mode,
+            # rule-definedness and lane state on the same choke point as
+            # SAFE_MODE, instead of nowhere.
+            lane_key=_lane_key_for(cfg),
         )
         if not capacity.allowed:
             self.warehouse.update_opportunity_status(opportunity_id, capacity.status)

@@ -447,6 +447,11 @@ def create_app() -> FastAPI:
     from app.api.v1.endpoints.snapback_plans import router as snapback_plans_router
     app.include_router(snapback_plans_router, prefix="/api/v1")
 
+    # Two-strategy, five-mode reporting surface. Read-only: promotion is an
+    # evidence decision, never an HTTP call.
+    from app.api.v1.endpoints.lanes import router as lanes_router
+    app.include_router(lanes_router, prefix="/api/v1")
+
     return app
 
 
