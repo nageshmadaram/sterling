@@ -521,6 +521,10 @@ async def test_crash_after_processing_entry_recovers_deterministically(temp_ware
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
         spot_price=24500.0,
+        # A real Day-T signal always carries its own assumed_iv. Omitting it
+        # here left the column at its 0.0 default, which the entry path now
+        # refuses rather than replacing with a house vol.
+        signal_iv=0.18,
         signal_timestamp=sig_dt.isoformat(),
         signal_side="fade_up",
     )
@@ -846,6 +850,9 @@ async def test_crash_after_partial_option_fill_recovers_cleanly(temp_warehouse, 
         symbol="NIFTY",
         signal_type="SNAPBACK_FADE_UP",
         spot_price=24500.0,
+        # A real Day-T signal always carries its own assumed_iv; the column
+        # otherwise defaults to 0.0, which entry now refuses.
+        signal_iv=0.18,
         status="PROCESSING_ENTRY",
         provider_timestamp="2026-09-15T09:20:00+05:30",
     )

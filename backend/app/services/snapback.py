@@ -1037,7 +1037,25 @@ async def process_prospective_pending_entries(client, cfg: SnapbackConfig) -> in
 
                 sig_side = opp.get("signal_side") or ("fade_up" if "FADE_UP" in opp.get("signal_type", "") else "fade_down")
                 want_type = "PE" if sig_side == "fade_up" else "CE"
-                iv_proxy = float(opp.get("signal_iv") or cfg.assumed_vrp * 0.15)
+                # The Day-T signal's own assumed_iv, or nothing. Substituting a
+                # house vol here silently reprices the whole contract selection:
+                # strike, delta and premium all move, and the resulting trade
+                # looks like evidence about the frozen rule when it is evidence
+                # about our guess. Refuse the opportunity instead.
+                raw_signal_iv = opp.get("signal_iv")
+                try:
+                    iv_proxy = float(raw_signal_iv) if raw_signal_iv is not None else 0.0
+                except (TypeError, ValueError):
+                    iv_proxy = 0.0
+                if not math.isfinite(iv_proxy) or iv_proxy <= 0.0:
+                    log.warning(
+                        "INCONCLUSIVE_SIGNAL_IV for %s: stored signal_iv is %r; refusing "
+                        "to price the chain on a substituted vol",
+                        opp_id, raw_signal_iv,
+                    )
+                    collector.warehouse.update_opportunity_status(opp_id, "INCONCLUSIVE")
+                    processed += 1
+                    continue
 
                 cand_infos: List[OptionCandidateInfo] = []
                 cand_symbols: List[str] = []
@@ -1324,7 +1342,23 @@ async def process_prospective_daily_mtm_and_exits(client, cfg: SnapbackConfig) -
                 except Exception:
                     days_elapsed = 1
                 rem_dte = max(1, entry_dte_val - days_elapsed)
-                curr_iv = float(pos.get("entry_iv") or 0.20)
+                # This vol produces curr_opt_delta, which sizes the hedge. A
+                # substituted 0.20 therefore mis-sizes a real hedge on an open
+                # position, so an unknown entry vol must stop the rebalance
+                # rather than guess through it.
+                raw_entry_iv = pos.get("entry_iv")
+                try:
+                    curr_iv = float(raw_entry_iv) if raw_entry_iv is not None else 0.0
+                except (TypeError, ValueError):
+                    curr_iv = 0.0
+                if not math.isfinite(curr_iv) or curr_iv <= 0.0:
+                    log.warning(
+                        "INCONCLUSIVE_ENTRY_IV for %s: stored entry_iv is %r; refusing to "
+                        "rebalance a hedge sized on a substituted vol",
+                        opp_id, raw_entry_iv,
+                    )
+                    processed += 1
+                    continue
                 curr_d_raw = float(bs_delta(curr_spot, opt_strike_val, rem_dte / 365.0, curr_iv, call=(opt_type_str == "CE")))
                 curr_opt_delta = -abs(curr_d_raw) if opt_type_str == "PE" else abs(curr_d_raw)
 
@@ -1522,6 +1556,23 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                     except Exception:
                         exit_dte = entry_dte_val
 
+                    # The vol this position was actually entered at. A hardcoded
+                    # 0.20 here would price the exit diagnostics on a house vol
+                    # and present the result as observed economics.
+                    raw_entry_iv = pos.get("entry_iv")
+                    try:
+                        exit_iv_proxy = float(raw_entry_iv) if raw_entry_iv is not None else 0.0
+                    except (TypeError, ValueError):
+                        exit_iv_proxy = 0.0
+                    if not math.isfinite(exit_iv_proxy) or exit_iv_proxy <= 0.0:
+                        log.warning(
+                            "INCONCLUSIVE_ENTRY_IV for %s (%s): stored entry_iv is %r; "
+                            "refusing to close on a substituted vol",
+                            opp_id, exit_reason, raw_entry_iv,
+                        )
+                        processed += 1
+                        continue
+
                     collector.close_opportunity(
                         opportunity_id=opp_id,
                         symbol=symbol,
@@ -1533,7 +1584,7 @@ async def process_prospective_intraday_risk(client, cfg: SnapbackConfig) -> int:
                         selected_strike=opt_strike_val,
                         entry_dte=entry_dte_val,
                         exit_dte=exit_dte,
-                        iv_proxy=float(pos.get("entry_iv") or 0.20),
+                        iv_proxy=exit_iv_proxy,
                         option_entry_price=float(pos["option_entry_price"]),
                         option_exit_bid=curr_bid,
                         futures_entry_price=float(pos.get("avg_futures_entry_price") or 0.0),
