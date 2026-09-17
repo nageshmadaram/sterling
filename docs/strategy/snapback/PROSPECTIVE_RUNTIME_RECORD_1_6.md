@@ -175,6 +175,8 @@ answerable; it does not answer it.
 | `b51203be1` | make the acceptance harness runnable |
 | `fbda6efe5`, `4ceb6fe76` | restore fail-closed prospective evidence hardening |
 | `e1a5f41b9` | execution-contract evidence + production recorder wiring |
+| `d5ff359e6` | finalize the release record (docs only) |
+| `f6b3894ac` | make live reconnect acceptance exercisable |
 
 The fail-closed contract/tick hardening was first written on a sibling commit
 (`8c49034a5`) that is not in this branch's history; its changes reached the
@@ -233,7 +235,7 @@ An unreadable or unrecognised state file reads as SAFE_MODE, not NORMAL.
 ## Verification
 
 ```
-backend unit + integration     1995 pass
+backend unit + integration     2001 pass
 kitelake                        294 pass
 frontend vitest                1539 pass
 frontend typecheck             clean
@@ -247,9 +249,17 @@ evidence auditor CLI           verified, text and --json
 backup manifest                sha256 -c VERIFIED against the mounted lake
 ```
 
-Remote CI: PR #179, 13/13 checks SUCCESS at the code-complete head
-`e1a5f41b9`. This record is the only change after it, and CI must be green again
-at the resulting head before the live acceptance run certifies that SHA.
+Remote CI: PR #179. The last code change is `f6b3894ac`, whose complete gates
+are green:
+
+```
+CI                     PASS    backend 3.12: 5802 passed, 7 skipped
+Snapback Release Gate  PASS
+Regression Gate        PASS
+```
+
+This record is the only change after `f6b3894ac`, and CI must be green again at
+the resulting head before the live acceptance run certifies that SHA.
 
 ## Backups
 
@@ -259,6 +269,35 @@ copy 1     /mnt/OS/SterlingLakeBackup                      18483 files, verified
 copy 2     SD card 3331-6535                               18483 files, verified
 manifest   41f1f2c398f45a901bbce598b5305d172bd81dd4ca49839ca83d924b43b49c09
 ```
+
+---
+
+### Reconnect is exercised, not awaited
+
+An earlier harness graded reconnect by waiting to see whether a disconnect
+happened to occur, and reported SKIP when none did. Since `overall` treats any
+SKIP as SKIP — a gate that accepts SKIP accepts an untested claim — a healthy
+socket made the gate mathematically incapable of returning PASS, and a clean run
+proved nothing about reconnect either way.
+
+`f6b3894ac` forces the condition instead. It aborts the underlying websocket
+transport while leaving auto-retry alive; `KiteTicker.close()` cannot be used
+because it calls `stop_retry()` and so disables the very path under test. The
+abort is scheduled onto Twisted's reactor thread because the acceptance loop runs
+on the main thread. Release now requires all of:
+
+```
+forced_disconnect             PASS
+disconnect_observed           PASS
+reconnect_attempted           PASS
+reconnect_connected           PASS
+post_reconnect_fresh_ticks    PASS for every subscribed token
+post_reconnect_full_mode      PASS for every subscribed token
+```
+
+Pre-disconnect ticks are held separately so they cannot satisfy the
+post-reconnect requirement, and the deliberate `close()` happens only after
+reconnect has been graded. None of these six can return SKIP.
 
 ---
 
