@@ -337,14 +337,18 @@ def test_engaging_safe_mode_needs_a_reason(client):
     ).status_code == 400
 
 
-def test_every_lane_route_is_read_only_except_the_operator_actions():
-    from main import create_app
-
-    app = create_app()
+def test_every_lane_route_is_read_only_except_the_operator_actions(client):
+    """Same fix as above: read the fixture's app, and count what was checked so
+    an empty route list cannot pass silently."""
+    seen = 0
+    app = client.app
     for route in app.routes:
         path = getattr(route, "path", "")
         methods = set(getattr(route, "methods", set()))
         if path.startswith(("/api/v1/strategies", "/api/v1/lanes", "/api/v1/focus")):
             assert methods <= {"GET", "HEAD", "OPTIONS"}, path
+            seen += 1
         if path.startswith("/api/v1/operator/"):
             assert methods <= {"POST", "HEAD", "OPTIONS"}, path
+            seen += 1
+    assert seen >= 10
