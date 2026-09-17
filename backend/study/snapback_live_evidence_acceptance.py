@@ -35,6 +35,34 @@ SKIP = "SKIP"
 ACCEPTANCE_EVIDENCE_CLASS = "MODELLED"
 ACCEPTANCE_TAG = "TEST_ACCEPTANCE"
 
+NOT_EXERCISED = "NOT_EXERCISED"
+INCONCLUSIVE = "INCONCLUSIVE"
+PROVEN = "PROVEN"
+CONTRADICTED = "CONTRADICTED"
+
+#: Which question each check answers. A run produces three conclusions, never
+#: one headline: whether the runtime is fit to release, whether the vendor
+#: behaves as the schema assumes, and what the frozen strategy could actually do
+#: today. Collapsing them lets a closed market or a blocked expiry calendar read
+#: as a runtime failure, and lets vendor proof read as strategy proof.
+ENGINEERING_CHECKS = frozenset({
+    "instrument_master", "candidate_hash", "selector_replay", "spot",
+    "row_conversion", "persistence", "reload_reproduces_values", "writer_healthy",
+    "forced_disconnect", "disconnect_observed", "reconnect_attempted",
+    "reconnect_connected", "post_reconnect_fresh_ticks", "post_reconnect_full_mode",
+    "simultaneous_subscription", "vendor_probe_contract", "hedge_contract",
+})
+VENDOR_CHECKS = frozenset({
+    "option_full_tick", "option_five_level_depth", "option_order_counts",
+    "option_depth_quantities", "option_exchange_timestamp",
+    "hedge_full_tick", "hedge_five_level_depth", "hedge_order_counts",
+    "hedge_depth_quantities", "hedge_exchange_timestamp",
+    "clock_separation", "freshness_computable", "clock_ordering_sane",
+    "null_exchange_timestamp_semantics", "absent_level_is_null_not_zero",
+    "market_data_live",
+})
+STRATEGY_CHECKS = frozenset({"candidate_universe", "listedness"})
+
 #: Ticks older than this are not a live market. On connect, Kite replays the last
 #: trade of the previous session, so a run after the close receives well-formed
 #: five-level books whose data is hours old. Every schema check then passes while
@@ -79,14 +107,65 @@ class Report:
         if detail is not None:
             self.detail[name] = detail
 
+    def _verdict_over(self, names: frozenset[str]) -> str:
+        seen = {k: v for k, v in self.checks.items() if k in names}
+        if not seen:
+            return NOT_EXERCISED
+        if any(v == FAIL for v in seen.values()):
+            return FAIL
+        if any(v == SKIP for v in seen.values()):
+            return SKIP
+        return PASS
+
+    @property
+    def engineering_gate(self) -> str:
+        """Is this runtime fit to release? Blind to strategy and market state.
+
+        Checks belonging to no declared category count here. A new check must
+        never be silently excluded from every verdict merely because nobody
+        added it to a set — that would let a failing check certify a release.
+        """
+        classified = VENDOR_CHECKS | STRATEGY_CHECKS
+        names = frozenset(ENGINEERING_CHECKS) | {
+            k for k in self.checks if k not in classified
+        }
+        return self._verdict_over(names)
+
+    @property
+    def vendor_assumptions(self) -> str:
+        """Does Kite behave as the evidence schema assumes?
+
+        NOT_EXERCISED when the market was closed: the schema checks still hold on
+        a replayed closing book, but nothing about live behaviour was tested, and
+        reporting that as PROVEN is how a green artifact comes to certify nothing.
+        """
+        verdict = self._verdict_over(VENDOR_CHECKS)
+        if self.checks.get("market_data_live") == FAIL:
+            return NOT_EXERCISED
+        return {PASS: PROVEN, FAIL: CONTRADICTED}.get(verdict, verdict)
+
+    @property
+    def strategy_reality(self) -> str:
+        """What could the frozen strategy actually do today?
+
+        A blocked expiry calendar is a finding about Snapback, never a runtime
+        defect, so it must not be able to fail the engineering gate.
+        """
+        return self._verdict_over(STRATEGY_CHECKS)
+
     @property
     def overall(self) -> str:
+        """Release certification: engineering fit AND vendor assumptions proven.
+
+        Strategy reality is deliberately excluded. Sterling can be correct on a
+        day Snapback cannot trade.
+        """
         if not self.checks:
             return FAIL
-        if any(v == FAIL for v in self.checks.values()):
-            return FAIL
-        if any(v == SKIP for v in self.checks.values()):
-            return SKIP
+        if self.engineering_gate != PASS:
+            return self.engineering_gate
+        if self.vendor_assumptions != PROVEN:
+            return FAIL if self.vendor_assumptions == CONTRADICTED else INCONCLUSIVE
         return PASS
 
     def as_dict(self) -> dict[str, Any]:
@@ -100,6 +179,14 @@ class Report:
             **self.checks,
             "detail": self.detail,
             "notes": self.notes,
+            "conclusions": {
+                "engineering_gate": self.engineering_gate,
+                "vendor_assumptions": self.vendor_assumptions,
+                "strategy_reality": self.strategy_reality,
+            },
+            "unclassified_checks": sorted(
+                set(self.checks) - ENGINEERING_CHECKS - VENDOR_CHECKS - STRATEGY_CHECKS
+            ),
             "overall": self.overall,
         }
 
@@ -424,7 +511,31 @@ def evaluate_forced_reconnect(
     connection_count: int,
     post_reconnect: dict[int, list[dict[str, Any]]],
 ) -> None:
-    report.record("forced_disconnect", PASS if force_succeeded else FAIL, force_detail)
+    report.record(
+        "forced_disconnect",
+        PASS if force_succeeded else FAIL,
+        {
+            "detail": force_detail,
+            "root_cause": (
+                "HARNESS_TRANSPORT_INCOMPATIBILITY: the loss could not be "
+                "induced, so every reconnect check below is consequential rather "
+                "than an independent Sterling defect. Diagnose the abort "
+                "mechanism first."
+                if not force_succeeded
+                else "transport aborted with auto-retry left alive"
+            ),
+        },
+    )
+
+    if not force_succeeded:
+        # Nothing downstream was exercised. Reporting five independent failures
+        # would invite five investigations of one cause.
+        for name in ("disconnect_observed", "reconnect_attempted",
+                     "reconnect_connected", "post_reconnect_fresh_ticks",
+                     "post_reconnect_full_mode"):
+            report.record(name, SKIP,
+                          "NOT_EXERCISED: the disconnect was never induced")
+        return
     report.record(
         "disconnect_observed",
         PASS if disconnects else FAIL,

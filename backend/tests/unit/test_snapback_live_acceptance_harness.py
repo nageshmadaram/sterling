@@ -14,7 +14,10 @@ import pytest
 from study.snapback_live_evidence_acceptance import (
     ACCEPTANCE_EVIDENCE_CLASS,
     FAIL,
+    INCONCLUSIVE,
+    NOT_EXERCISED,
     PASS,
+    PROVEN,
     SKIP,
     Report,
     _force_transport_disconnect,
@@ -71,10 +74,15 @@ def test_one_failure_fails_the_run():
 
 
 def test_all_pass_is_a_pass():
+    """Certification needs engineering fit AND proven vendor assumptions."""
     report = _report()
-    report.record("a", PASS)
-    report.record("b", PASS)
+    for name in ("instrument_master", "persistence", "writer_healthy"):
+        report.record(name, PASS)
+    for name in ("market_data_live", "clock_separation", "option_full_tick"):
+        report.record(name, PASS)
 
+    assert report.engineering_gate == PASS
+    assert report.vendor_assumptions == PROVEN
     assert report.overall == PASS
 
 
@@ -265,7 +273,10 @@ def test_reconnect_pass_requires_disconnect_retry_second_connection_and_fresh_fu
     assert report.checks["reconnect_connected"] == PASS
     assert report.checks["post_reconnect_fresh_ticks"] == PASS
     assert report.checks["post_reconnect_full_mode"] == PASS
-    assert report.overall == PASS
+    # The reconnect chain is an engineering concern; on its own it cannot
+    # certify a release, because no vendor check ran.
+    assert report.engineering_gate == PASS
+    assert report.overall != PASS
 
 
 def test_reconnect_fails_when_one_token_has_no_new_post_reconnect_tick():
@@ -405,7 +416,11 @@ def test_a_stale_book_still_fails_overall_even_when_everything_else_passes():
 
     evaluate_rows(report, [_row(exchange_ts=datetime(2026, 9, 17, 2, 20, tzinfo=timezone.utc))])
 
-    assert report.overall == FAIL
+    # Not a runtime failure — nothing about live behaviour was tested — but it
+    # can never certify.
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall == INCONCLUSIVE
+    assert report.overall != PASS
 
 
 def test_a_fully_populated_book_reports_the_absent_level_path_unexercised():
@@ -485,7 +500,9 @@ def test_a_disconnect_that_never_happened_is_not_recovery():
     )
 
     assert report.checks["forced_disconnect"] == FAIL
-    assert report.checks["reconnect_attempted"] == FAIL
+    # The abort never happened, so recovery was not exercised rather than
+    # independently broken — see the harness-incompatibility root cause.
+    assert report.checks["reconnect_attempted"] == SKIP
 
 
 # ─── credentials ─────────────────────────────────────────────────────────────
@@ -545,3 +562,73 @@ def test_index_spot_symbols_are_not_the_derivatives_underlying():
     assert _SPOT_QUOTE_KEYS["NIFTY"][0] == "NSE:NIFTY 50"
     assert _SPOT_QUOTE_KEYS["BANKNIFTY"][0] == "NSE:NIFTY BANK"
     assert _SPOT_QUOTE_KEYS["SENSEX"][0] == "BSE:SENSEX"
+
+
+# ─── three conclusions, never one headline ───────────────────────────────────
+# Collapsing them lets a closed market or a blocked expiry calendar read as a
+# runtime failure, and lets vendor proof read as strategy proof.
+
+def test_a_blocked_expiry_calendar_does_not_fail_the_engineering_gate():
+    report = _report()
+    for name in ("instrument_master", "persistence", "writer_healthy"):
+        report.record(name, PASS)
+    for name in ("market_data_live", "clock_separation"):
+        report.record(name, PASS)
+    report.record("candidate_universe", FAIL)      # no eligible DTE today
+
+    assert report.strategy_reality == FAIL
+    assert report.engineering_gate == PASS
+    assert report.vendor_assumptions == PROVEN
+    # Sterling can be correct on a day Snapback cannot trade.
+    assert report.overall == PASS
+
+
+def test_a_closed_market_never_proves_vendor_assumptions():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("option_five_level_depth", PASS)
+    report.record("clock_separation", PASS)
+    report.record("market_data_live", FAIL)
+
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall != PASS
+
+
+def test_an_unclassified_check_still_counts():
+    """A new check must never be silently excluded from every verdict."""
+    report = _report()
+    for name in ("instrument_master", "market_data_live", "clock_separation"):
+        report.record(name, PASS)
+    report.record("some_brand_new_check", FAIL)
+
+    assert report.engineering_gate == FAIL
+    assert report.overall != PASS
+    assert "some_brand_new_check" in report.as_dict()["unclassified_checks"]
+
+
+def test_the_artifact_carries_all_three_conclusions():
+    report = _report()
+    report.record("instrument_master", PASS)
+
+    blob = report.as_dict()
+
+    assert set(blob["conclusions"]) == {
+        "engineering_gate", "vendor_assumptions", "strategy_reality"}
+
+
+def test_an_uninducible_disconnect_is_a_harness_incompatibility():
+    """One root cause must not present as five independent failures."""
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=False,
+        force_detail="ticker websocket transport has no abortConnection()",
+        disconnects=[], reconnect_attempts=[], connection_count=1, post_reconnect={},
+    )
+
+    assert report.checks["forced_disconnect"] == FAIL
+    assert "HARNESS_TRANSPORT_INCOMPATIBILITY" in report.detail["forced_disconnect"]["root_cause"]
+    for name in ("disconnect_observed", "reconnect_attempted", "reconnect_connected",
+                 "post_reconnect_fresh_ticks", "post_reconnect_full_mode"):
+        assert report.checks[name] == SKIP

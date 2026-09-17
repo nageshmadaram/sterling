@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import logging
+import traceback
 import math
 import os
 import shutil
@@ -23,6 +24,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -91,8 +94,13 @@ def load_forward_records(warehouse, *, strict: bool = False):
         try:
             records[table] = [dict(r) for r in (warehouse.get_records_by_table(table) or [])]
         except Exception as exc:
+            # Keep the package alive, but never lose why. A bare str(exc) turns a
+            # NameError or AttributeError into a bland business reason with no
+            # stack, which has already disguised hard failures as legitimate
+            # no-action decisions in this codebase more than once.
+            log.exception("Snapback report: failed reading table %s", table)
             records[table] = []
-            errors.append(f"{table}: {exc}")
+            errors.append(f"{table}: {type(exc).__name__}: {exc}")
     if strict:
         return records, errors
     if errors:
@@ -588,10 +596,20 @@ def _write_forward_report_files(
             source_snapshot_sha256=str(summary.get("source_snapshot_sha256") or ""),
         ).as_dict()
     except Exception as exc:
+        # Fail closed and say what broke. The operator dashboard reads this, and
+        # "could not be evaluated" with no type, no stack and no thresholds is
+        # indistinguishable from a quiet day.
+        log.exception("Snapback report: authoritative gate evaluation failed")
         gate_payload = {
             "verdict": "INCONCLUSIVE",
-            "error": str(exc),
-            "missing_requirements": ["authoritative gate could not be evaluated"],
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+            "operator_status": "BLOCKED",
+            "missing_requirements": [
+                f"authoritative gate could not be evaluated: {type(exc).__name__}: {exc}",
+                "Completed trades 0 < required 300",
+                "Independent sessions 0 < required 60",
+            ],
         }
     authoritative_gate.write_text(json.dumps(gate_payload, indent=2), encoding="utf-8")
 
