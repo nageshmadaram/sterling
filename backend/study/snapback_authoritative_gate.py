@@ -3,11 +3,17 @@
 Implements the single authoritative promotion decision framework matching
 docs/strategy/snapback/specs/04_VALIDATION_AND_DELIVERY.md.
 
-This is intentionally conservative. The forward sample must survive baseline,
-2x and 3x observed-cost stress, and it must remain positive after removing the
-most profitable 1% of trades (minimum three once N>=300). Those robustness gates
-are predeclared before authoritative forward outcomes are inspected; they are not
-strategy tuning and may not be relaxed because results are inconvenient.
+Replaces all secondary/legacy promotion reports.
+
+Runtime 1.6 post-merge hardening predeclares two additional robustness checks
+before any authoritative prospective sample is accepted:
+
+* expectancy remains positive under 3x observed execution/statutory costs; and
+* expectancy remains positive after removing the most profitable 1% of trades
+  (minimum three trades once the 300-trade sample exists).
+
+These are evidence/promotion rules, not strategy rules. They do not change which
+signals fire or which contracts are selected.
 """
 from __future__ import annotations
 
@@ -17,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+
 PASSED = "PASSED"
 FAILED = "FAILED"
 INCONCLUSIVE = "INCONCLUSIVE"
@@ -25,7 +32,11 @@ INCONCLUSIVE = "INCONCLUSIVE"
 def verdict_for(
     *, promoted: bool, sample_sufficient: bool, data_quality_ok: bool = True,
 ) -> str:
-    """Map a gate result onto the operator-facing verdict."""
+    """Map a gate result onto the operator-facing verdict.
+
+    Broken or missing evidence outranks everything: it can never be a decision,
+    in either direction.
+    """
     if not data_quality_ok:
         return INCONCLUSIVE
     if promoted:
@@ -61,7 +72,9 @@ class AuthoritativeGateVerdict:
             "lower_95_ci": round(self.lower_95_ci, 2),
             "expectancy_2x_cost": round(self.expectancy_2x_cost, 2),
             "expectancy_3x_cost": round(self.expectancy_3x_cost, 2),
-            "expectancy_without_top_1pct": round(self.expectancy_without_top_1pct, 2),
+            "expectancy_without_top_1pct": round(
+                self.expectancy_without_top_1pct, 2
+            ),
             "max_mtm_drawdown_pct": round(self.max_mtm_drawdown_pct, 2),
             "top_1pct_pnl_share": round(self.top_1pct_pnl_share, 4),
             "unresolved_exposures_count": self.unresolved_exposures_count,
@@ -71,26 +84,39 @@ class AuthoritativeGateVerdict:
         }
 
 
-def _empty_verdict(
+def _invalid_verdict(
     *,
     n_trades: int,
-    sessions: int,
+    total_sessions: int,
     unresolved_exposures_count: int,
     quote_coverage_pct: float,
     checks: Dict[str, bool],
     reasons: List[str],
-    max_dd: float = 999.0,
 ) -> AuthoritativeGateVerdict:
+    """Fail closed when the numeric evidence itself is unusable."""
+    checks.setdefault("independent_sessions_ge_60", total_sessions >= 60)
+    checks.setdefault("completed_trades_ge_300", n_trades >= 300)
+    for name in (
+        "positive_lower_95_ci",
+        "positive_baseline_expectancy",
+        "positive_under_2x_costs",
+        "positive_under_3x_costs",
+        "positive_without_top_1pct",
+        "drawdown_within_budget",
+    ):
+        checks.setdefault(name, False)
+    checks.setdefault("zero_unresolved_exposures", unresolved_exposures_count == 0)
+    checks.setdefault("quote_coverage_ge_95", False)
     return AuthoritativeGateVerdict(
         promoted=False,
-        total_sessions=sessions,
+        total_sessions=total_sessions,
         completed_trades=n_trades,
         net_expectancy=0.0,
         lower_95_ci=0.0,
         expectancy_2x_cost=0.0,
         expectancy_3x_cost=0.0,
         expectancy_without_top_1pct=0.0,
-        max_mtm_drawdown_pct=max_dd,
+        max_mtm_drawdown_pct=999.0,
         top_1pct_pnl_share=0.0,
         unresolved_exposures_count=unresolved_exposures_count,
         quote_coverage_pct=quote_coverage_pct,
@@ -112,82 +138,137 @@ def evaluate_authoritative_snapback_gate(
     entry_sessions_count: Optional[int] = None,
     require_mtm_evidence: bool = True,
 ) -> AuthoritativeGateVerdict:
-    """Evaluate prospective evidence against the predeclared promotion contract."""
+    """Evaluate authoritative prospective results against the promotion contract."""
     n_trades = len(trade_pnls)
     reasons: List[str] = []
     checks: Dict[str, bool] = {}
-
-    cost_evidence_valid = statutory_costs is not None and len(statutory_costs) == n_trades
-    checks["cost_evidence_provided"] = cost_evidence_valid
-    if not cost_evidence_valid:
-        reasons.append(
-            f"Missing or mismatched statutory cost evidence: costs="
-            f"{len(statutory_costs) if statutory_costs else 0} vs trades={n_trades}"
-        )
 
     entry_dates_valid = entry_dates is not None and len(entry_dates) == n_trades
     checks["entry_dates_provided"] = entry_dates_valid
     if not entry_dates_valid:
         reasons.append(
-            f"Missing or mismatched actual entry dates evidence: entry_dates="
-            f"{len(entry_dates) if entry_dates else 0} vs trades={n_trades}"
+            "Missing or mismatched actual entry dates evidence: "
+            f"entry_dates={len(entry_dates) if entry_dates else 0} vs trades={n_trades}"
         )
 
     dates = list(entry_dates) if entry_dates_valid else [f"day_{i}" for i in range(n_trades)]
     entry_day_count = len(set(dates)) if n_trades > 0 else 0
-    sessions = int(entry_sessions_count) if entry_sessions_count is not None else entry_day_count
+    total_sessions = (
+        int(entry_sessions_count)
+        if entry_sessions_count is not None
+        else entry_day_count
+    )
+
+    cost_evidence_valid = statutory_costs is not None and len(statutory_costs) == n_trades
+    if cost_evidence_valid:
+        try:
+            cost_evidence_valid = all(
+                math.isfinite(float(v)) and float(v) >= 0.0
+                for v in statutory_costs or []
+            )
+        except (TypeError, ValueError):
+            cost_evidence_valid = False
+    checks["cost_evidence_provided"] = cost_evidence_valid
+    if not cost_evidence_valid:
+        reasons.append(
+            "Missing, mismatched, negative or non-finite statutory cost evidence: "
+            f"costs={len(statutory_costs) if statutory_costs else 0} vs trades={n_trades}"
+        )
+
+    try:
+        pnls_finite = all(math.isfinite(float(v)) for v in trade_pnls)
+    except (TypeError, ValueError):
+        pnls_finite = False
+    checks["trade_pnls_finite"] = pnls_finite
+    if not pnls_finite:
+        reasons.append("Trade P&L evidence contains a non-numeric or non-finite value")
+
+    dates_nonempty = entry_dates_valid and all(str(v).strip() for v in (entry_dates or []))
+    checks["entry_dates_nonempty"] = dates_nonempty
+    if entry_dates_valid and not dates_nonempty:
+        reasons.append("Entry-date evidence contains a blank value")
+
+    try:
+        capital_valid = (
+            math.isfinite(float(allocation_capital_budget))
+            and float(allocation_capital_budget) > 0.0
+        )
+    except (TypeError, ValueError):
+        capital_valid = False
+    checks["allocation_capital_valid"] = capital_valid
+    if not capital_valid:
+        reasons.append("Allocation capital budget must be finite and strictly positive")
+
+    try:
+        coverage_valid = (
+            math.isfinite(float(quote_coverage_pct))
+            and 0.0 <= float(quote_coverage_pct) <= 100.0
+        )
+    except (TypeError, ValueError):
+        coverage_valid = False
+    checks["quote_coverage_valid"] = coverage_valid
+    if not coverage_valid:
+        reasons.append("Quote coverage must be a finite percentage in [0, 100]")
+
+    unresolved_valid = isinstance(unresolved_exposures_count, (int, np.integer)) and int(
+        unresolved_exposures_count
+    ) >= 0
+    checks["unresolved_exposure_count_valid"] = unresolved_valid
+    if not unresolved_valid:
+        reasons.append("Unresolved exposure count must be a non-negative integer")
 
     has_mtm_evidence = daily_mtm_equity_series is not None and len(daily_mtm_equity_series) > 0
-    checks["daily_mtm_evidence_provided"] = has_mtm_evidence or not require_mtm_evidence
+    mtm_valid = True
+    if has_mtm_evidence:
+        try:
+            mtm_valid = all(math.isfinite(float(v)) for v in daily_mtm_equity_series or [])
+        except (TypeError, ValueError):
+            mtm_valid = False
+    checks["daily_mtm_evidence_provided"] = (
+        has_mtm_evidence and mtm_valid
+    ) or not require_mtm_evidence
+    if has_mtm_evidence and not mtm_valid:
+        reasons.append("Daily MTM evidence contains a non-numeric or non-finite value")
 
-    if not (cost_evidence_valid and entry_dates_valid):
-        checks["independent_sessions_ge_60"] = sessions >= 60
-        checks["completed_trades_ge_300"] = n_trades >= 300
-        # Name the sample shortfalls in the same words the populated path uses.
-        # Returning only a data-quality reason reads as though the 300-trade and
-        # 60-session thresholds had been satisfied, or did not apply.
-        if not checks["completed_trades_ge_300"]:
-            reasons.append(f"Completed trades {n_trades} < required 300")
-        if not checks["independent_sessions_ge_60"]:
-            reasons.append(f"Independent sessions {sessions} < required 60")
-        checks["positive_lower_95_ci"] = False
-        checks["positive_baseline_expectancy"] = False
-        checks["positive_under_2x_costs"] = False
-        checks["positive_under_3x_costs"] = False
-        checks["positive_without_top_1pct"] = False
-        checks["drawdown_within_budget"] = False
-        checks["zero_unresolved_exposures"] = unresolved_exposures_count == 0
-        checks["quote_coverage_ge_95"] = quote_coverage_pct >= 95.0
-        return _empty_verdict(
+    base_evidence_valid = all((
+        cost_evidence_valid,
+        entry_dates_valid,
+        dates_nonempty if n_trades else True,
+        pnls_finite,
+        capital_valid,
+        coverage_valid,
+        unresolved_valid,
+        mtm_valid,
+    ))
+    if not base_evidence_valid:
+        return _invalid_verdict(
             n_trades=n_trades,
-            sessions=sessions,
-            unresolved_exposures_count=unresolved_exposures_count,
-            quote_coverage_pct=quote_coverage_pct,
+            total_sessions=total_sessions,
+            unresolved_exposures_count=max(0, int(unresolved_exposures_count))
+            if isinstance(unresolved_exposures_count, (int, np.integer)) else 0,
+            quote_coverage_pct=float(quote_coverage_pct) if coverage_valid else 0.0,
             checks=checks,
             reasons=reasons,
         )
 
     if n_trades == 0:
         checks["completed_trades_ge_300"] = False
-        checks["positive_under_3x_costs"] = False
-        checks["positive_without_top_1pct"] = False
         reasons.append("No completed trades in evaluation run")
-        # State the shortfalls explicitly, in the same words the populated path
-        # uses. An operator reading missing_requirements on an empty day must see
-        # how far the sample is from the gate, not only that it is empty — and a
-        # report that omits the thresholds reads as though they do not apply.
-        reasons.append(f"Completed trades {n_trades} < required 300")
-        checks["independent_sessions_ge_60"] = sessions >= 60
-        if not checks["independent_sessions_ge_60"]:
-            reasons.append(f"Independent sessions {sessions} < required 60")
-        return _empty_verdict(
-            n_trades=0,
-            sessions=sessions,
-            unresolved_exposures_count=unresolved_exposures_count,
-            quote_coverage_pct=quote_coverage_pct,
+        return AuthoritativeGateVerdict(
+            promoted=False,
+            total_sessions=total_sessions,
+            completed_trades=0,
+            net_expectancy=0.0,
+            lower_95_ci=0.0,
+            expectancy_2x_cost=0.0,
+            expectancy_3x_cost=0.0,
+            expectancy_without_top_1pct=0.0,
+            max_mtm_drawdown_pct=0.0,
+            top_1pct_pnl_share=0.0,
+            unresolved_exposures_count=int(unresolved_exposures_count),
+            quote_coverage_pct=float(quote_coverage_pct),
             checks=checks,
             reasons=reasons,
-            max_dd=0.0,
         )
 
     pnls = np.array(trade_pnls, dtype=float)
@@ -199,12 +280,27 @@ def evaluate_authoritative_snapback_gate(
     expectancy_2x = float(np.mean(pnls_2x))
     expectancy_3x = float(np.mean(pnls_3x))
 
+    # Predeclared tail-concentration stress. Remove the best 1% of all trades,
+    # with a minimum of three once the promotion-sized sample exists. Removing
+    # only winners is intentional: the question is whether the apparent edge
+    # survives without its most favourable outcomes.
+    remove_n = max(3, int(math.ceil(0.01 * n_trades))) if n_trades >= 300 else max(
+        1, int(math.ceil(0.01 * n_trades))
+    )
+    positive_indices = [i for i in np.argsort(pnls)[::-1] if pnls[i] > 0]
+    remove_indices = set(int(i) for i in positive_indices[:remove_n])
+    remaining = np.array(
+        [p for i, p in enumerate(pnls) if i not in remove_indices], dtype=float
+    )
+    expectancy_without_top = float(np.mean(remaining)) if len(remaining) else float("-inf")
+
+    # ENTRY-DAY BLOCK BOOTSTRAP.
     rng = np.random.default_rng(seed)
     day_to_pnls: Dict[str, List[float]] = {}
     for d, p in zip(dates, pnls):
-        day_to_pnls.setdefault(d, []).append(p)
-    unique_days_list = list(day_to_pnls.keys())
+        day_to_pnls.setdefault(d, []).append(float(p))
 
+    unique_days_list = list(day_to_pnls.keys())
     if len(unique_days_list) >= 5:
         boot_means = []
         for _ in range(1000):
@@ -220,29 +316,23 @@ def evaluate_authoritative_snapback_gate(
         peak = np.maximum.accumulate(mtm_series)
         drawdowns = peak - mtm_series
         max_dd_val = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
-        max_dd_pct = (max_dd_val / allocation_capital_budget) * 100.0
+        max_dd_pct = (max_dd_val / float(allocation_capital_budget)) * 100.0
     else:
         cum = np.cumsum(pnls)
         peak = np.maximum.accumulate(cum)
         drawdowns = peak - cum
         max_dd_val = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
-        max_dd_pct = (max_dd_val / allocation_capital_budget) * 100.0
+        max_dd_pct = (max_dd_val / float(allocation_capital_budget)) * 100.0
 
-    # Tail concentration is diagnostic; the hard robustness test below removes
-    # the best 1% of trades, with a minimum of three at the 300-trade decision point.
     sorted_pnls = np.sort(pnls)[::-1]
     top_1pct_n = max(1, int(math.ceil(0.01 * n_trades)))
     top_1pct_sum = float(np.sum(sorted_pnls[:top_1pct_n]))
     total_positive_pnl = float(np.sum(pnls[pnls > 0])) if np.any(pnls > 0) else 1.0
     top_1pct_share = top_1pct_sum / total_positive_pnl
 
-    tail_remove_n = min(n_trades, max(3, int(math.ceil(0.01 * n_trades))))
-    remaining = sorted_pnls[tail_remove_n:]
-    expectancy_without_top = float(np.mean(remaining)) if len(remaining) else float("-inf")
-
-    checks["independent_sessions_ge_60"] = sessions >= 60
+    checks["independent_sessions_ge_60"] = total_sessions >= 60
     if not checks["independent_sessions_ge_60"]:
-        reasons.append(f"Independent sessions {sessions} < required 60")
+        reasons.append(f"Independent sessions {total_sessions} < required 60")
 
     checks["completed_trades_ge_300"] = n_trades >= 300
     if not checks["completed_trades_ge_300"]:
@@ -266,10 +356,10 @@ def evaluate_authoritative_snapback_gate(
     if not checks["positive_under_3x_costs"]:
         reasons.append(f"Expectancy under 3x costs ({expectancy_3x:.2f}) <= 0")
 
-    checks["positive_without_top_1pct"] = n_trades >= 300 and expectancy_without_top > 0.0
-    if n_trades >= 300 and not checks["positive_without_top_1pct"]:
+    checks["positive_without_top_1pct"] = expectancy_without_top > 0.0
+    if not checks["positive_without_top_1pct"]:
         reasons.append(
-            f"Expectancy after removing the top {tail_remove_n} profitable trades "
+            "Expectancy after removing the strongest 1% of profitable trades "
             f"({expectancy_without_top:.2f}) <= 0"
         )
 
@@ -286,11 +376,11 @@ def evaluate_authoritative_snapback_gate(
                 f"{max_allowed_drawdown_pct:.2f}%"
             )
 
-    checks["zero_unresolved_exposures"] = unresolved_exposures_count == 0
+    checks["zero_unresolved_exposures"] = int(unresolved_exposures_count) == 0
     if not checks["zero_unresolved_exposures"]:
         reasons.append(f"Unresolved exposures present: {unresolved_exposures_count}")
 
-    checks["quote_coverage_ge_95"] = quote_coverage_pct >= 95.0
+    checks["quote_coverage_ge_95"] = float(quote_coverage_pct) >= 95.0
     if not checks["quote_coverage_ge_95"]:
         reasons.append(f"Quote coverage {quote_coverage_pct:.2f}% < required 95.0%")
 
@@ -298,7 +388,7 @@ def evaluate_authoritative_snapback_gate(
 
     return AuthoritativeGateVerdict(
         promoted=promoted,
-        total_sessions=sessions,
+        total_sessions=total_sessions,
         completed_trades=n_trades,
         net_expectancy=net_expectancy,
         lower_95_ci=lower_95_ci,
@@ -307,8 +397,8 @@ def evaluate_authoritative_snapback_gate(
         expectancy_without_top_1pct=expectancy_without_top,
         max_mtm_drawdown_pct=max_dd_pct,
         top_1pct_pnl_share=top_1pct_share,
-        unresolved_exposures_count=unresolved_exposures_count,
-        quote_coverage_pct=quote_coverage_pct,
+        unresolved_exposures_count=int(unresolved_exposures_count),
+        quote_coverage_pct=float(quote_coverage_pct),
         checks=checks,
         reasons=reasons,
     )
@@ -319,11 +409,10 @@ def evaluate_with_verdict(**kwargs) -> Dict[str, Any]:
     data_quality_ok = bool(kwargs.pop("data_quality_ok", True))
     min_sessions = int(kwargs.pop("min_sessions", 60))
     min_trades = int(kwargs.pop("min_trades", 300))
-    sessions = int(kwargs.get("entry_sessions_count") or 0)
 
     payload = evaluate_authoritative_snapback_gate(**kwargs).as_dict()
     sample_sufficient = (
-        sessions >= min_sessions
+        int(payload.get("total_sessions") or 0) >= min_sessions
         and int(payload.get("completed_trades") or 0) >= min_trades
     )
     payload["verdict"] = verdict_for(

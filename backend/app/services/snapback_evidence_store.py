@@ -7,15 +7,13 @@ without touching the lifecycle rules.
 Two behaviours matter more than the format.
 
 **Atomicity.** Every file is serialized into ``_staging`` and moved into place
-with ``os.replace``. A crash may leave an orphan staging file, which is
-recoverable noise; a crash must never leave a truncated file that reads as valid
-evidence, which is unrecoverable and silent.
+only after fsync. A crash may leave an orphan staging file; it must never leave a
+truncated final evidence part.
 
-**Asymmetric failure.** A writer that cannot persist must block *new* entries —
-evidence that is not durable cannot support a capital decision. It must not block
-exiting an *existing* position. Capital safety outranks evidence completeness once
-exposure exists, and a system that refuses to close a position because its disk
-died has turned a storage fault into a market loss.
+**Asymmetric failure.** A writer that cannot persist must block *new* entries. It
+must not block managing existing exposure. Restart hydration also validates the
+causal lifecycle chain: a missing part is an evidence gap, not a shorter valid
+history.
 """
 
 from __future__ import annotations
@@ -39,16 +37,12 @@ EVIDENCE_STORE_SCHEMA_VERSION = "1"
 
 
 class EvidenceStoreError(RuntimeError):
-    """The evidence could not be made durable."""
+    """The evidence could not be made durable or reconstructed truthfully."""
 
 
 @dataclass
 class WriterHealth:
-    """Whether evidence is durable, and what that permits.
-
-    ``may_open_new_exposure`` and ``may_manage_existing_exposure`` are separate on
-    purpose: they answer different questions and must be allowed to disagree.
-    """
+    """Whether evidence is durable, and what that permits."""
 
     healthy: bool = True
     last_error: Optional[str] = None
@@ -60,7 +54,6 @@ class WriterHealth:
 
     @property
     def may_manage_existing_exposure(self) -> bool:
-        # Always. Losing the disk must not strand an open position.
         return True
 
 
@@ -79,18 +72,12 @@ def _default(value: Any) -> str:
 
 
 class SnapbackEvidenceStore:
-    """Append-only evidence, one immutable part file per write.
-
-    Part files rather than one rewritten daily file: rewriting means reading the
-    whole of yesterday into memory and writing it back on every append, which
-    turns a power cut or a pulled drive into the loss of a whole session rather
-    than of one record.
-    """
+    """Append-only evidence, one immutable part file per write."""
 
     KINDS = (
         "opportunities", "candidate_universes", "selections",
-        "hedge_selections", "broker_events", "lifecycle", "market_events",
-        "protection",
+        "execution_contracts", "hedge_selections", "broker_events", "lifecycle",
+        "market_events", "protection",
     )
 
     def __init__(self, root: Path | str, *, session_date: Optional[date] = None,
@@ -109,12 +96,7 @@ class SnapbackEvidenceStore:
         return self._root / "evidence" / f"date={self._date.isoformat()}" / kind
 
     def _write(self, kind: str, row: dict[str, Any]) -> Optional[Path]:
-        """Serialise one row atomically. Records the failure rather than raising.
-
-        Raising here would propagate a storage fault into whichever trading path
-        happened to be recording, which is exactly the coupling this module
-        exists to avoid. The caller consults ``health`` instead.
-        """
+        """Serialise one row atomically. Records the failure rather than raising."""
         try:
             target_dir = self._dir(kind)
             staging_dir = self._root / "evidence" / "_staging"
@@ -126,13 +108,17 @@ class SnapbackEvidenceStore:
             staging = staging_dir / name
             final = target_dir / name
 
+            # Reusing a run id after restart must never overwrite a final part.
+            # An overwrite would turn append-only evidence into mutable evidence.
+            if final.exists():
+                raise OSError(f"evidence part already exists and is immutable: {final}")
+
             blob = json.dumps(row, sort_keys=True, separators=(",", ":"), default=_default)
             with open(staging, "w", encoding="utf-8") as fh:
                 fh.write(blob)
                 fh.flush()
                 os.fsync(fh.fileno())
 
-            # Only now does it become visible under its final name.
             os.replace(staging, final)
 
             self.health.healthy = True
@@ -144,8 +130,6 @@ class SnapbackEvidenceStore:
             self.health.failed_writes += 1
             return None
 
-    # ─── append methods ──────────────────────────────────────────────────────
-
     def append_opportunity(self, envelope: Any) -> Optional[Path]:
         return self._write("opportunities", _as_row(envelope))
 
@@ -154,6 +138,9 @@ class SnapbackEvidenceStore:
 
     def append_selection(self, selection: Any) -> Optional[Path]:
         return self._write("selections", _as_row(selection))
+
+    def append_execution_contract(self, record: Any) -> Optional[Path]:
+        return self._write("execution_contracts", _as_row(record))
 
     def append_hedge_selection(self, hedge: Any) -> Optional[Path]:
         return self._write("hedge_selections", _as_row(hedge))
@@ -165,21 +152,13 @@ class SnapbackEvidenceStore:
         return self._write("lifecycle", _as_row(event))
 
     def append_market_event(self, row: Any) -> Optional[Path]:
-        """One market evidence row. Accepts a plain dict, since tick rows are
-        built by kitelake and are already flat."""
         return self._write("market_events", row if isinstance(row, dict) else _as_row(row))
 
     def append_protection_event(self, event: Any) -> Optional[Path]:
         return self._write("protection", _as_row(event))
 
-    # ─── reading back ────────────────────────────────────────────────────────
-
     def read(self, kind: str) -> list[dict[str, Any]]:
-        """Every persisted row of one kind, ordered by part number.
-
-        Staging files are deliberately not read: a file that never reached its
-        final name is a crash artefact, not evidence.
-        """
+        """Every persisted row of one kind, ordered by part filename."""
         if kind not in self.KINDS:
             raise EvidenceStoreError(f"unknown evidence kind {kind!r}")
         directory = self._dir(kind)
@@ -194,9 +173,60 @@ class SnapbackEvidenceStore:
         return rows
 
     def read_lifecycle_events(self) -> list[Any]:
-        """Rebuild lifecycle events for restart, ordered causally per opportunity."""
-        from app.services.snapback_evidence_recorder import EvidenceLifecycleEvent
+        """Rebuild lifecycle events and reject a broken causal chain.
+
+        Sorting is not validation. A failed write can leave sequence 0,2 on disk;
+        accepting that as a two-event history would erase the fact that sequence 1
+        was lost. The same applies to duplicated ids and impossible transitions.
+        """
+        from app.services.snapback_evidence_recorder import (
+            EvidenceLifecycleEvent,
+            LEGAL_TRANSITIONS,
+            OpportunityState,
+        )
 
         events = [EvidenceLifecycleEvent(**row) for row in self.read("lifecycle")]
         events.sort(key=lambda e: (e.opportunity_id, e.sequence))
+
+        seen_ids: set[str] = set()
+        by_opp: dict[str, list[Any]] = {}
+        for event in events:
+            if event.event_id in seen_ids:
+                raise EvidenceStoreError(f"duplicate lifecycle event_id {event.event_id}")
+            seen_ids.add(event.event_id)
+            by_opp.setdefault(event.opportunity_id, []).append(event)
+
+        for opportunity_id, chain in by_opp.items():
+            prior_state: Optional[str] = None
+            for expected_sequence, event in enumerate(chain):
+                if int(event.sequence) != expected_sequence:
+                    raise EvidenceStoreError(
+                        f"lifecycle sequence gap for {opportunity_id}: expected "
+                        f"{expected_sequence}, got {event.sequence}"
+                    )
+                if expected_sequence == 0:
+                    if event.previous_state is not None:
+                        raise EvidenceStoreError(
+                            f"first lifecycle event for {opportunity_id} has previous_state "
+                            f"{event.previous_state!r}"
+                        )
+                    if event.state != OpportunityState.OPPORTUNITY_CREATED:
+                        raise EvidenceStoreError(
+                            f"first lifecycle event for {opportunity_id} is {event.state!r}, "
+                            "not OPPORTUNITY_CREATED"
+                        )
+                else:
+                    if event.previous_state != prior_state:
+                        raise EvidenceStoreError(
+                            f"lifecycle previous_state mismatch for {opportunity_id} at "
+                            f"sequence {event.sequence}: stored={event.previous_state!r}, "
+                            f"expected={prior_state!r}"
+                        )
+                    if event.state not in LEGAL_TRANSITIONS.get(str(prior_state), frozenset()):
+                        raise EvidenceStoreError(
+                            f"illegal persisted lifecycle transition for {opportunity_id}: "
+                            f"{prior_state} -> {event.state}"
+                        )
+                prior_state = event.state
+
         return events

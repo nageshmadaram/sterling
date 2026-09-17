@@ -18,7 +18,9 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-GATE_VERSION = "authoritative_gate_v2"
+# v3 predeclares 3x-cost and top-1%-profit-removal robustness gates before the
+# authoritative prospective sample starts.
+GATE_VERSION = "authoritative_gate_v3"
 
 PASSED = "PASSED"
 FAILED = "FAILED"
@@ -79,8 +81,11 @@ def _identity() -> Dict[str, str]:
     from app.services.snapback_identity import build_sha
     import os
 
+    # No historical default. The experiment id is a provenance fact, not a
+    # convenience value. Preflight already requires it; promotion must agree.
+    experiment_id = (os.environ.get("STERLING_EXPERIMENT_ID") or "").strip()
     return {
-        "experiment_id": os.environ.get("STERLING_EXPERIMENT_ID", "prospective_runtime_1_1"),
+        "experiment_id": experiment_id,
         "runtime_build_sha": build_sha(),
         "strategy_config_hash": compute_config_hash(),
         "strategy_rule_hash": compute_rule_hash(),
@@ -98,16 +103,57 @@ class PromotionService:
     def evaluate(self, *, warehouse, source_snapshot_sha256: str) -> PromotionResult:
         from study.snapback_authoritative_gate import evaluate_authoritative_snapback_gate
         from study.snapback_forward_report import load_forward_records
-        from study.snapback_promotion_inputs import (
-            PromotionInputError, build_promotion_input,
+        from study.snapback_promotion_inputs import PromotionInputError, build_promotion_input
+        from app.services.snapback_session_ledger import (
+            observed_session_count,
+            session_market_evidence_complete,
         )
-        from app.services.snapback_session_ledger import observed_session_count
 
         identity = _identity()
         evaluated_at = datetime.now(timezone.utc).isoformat()
+        observed_sessions = observed_session_count(warehouse)
+
+        if not identity["experiment_id"]:
+            return self._record(
+                warehouse,
+                self._inconclusive(
+                    identity,
+                    source_snapshot_sha256,
+                    observed_sessions,
+                    reasons=["STERLING_EXPERIMENT_ID is not set; promotion identity is unknown"],
+                    evaluated_at=evaluated_at,
+                ),
+            )
 
         records, load_errors = load_forward_records(warehouse, strict=True)
-        observed_sessions = observed_session_count(warehouse)
+
+        # A prospective experiment cannot silently drop a broken day. Restrict
+        # this check to the current experiment so an old database row cannot
+        # poison a later, explicitly separate experiment.
+        current_sessions = [
+            dict(row)
+            for row in (records.get("prospective_sessions") or [])
+            if str(dict(row).get("experiment_id") or "") == identity["experiment_id"]
+        ]
+        gap_sessions = [
+            str(row.get("session_date") or "unknown")
+            for row in current_sessions
+            if not session_market_evidence_complete(row)
+        ]
+        if gap_sessions:
+            return self._record(
+                warehouse,
+                self._inconclusive(
+                    identity,
+                    source_snapshot_sha256,
+                    observed_sessions,
+                    reasons=[
+                        "incomplete prospective evidence sessions: "
+                        + ", ".join(gap_sessions[:20])
+                    ],
+                    evaluated_at=evaluated_at,
+                ),
+            )
 
         try:
             inputs = build_promotion_input(
@@ -117,7 +163,6 @@ class PromotionService:
                 observed_sessions=observed_sessions,
             )
         except PromotionInputError as exc:
-            # Broken or missing evidence is never an economic verdict.
             return self._record(
                 warehouse,
                 self._inconclusive(
@@ -159,7 +204,6 @@ class PromotionService:
             inputs.observed_sessions >= self.MIN_SESSIONS
             and inputs.completed_trades >= self.MIN_TRADES
         )
-        # One mapping, shared with study/snapback_forward_gate.py.
         verdict = verdict_for(
             promoted=bool(verdict_payload.get("promoted")),
             sample_sufficient=sample_sufficient,
@@ -222,8 +266,6 @@ class PromotionService:
             checks=json.loads(row["checks_json"] or "{}"),
             evaluated_at=row["evaluated_at"],
         )
-
-    # ------------------------------------------------------------------ internals
 
     def _inconclusive(
         self, identity, snapshot, observed_sessions, *, reasons, evaluated_at,
@@ -292,10 +334,6 @@ class PromotionService:
                 evaluated_at=result.evaluated_at,
             )
         except Exception as exc:
-            # A verdict nobody can audit later is not evidence of anything. If
-            # the record cannot be stored, the decision does not stand: it
-            # degrades to INCONCLUSIVE rather than being reported as a result
-            # whose provenance was silently lost.
             log.error("Promotion record could not be persisted: %s", exc)
             return replace(
                 result,
