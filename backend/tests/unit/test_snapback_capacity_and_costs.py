@@ -4,7 +4,8 @@ Costs: one versioned calculator, side- and segment-correct. STT is sell-side onl
 charging it on an option buy overstates entry cost and understates exit cost.
 
 Capacity: an unaffordable lot is NO_CAPACITY, not a paper trade. A book that could not
-have been funded is not evidence.
+have been funded is not evidence. SAFE_MODE is part of admission: an operator stop
+must block new exposure at the production choke point, not only change a status file.
 """
 
 from __future__ import annotations
@@ -19,6 +20,12 @@ from app.services.snapback_capacity import (
     CapacityDecision,
     evaluate_capacity,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_safe_mode(monkeypatch, tmp_path):
+    """Capacity tests must not depend on an operator's real SAFE_MODE file."""
+    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe_mode.json"))
 
 
 # ----------------------------------------------------------------- costs
@@ -119,7 +126,6 @@ def test_unaffordable_single_lot_is_no_capacity_not_a_paper_trade():
     decision = evaluate_capacity(
         capital=100_000.0,
         reserved_margin=0.0,
-        # One LAURUSLABS lot of premium plus hedge margin exceeds the account.
         option_premium_cash=150_000.0,
         hedge_margin=40_000.0,
         fee_reserve=1_000.0,
@@ -218,3 +224,47 @@ def test_unknown_capital_is_inconclusive():
 
     assert decision.allowed is False
     assert decision.status == "INCONCLUSIVE_CAPACITY"
+
+
+def test_safe_mode_blocks_an_otherwise_affordable_entry(tmp_path):
+    from app.services.safe_mode import SafeModeService, SafeModeTrigger
+
+    service = SafeModeService(tmp_path / "safe_mode.json")
+    service.engage(trigger=SafeModeTrigger.OPERATOR, reason="operator stop")
+
+    decision = evaluate_capacity(
+        capital=1_000_000.0,
+        reserved_margin=0.0,
+        option_premium_cash=10_000.0,
+        hedge_margin=10_000.0,
+        fee_reserve=500.0,
+        open_positions=0,
+        max_open_positions=3,
+        underlying="INFY",
+        open_underlyings=set(),
+    )
+
+    assert decision.allowed is False
+    assert decision.status == "SAFE_MODE"
+    assert "safe_mode_active" in decision.reasons
+
+
+def test_unreadable_safe_mode_file_fails_closed(monkeypatch, tmp_path):
+    state_path = tmp_path / "safe_mode.json"
+    state_path.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(state_path))
+
+    decision = evaluate_capacity(
+        capital=1_000_000.0,
+        reserved_margin=0.0,
+        option_premium_cash=10_000.0,
+        hedge_margin=10_000.0,
+        fee_reserve=500.0,
+        open_positions=0,
+        max_open_positions=3,
+        underlying="INFY",
+        open_underlyings=set(),
+    )
+
+    assert decision.allowed is False
+    assert decision.status == "SAFE_MODE"

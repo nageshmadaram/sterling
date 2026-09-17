@@ -1,26 +1,19 @@
 """Live acceptance: does the real Kite payload match what the evidence schema assumes?
 
-Synthetic fixtures prove the code does what its tests describe. They cannot prove
-that Kite's FULL tick carries five depth levels with order counts, that
-``exchange_timestamp`` is populated the way the schema expects, or that it is ever
-absent. Runtime 1.5 was tagged twice on green suites and twice was wrong, both
-times because nothing had run the built artifact against reality.
+Synthetic fixtures prove code behavior, not vendor reality. This harness reads the
+live instrument master and FULL websocket feed, exercises one forced transport
+failure without disabling KiteTicker retry, verifies resubscription with fresh
+post-reconnect ticks, and round-trips the captured evidence. It never places an
+order.
 
-So this runs against a real socket and writes a machine-readable verdict. It is
-read-only with respect to trading: it authenticates, reads the instrument master,
-computes a contract with the frozen selector, subscribes, deliberately forces one
-transport disconnect, verifies automatic resubscription with fresh ticks, and
-records. It places no order, and there is no code path here that could.
+The frozen selector's listedness is reported separately from the vendor-schema
+probe. If the theoretical target is NOT_LISTED, that is a strategy-reality finding;
+the harness then subscribes to a clearly labelled real listed probe contract from
+the captured universe so depth/timestamp/reconnect assumptions can still be tested.
+The probe must never be mistaken for a Snapback execution choice.
 
-Evidence written by this harness is marked TEST_ACCEPTANCE and must never enter
-the Track A economic sample.
-
-Usage, with a Kite session the operator has already established:
-
-    python -m study.snapback_live_evidence_acceptance --underlying NIFTY --seconds 120
-
-Credentials are read from the existing kitelake session store. Nothing here
-prompts for, stores, or logs a password, API secret or access token.
+Evidence written by this harness is TEST_ACCEPTANCE/MODELLED and must never enter
+Track A economics.
 """
 
 from __future__ import annotations
@@ -29,8 +22,9 @@ import argparse
 import json
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -38,10 +32,77 @@ PASS = "PASS"
 FAIL = "FAIL"
 SKIP = "SKIP"
 
-#: Evidence from this harness is deliberately not OBSERVED_MARKET: it must be
-#: impossible to mistake an acceptance run for a real opportunity's evidence.
 ACCEPTANCE_EVIDENCE_CLASS = "MODELLED"
 ACCEPTANCE_TAG = "TEST_ACCEPTANCE"
+
+NOT_EXERCISED = "NOT_EXERCISED"
+INCONCLUSIVE = "INCONCLUSIVE"
+PROVEN = "PROVEN"
+CONTRADICTED = "CONTRADICTED"
+
+#: Strategy reality is a finding, not a gate. A blocked expiry calendar says
+#: something about Snapback and nothing about the runtime, so it gets its own
+#: vocabulary rather than borrowing PASS/FAIL and inviting an operator to read
+#: it as a release failure.
+EXECUTABLE = "EXECUTABLE"
+BLOCKED = "BLOCKED"
+
+#: Which question each check answers. A run produces three conclusions, never
+#: one headline: whether the runtime is fit to release, whether the vendor
+#: behaves as the schema assumes, and what the frozen strategy could actually do
+#: today. Collapsing them lets a closed market or a blocked expiry calendar read
+#: as a runtime failure, and lets vendor proof read as strategy proof.
+ENGINEERING_CHECKS = frozenset({
+    "instrument_master", "candidate_hash", "selector_replay", "spot",
+    "row_conversion", "persistence", "reload_reproduces_values", "writer_healthy",
+    "forced_disconnect", "disconnect_observed", "reconnect_attempted",
+    "reconnect_connected", "post_reconnect_fresh_ticks", "post_reconnect_full_mode",
+    "simultaneous_subscription", "vendor_probe_contract", "hedge_contract",
+})
+VENDOR_CHECKS = frozenset({
+    "option_full_tick", "option_five_level_depth", "option_order_counts",
+    "option_depth_quantities", "option_exchange_timestamp",
+    "hedge_full_tick", "hedge_five_level_depth", "hedge_order_counts",
+    "hedge_depth_quantities", "hedge_exchange_timestamp",
+    "clock_separation", "freshness_computable", "clock_ordering_sane",
+    "null_exchange_timestamp_semantics", "absent_level_is_null_not_zero",
+    "market_data_live",
+})
+STRATEGY_CHECKS = frozenset({"candidate_universe", "listedness"})
+
+#: What a non-passing strategy check means, in strategy terms rather than
+#: pass/fail terms.
+_STRATEGY_RESULTS = {
+    "candidate_universe": "NO_ELIGIBLE_EXPIRY",
+    "listedness": "TARGET_NOT_LISTED",
+}
+
+#: Ticks older than this are not a live market. On connect, Kite replays the last
+#: trade of the previous session, so a run after the close receives well-formed
+#: five-level books whose data is hours old. Every schema check then passes while
+#: proving nothing about live behaviour, and the artifact reads like an
+#: acceptance. Generous on purpose: this separates "the market is trading" from
+#: "this is yesterday's close", not a production freshness TTL.
+MAX_LIVE_TICK_AGE_MS = 15 * 60 * 1000
+
+#: Levels per side in Kite FULL mode. Mirrors kitelake.evidence.DEPTH_LEVELS and
+#: is asserted equal to it by the harness tests, so the two cannot drift.
+DEPTH_LEVELS = 5
+
+#: How each underlying's SPOT quotes, which differs from the derivatives
+#: underlying name. Tried in order; the first positive last_price wins.
+_SPOT_QUOTE_KEYS = {
+    "NIFTY": ("NSE:NIFTY 50", "NSE:NIFTY"),
+    "BANKNIFTY": ("NSE:NIFTY BANK", "NSE:BANKNIFTY"),
+    "FINNIFTY": ("NSE:NIFTY FIN SERVICE", "NSE:FINNIFTY"),
+    "MIDCPNIFTY": ("NSE:NIFTY MID SELECT", "NSE:MIDCPNIFTY"),
+    "SENSEX": ("BSE:SENSEX",),
+    "BANKEX": ("BSE:BANKEX",),
+}
+
+
+class CredentialsUnavailable(RuntimeError):
+    """No Kite session this harness can use. Never carries the token itself."""
 
 
 @dataclass
@@ -60,15 +121,112 @@ class Report:
         if detail is not None:
             self.detail[name] = detail
 
+    def _verdict_over(self, names: frozenset[str]) -> str:
+        seen = {k: v for k, v in self.checks.items() if k in names}
+        if not seen:
+            return NOT_EXERCISED
+        if any(v == FAIL for v in seen.values()):
+            return FAIL
+        if any(v == SKIP for v in seen.values()):
+            return SKIP
+        return PASS
+
+    @property
+    def engineering_gate(self) -> str:
+        """Is this runtime fit to release? Blind to strategy and market state.
+
+        Checks belonging to no declared category count here. A new check must
+        never be silently excluded from every verdict merely because nobody
+        added it to a set — that would let a failing check certify a release.
+        """
+        classified = VENDOR_CHECKS | STRATEGY_CHECKS
+        names = frozenset(ENGINEERING_CHECKS) | {
+            k for k in self.checks if k not in classified
+        }
+        return self._verdict_over(names)
+
+    @property
+    def vendor_assumptions(self) -> str:
+        """Does Kite behave as the evidence schema assumes?
+
+        Liveness and schema correctness are separate questions, and an earlier
+        version conflated them: any closed-market run returned NOT_EXERCISED,
+        which downgraded a genuine decoder contradiction — say order counts
+        missing from the payload — into "not tested". A schema defect is visible
+        on a replayed closing book and stays a defect after hours.
+
+        So the schema verdict is taken first, and only a clean schema can be
+        demoted by a dead market.
+        """
+        schema = self._verdict_over(VENDOR_CHECKS - {"market_data_live"})
+
+        if schema == FAIL:
+            return CONTRADICTED
+        if schema == SKIP:
+            return SKIP
+        if schema == NOT_EXERCISED:
+            return NOT_EXERCISED
+        # Schema looks right; but on a closing-book replay nothing about live
+        # behaviour was exercised.
+        if self.checks.get("market_data_live") != PASS:
+            return NOT_EXERCISED
+        return PROVEN
+
+    @property
+    def strategy_reality(self) -> dict[str, Any]:
+        """What could the frozen strategy actually do today?
+
+        Reported as a finding rather than a verdict. Returning FAIL here made a
+        blocked expiry calendar look like something Sterling got wrong, when it
+        is a fact about the market and the frozen DTE rule.
+        """
+        seen = {k: v for k, v in self.checks.items() if k in STRATEGY_CHECKS}
+        findings = []
+        for name, verdict in sorted(seen.items()):
+            if verdict == PASS:
+                continue
+            detail = self.detail.get(name)
+            interpretation = (
+                detail.get("interpretation") if isinstance(detail, dict) else None
+            ) or (detail if isinstance(detail, str) else None)
+            findings.append({
+                "check": name,
+                "result": _STRATEGY_RESULTS.get(name, "REFUSED"),
+                "interpretation": interpretation or "see the check detail",
+            })
+
+        if not seen:
+            status = NOT_EXERCISED
+        elif findings:
+            status = BLOCKED if any(v == FAIL for v in seen.values()) else INCONCLUSIVE
+        else:
+            status = EXECUTABLE
+
+        return {"status": status, "findings": findings}
+
     @property
     def overall(self) -> str:
+        """Release certification: engineering fit AND vendor assumptions proven.
+
+        Strategy reality is deliberately excluded. Sterling can be correct on a
+        day Snapback cannot trade.
+
+        A vendor contradiction is checked first and dominates. Evaluating the
+        engineering gate first meant a report carrying CONTRADICTED but no
+        engineering check returned NOT_EXERCISED — softening a proven defect
+        into "untested", which is the same masking this layer exists to prevent,
+        one level up. That ordering is unreachable in a real run, because
+        instrument_master is recorded before any vendor check; the layer whose
+        job is to be unfoolable should not depend on that accident.
+        """
         if not self.checks:
             return FAIL
-        if any(v == FAIL for v in self.checks.values()):
+        if self.vendor_assumptions == CONTRADICTED:
             return FAIL
-        # A skipped check is not a pass. The release gate needs PASS.
-        if any(v == SKIP for v in self.checks.values()):
-            return SKIP
+        if self.engineering_gate != PASS:
+            return self.engineering_gate
+        if self.vendor_assumptions != PROVEN:
+            return INCONCLUSIVE
         return PASS
 
     def as_dict(self) -> dict[str, Any]:
@@ -82,6 +240,14 @@ class Report:
             **self.checks,
             "detail": self.detail,
             "notes": self.notes,
+            "conclusions": {
+                "engineering_gate": self.engineering_gate,
+                "vendor_assumptions": self.vendor_assumptions,
+                "strategy_reality": self.strategy_reality,
+            },
+            "unclassified_checks": sorted(
+                set(self.checks) - ENGINEERING_CHECKS - VENDOR_CHECKS - STRATEGY_CHECKS
+            ),
             "overall": self.overall,
         }
 
@@ -94,10 +260,102 @@ def _runtime_sha() -> str:
         return "UNKNOWN"
 
 
+def market_session_state(now: Optional[datetime] = None) -> tuple[bool, str]:
+    """Is the Indian cash/derivatives market open right now?
+
+    Advisory only: the authority on liveness is ``market_data_live``, which reads
+    the ticks themselves. This exists so an operator is told up front rather than
+    after spending the capture window, and so a closed-market run is labelled the
+    moment it starts.
+    """
+    from zoneinfo import ZoneInfo
+
+    ist = ZoneInfo("Asia/Kolkata")
+    moment = (now or datetime.now(timezone.utc)).astimezone(ist)
+
+    if moment.weekday() >= 5:
+        return False, f"{moment:%A} — the market does not trade at the weekend"
+
+    open_at = moment.replace(hour=9, minute=15, second=0, microsecond=0)
+    close_at = moment.replace(hour=15, minute=30, second=0, microsecond=0)
+    if moment < open_at:
+        return False, f"{moment:%H:%M} IST — the market opens at 09:15"
+    if moment > close_at:
+        return False, f"{moment:%H:%M} IST — the market closed at 15:30"
+    return True, f"{moment:%H:%M} IST — within the 09:15-15:30 session"
+
+
+# ─── credentials ─────────────────────────────────────────────────────────────
+
+def resolve_acceptance_credentials() -> tuple[str, str, str]:
+    """The Kite session this machine actually has, whichever flow created it.
+
+    Two independent stores exist and they held different applications: Sterling's
+    own login flow writes an encrypted token into ``kite_accounts``, while the
+    kitelake data-lake tooling keeps its own ``session.json``. The harness
+    originally read only the second, so an operator who refreshed the session the
+    documented way — through Sterling — still hit
+    ``TokenException: Incorrect api_key or access_token``, with no indication
+    that two different apps were involved.
+
+    A release gate the operator cannot run after following the runbook is not a
+    gate, so this prefers Sterling's store and falls back to kitelake's.
+
+    Returns ``(api_key, access_token, source)``. The token is returned for
+    immediate use and is never logged, printed or persisted; the caller must not
+    put it in the acceptance report.
+    """
+    # 1. Sterling's own account store, which the documented login flow writes.
+    try:
+        import app.services.exchanges.kite.accounts as kite_accounts
+
+        for account in kite_accounts._load_from_db():
+            if not account.is_active:
+                continue
+            # ``access_token`` is a property that decrypts on read. Calling a
+            # non-existent ``token()`` here silently yielded "" through the
+            # handler below and looked exactly like a logged-out account.
+            token = account.access_token or ""
+            if account.api_key and token:
+                return account.api_key, token, "sterling_kite_accounts"
+            if account.api_key and not token:
+                # Present but undecryptable: almost always STERLING_SECRET_KEY
+                # missing from this process. Say so, because decrypt() returns ""
+                # and an absent key is otherwise indistinguishable from an
+                # account that was never logged in.
+                raise CredentialsUnavailable(
+                    "Sterling has an active Kite account "
+                    f"(api_key {account.api_key[:4]}…) whose access token could not be "
+                    "decrypted. STERLING_SECRET_KEY is probably not set for this "
+                    "process; export it, or run the harness the same way the backend "
+                    "service runs."
+                )
+    except CredentialsUnavailable:
+        raise
+    except Exception:
+        # No store, no schema, no rows — fall through to kitelake.
+        pass
+
+    # 2. The data-lake session, for a machine that only ever used kitelake.
+    try:
+        from kitelake.config import load_credentials
+
+        creds = load_credentials()
+        if creds.api_key and creds.access_token:
+            return creds.api_key, creds.access_token, "kitelake_session"
+    except Exception:
+        pass
+
+    raise CredentialsUnavailable(
+        "no usable Kite session found. Either complete Sterling's Kite login "
+        "(and make STERLING_SECRET_KEY available to this process), or set "
+        "KITE_API_KEY and KITE_ACCESS_TOKEN in the environment."
+    )
+
+
 # ─── instrument master ───────────────────────────────────────────────────────
 
 def fetch_instrument_master(kite: Any, exchange: str = "NFO") -> list[dict[str, Any]]:
-    """The live master, as published. Never reconstructed."""
     return list(kite.instruments(exchange))
 
 
@@ -105,6 +363,7 @@ def archive_instrument_master(rows: list[dict[str, Any]], root: Path, *,
                               retrieved_at: datetime) -> dict[str, Any]:
     """Persist an immutable, hashed snapshot. Today's master is gone tomorrow."""
     import hashlib
+    import os
 
     stamp = retrieved_at.strftime("%Y%m%dT%H%M%S")
     directory = root / "instrument_master" / f"date={retrieved_at.date().isoformat()}" / f"snapshot={stamp}"
@@ -115,7 +374,6 @@ def archive_instrument_master(rows: list[dict[str, Any]], root: Path, *,
 
     staging = directory.parent / f".staging-{stamp}.json"
     staging.write_text(payload, encoding="utf-8")
-    import os
     os.replace(staging, directory / "instruments.json")
 
     metadata = {
@@ -152,7 +410,6 @@ def inspect_tick(tick: dict[str, Any]) -> dict[str, Any]:
 
 
 def evaluate_ticks(report: Report, role: str, ticks: list[dict[str, Any]]) -> None:
-    """Grade one instrument's captured ticks against the schema's assumptions."""
     if not ticks:
         report.record(f"{role}_full_tick", FAIL, "no tick received")
         return
@@ -165,14 +422,19 @@ def evaluate_ticks(report: Report, role: str, ticks: list[dict[str, Any]]) -> No
     report.record(
         f"{role}_five_level_depth",
         PASS if deepest_buy >= 5 and deepest_sell >= 5 else FAIL,
-        {"max_buy_levels": deepest_buy, "max_sell_levels": deepest_sell},
+        {
+            "max_buy_levels": deepest_buy,
+            "max_sell_levels": deepest_sell,
+            "interpretation": "observed book depth; a thin market and a decoder defect require separate diagnosis",
+        },
     )
 
     with_orders = any(f["buy_has_orders"] and f["sell_has_orders"] for f in findings)
     report.record(f"{role}_order_counts", PASS if with_orders else FAIL)
 
     quantities_present = any(
-        all(q is not None for q in f["buy_quantities"]) for f in findings if f["buy_quantities"]
+        all(q is not None for q in f["buy_quantities"])
+        for f in findings if f["buy_quantities"]
     )
     report.record(f"{role}_depth_quantities", PASS if quantities_present else FAIL)
 
@@ -185,18 +447,39 @@ def evaluate_ticks(report: Report, role: str, ticks: list[dict[str, Any]]) -> No
 
 
 def evaluate_rows(report: Report, rows: list[dict[str, Any]]) -> None:
-    """Grade the rows the schema produced from those ticks."""
     if not rows:
         report.record("row_conversion", FAIL, "no evidence rows built")
         return
 
     report.record("row_conversion", PASS, f"{len(rows)} rows")
-
-    # Both clocks, independently recorded.
     separated = [r for r in rows if r.get("exchange_ts") and r.get("received_ts")]
     report.record("clock_separation", PASS if separated else FAIL)
 
     if separated:
+        # Is this a live market at all? See MAX_LIVE_TICK_AGE_MS.
+        all_ages = [
+            (r["received_ts"] - r["exchange_ts"]).total_seconds() * 1000.0
+            for r in separated
+        ]
+        freshest = min(all_ages)
+        live = freshest <= MAX_LIVE_TICK_AGE_MS
+        report.record(
+            "market_data_live",
+            PASS if live else FAIL,
+            {
+                "freshest_tick_age_ms": round(freshest, 1),
+                "threshold_ms": MAX_LIVE_TICK_AGE_MS,
+                "interpretation": (
+                    "ticks are current; the book was moving during the run"
+                    if live
+                    else "NOT_A_LIVE_MARKET: every tick predates the threshold, so "
+                         "these are replayed closing-book values. Schema and decode "
+                         "checks remain valid; depth turnover, freshness and live "
+                         "behaviour are NOT exercised by this run."
+                ),
+            },
+        )
+
         ages = [
             (r["received_ts"] - r["exchange_ts"]).total_seconds() * 1000.0
             for r in separated
@@ -205,34 +488,62 @@ def evaluate_rows(report: Report, rows: list[dict[str, Any]]) -> None:
             "min_age_ms": round(min(ages), 1),
             "max_age_ms": round(max(ages), 1),
         })
-        # A negative age means the two clocks are not comparable as assumed.
         report.record("clock_ordering_sane", PASS if min(ages) > -5000 else FAIL,
                       {"min_age_ms": round(min(ages), 1)})
 
-    # An absent exchange timestamp must stay absent, never borrow received_ts.
     unstamped = [r for r in rows if r.get("exchange_ts") is None]
     if unstamped:
         borrowed = [r for r in unstamped if r.get("exchange_ts") == r.get("received_ts")]
-        report.record("null_exchange_timestamp_semantics", PASS if not borrowed else FAIL,
-                      {"unstamped_rows": len(unstamped)})
+        report.record(
+            "null_exchange_timestamp_semantics",
+            PASS if not borrowed else FAIL,
+            {"unstamped_rows": len(unstamped), "exercised": True},
+        )
     else:
-        report.record("null_exchange_timestamp_semantics", PASS,
-                      "every tick carried an exchange timestamp; nothing was fabricated")
+        # This is deliberately a PASS for the release fold: no timestamp was
+        # fabricated. The detail makes explicit that the nullable live path was
+        # not exercised, so an auditor must not overclaim what this run proved.
+        report.record(
+            "null_exchange_timestamp_semantics",
+            PASS,
+            {
+                "unstamped_rows": 0,
+                "exercised": False,
+                "interpretation": "NOT_EXERCISED: every observed tick was stamped",
+            },
+        )
 
-    # Absent depth levels must be null, never zero.
+    # Absent levels must be null, never zero — an empty rung and a rung quoting
+    # zero are different facts. On a full five-deep book nothing is absent, so
+    # this passes without testing anything; say which case occurred rather than
+    # letting a vacuous pass read like a proven one.
     zeroed = [r for r in rows if r.get("bid4_price") == 0 or r.get("ask4_price") == 0]
-    report.record("absent_level_is_null_not_zero", PASS if not zeroed else FAIL)
+    exercised = any(
+        r.get(f"{side}{i}_price") is None
+        for r in rows for side in ("bid", "ask") for i in range(DEPTH_LEVELS)
+    )
+    report.record(
+        "absent_level_is_null_not_zero",
+        PASS if not zeroed else FAIL,
+        {
+            "rows_with_a_zeroed_level": len(zeroed),
+            "exercised": exercised,
+            "interpretation": (
+                "an absent level was observed and stored as null"
+                if exercised and not zeroed
+                else "NOT_EXERCISED: every observed book was fully populated, so "
+                     "the absent-level path never ran"
+                if not exercised
+                else "a level was stored as zero rather than null"
+            ),
+        },
+    )
 
 
 # ─── reconnect exercise ──────────────────────────────────────────────────────
 
 def _force_transport_disconnect(ticker: Any, *, schedule: Any = None) -> tuple[bool, str]:
-    """Abort only the live TCP transport, leaving KiteTicker auto-retry enabled.
-
-    ``KiteTicker.close()`` calls ``stop_retry()`` and therefore cannot exercise
-    the reconnect path. The transport abort is scheduled onto Twisted's reactor
-    thread because the acceptance loop itself runs on the main thread.
-    """
+    """Abort only the TCP transport, leaving KiteTicker auto-retry enabled."""
     ws = getattr(ticker, "ws", None)
     transport = getattr(ws, "transport", None)
     abort = getattr(transport, "abortConnection", None)
@@ -261,21 +572,62 @@ def evaluate_forced_reconnect(
     connection_count: int,
     post_reconnect: dict[int, list[dict[str, Any]]],
 ) -> None:
-    """Require an exercised reconnect and fresh FULL ticks after resubscription."""
     report.record(
         "forced_disconnect",
         PASS if force_succeeded else FAIL,
-        force_detail,
+        {
+            "detail": force_detail,
+            "root_cause": (
+                "HARNESS_TRANSPORT_INCOMPATIBILITY: the loss could not be "
+                "induced, so every reconnect check below is consequential rather "
+                "than an independent Sterling defect. Diagnose the abort "
+                "mechanism first."
+                if not force_succeeded
+                else "transport aborted with auto-retry left alive"
+            ),
+        },
     )
+
+    if not force_succeeded:
+        # Nothing downstream was exercised. Reporting five independent failures
+        # would invite five investigations of one cause.
+        for name in ("disconnect_observed", "reconnect_attempted",
+                     "reconnect_connected", "post_reconnect_fresh_ticks",
+                     "post_reconnect_full_mode"):
+            report.record(name, SKIP,
+                          "NOT_EXERCISED: the disconnect was never induced")
+        return
     report.record(
         "disconnect_observed",
         PASS if disconnects else FAIL,
         disconnects or "forced transport loss was not observed by KiteTicker",
     )
+    # Grade the outcome, not the instrumentation. The requirement is that the
+    # socket comes back and resumes delivering evidence after a loss; whether
+    # kiteconnect happens to invoke on_reconnect while doing so is its own
+    # implementation detail. A run where the transport was aborted, the loss was
+    # observed, a second connection succeeded and fresh FULL ticks arrived has
+    # demonstrably exercised recovery, and failing it because a callback stayed
+    # silent would report a working system as broken.
+    #
+    # The counter is still recorded, so a future kiteconnect that does fire it
+    # leaves that visible rather than the fact being lost.
+    recovered = connection_count >= 2 and bool(disconnects)
     report.record(
         "reconnect_attempted",
-        PASS if reconnect_attempts else FAIL,
-        reconnect_attempts or "KiteTicker never entered its retry path",
+        PASS if (reconnect_attempts or recovered) else FAIL,
+        {
+            "on_reconnect_callbacks": reconnect_attempts,
+            "recovered_without_callback": bool(recovered and not reconnect_attempts),
+            "interpretation": (
+                "recovery evidenced by reconnection and post-loss ticks; the "
+                "on_reconnect callback did not fire"
+                if recovered and not reconnect_attempts
+                else "on_reconnect callback observed"
+                if reconnect_attempts
+                else "no retry path entered and no successful reconnection"
+            ),
+        },
     )
     report.record(
         "reconnect_connected",
@@ -301,6 +653,57 @@ def evaluate_forced_reconnect(
     )
 
 
+def _vendor_probe(selection: Any, universe: Any, expiry: str) -> tuple[Optional[int], dict[str, Any]]:
+    """Choose the socket probe without changing or hiding the frozen selection.
+
+    LISTED uses the actual frozen theoretical target. NOT_LISTED uses the nearest
+    genuinely listed contract from the same observed expiry (falling back to the
+    universe only if that expiry has no rows) solely for vendor-schema testing.
+    """
+    if selection.listed == "LISTED" and selection.selected_instrument_token:
+        return int(selection.selected_instrument_token), {
+            "source": "FROZEN_THEORETICAL_SELECTION",
+            "instrument_token": int(selection.selected_instrument_token),
+            "computed_strike": selection.selected_strike,
+            "not_strategy_substitute": False,
+        }
+
+    contracts = list(universe.contracts or ())
+    same_expiry = [c for c in contracts if c.expiry == expiry]
+    pool = same_expiry or contracts
+    if not pool:
+        return None, {
+            "source": "NONE",
+            "reason": "candidate universe contains no listed contract for vendor probe",
+            "not_strategy_substitute": True,
+        }
+
+    probe = min(
+        pool,
+        key=lambda c: (
+            abs(float(c.strike) - float(selection.selected_strike)),
+            c.expiry,
+            float(c.strike),
+            int(c.instrument_token),
+        ),
+    )
+    return int(probe.instrument_token), {
+        "source": "LISTED_VENDOR_SCHEMA_PROBE",
+        "instrument_token": int(probe.instrument_token),
+        "tradingsymbol": probe.tradingsymbol,
+        "strike": float(probe.strike),
+        "expiry": probe.expiry,
+        "theoretical_target_listedness": selection.listed,
+        "computed_strike": selection.selected_strike,
+        "not_strategy_substitute": True,
+    }
+
+
+def _roundtrip_root(root: Path) -> Path:
+    """One evidence store per acceptance invocation; reruns cannot see old parts."""
+    return root / "roundtrip" / f"run={uuid.uuid4().hex}"
+
+
 # ─── the run ─────────────────────────────────────────────────────────────────
 
 def run_acceptance(
@@ -312,7 +715,6 @@ def run_acceptance(
     kite: Any = None,
     ticker_factory: Any = None,
 ) -> Report:
-    """Execute the acceptance sequence. Returns the report; writes nothing fatal."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
     from app.engines.snapback.config import SnapbackConfig
@@ -321,7 +723,7 @@ def run_acceptance(
         CandidateUniverseError, build_candidate_universe, universe_hash,
     )
     from app.services.snapback_contract_selection import (
-        SelectionInputs, select_snapback_contract,
+        SelectionError, SelectionInputs, select_snapback_contract,
     )
 
     report = Report(
@@ -331,15 +733,28 @@ def run_acceptance(
     )
     cfg = SnapbackConfig()
 
+    # Say it now, not after the capture window. A holiday still reads as open
+    # here, which is why market_data_live decides and this only advises.
+    session_open, session_detail = market_session_state()
+    report.notes.append(f"market session: {session_detail}")
+    if not session_open:
+        print(
+            f"NOTE: {session_detail}.\n"
+            "      Ticks will be the previous session's closing book replayed on\n"
+            "      connect, so market_data_live will fail and this run cannot\n"
+            "      certify a release. Schema, decode, reconnect and persistence\n"
+            "      checks remain meaningful.",
+            flush=True,
+        )
+
     if kite is None:
-        from kitelake.config import load_credentials
         from kiteconnect import KiteConnect
 
-        creds = load_credentials()
-        kite = KiteConnect(api_key=creds.api_key)
-        kite.set_access_token(creds.access_token)
+        api_key, access_token, creds_source = resolve_acceptance_credentials()
+        report.notes.append(f"kite session source: {creds_source}")
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
 
-    # ─── instrument master ───────────────────────────────────────────────────
     try:
         rows = fetch_instrument_master(kite)
         metadata = archive_instrument_master(rows, root, retrieved_at=datetime.now(timezone.utc))
@@ -348,7 +763,6 @@ def run_acceptance(
         report.record("instrument_master", FAIL, f"{type(exc).__name__}: {exc}")
         return report
 
-    # ─── candidate universe ──────────────────────────────────────────────────
     spec = spec_for(underlying)
     if spec is None:
         report.record("candidate_universe", FAIL, f"no contract spec for {underlying}")
@@ -365,23 +779,73 @@ def run_acceptance(
         report.record("candidate_universe", PASS, {
             "contracts": len(universe.contracts), "expiries": list(universe.expiries)})
     except CandidateUniverseError as exc:
-        report.record("candidate_universe", FAIL, str(exc))
-        return report
+        # No monthly expiry sits inside the frozen DTE window today. That is a
+        # real strategy-reality finding — Snapback simply cannot trade this
+        # underlying now — and it is NOT a statement about the vendor.
+        #
+        # Monthly expiries are ~30 days apart and the frozen window is 21 days
+        # wide, so roughly a third of weekdays have nothing eligible. Returning
+        # here made the release gate unrunnable on those days for calendar
+        # reasons alone, which is the strategy blocking its own vendor test.
+        report.record(
+            "candidate_universe", FAIL,
+            {
+                "error": str(exc),
+                "interpretation": (
+                    "STRATEGY_REALITY: no listed monthly expiry inside the frozen "
+                    f"{cfg.min_dte}-{cfg.max_dte} DTE window. Snapback cannot trade "
+                    "this underlying today. Vendor-schema checks continue on an "
+                    "explicitly substituted contract."
+                ),
+            },
+        )
+        report.notes.append(
+            f"{underlying}: no expiry in the frozen {cfg.min_dte}-{cfg.max_dte} DTE "
+            "window today; vendor probe uses a substituted listed contract"
+        )
+        universe = None
+
+    if universe is None:
+        return _vendor_only_run(
+            report=report, kite=kite, rows=rows, spec=spec, cfg=cfg,
+            underlying=underlying, seconds=seconds, root=root,
+        )
 
     recomputed = universe_hash(
         universe.contracts, underlying=universe.underlying, option_type=universe.option_type,
         as_of=universe.as_of, min_dte=universe.min_dte, max_dte=universe.max_dte,
     )
-    report.record("candidate_hash", PASS if recomputed == universe.candidate_universe_hash else FAIL,
-                  universe.candidate_universe_hash)
+    report.record(
+        "candidate_hash",
+        PASS if recomputed == universe.candidate_universe_hash else FAIL,
+        universe.candidate_universe_hash,
+    )
 
-    # ─── frozen selector against the real master ─────────────────────────────
-    try:
-        quote = kite.ltp([f"NSE:{spec.underlying}"]) if hasattr(kite, "ltp") else {}
-        spot = float(next(iter(quote.values()))["last_price"]) if quote else 0.0
-    except Exception as exc:
-        report.record("spot", FAIL, f"{type(exc).__name__}: {exc}")
+    # The tradingsymbol an index quotes under is not its derivatives underlying:
+    # NIFTY options are written on "NIFTY", but the spot quotes as "NSE:NIFTY 50".
+    # Asking for NSE:NIFTY returns nothing, and an empty result previously became
+    # spot 0.0 and then a raised SelectionError rather than a recorded failure.
+    spot_keys = _SPOT_QUOTE_KEYS.get(underlying.upper(), (f"NSE:{spec.underlying}",))
+    spot, spot_key, spot_error = 0.0, "", ""
+    for key in spot_keys:
+        try:
+            quote = kite.ltp([key]) if hasattr(kite, "ltp") else {}
+        except Exception as exc:
+            spot_error = f"{type(exc).__name__}: {exc}"
+            continue
+        row = (quote or {}).get(key) or {}
+        price = float(row.get("last_price") or 0.0)
+        if price > 0:
+            spot, spot_key = price, key
+            break
+
+    if spot <= 0:
+        report.record(
+            "spot", FAIL,
+            spot_error or f"no positive last_price from any of {list(spot_keys)}",
+        )
         return report
+    report.record("spot", PASS, {"key": spot_key, "last_price": spot})
 
     expiry = universe.expiries[0]
     dte = (date.fromisoformat(expiry) - date.today()).days
@@ -392,44 +856,184 @@ def run_acceptance(
         strike_step=spec.strike_step, expiry=expiry,
         candidate_universe_hash=universe.candidate_universe_hash,
     )
-    selection = select_snapback_contract(inputs, universe.contracts)
-    replay = select_snapback_contract(inputs, universe.contracts)
+    try:
+        selection = select_snapback_contract(inputs, universe.contracts)
+        replay = select_snapback_contract(inputs, universe.contracts)
+    except SelectionError as exc:
+        # A refusal is a result, not a crash. Recording it keeps the artifact
+        # machine-readable instead of leaving a traceback and no report.
+        report.record("selector_replay", FAIL, f"SelectionError: {exc}")
+        return report
 
-    report.record("selector_replay",
-                  PASS if replay.selected_strike == selection.selected_strike else FAIL,
-                  {"strike": selection.selected_strike})
-    # LISTED or NOT_LISTED both prove resolution worked; UNKNOWN means it did not.
-    report.record("listedness", PASS if selection.listed in ("LISTED", "NOT_LISTED") else FAIL,
-                  {"listed": selection.listed, "computed_strike": selection.selected_strike})
+    report.record(
+        "selector_replay",
+        PASS if replay.selected_strike == selection.selected_strike else FAIL,
+        {"strike": selection.selected_strike},
+    )
+    report.record(
+        "listedness",
+        PASS if selection.listed in ("LISTED", "NOT_LISTED") else FAIL,
+        {
+            "listed": selection.listed,
+            "computed_strike": selection.selected_strike,
+            "interpretation": "strategy-reality finding; NOT_LISTED is not a decoder failure",
+        },
+    )
     report.notes.append(
         f"frozen selector computed {selection.selected_strike} PE {expiry}; "
         f"listedness against the real master: {selection.listed}"
     )
 
-    if selection.listed != "LISTED":
-        # A real and important finding, not a harness failure: the frozen rule
-        # computed a contract the exchange does not list.
-        report.notes.append(
-            "the computed strike is NOT listed in today's master; this is a "
-            "selection-reality finding about the frozen strategy, not a defect here"
-        )
-        report.record("option_full_tick", SKIP, "no listed contract to subscribe to")
+    option_token, probe_detail = _vendor_probe(selection, universe, expiry)
+    report.record("vendor_probe_contract", PASS if option_token else FAIL, probe_detail)
+    if not option_token:
         return report
+    if probe_detail.get("not_strategy_substitute"):
+        report.notes.append(
+            "NOT_LISTED theoretical target retained as a strategy finding; live socket "
+            "checks use a labelled listed vendor-schema probe and do not treat it as Snapback's choice"
+        )
 
-    option_token = selection.selected_instrument_token
-
-    # ─── hedge ───────────────────────────────────────────────────────────────
     from app.services.snapback_hedge_contract import HedgeContractError, select_hedge_future
     try:
-        hedge = select_hedge_future(rows, option_expiry=date.fromisoformat(expiry),
-                                    name=underlying, exchange="NFO")
+        hedge = select_hedge_future(
+            rows, option_expiry=date.fromisoformat(expiry), name=underlying, exchange="NFO"
+        )
         report.record("hedge_contract", PASS, {"tradingsymbol": hedge.tradingsymbol})
         hedge_token = hedge.instrument_token
     except HedgeContractError as exc:
         report.record("hedge_contract", FAIL, str(exc))
         hedge_token = None
 
-    # ─── live socket ─────────────────────────────────────────────────────────
+    return _capture_and_grade(
+        report=report, option_token=option_token, hedge_token=hedge_token,
+        opportunity_id=universe.opportunity_id, seconds=seconds, root=root,
+        ticker_factory=ticker_factory,
+    )
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--underlying", default="NIFTY")
+    parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--root", default=None,
+                        help="evidence root; defaults to a temp acceptance area, never the live lake")
+    parser.add_argument("--out-dir", default="data/evidence_acceptance")
+    args = parser.parse_args(argv)
+
+    root = Path(args.root) if args.root else Path("data/evidence_acceptance/_root")
+    root.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    report = run_acceptance(
+        underlying=args.underlying, seconds=args.seconds, root=root, out_dir=out_dir,
+    )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"acceptance-{stamp}.json"
+    path.write_text(json.dumps(report.as_dict(), indent=1, default=str), encoding="utf-8")
+
+    print(json.dumps(report.as_dict(), indent=1, default=str))
+    print(f"\nreport written to {path}")
+    print(f"OVERALL: {report.overall}")
+    return 0 if report.overall == PASS else 1
+
+
+
+def _vendor_only_run(
+    *,
+    report: Report,
+    kite: Any,
+    rows: list[dict[str, Any]],
+    spec: Any,
+    cfg: Any,
+    underlying: str,
+    seconds: int,
+    root: Path,
+    ticker_factory: Any = None,
+) -> Report:
+    """Vendor-schema checks on a day the frozen strategy cannot trade.
+
+    Roughly a third of weekdays have no monthly expiry inside the frozen 40-60
+    DTE window, because monthlies sit ~30 days apart and the window is 21 days
+    wide. On those days the strategy is genuinely blocked — that is recorded as
+    a strategy-reality finding — but the vendor's payload is unchanged and still
+    needs proving, so the release gate must not be hostage to the expiry
+    calendar.
+
+    Every contract used here is explicitly substituted. Nothing in this path can
+    be read as Snapback's selection.
+    """
+    options = [
+        r for r in rows
+        if str(r.get("name", "")).upper() == underlying.upper()
+        and str(r.get("instrument_type", "")).upper() == "PE"
+        and r.get("instrument_token") and r.get("expiry")
+    ]
+    if not options:
+        report.record("vendor_probe_contract", FAIL,
+                      f"no listed {underlying} PE contract in the master at all")
+        return report
+
+    # Nearest expiry, then the middle strike of it: the most liquid corner of the
+    # board, chosen for tick flow rather than for any strategy property.
+    nearest = min(str(r["expiry"])[:10] for r in options)
+    same = sorted(
+        (r for r in options if str(r["expiry"])[:10] == nearest),
+        key=lambda r: float(r.get("strike") or 0.0),
+    )
+    probe = same[len(same) // 2]
+    option_token = int(probe["instrument_token"])
+
+    report.record("vendor_probe_contract", PASS, {
+        "source": "LISTED_VENDOR_SCHEMA_PROBE",
+        "instrument_token": option_token,
+        "tradingsymbol": probe.get("tradingsymbol"),
+        "strike": float(probe.get("strike") or 0.0),
+        "expiry": nearest,
+        "reason": "no expiry inside the frozen DTE window; substituted for vendor testing",
+        "not_strategy_substitute": True,
+    })
+
+    hedge_token = None
+    try:
+        from app.services.snapback_hedge_contract import select_hedge_future
+
+        hedge = select_hedge_future(
+            rows, option_expiry=date.fromisoformat(nearest),
+            name=underlying, exchange=spec.exchange,
+        )
+        hedge_token = hedge.instrument_token
+        report.record("hedge_contract", PASS, {
+            "tradingsymbol": hedge.tradingsymbol, "not_strategy_substitute": True,
+        })
+    except Exception as exc:
+        report.record("hedge_contract", FAIL, f"{type(exc).__name__}: {exc}")
+
+    return _capture_and_grade(
+        report=report, option_token=option_token, hedge_token=hedge_token,
+        opportunity_id=f"VENDOR-PROBE-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}",
+        seconds=seconds, root=root, ticker_factory=ticker_factory,
+    )
+
+
+def _capture_and_grade(
+    *,
+    report: Report,
+    option_token: Optional[int],
+    hedge_token: Optional[int],
+    opportunity_id: str,
+    seconds: int,
+    root: Path,
+    ticker_factory: Any = None,
+) -> Report:
+    """Subscribe, force a reconnect, grade the payload, prove the round trip.
+
+    Shared by the full run and the vendor-only run, so a day with no eligible
+    expiry still exercises exactly the same vendor checks rather than a second,
+    quietly divergent copy of them.
+    """
     tokens = [t for t in (option_token, hedge_token) if t]
     captured: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
     post_reconnect: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
@@ -439,13 +1043,13 @@ def run_acceptance(
     connection_count = 0
     shutting_down = False
 
-    from kitelake.evidence import evidence_tick_row
+    from kitelake.evidence import DEPTH_LEVELS, evidence_tick_row
 
     if ticker_factory is None:
-        from kitelake.config import load_credentials
         from kiteconnect import KiteTicker
-        creds = load_credentials()
-        ticker = KiteTicker(creds.api_key, creds.access_token)
+
+        api_key, access_token, _ = resolve_acceptance_credentials()
+        ticker = KiteTicker(api_key, access_token)
     else:
         ticker = ticker_factory()
 
@@ -462,7 +1066,7 @@ def run_acceptance(
                     built_rows.append(evidence_tick_row(
                         tick, received_ts=received,
                         evidence_class=ACCEPTANCE_EVIDENCE_CLASS,
-                        opportunity_id=universe.opportunity_id,
+                        opportunity_id=opportunity_id,
                         capture_reason=ACCEPTANCE_TAG,
                     ))
                 except Exception as exc:  # pragma: no cover - live only
@@ -471,9 +1075,6 @@ def run_acceptance(
     def on_connect(ws, _response):
         nonlocal connection_count
         connection_count += 1
-        # Only the first connection subscribes explicitly. On reconnect,
-        # KiteTicker's _on_open() must restore its stored subscriptions/modes.
-        # That is the behavior this acceptance gate exists to exercise.
         if connection_count == 1:
             ws.subscribe(tokens)
             ws.set_mode(ws.MODE_FULL, tokens)
@@ -513,9 +1114,11 @@ def run_acceptance(
     evaluate_ticks(report, "option", captured.get(option_token, []))
     if hedge_token:
         evaluate_ticks(report, "hedge", captured.get(hedge_token, []))
-    report.record("simultaneous_subscription",
-                  PASS if all(captured.get(t) for t in tokens) else FAIL,
-                  {str(t): len(captured.get(t, [])) for t in tokens})
+    report.record(
+        "simultaneous_subscription",
+        PASS if all(captured.get(t) for t in tokens) else FAIL,
+        {str(t): len(captured.get(t, [])) for t in tokens},
+    )
     evaluate_rows(report, built_rows)
     evaluate_forced_reconnect(
         report,
@@ -528,63 +1131,44 @@ def run_acceptance(
         post_reconnect=post_reconnect,
     )
 
-    # Final shutdown is deliberate and must not be mistaken for the exercised
-    # disconnect. close() is correct here because no further reconnect is wanted.
     shutting_down = True
     try:
         ticker.close()
     except Exception:
         pass
 
-    # ─── persistence round trip ──────────────────────────────────────────────
     from app.services.snapback_evidence_store import SnapbackEvidenceStore
 
-    store = SnapbackEvidenceStore(root, session_date=date.today())
+    # Isolate every invocation. read(kind) intentionally reads every part in its
+    # store, so sharing one date root made a valid second run fail because it saw
+    # the first run's rows too.
+    persistence_root = _roundtrip_root(root)
+    store = SnapbackEvidenceStore(persistence_root, session_date=date.today())
     sample = built_rows[:50]
     for row in sample:
         store.append_market_event(row)
     reloaded = store.read("market_events")
-    report.record("persistence", PASS if len(reloaded) == len(sample) else FAIL,
-                  {"written": len(sample), "read_back": len(reloaded)})
+    report.record(
+        "persistence",
+        PASS if len(reloaded) == len(sample) else FAIL,
+        {
+            "written": len(sample),
+            "read_back": len(reloaded),
+            "isolated_store": str(persistence_root),
+        },
+    )
 
-    # A round trip must return the same values, not merely the same row count.
     if sample and reloaded:
         original, restored = sample[0], reloaded[0]
         same = str(original.get("bid0_price")) == str(restored.get("bid0_price"))
-        report.record("reload_reproduces_values", PASS if same else FAIL,
-                      {"bid0_price": restored.get("bid0_price")})
+        report.record(
+            "reload_reproduces_values",
+            PASS if same else FAIL,
+            {"bid0_price": restored.get("bid0_price")},
+        )
 
     report.record("writer_healthy", PASS if store.health.healthy else FAIL)
-
     return report
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--underlying", default="NIFTY")
-    parser.add_argument("--seconds", type=int, default=120)
-    parser.add_argument("--root", default=None,
-                        help="evidence root; defaults to a temp acceptance area, never the live lake")
-    parser.add_argument("--out-dir", default="data/evidence_acceptance")
-    args = parser.parse_args(argv)
-
-    root = Path(args.root) if args.root else Path("data/evidence_acceptance/_root")
-    root.mkdir(parents=True, exist_ok=True)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    report = run_acceptance(
-        underlying=args.underlying, seconds=args.seconds, root=root, out_dir=out_dir,
-    )
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = out_dir / f"acceptance-{stamp}.json"
-    path.write_text(json.dumps(report.as_dict(), indent=1, default=str), encoding="utf-8")
-
-    print(json.dumps(report.as_dict(), indent=1, default=str))
-    print(f"\nreport written to {path}")
-    print(f"OVERALL: {report.overall}")
-    return 0 if report.overall == PASS else 1
 
 
 if __name__ == "__main__":

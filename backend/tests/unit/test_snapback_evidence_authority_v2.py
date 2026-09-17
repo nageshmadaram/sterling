@@ -146,9 +146,23 @@ def _cost(phase, build="build-1-4", cost=25.0):
     return base
 
 
+def _opportunities_for(outcomes):
+    """The Day-T rows production always writes, one per outcome."""
+    return [
+        {
+            "opportunity_id": o["opportunity_id"], "symbol": "NIFTY",
+            "signal_iv": 0.18, "authoritative": 1,
+            "source": o.get("source", "PROSPECTIVE_PAPER"),
+            "runtime_build_sha": o.get("runtime_build_sha", "build-1"),
+        }
+        for o in outcomes
+    ]
+
+
 def _records(outcomes, costs, **over):
     base = {
         "outcomes": outcomes, "costs": costs, "hedge_rebalances": [],
+        "opportunities": _opportunities_for(outcomes),
         "paper_positions": [], "daily_mtm": [], "prospective_sessions": [],
         "quote_quality_events": [
             _row() | {"required_for_economics": 1, "accepted": 1} for _ in range(10)

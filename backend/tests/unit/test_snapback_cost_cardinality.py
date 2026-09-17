@@ -68,10 +68,28 @@ def _outcome(opp="OPP-1", *, costs=50.0, hedged=True):
     }
 
 
+def _opportunities_for(outcomes):
+    """The Day-T rows production always writes, one per outcome.
+
+    Promotion joins every outcome back to its authoritative opportunity and
+    requires a real signal_iv, so an outcome with no source row is inadmissible.
+    """
+    return [
+        {
+            "opportunity_id": o["opportunity_id"], "symbol": "NIFTY",
+            "signal_iv": 0.18, "authoritative": 1,
+            "source": o.get("source", "PROSPECTIVE_PAPER"),
+            "runtime_build_sha": o.get("runtime_build_sha", "build-1"),
+        }
+        for o in outcomes
+    ]
+
+
 def _records(*, outcomes, costs, rebalances=None):
     return {
         "outcomes": outcomes,
         "costs": costs,
+        "opportunities": _opportunities_for(outcomes),
         "hedge_rebalances": rebalances or [],
         "paper_positions": [],
         "daily_mtm": [],

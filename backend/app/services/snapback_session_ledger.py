@@ -57,7 +57,6 @@ def record_session_scan(
 ) -> None:
     """Upsert the session's scan record. Re-scanning a session updates it."""
     now = datetime.now(timezone.utc).isoformat()
-    # The universe counter is a claim; the decision rows are the evidence.
     decisions_recorded = _decisions_recorded(warehouse, session_date)
     conn = warehouse._get_connection()
     try:
@@ -83,7 +82,8 @@ def record_session_scan(
                     scanner_status = excluded.scanner_status,
                     market_gate_status = excluded.market_gate_status,
                     signals_authoritative = excluded.signals_authoritative,
-                    -- Gap codes accumulate; a rescan cannot erase an earlier gap.
+                    -- Gap codes deliberately persist: a rescan cannot erase an
+                    -- entry/EOD failure observed earlier in the same session.
                     observed_at = excluded.observed_at,
                     decisions_recorded = excluded.decisions_recorded
                 """,
@@ -118,10 +118,10 @@ def update_session_phase(warehouse, session_date: str, **phases: str) -> None:
 
 
 def append_session_evidence_gap(warehouse, session_date: str, code: str) -> None:
-    """Add one gap code, preserving the others.
+    """Add one gap code, preserving every earlier uncertainty.
 
-    A scanner rerun must never erase an entry or end-of-day gap recorded earlier in
-    the day: the session is only as good as its worst phase.
+    Corrupt gap JSON is itself evidence damage. It must survive as an explicit gap,
+    not be overwritten by the next perfectly valid code and thereby disappear.
     """
     conn = warehouse._get_connection()
     try:
@@ -134,12 +134,14 @@ def append_session_evidence_gap(warehouse, session_date: str, code: str) -> None
             existing: List[str] = []
             if row:
                 try:
-                    existing = list(json.loads(row["evidence_gap_codes_json"] or "[]"))
+                    decoded = json.loads(row["evidence_gap_codes_json"] or "[]")
+                    if not isinstance(decoded, list):
+                        raise ValueError("gap payload is not a list")
+                    existing = [str(item) for item in decoded]
                 except Exception:
-                    existing = []
-            if code in existing:
-                return
-            existing.append(code)
+                    existing = ["unreadable_evidence_gap_codes"]
+            if code not in existing:
+                existing.append(code)
             conn.execute(
                 """
                 INSERT INTO prospective_sessions (session_date, evidence_gap_codes_json,
@@ -169,19 +171,16 @@ def session_record(warehouse, session_date: str) -> Optional[Dict[str, Any]]:
 
 def evidence_gap_codes(row: Dict[str, Any]) -> List[str]:
     try:
-        return list(json.loads(row.get("evidence_gap_codes_json") or "[]"))
+        decoded = json.loads(row.get("evidence_gap_codes_json") or "[]")
+        if not isinstance(decoded, list):
+            raise ValueError("gap payload is not a list")
+        return [str(item) for item in decoded]
     except Exception:
-        # An unreadable gap list is itself a gap.
         return ["unreadable_evidence_gap_codes"]
 
 
 def session_scan_complete(row: Dict[str, Any]) -> bool:
-    """Did the SCANNER observe the whole session?
-
-    This answers "must I rescan?" only. It says nothing about whether the trading
-    day's entry, end-of-day and packaging phases finished, so it must never be used
-    as the economic evidence denominator.
-    """
+    """Did the SCANNER observe the whole session?"""
     if not row:
         return False
     if str(row.get("scanner_status")) != SessionStatus.COMPLETE:
@@ -194,20 +193,13 @@ def session_scan_complete(row: Dict[str, Any]) -> bool:
         return False
     if not str(row.get("market_gate_status") or ""):
         return False
-    # The counter alone is not evidence: one durable decision per scanned symbol.
     if int(row.get("decisions_recorded") or 0) < expected:
         return False
     return True
 
 
 def session_market_evidence_complete(row: Dict[str, Any]) -> bool:
-    """Is this session admissible as economic evidence?
-
-    The scanner, the entry phase and the end-of-day phase must all have finished with
-    no recorded gap. Packaging is deliberately NOT required: the report needs the
-    session count, so requiring the package here would deadlock the gate behind its
-    own output.
-    """
+    """Is this session admissible as economic evidence?"""
     if not session_scan_complete(row):
         return False
     for phase in ("entry_phase_status", "eod_phase_status"):
@@ -217,28 +209,21 @@ def session_market_evidence_complete(row: Dict[str, Any]) -> bool:
 
 
 def session_package_complete(row: Dict[str, Any]) -> bool:
-    """Did the post-market package finish on top of complete market evidence?"""
     return (
         session_market_evidence_complete(row)
         and str(row.get("package_status") or "") == SessionStatus.COMPLETE
     )
 
 
-# Kept for callers that predate the split; market evidence is the economic meaning.
 session_evidence_complete = session_market_evidence_complete
 
 
 def session_is_complete(warehouse, session_date: str) -> bool:
-    """Scanner completeness, used by the runner to avoid a duplicate scan."""
     return session_scan_complete(session_record(warehouse, session_date) or {})
 
 
 def observed_session_count(warehouse) -> int:
-    """Fully observed sessions — the denominator the 60-session rule actually means.
-
-    Counted from the session ledger, not from unique trade entry dates: a session
-    that produced no signal is still a held-out session if it was fully observed.
-    """
+    """Fully observed sessions — the denominator the 60-session rule actually means."""
     try:
         rows = warehouse.get_records_by_table("prospective_sessions")
     except Exception as exc:
@@ -248,10 +233,12 @@ def observed_session_count(warehouse) -> int:
 
 
 def incomplete_sessions(warehouse) -> List[str]:
+    """Return known incomplete sessions, or an explicit sentinel if unreadable."""
     try:
         rows = warehouse.get_records_by_table("prospective_sessions")
-    except Exception:
-        return []
+    except Exception as exc:
+        log.warning("Snapback session ledger: cannot enumerate incomplete sessions: %s", exc)
+        return ["UNKNOWN:SESSION_LEDGER_UNREADABLE"]
     return [
         str(dict(r)["session_date"])
         for r in rows

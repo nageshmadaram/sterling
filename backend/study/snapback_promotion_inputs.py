@@ -4,7 +4,8 @@ Every other path that assembles "promotable" numbers is a second opinion nobody 
 for, and two opinions eventually disagree about whether a family may trade real money.
 This builder proves the evidence hangs together BEFORE the gate sees it: identities
 match, every completed trade's cost ledger reconciles with its outcome, coverage comes
-from recorded attempts, and nothing is left unresolved.
+from recorded attempts, the Day-T opportunity carried a real positive IV rather than a
+fallback, and nothing is left unresolved.
 """
 
 from __future__ import annotations
@@ -183,9 +184,6 @@ def build_promotion_input(
     errors: List[str] = []
     expected_build = expected_identity.get("runtime_build_sha") or ""
 
-    # Build identity is proved for every promotable row, not just outcomes. A
-    # 1.4 outcome priced by a 1.3 cost event is not one experiment, and the
-    # builder is supposed to prove that rather than assume a fresh database.
     def _authoritative(key: str):
         rows = records.get(key)
         kept = filter_authoritative(rows, expected_build_sha=expected_build or None)
@@ -203,10 +201,27 @@ def build_promotion_input(
 
     outcomes = _authoritative("outcomes")
     cost_rows = [dict(r) for r in _authoritative("costs")]
+    opportunities = [dict(r) for r in _authoritative("opportunities")]
+    # Two authoritative Day-T rows claiming one opportunity_id make the join
+    # ambiguous, and a dict comprehension would silently keep whichever arrived
+    # last — a guess about which signal produced the trade, and about which
+    # signal_iv priced it. Ambiguous authority is refused, not resolved.
+    opportunity_by_id: dict[str, Any] = {}
+    duplicate_opportunity_ids: set[str] = set()
+    for row in opportunities:
+        key = str(row.get("opportunity_id") or "")
+        if not key:
+            continue
+        if key in opportunity_by_id:
+            duplicate_opportunity_ids.add(key)
+        opportunity_by_id[key] = row
+    for key in sorted(duplicate_opportunity_ids):
+        errors.append(
+            f"{key}: duplicate authoritative Day-T opportunity rows; the join is "
+            "ambiguous and cannot be resolved by choosing one"
+        )
     positions = [dict(r) for r in (records.get("paper_positions") or [])]
 
-    # Costs by trade come from the LEDGER. A bug in outcome writing must not be able
-    # to make costs disappear from the 2x/3x stress.
     ledger: Dict[str, float] = {}
     phase_counts: Dict[str, Dict[str, int]] = {}
     for row in cost_rows:
@@ -219,11 +234,6 @@ def build_promotion_input(
         phase_counts.setdefault(opp, {})
         phase_counts[opp][phase] = phase_counts[opp].get(phase, 0) + 1
 
-    # G24: one executed leg, one cost event. Summing per trade catches a wrong
-    # total but not a missing leg whose cost was small, a duplicate that
-    # double-charges, or an orphan attached to a leg that never executed. Each
-    # changes the cost stress the gate applies without moving the sum enough to
-    # be noticed.
     hedge_fills = _hedge_executions(records)
     rebalance_counts: Dict[str, int] = {}
     for row in _authoritative("hedge_rebalances"):
@@ -243,6 +253,21 @@ def build_promotion_input(
         build = str(outcome.get("runtime_build_sha") or "")
         if expected_build and build and build != expected_build:
             errors.append(f"{opp}: runtime build {build} does not match {expected_build}")
+
+        # The IV used to choose the contract/delta must be a Day-T observation,
+        # not a T+1 fallback. The old orchestration had a plausible numeric
+        # fallback (`assumed_vrp * 0.15`) when signal_iv was absent; that can make
+        # an otherwise complete outcome look authoritative. Joining back to the
+        # authoritative opportunity makes such a trade permanently ineligible for
+        # promotion even if legacy code managed to execute it.
+        source_opportunity = opportunity_by_id.get(opp)
+        if source_opportunity is None:
+            errors.append(f"{opp}: no authoritative Day-T opportunity row")
+            signal_iv = None
+        else:
+            signal_iv = _num(source_opportunity, "signal_iv", errors, f"{opp}:opportunity")
+            if signal_iv is not None and signal_iv <= 0:
+                errors.append(f"{opp}:opportunity: signal_iv must be > 0")
 
         option_pnl = _num(outcome, "actual_option_pnl", errors, opp)
         futures_pnl = _num(outcome, "actual_futures_pnl", errors, opp)
@@ -280,7 +305,7 @@ def build_promotion_input(
                     f"option+futures-ledger {expected_total}"
                 )
 
-        if None in (option_pnl, futures_pnl, total) or not session:
+        if None in (signal_iv, option_pnl, futures_pnl, total) or not session:
             continue
 
         trade_pnls.append(total)
@@ -362,6 +387,5 @@ def build_promotion_input(
         unresolved_exposures=unresolved,
         evidence_gap_sessions=gap_sessions,
         allocation_capital=float(allocation_capital or 0.0),
-        # Deterministic over gate-relevant values only: no timestamps, no paths.
         gate_input_hash=_hash(identity_payload),
     )

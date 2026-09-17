@@ -231,6 +231,16 @@ class PromotionService:
     ) -> PromotionResult:
         import hashlib
 
+        # Inadmissible evidence is a reason the gate could not be evaluated. It is
+        # not a reason the sample thresholds stopped applying, and a report naming
+        # only the data-quality fault reads as though they had been met. State the
+        # shortfalls too, in the same words the gate itself uses.
+        reasons = list(reasons)
+        if int(completed_trades) < 300:
+            reasons.append(f"Completed trades {int(completed_trades)} < required 300")
+        if int(observed_sessions or 0) < 60:
+            reasons.append(f"Independent sessions {int(observed_sessions or 0)} < required 60")
+
         digest = gate_input_hash or hashlib.sha256(
             json.dumps(
                 {"snapshot": snapshot, "identity": identity, "reasons": sorted(reasons)},

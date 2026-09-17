@@ -14,7 +14,10 @@ import pytest
 from study.snapback_live_evidence_acceptance import (
     ACCEPTANCE_EVIDENCE_CLASS,
     FAIL,
+    INCONCLUSIVE,
+    NOT_EXERCISED,
     PASS,
+    PROVEN,
     SKIP,
     Report,
     _force_transport_disconnect,
@@ -71,10 +74,15 @@ def test_one_failure_fails_the_run():
 
 
 def test_all_pass_is_a_pass():
+    """Certification needs engineering fit AND proven vendor assumptions."""
     report = _report()
-    report.record("a", PASS)
-    report.record("b", PASS)
+    for name in ("instrument_master", "persistence", "writer_healthy"):
+        report.record(name, PASS)
+    for name in ("market_data_live", "clock_separation", "option_full_tick"):
+        report.record(name, PASS)
 
+    assert report.engineering_gate == PASS
+    assert report.vendor_assumptions == PROVEN
     assert report.overall == PASS
 
 
@@ -141,11 +149,15 @@ def test_an_empty_book_is_reported_as_empty():
 # ─── row grading ─────────────────────────────────────────────────────────────
 
 def _row(**over):
+    """A fully populated five-deep book, so that a test which omits a level is
+    deliberately testing absence rather than accidentally creating it."""
     row = {
         "exchange_ts": datetime(2026, 9, 17, 9, 19, 59, tzinfo=timezone.utc),
         "received_ts": NOW,
-        "bid4_price": 995000, "ask4_price": 1005000,
     }
+    for i in range(5):
+        row[f"bid{i}_price"] = 1000000 - i * 500
+        row[f"ask{i}_price"] = 1000500 + i * 500
     row.update(over)
     return row
 
@@ -261,7 +273,10 @@ def test_reconnect_pass_requires_disconnect_retry_second_connection_and_fresh_fu
     assert report.checks["reconnect_connected"] == PASS
     assert report.checks["post_reconnect_fresh_ticks"] == PASS
     assert report.checks["post_reconnect_full_mode"] == PASS
-    assert report.overall == PASS
+    # The reconnect chain is an engineering concern; on its own it cannot
+    # certify a release, because no vendor check ran.
+    assert report.engineering_gate == PASS
+    assert report.overall != PASS
 
 
 def test_reconnect_fails_when_one_token_has_no_new_post_reconnect_tick():
@@ -364,3 +379,390 @@ def test_no_credential_is_logged_or_stored():
     # The token may be handed to the client, never written anywhere.
     assert "write_text(creds" not in code
     assert "json.dumps(creds" not in code
+
+
+# ─── a closed market must not look like an acceptance ────────────────────────
+# A run after the close receives the previous session's book replayed on
+# connect: well-formed, five levels deep, fully stamped. Every schema check
+# passes and the artifact reads like a certified release. These pin the
+# separation between "the schema is right" and "the market was live".
+
+def test_a_stale_closing_book_is_not_a_live_market():
+    from study.snapback_live_evidence_acceptance import MAX_LIVE_TICK_AGE_MS
+
+    report = _report()
+    stale = datetime(2026, 9, 17, 2, 20, tzinfo=timezone.utc)   # ~7h before receipt
+
+    evaluate_rows(report, [_row(exchange_ts=stale)])
+
+    assert report.checks["market_data_live"] == FAIL
+    assert "NOT_A_LIVE_MARKET" in report.detail["market_data_live"]["interpretation"]
+    assert report.detail["market_data_live"]["freshest_tick_age_ms"] > MAX_LIVE_TICK_AGE_MS
+
+
+def test_a_current_tick_is_a_live_market():
+    report = _report()
+
+    evaluate_rows(report, [_row()])
+
+    assert report.checks["market_data_live"] == PASS
+
+
+def test_a_stale_book_still_fails_overall_even_when_everything_else_passes():
+    """The whole point: 32 green schema checks must not certify a closed market."""
+    report = _report()
+    for name in ("option_full_tick", "option_five_level_depth", "clock_separation"):
+        report.record(name, PASS)
+
+    evaluate_rows(report, [_row(exchange_ts=datetime(2026, 9, 17, 2, 20, tzinfo=timezone.utc))])
+
+    # Not a runtime failure — nothing about live behaviour was tested — but it
+    # can never certify.
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall == INCONCLUSIVE
+    assert report.overall != PASS
+
+
+def test_a_fully_populated_book_reports_the_absent_level_path_unexercised():
+    report = _report()
+
+    evaluate_rows(report, [_row()])
+
+    assert report.checks["absent_level_is_null_not_zero"] == PASS
+    assert report.detail["absent_level_is_null_not_zero"]["exercised"] is False
+    assert "NOT_EXERCISED" in report.detail["absent_level_is_null_not_zero"]["interpretation"]
+
+
+def test_an_observed_absent_level_exercises_the_path():
+    report = _report()
+
+    evaluate_rows(report, [_row(bid4_price=None)])
+
+    assert report.detail["absent_level_is_null_not_zero"]["exercised"] is True
+
+
+def test_the_depth_constant_cannot_drift_from_kitelake():
+    """kitelake runs in its own environment, so compare the source textually."""
+    import pathlib
+    import re
+
+    from study.snapback_live_evidence_acceptance import DEPTH_LEVELS
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    text = (root / "kitelake" / "evidence.py").read_text(encoding="utf-8")
+    match = re.search(r"^DEPTH_LEVELS = (\d+)", text, re.MULTILINE)
+
+    assert match, "kitelake/evidence.py no longer declares DEPTH_LEVELS"
+    assert DEPTH_LEVELS == int(match.group(1))
+
+
+# ─── reconnect is graded on outcome, not on a callback ───────────────────────
+
+def test_recovery_without_the_callback_still_counts():
+    """kiteconnect reconnected and delivered fresh ticks without firing
+    on_reconnect. Failing that reports a working system as broken."""
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1, 2], force_succeeded=True, force_detail="aborted",
+        disconnects=["1006: peer dropped"], reconnect_attempts=[],
+        connection_count=2, post_reconnect={1: [_tick()], 2: [_tick()]},
+    )
+
+    assert report.checks["reconnect_attempted"] == PASS
+    assert report.detail["reconnect_attempted"]["recovered_without_callback"] is True
+
+
+def test_no_reconnection_at_all_still_fails():
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=True, force_detail="aborted",
+        disconnects=["1006: peer dropped"], reconnect_attempts=[],
+        connection_count=1, post_reconnect={},
+    )
+
+    assert report.checks["reconnect_attempted"] == FAIL
+    assert report.checks["reconnect_connected"] == FAIL
+    assert report.checks["post_reconnect_fresh_ticks"] == FAIL
+
+
+def test_a_disconnect_that_never_happened_is_not_recovery():
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=False, force_detail="no abortConnection()",
+        disconnects=[], reconnect_attempts=[], connection_count=2,
+        post_reconnect={1: [_tick()]},
+    )
+
+    assert report.checks["forced_disconnect"] == FAIL
+    # The abort never happened, so recovery was not exercised rather than
+    # independently broken — see the harness-incompatibility root cause.
+    assert report.checks["reconnect_attempted"] == SKIP
+
+
+# ─── credentials ─────────────────────────────────────────────────────────────
+
+def test_credential_resolution_prefers_sterlings_own_store(monkeypatch):
+    """Two Kite apps existed; reading only kitelake's made the documented
+    Sterling login flow unusable and surfaced a misleading TokenException."""
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    class FakeAccount:
+        is_active = True
+        api_key = "sterling-key"
+        access_token = "sterling-token"
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [FakeAccount()])
+
+    key, token, source = mod.resolve_acceptance_credentials()
+
+    assert (key, token, source) == ("sterling-key", "sterling-token", "sterling_kite_accounts")
+
+
+def test_an_undecryptable_token_says_so_instead_of_looking_logged_out(monkeypatch):
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    class FakeAccount:
+        is_active = True
+        api_key = "sterling-key"
+        access_token = ""      # decrypt() returns "" when the key is absent
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [FakeAccount()])
+
+    with pytest.raises(mod.CredentialsUnavailable) as excinfo:
+        mod.resolve_acceptance_credentials()
+
+    assert "STERLING_SECRET_KEY" in str(excinfo.value)
+
+
+def test_the_credential_error_never_carries_the_token(monkeypatch):
+    import study.snapback_live_evidence_acceptance as mod
+    import app.services.exchanges.kite.accounts as accounts
+
+    monkeypatch.setattr(accounts, "_load_from_db", lambda: [])
+    monkeypatch.setattr(mod, "_SPOT_QUOTE_KEYS", mod._SPOT_QUOTE_KEYS)
+
+    try:
+        mod.resolve_acceptance_credentials()
+    except mod.CredentialsUnavailable as exc:
+        assert "token" not in str(exc).lower() or "ACCESS_TOKEN" in str(exc)
+
+
+def test_index_spot_symbols_are_not_the_derivatives_underlying():
+    """NIFTY options are written on "NIFTY"; the spot quotes as "NSE:NIFTY 50"."""
+    from study.snapback_live_evidence_acceptance import _SPOT_QUOTE_KEYS
+
+    assert _SPOT_QUOTE_KEYS["NIFTY"][0] == "NSE:NIFTY 50"
+    assert _SPOT_QUOTE_KEYS["BANKNIFTY"][0] == "NSE:NIFTY BANK"
+    assert _SPOT_QUOTE_KEYS["SENSEX"][0] == "BSE:SENSEX"
+
+
+# ─── three conclusions, never one headline ───────────────────────────────────
+# Collapsing them lets a closed market or a blocked expiry calendar read as a
+# runtime failure, and lets vendor proof read as strategy proof.
+
+def test_a_blocked_expiry_calendar_does_not_fail_the_engineering_gate():
+    report = _report()
+    for name in ("instrument_master", "persistence", "writer_healthy"):
+        report.record(name, PASS)
+    for name in ("market_data_live", "clock_separation"):
+        report.record(name, PASS)
+    report.record("candidate_universe", FAIL)      # no eligible DTE today
+
+    assert report.strategy_reality["status"] == "BLOCKED"
+    assert report.engineering_gate == PASS
+    assert report.vendor_assumptions == PROVEN
+    # Sterling can be correct on a day Snapback cannot trade.
+    assert report.overall == PASS
+
+
+def test_a_closed_market_never_proves_vendor_assumptions():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("option_five_level_depth", PASS)
+    report.record("clock_separation", PASS)
+    report.record("market_data_live", FAIL)
+
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall != PASS
+
+
+def test_an_unclassified_check_still_counts():
+    """A new check must never be silently excluded from every verdict."""
+    report = _report()
+    for name in ("instrument_master", "market_data_live", "clock_separation"):
+        report.record(name, PASS)
+    report.record("some_brand_new_check", FAIL)
+
+    assert report.engineering_gate == FAIL
+    assert report.overall != PASS
+    assert "some_brand_new_check" in report.as_dict()["unclassified_checks"]
+
+
+def test_the_artifact_carries_all_three_conclusions():
+    report = _report()
+    report.record("instrument_master", PASS)
+
+    blob = report.as_dict()
+
+    assert set(blob["conclusions"]) == {
+        "engineering_gate", "vendor_assumptions", "strategy_reality"}
+
+
+def test_an_uninducible_disconnect_is_a_harness_incompatibility():
+    """One root cause must not present as five independent failures."""
+    from study.snapback_live_evidence_acceptance import evaluate_forced_reconnect
+
+    report = _report()
+    evaluate_forced_reconnect(
+        report, tokens=[1], force_succeeded=False,
+        force_detail="ticker websocket transport has no abortConnection()",
+        disconnects=[], reconnect_attempts=[], connection_count=1, post_reconnect={},
+    )
+
+    assert report.checks["forced_disconnect"] == FAIL
+    assert "HARNESS_TRANSPORT_INCOMPATIBILITY" in report.detail["forced_disconnect"]["root_cause"]
+    for name in ("disconnect_observed", "reconnect_attempted", "reconnect_connected",
+                 "post_reconnect_fresh_ticks", "post_reconnect_full_mode"):
+        assert report.checks[name] == SKIP
+
+
+# ─── a closed market must not mask a real vendor defect ──────────────────────
+
+def test_a_schema_contradiction_survives_a_closed_market():
+    """Liveness and schema correctness are separate questions.
+
+    An earlier version returned NOT_EXERCISED for any closed-market run, which
+    downgraded a genuine decoder contradiction into "not tested". A schema
+    defect is visible on a replayed closing book and stays a defect after hours.
+    """
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("market_data_live", FAIL)      # expected after hours
+    report.record("option_order_counts", FAIL)   # a real vendor/decoder defect
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
+
+
+def test_a_clean_schema_on_a_closed_market_is_only_not_exercised():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("option_order_counts", PASS)
+    report.record("market_data_live", FAIL)
+
+    assert report.vendor_assumptions == NOT_EXERCISED
+    assert report.overall == INCONCLUSIVE
+
+
+def test_a_clean_schema_on_a_live_market_is_proven():
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("clock_separation", PASS)
+    report.record("option_order_counts", PASS)
+    report.record("market_data_live", PASS)
+
+    assert report.vendor_assumptions == PROVEN
+    assert report.overall == PASS
+
+
+# ─── strategy reality is a finding, not a gate ───────────────────────────────
+
+def test_a_blocked_expiry_calendar_reports_blocked_not_fail():
+    from study.snapback_live_evidence_acceptance import BLOCKED
+
+    report = _report()
+    report.record("instrument_master", PASS)
+    report.record("market_data_live", PASS)
+    report.record("clock_separation", PASS)
+    report.record("candidate_universe", FAIL,
+                  {"interpretation": "STRATEGY_REALITY: no listed monthly expiry"})
+
+    reality = report.strategy_reality
+    assert reality["status"] == BLOCKED
+    assert reality["findings"][0]["check"] == "candidate_universe"
+    assert reality["findings"][0]["result"] == "NO_ELIGIBLE_EXPIRY"
+    assert "no listed monthly expiry" in reality["findings"][0]["interpretation"]
+
+    # And it still does not stop the release.
+    assert report.engineering_gate == PASS
+    assert report.overall == PASS
+
+
+def test_a_tradeable_day_reports_executable():
+    from study.snapback_live_evidence_acceptance import EXECUTABLE
+
+    report = _report()
+    report.record("candidate_universe", PASS)
+    report.record("listedness", PASS)
+
+    reality = report.strategy_reality
+    assert reality["status"] == EXECUTABLE
+    assert reality["findings"] == []
+
+
+def test_an_unlisted_target_is_a_finding_with_its_own_result():
+    report = _report()
+    report.record("candidate_universe", PASS)
+    report.record("listedness", FAIL, {"interpretation": "computed strike absent"})
+
+    finding = report.strategy_reality["findings"][0]
+    assert finding["check"] == "listedness"
+    assert finding["result"] == "TARGET_NOT_LISTED"
+
+
+def test_strategy_reality_is_not_exercised_when_no_strategy_check_ran():
+    report = _report()
+    report.record("instrument_master", PASS)
+
+    assert report.strategy_reality["status"] == NOT_EXERCISED
+
+
+def test_the_artifact_carries_strategy_reality_as_a_structure():
+    report = _report()
+    report.record("candidate_universe", FAIL, {"interpretation": "no eligible expiry"})
+
+    blob = report.as_dict()
+
+    assert isinstance(blob["conclusions"]["strategy_reality"], dict)
+    assert blob["conclusions"]["strategy_reality"]["status"] == "BLOCKED"
+
+
+def test_a_vendor_contradiction_dominates_the_overall_verdict():
+    """Spec 8.1's pinned case, with nothing else recorded.
+
+    Evaluating the engineering gate first let a report carrying CONTRADICTED but
+    no engineering check return NOT_EXERCISED, softening a proven defect into
+    "untested". Unreachable in a real run — instrument_master is always recorded
+    first — but the layer whose job is to be unfoolable must not rely on that.
+    """
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("market_data_live", FAIL)
+    report.record("option_order_counts", FAIL)
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
+
+
+def test_a_contradiction_outranks_an_unfinished_engineering_gate():
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("option_depth_quantities", FAIL)   # vendor contradiction
+    report.record("instrument_master", SKIP)         # engineering incomplete
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
