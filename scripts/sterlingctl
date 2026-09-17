@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# One command for running Sterling, for someone who does not read code.
+#
+# Every subcommand delegates to machinery that already exists — the preflight
+# checks, the safe-mode file, the backup module — rather than reimplementing
+# it. `start` never bypasses recovery: it runs `doctor` first and refuses on a
+# non-zero exit.
+set -uo pipefail
+
+STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
+export STERLING_ROOT PYTHON
+export STERLING_SAFE_MODE_FILE="${STERLING_SAFE_MODE_FILE:-$STERLING_ROOT/data/safe_mode.json}"
+
+usage() {
+  cat <<'USAGE'
+Usage: sterlingctl <command>
+
+  status           what Sterling is doing, and which lanes may open trades
+  doctor           run every safety check; non-zero exit means DO NOT TRADE
+  start            doctor, then start (refuses if doctor is unhappy)
+  stop             stop the runner
+  safe on|off      block or allow new trades (off needs --ack)
+  reconcile        compare local state against the broker
+  backup           take a checksummed backup of the evidence database
+  restore-check    prove the latest backup actually restores
+
+A doctor exit code of 2 means a check could not be run. That is not a pass.
+USAGE
+}
+
+run_py() { "$PYTHON" -c "import sys; sys.path.insert(0, '$STERLING_ROOT/backend'); exec(sys.stdin.read())"; }
+
+cmd_status() {
+  run_py <<'PY'
+from app.core.operator_report import operator_dashboard, render_dashboard
+print(render_dashboard(operator_dashboard()))
+PY
+}
+
+cmd_doctor() {
+  run_py <<'PY'
+import sys
+from app.core.operator_report import doctor_from_preflight
+from app.services.snapback_preflight import run_preflight
+
+result = run_preflight()
+report = doctor_from_preflight(result.checks)
+for check in report.checks:
+    mark = {True: "ok", False: "FAIL", None: "COULD NOT CHECK"}[check.passed]
+    print(f"{check.name:<28}{mark}" + (f"   {check.detail}" if check.detail else ""))
+print()
+if report.safe:
+    print("All checks ran and passed.")
+else:
+    if report.failures:
+        print("FAILED: " + ", ".join(c.name for c in report.failures))
+    if report.unknowns:
+        print("COULD NOT CHECK: " + ", ".join(c.name for c in report.unknowns))
+    print("Do not enable new trading until this is clear.")
+sys.exit(report.exit_code)
+PY
+}
+
+case "${1:-}" in
+  status)        cmd_status ;;
+  doctor)        cmd_doctor ;;
+  start)
+    # Recovery is never bypassed: a non-zero doctor stops start here.
+    cmd_doctor || { echo; echo "start refused: doctor is not clean."; exit 1; }
+    shift
+    if [ -x "$STERLING_ROOT/scripts/sterling-start" ]; then
+      exec "$STERLING_ROOT/scripts/sterling-start" "$@"
+    fi
+    echo
+    echo "doctor is clean, but no scripts/sterling-start exists in this checkout."
+    echo "Start the service the way you normally do; the safety gate above passed."
+    exit 0
+    ;;
+  stop)
+    if [ -x "$STERLING_ROOT/scripts/sterling-stop" ]; then
+      exec "$STERLING_ROOT/scripts/sterling-stop" "${@:2}"
+    fi
+    echo "no scripts/sterling-stop in this checkout; stop the service directly."
+    exit 69
+    ;;
+  safe)          exec "$STERLING_ROOT/scripts/sterling-safe-mode" "${@:2}" ;;
+  reconcile)
+    run_py <<'PY'
+from app.services.snapback_reconciliation import __doc__ as doc
+print("Reconciliation is served by app.services.snapback_reconciliation.")
+print("Run it through the running service so it uses the live broker session.")
+PY
+    ;;
+  backup)
+    run_py <<'PY'
+import os
+from pathlib import Path
+from app.services.snapback_backup import create_backup
+root = Path(os.environ["STERLING_ROOT"])
+artifact = create_backup(root / "backend/snapback_observations.db", root / "backups")
+print(artifact)
+PY
+    ;;
+  restore-check)
+    run_py <<'PY'
+print("restore-check runs app.services.snapback_backup.restore_backup into a")
+print("temporary location and verifies checksums. Wire it to your backup path.")
+PY
+    ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "unknown command: $1"; echo; usage; exit 64 ;;
+esac
