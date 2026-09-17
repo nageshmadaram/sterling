@@ -38,6 +38,66 @@ The historical replay engine was quarantined rather than repaired.
 
 ---
 
+## The historical study also scheduled contracts that may not have existed
+
+Measured 2026-09-18, after the acceptance harness reported `INCONCLUSIVE` for
+every underlying on the board.
+
+`app/engines/snapback/backtest.py:343` reads:
+
+```python
+dte = int(cfg.min_dte)        # a flat 40, every trade, every date
+```
+
+`max_dte` is never referenced outside `config.py`. No expiry calendar appears in
+`backtest.py` or `walkforward.py` at all, and `contracts.py` documents its own
+field as "days to expiry ASSUMED for the model". So the historical engine
+assumed a 40-DTE contract existed on every signal date. It never consulted a
+real expiry, never applied the 40-60 window it declares, and never refused a
+signal for having nothing eligible.
+
+Real expiries do not oblige. Indian monthly expiries are synchronised across the
+whole board — on 2026-09-17 all 216 underlyings listed the same three monthly
+dates — and the frozen window is 21 days wide against a ~30-day cycle. The
+observed board that day carried expiries at 4, 11, 18, 25, 31, 39, 66 and 102
+DTE: nothing between 39 and 66, so **no underlying on the exchange had an
+eligible contract**.
+
+Projected across a year of real monthly expiries:
+
+```
+weekdays                              206
+tradeable                             136   66%
+blocked, market-wide and simultaneous  70   34%
+
+11 blocked stretches per year, median 5 weekdays, longest 11
+```
+
+Two consequences, different in kind.
+
+**Frequency.** The observed 0.33 trades/session does not account for blocked
+days, because the study never modelled them. The forward rate is therefore lower
+— roughly 0.22 per weekday — putting 300 authoritative trades near 1,377
+weekdays, about 5.5 years. Every promotion timeline should use 0.22, not 0.33.
+
+**Composition, which matters more.** The blocked days are not a random third.
+They fall at a fixed point in each monthly cycle: after one expiry drops through
+the 40-DTE floor and before the next reaches it. The historical sample therefore
+contains trades drawn from a part of the cycle that forward operation can never
+sample. That is not merely fewer trades; the historical and prospective samples
+are drawn from different populations.
+
+This is the same defect family as `NOT_LISTED` and the modelled option prices —
+the study priced contracts that may not have existed — except that here it also
+scheduled them. It further weakens the `+3.04% OOS, p=0.016` result, which was
+already model-dependent.
+
+Nothing in the frozen strategy is changed in response. The DTE rule is part of
+the identity under test, and altering it mid-experiment is forbidden. This is
+recorded as a measurement, and as a named limitation on the historical result.
+
+---
+
 ## Identity
 
 A release record cannot contain the SHA of the commit that contains it: writing
@@ -174,9 +234,13 @@ answerable; it does not answer it.
 | `830a215b3`, `74e0aae49` | release record, bound to its tag rather than its own SHA |
 | `b51203be1` | make the acceptance harness runnable |
 | `fbda6efe5`, `4ceb6fe76` | restore fail-closed prospective evidence hardening |
-| `e1a5f41b9` | execution-contract evidence + production recorder wiring |
+| `e1a5f41b9` | execution-contract evidence, recorded beside the theoretical target |
 | `d5ff359e6` | finalize the release record (docs only) |
 | `f6b3894ac` | make live reconnect acceptance exercisable |
+| `07199a5d2` | refuse a substituted vol at entry, rebalance and exit |
+| `8a119ef2f` | report sample shortfalls; complete the promotion fixtures |
+| `6c50c9534` | make the acceptance gate runnable; block a closed-market pass |
+| `20be93d57` | let the vendor gate run on days the strategy cannot trade |
 
 The fail-closed contract/tick hardening was first written on a sibling commit
 (`8c49034a5`) that is not in this branch's history; its changes reached the
@@ -235,7 +299,7 @@ An unreadable or unrecognised state file reads as SAFE_MODE, not NORMAL.
 ## Verification
 
 ```
-backend unit + integration     2001 pass
+backend unit + integration     2042 pass
 kitelake                        294 pass
 frontend vitest                1539 pass
 frontend typecheck             clean
@@ -249,17 +313,10 @@ evidence auditor CLI           verified, text and --json
 backup manifest                sha256 -c VERIFIED against the mounted lake
 ```
 
-Remote CI: PR #179. The last code change is `f6b3894ac`, whose complete gates
-are green:
-
-```
-CI                     PASS    backend 3.12: 5802 passed, 7 skipped
-Snapback Release Gate  PASS
-Regression Gate        PASS
-```
-
-This record is the only change after `f6b3894ac`, and CI must be green again at
-the resulting head before the live acceptance run certifies that SHA.
+Remote CI: the release-record branch was merged to `main` as `1b16320f1`, and
+the post-merge audit continues on `fix/runtime-1.6-postmerge-audit` (PR #180),
+which is where the defects listed below were found and closed. The tag belongs
+to the certified head of that work, not to `1b16320f1`.
 
 ## Backups
 
@@ -303,25 +360,45 @@ reconnect has been graded. None of these six can return SKIP.
 
 ## Known limitations
 
-1. **The live acceptance run has not passed.** A pre-open invocation reached the
-   real Kite instrument master and reproduced a real candidate hash, then stopped
-   at the spot quote because the daily access token had expired. FULL-mode depth
-   and timestamp semantics therefore remain unconfirmed against the vendor until
-   `acceptance-*.json` reports `overall: PASS` using a current token during market
-   hours.
-2. **The recorder has not observed a natural live opportunity.** The
-   recorder/lifecycle journal is wired into the real
-   `SnapbackProspectiveCollector` production path and proven by production-path
-   integration tests that drive `execute_pending_entry` itself rather than the
-   helpers in isolation. What remains is prospective evidence still to be
-   collected, not an implementation gap.
-3. **Listedness is unmeasured for real Snapback opportunities.** The acceptance
-   master proves the universe can be built from reality; an acceptance probe is
-   not a frozen strategy signal with its real `assumed_iv`.
-4. **CI has no kitelake job**, so `kitelake/tests` must still be verified locally.
-5. **`OPTION_PARTIALLY_FILLED` is not a distinct state**; partials re-enter
+1. **The live acceptance run has not passed.** It has been run repeatedly
+   against a closed market, reaching the socket and grading the full payload:
+   29 checks PASS, with `market_data_live` and `candidate_universe` failing
+   correctly. Ten consecutive runs were byte-identical, proving no cross-run
+   contamination and that forced reconnect recovers reliably rather than by
+   luck. What remains unproven is behaviour against a *moving* book: every tick
+   observed so far is the previous session's close replayed on connect, ~7 hours
+   stale. Certification requires `overall: PASS` during 09:15-15:30 IST.
+2. **The lifecycle/broker recorder is not wired into production.**
+   `SnapbackEvidenceRecorder` appears nowhere in `app/` outside its own module.
+   What `execute_pending_entry` does call is `_record_execution_contract`, which
+   records the execution contract and its candidate evaluations. The distinction
+   is deliberate and should stay: the lifecycle journal describes broker facts —
+   submission, acknowledgement, fill, protection — and the prospective collector
+   is paper observation with no broker to observe. Manufacturing
+   `BROKER_SUBMITTED` or `OPTION_FILLED` for paper execution would make the
+   evidence look stronger while making it less true. The journal belongs to the
+   future broker/shadow execution layer.
+3. **Listedness is unmeasured for real Snapback opportunities.** An acceptance
+   probe is not a frozen strategy signal carrying its own `assumed_iv`. A
+   read-only probe against the 2026-09-17 master found the computed 0.70-delta
+   strike listed across the plausible IV range for six underlyings, breaking
+   only above ~60% IV — and above ~42% for RELIANCE, whose chain extends only
+   +15% above spot. That is indicative, not evidence.
+4. **The historical sample is drawn from a different population.** The study
+   assumed a flat 40-DTE contract on every date, so it includes trades from days
+   when no eligible contract existed anywhere on the exchange — about 34% of
+   weekdays, market-wide, clustered at a fixed point in each expiry cycle. See
+   the section above. Promotion timelines should assume ~0.22 trades/weekday,
+   not 0.33.
+5. **Some acceptance checks can pass vacuously**, and now say so.
+   `null_exchange_timestamp_semantics` and `absent_level_is_null_not_zero` report
+   `NOT_EXERCISED` when every observed tick was stamped or every book was full.
+   `five_level_depth` grades the observed book, so a genuinely thin market and a
+   decoder defect require separate diagnosis. Read the detail, not the verdict.
+6. **CI has no kitelake job**, so `kitelake/tests` must still be verified locally.
+7. **`OPTION_PARTIALLY_FILLED` is not a distinct state**; partials re-enter
    `OPTION_FILL_PENDING` with cumulative quantity in the payload.
-6. **The state machine lives in `snapback_evidence_recorder.py`**, not a separate
+8. **The state machine lives in `snapback_evidence_recorder.py`**, not a separate
    `snapback_evidence_state.py`.
 
 ## What this release does not prove
