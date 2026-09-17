@@ -165,3 +165,95 @@ def test_rendering_names_the_state_and_the_reason():
 @pytest.mark.parametrize("lane", ["ultra_scalping", "overnight", "swing"])
 def test_every_mode_appears_in_the_rendered_screen(lane):
     assert lane in render_dashboard(operator_dashboard())
+
+
+# ── Sterling-specific doctor checks ───────────────────────────────────────
+
+
+def _by_name(checks):
+    return {c.name: c for c in checks}
+
+
+def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
+    from app.core.operator_report import lane_doctor_checks
+
+    names = set(_by_name(lane_doctor_checks()))
+    assert names == {
+        "focus_policy",
+        "release_tag",
+        "risk_limits",
+        "lane_origination",
+        "supertrend_core_frozen",
+    }
+
+
+def test_an_unset_release_tag_is_reported_as_a_failure(monkeypatch):
+    """Evidence written without one cannot name the release that produced it."""
+    from app.core.operator_report import lane_doctor_checks
+
+    monkeypatch.delenv("STERLING_RELEASE_TAG", raising=False)
+    check = _by_name(lane_doctor_checks())["release_tag"]
+    assert check.passed is False
+    assert "unattributed" in check.detail
+
+
+def test_a_set_release_tag_passes(monkeypatch):
+    from app.core.operator_report import lane_doctor_checks
+
+    monkeypatch.setenv("STERLING_RELEASE_TAG", "snapback-prospective-runtime-1.6")
+    check = _by_name(lane_doctor_checks())["release_tag"]
+    assert check.passed is True
+    assert check.detail == "snapback-prospective-runtime-1.6"
+
+
+def test_an_unconfigured_risk_hierarchy_is_reported(monkeypatch):
+    """The gap the capacity layer deliberately does not invent limits for."""
+    from app.core.operator_report import lane_doctor_checks
+    from app.core.risk_hierarchy import ENV_VAR
+
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    check = _by_name(lane_doctor_checks())["risk_limits"]
+    assert check.passed is False
+    assert "not enforced" in check.detail
+
+
+def test_a_configured_risk_hierarchy_passes(monkeypatch):
+    from app.core.operator_report import lane_doctor_checks
+    from app.core.risk_hierarchy import ENV_VAR
+
+    monkeypatch.setenv(ENV_VAR, '{"global": {"": 1000}}')
+    check = _by_name(lane_doctor_checks())["risk_limits"]
+    assert check.passed is True
+    assert "config_hash" in check.detail
+
+
+def test_a_malformed_risk_hierarchy_is_could_not_check_not_a_pass(monkeypatch):
+    from app.core.operator_report import lane_doctor_checks
+    from app.core.risk_hierarchy import ENV_VAR
+
+    monkeypatch.setenv(ENV_VAR, "{not json")
+    check = _by_name(lane_doctor_checks())["risk_limits"]
+    assert check.passed is None
+    assert check.blocking is True
+
+
+def test_the_doctor_names_which_lanes_may_trade():
+    from app.core.operator_report import lane_doctor_checks
+
+    check = _by_name(lane_doctor_checks())["lane_origination"]
+    assert "of 10 lanes" in check.detail
+
+
+def test_the_doctor_fails_if_the_supertrend_core_drifts(monkeypatch):
+    from app.core.operator_report import lane_doctor_checks
+    import app.engines.sterling_kite_engine.lanes as st_lanes
+
+    check = _by_name(lane_doctor_checks())["supertrend_core_frozen"]
+    assert check.passed is True
+
+    monkeypatch.setattr(
+        st_lanes, "audit_core_parity", lambda cfg=None: [st_lanes.ParityFinding("fast", (21, 1.0), (20, 1.0))]
+    )
+    drifted = _by_name(lane_doctor_checks())["supertrend_core_frozen"]
+    assert drifted.passed is False
+    assert "fast" in drifted.detail

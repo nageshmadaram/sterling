@@ -135,6 +135,78 @@ def doctor_from_preflight(
     return DoctorReport(checks=checks + tuple(extra), health=health)
 
 
+def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
+    """Sterling-specific gaps the generic preflight does not cover.
+
+    Each is something an operator can act on and would otherwise only discover
+    by reading code: a focus setting that will not parse, a release that cannot
+    be named, a risk hierarchy nobody configured, and whether any lane is
+    actually allowed to trade.
+    """
+    import os
+
+    checks: list[DoctorCheck] = []
+
+    def add(name: str, fn):
+        try:
+            passed, detail = fn()
+        except Exception as exc:  # noqa: BLE001 - a check that cannot run is not a pass
+            checks.append(DoctorCheck(name, None, f"{type(exc).__name__}: {exc}"))
+        else:
+            checks.append(DoctorCheck(name, passed, detail))
+
+    def _focus():
+        from app.core.focus import focus_policy
+
+        policy = focus_policy()
+        return True, f"originators: {', '.join(sorted(policy.originators)) or 'none'}"
+
+    def _release_tag():
+        tag = (os.environ.get("STERLING_RELEASE_TAG") or "").strip()
+        if not tag:
+            # Not a failure of the runtime, but evidence written now cannot name
+            # the release that produced it, so it will be unattributed.
+            return False, (
+                "STERLING_RELEASE_TAG unset: new evidence will be recorded "
+                "unattributed and excluded from every lane gate"
+            )
+        return True, tag
+
+    def _risk_limits():
+        from app.core.risk_hierarchy import ENV_VAR, configured_hierarchy
+
+        hierarchy = configured_hierarchy()
+        if hierarchy is None:
+            return False, (
+                f"{ENV_VAR} unset: the four-level risk hierarchy is not enforced; "
+                "only the capital arithmetic in capacity applies"
+            )
+        return True, f"config_hash {hierarchy.config_hash}"
+
+    def _lanes():
+        rows = dashboard_rows()
+        open_lanes = [r["lane_key"] for r in rows if r["may_originate"]]
+        return True, (
+            f"{len(open_lanes)} of {len(rows)} lanes may originate"
+            + (f": {', '.join(open_lanes)}" if open_lanes else "")
+        )
+
+    def _supertrend_frozen():
+        from app.engines.sterling_kite_engine.lanes import audit_core_parity
+
+        findings = audit_core_parity()
+        if findings:
+            return False, "; ".join(str(f) for f in findings)
+        return True, "supertrend_core_v1 matches the frozen record"
+
+    add("focus_policy", _focus)
+    add("release_tag", _release_tag)
+    add("risk_limits", _risk_limits)
+    add("lane_origination", _lanes)
+    add("supertrend_core_frozen", _supertrend_frozen)
+    return tuple(checks)
+
+
 def operator_dashboard(health: HealthReport | None = None) -> dict[str, Any]:
     """The main screen: system status first, then every lane, then exposure."""
     rows = dashboard_rows()

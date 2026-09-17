@@ -2,9 +2,16 @@
 # One command for running Sterling, for someone who does not read code.
 #
 # Every subcommand delegates to machinery that already exists — the preflight
-# checks, the safe-mode file, the backup module — rather than reimplementing
-# it. `start` never bypasses recovery: it runs `doctor` first and refuses on a
-# non-zero exit.
+# checks, the safe-mode file, the backup module, the release manifest — rather
+# than reimplementing it. `start` never bypasses recovery: it runs `doctor`
+# first and refuses on a non-zero exit.
+#
+# Exit codes are the contract, because a script may read them:
+#   0  the thing succeeded, or the state is safe
+#   1  it failed, or the state is not safe to trade in
+#   2  a check could not be run at all — which is NOT a pass
+#  64  the command line was wrong
+#  69  the thing being asked for does not exist in this checkout
 set -uo pipefail
 
 STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -12,6 +19,8 @@ PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
 [ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
 export STERLING_ROOT PYTHON
 export STERLING_SAFE_MODE_FILE="${STERLING_SAFE_MODE_FILE:-$STERLING_ROOT/data/safe_mode.json}"
+export STERLING_EVIDENCE_DB="${STERLING_EVIDENCE_DB:-$STERLING_ROOT/backend/snapback_observations.db}"
+export STERLING_BACKUP_ROOT="${STERLING_BACKUP_ROOT:-$STERLING_ROOT/backups/snapback}"
 
 usage() {
   cat <<'USAGE'
@@ -23,8 +32,13 @@ Usage: sterlingctl <command>
   stop             stop the runner
   safe on|off      block or allow new trades (off needs --ack)
   reconcile        compare local state against the broker
-  backup           take a checksummed backup of the evidence database
-  restore-check    prove the latest backup actually restores
+  backup           take a checksummed backup, with a manifest
+  restore-check    restore the latest backup in isolation and verify it
+  manifest         show the frozen release identity of all ten lanes
+  freeze           write the release manifest for this build
+  verify           compare the frozen manifest against what is running
+  report [DATE]    daily evidence completeness report (default: today)
+  lanes            the ten lanes, their state, and whether they may originate
 
 A doctor exit code of 2 means a check could not be run. That is not a pass.
 USAGE
@@ -42,11 +56,11 @@ PY
 cmd_doctor() {
   run_py <<'PY'
 import sys
-from app.core.operator_report import doctor_from_preflight
+from app.core.operator_report import doctor_from_preflight, lane_doctor_checks
 from app.services.snapback_preflight import run_preflight
 
 result = run_preflight()
-report = doctor_from_preflight(result.checks)
+report = doctor_from_preflight(result.checks, extra=lane_doctor_checks())
 for check in report.checks:
     mark = {True: "ok", False: "FAIL", None: "COULD NOT CHECK"}[check.passed]
     print(f"{check.name:<28}{mark}" + (f"   {check.detail}" if check.detail else ""))
@@ -86,29 +100,233 @@ case "${1:-}" in
     exit 69
     ;;
   safe)          exec "$STERLING_ROOT/scripts/sterling-safe-mode" "${@:2}" ;;
+
   reconcile)
     run_py <<'PY'
-from app.services.snapback_reconciliation import __doc__ as doc
-print("Reconciliation is served by app.services.snapback_reconciliation.")
-print("Run it through the running service so it uses the live broker session.")
+import asyncio, sys
+
+from app.services.snapback_reconciliation import reconcile_family_account
+
+try:
+    snapshot = asyncio.run(reconcile_family_account())
+except Exception as exc:
+    # An unreachable broker is not a clean book. It is an unknown one, and the
+    # operator must read this as "keep new risk blocked", not as a pass.
+    print(f"reconcile COULD NOT RUN: {exc}")
+    print("Broker state is unknown. Keep new entries blocked.")
+    sys.exit(2)
+
+print(f"account   {snapshot.account_id or 'UNBOUND'}")
+print(f"observed  {snapshot.observed_at}")
+print(f"broker positions   {len(snapshot.broker_positions)}")
+print(f"sterling positions {len(snapshot.sterling_positions)}")
+print()
+if snapshot.clean:
+    print("CLEAN: broker and Sterling agree.")
+    sys.exit(0)
+
+print("MISMATCH — the broker is the source of truth.")
+for m in snapshot.mismatches:
+    print(f"  [{m.severity}] {m.code} {m.instrument or ''} "
+          f"broker={m.broker_quantity} sterling={m.sterling_quantity} {m.details or ''}")
+print()
+print("Do not resubmit unknown orders. Resolve state before any new entry.")
+sys.exit(1)
 PY
     ;;
+
   backup)
     run_py <<'PY'
-import os
+import os, sys
 from pathlib import Path
+
+from app.core.backup_manifest import build_backup_manifest, write_backup_manifest
 from app.services.snapback_backup import create_backup
+
 root = Path(os.environ["STERLING_ROOT"])
-artifact = create_backup(root / "backend/snapback_observations.db", root / "backups")
-print(artifact)
+source = Path(os.environ["STERLING_EVIDENCE_DB"])
+backup_root = Path(os.environ["STERLING_BACKUP_ROOT"])
+
+if not source.exists():
+    print(f"evidence database not found: {source}")
+    print("Set STERLING_EVIDENCE_DB to the database you want backed up.")
+    sys.exit(2)
+
+artifact = create_backup(source_db=source, backup_root=backup_root)
+manifest = build_backup_manifest(artifact.directory)
+path = write_backup_manifest(manifest, root=root, backup_dir=artifact.directory)
+
+rows = sum(sum(c.values()) for c in manifest.row_counts.values())
+print(f"backup    {artifact.db_path}")
+print(f"sha256    {artifact.checksum}")
+print(f"manifest  {path}")
+print(f"rows      {rows} across {len(manifest.row_counts)} database(s)")
+print(f"release   {manifest.release_tag} ({manifest.release_sha[:12]})")
+print()
+print("restore_test_status is UNTESTED until `sterlingctl restore-check` passes.")
 PY
     ;;
+
   restore-check)
     run_py <<'PY'
-print("restore-check runs app.services.snapback_backup.restore_backup into a")
-print("temporary location and verifies checksums. Wire it to your backup path.")
+import os, sys
+from pathlib import Path
+
+from app.core.backup_manifest import (
+    latest_backup_dir,
+    prove_restore,
+    read_backup_manifest,
+    record_restore_proof,
+    render_restore_proof,
+    write_backup_manifest,
+)
+
+root = Path(os.environ["STERLING_ROOT"])
+backup_root = Path(os.environ["STERLING_BACKUP_ROOT"])
+
+directory = latest_backup_dir(backup_root)
+if directory is None:
+    print(f"no backup found under {backup_root}")
+    print("A release cannot be handed over without a proved restore.")
+    sys.exit(2)
+
+# The restore lands in a temporary directory and is removed afterwards. The
+# live databases are never touched by this command.
+proof = prove_restore(directory)
+print(render_restore_proof(proof))
+
+beside = directory / "manifest.json"
+if beside.exists():
+    stamped = record_restore_proof(read_backup_manifest(beside), proof)
+    write_backup_manifest(stamped, root=root, backup_dir=directory)
+    print(f"manifest restore_test_status = {stamped.restore_test_status}")
+
+sys.exit(0 if proof.passed else 1)
 PY
     ;;
+
+  manifest)
+    run_py <<'PY'
+from app.core.release_manifest import build_release_manifest, read_manifest, render_manifest
+
+stored = read_manifest()
+if stored is None:
+    print("No frozen release manifest. Showing the LIVE build instead.")
+    print("Run `sterlingctl freeze` to record it.")
+    print()
+    print(render_manifest(build_release_manifest()))
+else:
+    print(render_manifest(stored))
+PY
+    ;;
+
+  freeze)
+    run_py <<'PY'
+from app.core.release_manifest import build_release_manifest, render_manifest, write_manifest
+
+manifest = build_release_manifest()
+path = write_manifest(manifest=manifest)
+print(render_manifest(manifest))
+print()
+print(f"written to {path}")
+if manifest["build"].get("working_tree_clean") is not True:
+    print()
+    print("WARNING: the working tree is not clean, so this release identity")
+    print("describes uncommitted code. Commit before freezing for real.")
+PY
+    ;;
+
+  verify)
+    run_py <<'PY'
+import sys
+
+from app.core.release_manifest import read_manifest, verify_manifest
+
+stored = read_manifest()
+if stored is None:
+    print("No frozen release manifest to verify. Run `sterlingctl freeze`.")
+    sys.exit(2)
+
+verdict = verify_manifest(stored)
+if verdict.matches:
+    print("Release identity matches the frozen manifest.")
+    sys.exit(0)
+
+print("RELEASE IDENTITY DRIFT")
+for drift in verdict.drift:
+    print(f"  {drift}")
+for lane in verdict.missing_lanes:
+    print(f"  lane missing from the running build: {lane}")
+for lane in verdict.unexpected_lanes:
+    print(f"  lane present but not in the manifest: {lane}")
+print()
+if verdict.identity_drift:
+    print(f"{len(verdict.identity_drift)} change(s) alter a lane's identity.")
+    print("Evidence collected under the old manifest belongs to the OLD identity.")
+    print("Do not reassign it. Freeze a new release and start a new sample.")
+else:
+    print("The build moved but no lane identity changed. Re-freeze to record it.")
+sys.exit(1)
+PY
+    ;;
+
+  report)
+    STERLING_REPORT_DATE="${2:-}" run_py <<'PY'
+import os
+from datetime import date
+
+from app.core.evidence_completeness import (
+    build_daily_report,
+    load_session_rows,
+    render_daily_report,
+)
+
+session_date = os.environ.get("STERLING_REPORT_DATE") or date.today().isoformat()
+
+# A missing evidence database must read as SYSTEM_ERROR, not as a quiet day.
+# Constructing the warehouse would CREATE an empty one, and an empty store that
+# reports "no signals" is exactly the failure this report exists to catch.
+db_path = os.environ.get("STERLING_EVIDENCE_DB", "")
+session_row, rows = (None, [])
+if not db_path or not os.path.exists(db_path):
+    print(f"(evidence database not found: {db_path or 'unset'})")
+    print()
+else:
+    try:
+        from app.services.snapback_observation_warehouse import (
+            SnapbackObservationWarehouse,
+        )
+
+        session_row, rows = load_session_rows(
+            SnapbackObservationWarehouse(db_path), session_date
+        )
+    except Exception as exc:
+        print(f"(evidence store unreadable: {exc})")
+        print()
+
+report = build_daily_report(
+    session_date=session_date, session_row=session_row, evidence_rows=rows
+)
+print(render_daily_report(report))
+PY
+    ;;
+
+  lanes)
+    run_py <<'PY'
+from app.core.lane_registry import LANES, may_originate
+
+print(f"{'lane':<28}{'state':<14}{'trades?':<9}why")
+for key, lane in LANES.items():
+    decision = may_originate(lane.strategy_id, lane.mode)
+    allowed = "yes" if decision.allowed else "no"
+    why = decision.reason if not decision.allowed else ""
+    detail = f" - {decision.detail}" if (why and decision.detail) else ""
+    print(f"{key:<28}{lane.state.value:<14}{allowed:<9}{why}{detail}")
+print()
+print("A lane that may not originate is not broken. It has not earned a sample.")
+PY
+    ;;
+
   ""|-h|--help|help) usage ;;
   *) echo "unknown command: $1"; echo; usage; exit 64 ;;
 esac
