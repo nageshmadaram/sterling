@@ -166,6 +166,28 @@ def lane_columns(lane_identity: Optional[Any], source: str) -> Dict[str, Any]:
     }
 
 
+def horizon_columns(plan: Optional[Any]) -> Dict[str, Any]:
+    """The frozen horizon of one position, or empties when none was built."""
+    if plan is None:
+        return {
+            "horizon_plan_id": "", "expected_window_start": None,
+            "expected_window_end": None, "hard_exit_at": None,
+            "hard_exit_session": None, "calendar_version": "",
+            "mode_config_hash": "",
+        }
+    return {
+        "horizon_plan_id": plan.plan_id,
+        "expected_window_start": plan.expected_window_start.isoformat(),
+        "expected_window_end": plan.expected_window_end.isoformat(),
+        "hard_exit_at": plan.hard_exit_at.isoformat() if plan.hard_exit_at else None,
+        "hard_exit_session": (
+            plan.hard_exit_session.isoformat() if plan.hard_exit_session else None
+        ),
+        "calendar_version": plan.calendar_version,
+        "mode_config_hash": plan.mode_config_hash,
+    }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -1134,8 +1156,17 @@ class SnapbackObservationWarehouse:
         sessions_held: int = 1,
         is_runner: int = 0,
         status: str = "OPEN",
+        horizon_plan: Optional[Any] = None,
+        lane_identity: Optional[Any] = None,
+        source: str = "PROSPECTIVE_PAPER",
     ) -> None:
-        """Persist active paper position state ledger."""
+        """Persist active paper position state ledger.
+
+        ``horizon_plan`` is frozen at entry and stored verbatim, so a later
+        config change cannot move this position's hard exit.
+        """
+        horizon = horizon_columns(horizon_plan)
+        lane = lane_columns(lane_identity, source)
         conn = self._get_connection()
         try:
             with conn:
@@ -1146,15 +1177,26 @@ class SnapbackObservationWarehouse:
                         option_expiry, option_strike, futures_symbol, futures_lot_size,
                         current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
                         accumulated_costs, peak_option_bid, sessions_held, is_runner,
-                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status,
+                        horizon_plan_id, expected_window_start, expected_window_end,
+                        hard_exit_at, hard_exit_session, calendar_version, mode_config_hash,
+                        strategy_id, strategy_version, mode, mode_version, legacy_mode,
+                        lane_key, identity_hash, evidence_class, release_tag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         opportunity_id, symbol, option_symbol, option_qty, option_entry_price,
                         option_expiry, option_strike, futures_symbol, futures_lot_size,
                         current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
                         accumulated_costs, peak_option_bid or option_entry_price, sessions_held, is_runner,
-                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status,
+                        horizon["horizon_plan_id"], horizon["expected_window_start"],
+                        horizon["expected_window_end"], horizon["hard_exit_at"],
+                        horizon["hard_exit_session"], horizon["calendar_version"],
+                        horizon["mode_config_hash"],
+                        lane["strategy_id"], lane["strategy_version"], lane["mode"],
+                        lane["mode_version"], lane["legacy_mode"], lane["lane_key"],
+                        lane["identity_hash"], lane["evidence_class"], lane["release_tag"]
                     ),
                 )
         finally:
@@ -2618,8 +2660,19 @@ class SnapbackObservationWarehouse:
         paper_position_data: Dict[str, Any],
         cost_events: Optional[List[Any]] = None,
         processing_token: Optional[str] = None,
+        horizon_plan: Optional[Any] = None,
+        lane_identity: Optional[Any] = None,
     ) -> None:
-        """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction."""
+        """Commit decision, fill, hedge, cost, margin, and paper position ledgers PLUS update status to OPEN_POSITION in ONE single SQLite transaction.
+
+        ``horizon_plan`` is written inside the same transaction as the position
+        it belongs to. A position that committed without its hard exit would be
+        open with nothing to force it flat, so the two must not be separable.
+        """
+        horizon = horizon_columns(horizon_plan)
+        lane = lane_columns(
+            lane_identity, str(paper_position_data.get("source") or "PROSPECTIVE_PAPER")
+        )
         now = _now_iso()
         conn = self._get_connection()
         try:
@@ -2710,15 +2763,26 @@ class SnapbackObservationWarehouse:
                         option_expiry, option_strike, futures_symbol, futures_lot_size,
                         current_futures_lots, avg_futures_entry_price, realized_futures_pnl,
                         accumulated_costs, peak_option_bid, sessions_held, is_runner,
-                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        entry_spot, entry_timestamp, entry_dte, entry_iv, causal_beta, status,
+                        horizon_plan_id, expected_window_start, expected_window_end,
+                        hard_exit_at, hard_exit_session, calendar_version, mode_config_hash,
+                        strategy_id, strategy_version, mode, mode_version, legacy_mode,
+                        lane_key, identity_hash, evidence_class, release_tag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         opportunity_id, p["symbol"], p["option_symbol"], p["option_qty"], p["option_entry_price"],
                         p["option_expiry"], p["option_strike"], p["futures_symbol"], p["futures_lot_size"],
                         p["current_futures_lots"], p["avg_futures_entry_price"], p.get("realized_futures_pnl", 0.0),
                         p.get("accumulated_costs", 0.0), p.get("peak_option_bid") or p["option_entry_price"], p.get("sessions_held", 1), p.get("is_runner", 0),
-                        p["entry_spot"], p["entry_timestamp"], p["entry_dte"], p["entry_iv"], p["causal_beta"], p.get("status", "OPEN")
+                        p["entry_spot"], p["entry_timestamp"], p["entry_dte"], p["entry_iv"], p["causal_beta"], p.get("status", "OPEN"),
+                        horizon["horizon_plan_id"], horizon["expected_window_start"],
+                        horizon["expected_window_end"], horizon["hard_exit_at"],
+                        horizon["hard_exit_session"], horizon["calendar_version"],
+                        horizon["mode_config_hash"],
+                        lane["strategy_id"], lane["strategy_version"], lane["mode"],
+                        lane["mode_version"], lane["legacy_mode"], lane["lane_key"],
+                        lane["identity_hash"], lane["evidence_class"], lane["release_tag"],
                     ),
                 )
                 # 7. Atomically mark opportunity as OPEN_POSITION and clear processing token (enforces lease token)

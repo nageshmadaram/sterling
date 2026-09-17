@@ -67,6 +67,35 @@ def count_trading_sessions(start_date: date, end_date: date) -> int:
     return max(1, count)
 
 
+def _entry_horizon(cfg: SnapbackConfig, entry_at_iso: str):
+    """The horizon plan for a position opening now, or ``None``.
+
+    ``None`` only when the timestamp itself is unusable. A lane whose horizon
+    cannot be computed was already refused at admission, so reaching here with
+    an uncomputable horizon means the clock is wrong, not the calendar.
+    """
+    from datetime import datetime, timezone
+
+    from app.core.trade_horizon import HorizonUnavailable, build_horizon_plan
+
+    try:
+        entry_at = datetime.fromisoformat(str(entry_at_iso))
+    except (TypeError, ValueError):
+        log.warning("entry timestamp %r unparseable; no horizon plan stored", entry_at_iso)
+        return None
+    if entry_at.tzinfo is None:
+        entry_at = entry_at.replace(tzinfo=timezone.utc)
+    try:
+        return build_horizon_plan(
+            strategy_id="snapback",
+            mode=getattr(cfg, "trading_mode", "swing"),
+            entry_at=entry_at,
+        )
+    except (HorizonUnavailable, ValueError, KeyError) as exc:
+        log.warning("no horizon plan for this entry: %s", exc)
+        return None
+
+
 def release_tag() -> str:
     """The immutable release this evidence belongs to, or "" if unset."""
     return (os.environ.get("STERLING_RELEASE_TAG") or "").strip()
@@ -850,6 +879,8 @@ class SnapbackProspectiveCollector:
             # rule-definedness and lane state on the same choke point as
             # SAFE_MODE, instead of nowhere.
             lane_key=_lane_key_for(cfg),
+            # Refuses when this entry would have no computable hard exit.
+            entry_at=provider_ts,
         )
         if not capacity.allowed:
             self.warehouse.update_opportunity_status(opportunity_id, capacity.status)
@@ -960,6 +991,10 @@ class SnapbackProspectiveCollector:
                 "status": "OPEN",
             },
             processing_token=processing_token,
+            # Frozen in the same transaction as the position: a position that
+            # committed without its hard exit would have nothing to force it flat.
+            horizon_plan=_entry_horizon(cfg, provider_ts),
+            lane_identity=current_lane_identity(cfg),
         )
 
 

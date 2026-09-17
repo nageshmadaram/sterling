@@ -24,7 +24,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +94,50 @@ def _lane_origination(lane_key: str) -> Optional[CapacityDecision]:
     )
 
 
+def _horizon_admission(lane_key: str, entry_at: Any) -> Optional[CapacityDecision]:
+    """Refuse when this entry would have no computable hard exit.
+
+    A position whose horizon cannot be worked out has no latest permitted
+    holding time, so nothing would ever force it flat. The three cases this
+    catches are real: a Swing whose 15th session falls outside the verified
+    holiday calendar, a session-bound entry placed at or after the 15:20
+    square-off, and an entry on a day that is not a trading session at all.
+    """
+    from datetime import datetime, timezone
+
+    from app.core.trade_horizon import HorizonUnavailable, build_horizon_plan
+
+    moment = entry_at
+    if isinstance(moment, str):
+        try:
+            moment = datetime.fromisoformat(moment)
+        except ValueError:
+            return CapacityDecision(
+                allowed=False,
+                status="TIMELINE_UNAVAILABLE",
+                reasons=["entry_timestamp_unparseable", str(entry_at)],
+            )
+    if getattr(moment, "tzinfo", None) is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+
+    strategy, _, mode = str(lane_key or "").partition(":")
+    try:
+        build_horizon_plan(strategy_id=strategy, mode=mode, entry_at=moment)
+    except HorizonUnavailable as exc:
+        return CapacityDecision(
+            allowed=False,
+            status="TIMELINE_UNAVAILABLE",
+            reasons=[getattr(exc, "code", "TIMELINE_UNAVAILABLE"), str(exc)],
+        )
+    except (ValueError, KeyError) as exc:
+        return CapacityDecision(
+            allowed=False,
+            status="TIMELINE_UNAVAILABLE",
+            reasons=[f"horizon_uncomputable:{type(exc).__name__}", str(exc)],
+        )
+    return None
+
+
 def _margin_is_observed(value: object) -> bool:
     """Production requires broker provenance; pytest fixtures may use plain floats.
 
@@ -117,6 +161,7 @@ def evaluate_capacity(
     underlying: str,
     open_underlyings: Optional[Set[str]] = None,
     lane_key: Optional[str] = None,
+    entry_at: Optional[Any] = None,
 ) -> CapacityDecision:
     """Decide whether one paper entry is fundable and operationally admissible.
 
@@ -150,6 +195,10 @@ def evaluate_capacity(
         decision = _lane_origination(lane_key)
         if decision is not None:
             return decision
+        if entry_at is not None:
+            decision = _horizon_admission(lane_key, entry_at)
+            if decision is not None:
+                return decision
 
     if canonical_underlying in _LIFECYCLE_UNSUPPORTED_UNDERLYINGS:
         return CapacityDecision(

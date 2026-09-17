@@ -208,3 +208,131 @@ def test_a_tagged_row_does_not_count_toward_another_lane(tmp_path, monkeypatch):
     row = _recorded(tmp_path, monkeypatch, tagged=True)
     for other in ("snapback:scalping", "supertrend:swing"):
         assert eligible_for_lane(row, other) is False
+
+
+# ── the horizon is enforced at admission and frozen onto the position ─────
+
+IST_ENTRY = "2026-09-18T11:00:00+05:30"          # a trading Friday
+SATURDAY = "2026-09-19T11:00:00+05:30"
+LATE_DECEMBER = "2026-12-28T11:00:00+05:30"      # +15 sessions leaves the calendar
+AFTER_SQUARE_OFF = "2026-09-18T15:30:00+05:30"
+
+
+def test_a_computable_horizon_passes_through_to_the_funding_check():
+    """Not allowed here, but refused for funding — so the horizon check passed."""
+    decision = evaluate_capacity(**FUNDABLE, lane_key="snapback:swing", entry_at=IST_ENTRY)
+    assert decision.status != "TIMELINE_UNAVAILABLE"
+
+
+def test_an_entry_on_a_non_session_is_refused():
+    decision = evaluate_capacity(**FUNDABLE, lane_key="snapback:swing", entry_at=SATURDAY)
+    assert decision.allowed is False
+    assert decision.status == "TIMELINE_UNAVAILABLE"
+
+
+def test_a_swing_that_outruns_the_verified_calendar_is_refused():
+    """+15 sessions from late December leaves the verified holiday list."""
+    decision = evaluate_capacity(
+        **FUNDABLE, lane_key="snapback:swing", entry_at=LATE_DECEMBER
+    )
+    assert decision.allowed is False
+    assert "TIMELINE_CALENDAR_UNKNOWN" in decision.reasons
+
+
+def test_a_session_bound_entry_after_the_square_off_is_refused():
+    decision = evaluate_capacity(
+        **FUNDABLE, lane_key="snapback:scalping", entry_at=AFTER_SQUARE_OFF
+    )
+    assert decision.allowed is False
+    assert decision.status == "TIMELINE_UNAVAILABLE"
+
+
+def test_an_unparseable_entry_timestamp_refuses_rather_than_defaulting_to_now():
+    decision = evaluate_capacity(**FUNDABLE, lane_key="snapback:swing", entry_at="yesterday")
+    assert decision.allowed is False
+    assert "entry_timestamp_unparseable" in decision.reasons
+
+
+def test_the_production_call_site_passes_the_entry_time():
+    assert "entry_at=provider_ts" in inspect.getsource(collector)
+
+
+def test_the_entry_commit_freezes_a_horizon_plan():
+    """Written inside the same transaction as the position it belongs to."""
+    source = inspect.getsource(collector)
+    assert "horizon_plan=_entry_horizon(cfg, provider_ts)" in source
+    assert "lane_identity=current_lane_identity(cfg)" in source
+
+
+def test_the_collector_builds_a_swing_horizon_for_a_trading_day():
+    from app.engines.snapback.config import SnapbackConfig
+
+    plan = collector._entry_horizon(SnapbackConfig(), IST_ENTRY)
+    assert plan is not None
+    assert plan.mode.value == "swing"
+    assert plan.hard_max_sessions == 15
+    assert plan.hard_exit_session is not None
+
+
+def test_an_unusable_entry_timestamp_yields_no_plan_rather_than_a_wrong_one():
+    from app.engines.snapback.config import SnapbackConfig
+
+    assert collector._entry_horizon(SnapbackConfig(), "not-a-timestamp") is None
+
+
+def test_the_position_row_carries_the_frozen_horizon(tmp_path, monkeypatch):
+    from app.engines.snapback.config import SnapbackConfig
+
+    monkeypatch.setenv("STERLING_RELEASE_TAG", "snapback-prospective-runtime-1.6")
+    db = tmp_path / "obs.db"
+    warehouse = SnapbackObservationWarehouse(db_path=str(db))
+    warehouse.init_db()
+
+    cfg = SnapbackConfig()
+    plan = collector._entry_horizon(cfg, IST_ENTRY)
+    warehouse.save_paper_position(
+        opportunity_id="OPP-H-1", symbol="NIFTY", option_symbol="NIFTY26SEP24000CE",
+        option_qty=75, option_entry_price=120.0, option_expiry="2026-09-24",
+        option_strike=24000.0, futures_symbol="NIFTY26SEPFUT", futures_lot_size=75,
+        current_futures_lots=1, avg_futures_entry_price=24010.0,
+        realized_futures_pnl=0.0, entry_spot=24000.0, entry_timestamp=IST_ENTRY,
+        entry_dte=45, entry_iv=14.0, causal_beta=1.0,
+        horizon_plan=plan, lane_identity=collector.current_lane_identity(cfg),
+    )
+
+    conn = sqlite3.connect(db)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = dict(conn.execute("SELECT * FROM paper_positions").fetchone())
+    finally:
+        conn.close()
+
+    assert row["horizon_plan_id"] == plan.plan_id
+    assert row["hard_exit_session"] == plan.hard_exit_session.isoformat()
+    assert row["hard_exit_at"] is None          # session-based, not wall-clock
+    assert row["calendar_version"]
+    assert row["mode_config_hash"]
+    assert row["lane_key"] == "snapback:swing"
+
+
+def test_a_position_written_without_a_plan_stores_empties_not_guesses(tmp_path):
+    db = tmp_path / "obs.db"
+    warehouse = SnapbackObservationWarehouse(db_path=str(db))
+    warehouse.init_db()
+    warehouse.save_paper_position(
+        opportunity_id="OPP-H-2", symbol="NIFTY", option_symbol="X", option_qty=75,
+        option_entry_price=1.0, option_expiry="2026-09-24", option_strike=1.0,
+        futures_symbol="F", futures_lot_size=75, current_futures_lots=0,
+        avg_futures_entry_price=0.0, realized_futures_pnl=0.0, entry_spot=1.0,
+        entry_timestamp=IST_ENTRY, entry_dte=1, entry_iv=1.0, causal_beta=1.0,
+    )
+    conn = sqlite3.connect(db)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = dict(conn.execute("SELECT * FROM paper_positions").fetchone())
+    finally:
+        conn.close()
+    assert row["horizon_plan_id"] == ""
+    assert row["hard_exit_at"] is None
+    assert row["hard_exit_session"] is None
+    assert row["lane_key"] == ""
