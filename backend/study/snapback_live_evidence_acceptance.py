@@ -112,6 +112,31 @@ def _runtime_sha() -> str:
         return "UNKNOWN"
 
 
+def market_session_state(now: Optional[datetime] = None) -> tuple[bool, str]:
+    """Is the Indian cash/derivatives market open right now?
+
+    Advisory only: the authority on liveness is ``market_data_live``, which reads
+    the ticks themselves. This exists so an operator is told up front rather than
+    after spending the capture window, and so a closed-market run is labelled the
+    moment it starts.
+    """
+    from zoneinfo import ZoneInfo
+
+    ist = ZoneInfo("Asia/Kolkata")
+    moment = (now or datetime.now(timezone.utc)).astimezone(ist)
+
+    if moment.weekday() >= 5:
+        return False, f"{moment:%A} — the market does not trade at the weekend"
+
+    open_at = moment.replace(hour=9, minute=15, second=0, microsecond=0)
+    close_at = moment.replace(hour=15, minute=30, second=0, microsecond=0)
+    if moment < open_at:
+        return False, f"{moment:%H:%M} IST — the market opens at 09:15"
+    if moment > close_at:
+        return False, f"{moment:%H:%M} IST — the market closed at 15:30"
+    return True, f"{moment:%H:%M} IST — within the 09:15-15:30 session"
+
+
 # ─── credentials ─────────────────────────────────────────────────────────────
 
 def resolve_acceptance_credentials() -> tuple[str, str, str]:
@@ -536,6 +561,20 @@ def run_acceptance(
     )
     cfg = SnapbackConfig()
 
+    # Say it now, not after the capture window. A holiday still reads as open
+    # here, which is why market_data_live decides and this only advises.
+    session_open, session_detail = market_session_state()
+    report.notes.append(f"market session: {session_detail}")
+    if not session_open:
+        print(
+            f"NOTE: {session_detail}.\n"
+            "      Ticks will be the previous session's closing book replayed on\n"
+            "      connect, so market_data_live will fail and this run cannot\n"
+            "      certify a release. Schema, decode, reconnect and persistence\n"
+            "      checks remain meaningful.",
+            flush=True,
+        )
+
     if kite is None:
         from kiteconnect import KiteConnect
 
@@ -568,8 +607,37 @@ def run_acceptance(
         report.record("candidate_universe", PASS, {
             "contracts": len(universe.contracts), "expiries": list(universe.expiries)})
     except CandidateUniverseError as exc:
-        report.record("candidate_universe", FAIL, str(exc))
-        return report
+        # No monthly expiry sits inside the frozen DTE window today. That is a
+        # real strategy-reality finding — Snapback simply cannot trade this
+        # underlying now — and it is NOT a statement about the vendor.
+        #
+        # Monthly expiries are ~30 days apart and the frozen window is 21 days
+        # wide, so roughly a third of weekdays have nothing eligible. Returning
+        # here made the release gate unrunnable on those days for calendar
+        # reasons alone, which is the strategy blocking its own vendor test.
+        report.record(
+            "candidate_universe", FAIL,
+            {
+                "error": str(exc),
+                "interpretation": (
+                    "STRATEGY_REALITY: no listed monthly expiry inside the frozen "
+                    f"{cfg.min_dte}-{cfg.max_dte} DTE window. Snapback cannot trade "
+                    "this underlying today. Vendor-schema checks continue on an "
+                    "explicitly substituted contract."
+                ),
+            },
+        )
+        report.notes.append(
+            f"{underlying}: no expiry in the frozen {cfg.min_dte}-{cfg.max_dte} DTE "
+            "window today; vendor probe uses a substituted listed contract"
+        )
+        universe = None
+
+    if universe is None:
+        return _vendor_only_run(
+            report=report, kite=kite, rows=rows, spec=spec, cfg=cfg,
+            underlying=underlying, seconds=seconds, root=root,
+        )
 
     recomputed = universe_hash(
         universe.contracts, underlying=universe.underlying, option_type=universe.option_type,
@@ -665,6 +733,135 @@ def run_acceptance(
         report.record("hedge_contract", FAIL, str(exc))
         hedge_token = None
 
+    return _capture_and_grade(
+        report=report, option_token=option_token, hedge_token=hedge_token,
+        opportunity_id=universe.opportunity_id, seconds=seconds, root=root,
+        ticker_factory=ticker_factory,
+    )
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--underlying", default="NIFTY")
+    parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--root", default=None,
+                        help="evidence root; defaults to a temp acceptance area, never the live lake")
+    parser.add_argument("--out-dir", default="data/evidence_acceptance")
+    args = parser.parse_args(argv)
+
+    root = Path(args.root) if args.root else Path("data/evidence_acceptance/_root")
+    root.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    report = run_acceptance(
+        underlying=args.underlying, seconds=args.seconds, root=root, out_dir=out_dir,
+    )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"acceptance-{stamp}.json"
+    path.write_text(json.dumps(report.as_dict(), indent=1, default=str), encoding="utf-8")
+
+    print(json.dumps(report.as_dict(), indent=1, default=str))
+    print(f"\nreport written to {path}")
+    print(f"OVERALL: {report.overall}")
+    return 0 if report.overall == PASS else 1
+
+
+
+def _vendor_only_run(
+    *,
+    report: Report,
+    kite: Any,
+    rows: list[dict[str, Any]],
+    spec: Any,
+    cfg: Any,
+    underlying: str,
+    seconds: int,
+    root: Path,
+    ticker_factory: Any = None,
+) -> Report:
+    """Vendor-schema checks on a day the frozen strategy cannot trade.
+
+    Roughly a third of weekdays have no monthly expiry inside the frozen 40-60
+    DTE window, because monthlies sit ~30 days apart and the window is 21 days
+    wide. On those days the strategy is genuinely blocked — that is recorded as
+    a strategy-reality finding — but the vendor's payload is unchanged and still
+    needs proving, so the release gate must not be hostage to the expiry
+    calendar.
+
+    Every contract used here is explicitly substituted. Nothing in this path can
+    be read as Snapback's selection.
+    """
+    options = [
+        r for r in rows
+        if str(r.get("name", "")).upper() == underlying.upper()
+        and str(r.get("instrument_type", "")).upper() == "PE"
+        and r.get("instrument_token") and r.get("expiry")
+    ]
+    if not options:
+        report.record("vendor_probe_contract", FAIL,
+                      f"no listed {underlying} PE contract in the master at all")
+        return report
+
+    # Nearest expiry, then the middle strike of it: the most liquid corner of the
+    # board, chosen for tick flow rather than for any strategy property.
+    nearest = min(str(r["expiry"])[:10] for r in options)
+    same = sorted(
+        (r for r in options if str(r["expiry"])[:10] == nearest),
+        key=lambda r: float(r.get("strike") or 0.0),
+    )
+    probe = same[len(same) // 2]
+    option_token = int(probe["instrument_token"])
+
+    report.record("vendor_probe_contract", PASS, {
+        "source": "LISTED_VENDOR_SCHEMA_PROBE",
+        "instrument_token": option_token,
+        "tradingsymbol": probe.get("tradingsymbol"),
+        "strike": float(probe.get("strike") or 0.0),
+        "expiry": nearest,
+        "reason": "no expiry inside the frozen DTE window; substituted for vendor testing",
+        "not_strategy_substitute": True,
+    })
+
+    hedge_token = None
+    try:
+        from app.services.snapback_hedge_contract import select_hedge_future
+
+        hedge = select_hedge_future(
+            rows, option_expiry=date.fromisoformat(nearest),
+            name=underlying, exchange=spec.exchange,
+        )
+        hedge_token = hedge.instrument_token
+        report.record("hedge_contract", PASS, {
+            "tradingsymbol": hedge.tradingsymbol, "not_strategy_substitute": True,
+        })
+    except Exception as exc:
+        report.record("hedge_contract", FAIL, f"{type(exc).__name__}: {exc}")
+
+    return _capture_and_grade(
+        report=report, option_token=option_token, hedge_token=hedge_token,
+        opportunity_id=f"VENDOR-PROBE-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}",
+        seconds=seconds, root=root, ticker_factory=ticker_factory,
+    )
+
+
+def _capture_and_grade(
+    *,
+    report: Report,
+    option_token: Optional[int],
+    hedge_token: Optional[int],
+    opportunity_id: str,
+    seconds: int,
+    root: Path,
+    ticker_factory: Any = None,
+) -> Report:
+    """Subscribe, force a reconnect, grade the payload, prove the round trip.
+
+    Shared by the full run and the vendor-only run, so a day with no eligible
+    expiry still exercises exactly the same vendor checks rather than a second,
+    quietly divergent copy of them.
+    """
     tokens = [t for t in (option_token, hedge_token) if t]
     captured: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
     post_reconnect: dict[int, list[dict[str, Any]]] = {t: [] for t in tokens}
@@ -697,7 +894,7 @@ def run_acceptance(
                     built_rows.append(evidence_tick_row(
                         tick, received_ts=received,
                         evidence_class=ACCEPTANCE_EVIDENCE_CLASS,
-                        opportunity_id=universe.opportunity_id,
+                        opportunity_id=opportunity_id,
                         capture_reason=ACCEPTANCE_TAG,
                     ))
                 except Exception as exc:  # pragma: no cover - live only
@@ -800,34 +997,6 @@ def run_acceptance(
 
     report.record("writer_healthy", PASS if store.health.healthy else FAIL)
     return report
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--underlying", default="NIFTY")
-    parser.add_argument("--seconds", type=int, default=120)
-    parser.add_argument("--root", default=None,
-                        help="evidence root; defaults to a temp acceptance area, never the live lake")
-    parser.add_argument("--out-dir", default="data/evidence_acceptance")
-    args = parser.parse_args(argv)
-
-    root = Path(args.root) if args.root else Path("data/evidence_acceptance/_root")
-    root.mkdir(parents=True, exist_ok=True)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    report = run_acceptance(
-        underlying=args.underlying, seconds=args.seconds, root=root, out_dir=out_dir,
-    )
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = out_dir / f"acceptance-{stamp}.json"
-    path.write_text(json.dumps(report.as_dict(), indent=1, default=str), encoding="utf-8")
-
-    print(json.dumps(report.as_dict(), indent=1, default=str))
-    print(f"\nreport written to {path}")
-    print(f"OVERALL: {report.overall}")
-    return 0 if report.overall == PASS else 1
 
 
 if __name__ == "__main__":
