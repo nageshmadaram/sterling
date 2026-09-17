@@ -24,7 +24,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +141,63 @@ def _horizon_admission(lane_key: str, entry_at: Any) -> Optional[CapacityDecisio
     return None
 
 
+def _exposure_admission(
+    requested: Any, existing: List[Any]
+) -> Optional[CapacityDecision]:
+    """Refuse a second exposure that interacts with one already open.
+
+    Two lanes firing on one underlying are not two independent risks. The
+    coordinator refuses any relationship whose policy has not been declared, so
+    a combination nobody considered cannot be allowed because nobody considered
+    it.
+    """
+    from app.core.exposure import ExposureCoordinator
+
+    decision = ExposureCoordinator().evaluate(requested, existing)
+    if decision.allowed:
+        return None
+    detail = f"{decision.reason}:{decision.conflicting_lane}" if decision.conflicting_lane else decision.reason
+    return CapacityDecision(
+        allowed=False, status="EXPOSURE_REFUSED", reasons=[decision.reason, detail],
+    )
+
+
+def _risk_hierarchy_admission(
+    lane_key: Optional[str],
+    requested: float,
+    used: Optional[Dict[Any, float]],
+) -> Optional[CapacityDecision]:
+    """Apply the four-level risk hierarchy, when one has been configured.
+
+    Absent configuration the hierarchy is not consulted and the capital
+    arithmetic below stands alone. That is deliberate rather than fail-open:
+    inventing limits nobody set would be worse than declaring none, and
+    ``sterlingctl doctor`` reports an unconfigured hierarchy so the gap is
+    visible. Once limits exist, a lane missing from them is
+    INCONCLUSIVE_RISK_CONFIGURATION — never unlimited.
+    """
+    from app.core.risk_hierarchy import configured_hierarchy
+
+    hierarchy = configured_hierarchy()
+    if hierarchy is None or not lane_key:
+        return None
+    strategy, _, _mode = str(lane_key).partition(":")
+    decision = hierarchy.check(
+        strategy_id=strategy, lane_key=lane_key, requested=requested, used=used
+    )
+    if decision.allowed:
+        return None
+    return CapacityDecision(
+        allowed=False,
+        status=decision.reason,
+        reasons=[
+            decision.reason,
+            f"level={decision.level.value if decision.level else 'unknown'}",
+            f"limit={decision.limit} would_be={decision.would_be}",
+        ],
+    )
+
+
 def _margin_is_observed(value: object) -> bool:
     """Production requires broker provenance; pytest fixtures may use plain floats.
 
@@ -165,6 +222,9 @@ def evaluate_capacity(
     open_underlyings: Optional[Set[str]] = None,
     lane_key: Optional[str] = None,
     entry_at: Optional[Any] = None,
+    requested_exposure: Optional[Any] = None,
+    open_exposures: Optional[List[Any]] = None,
+    risk_used: Optional[Dict[Any, float]] = None,
 ) -> CapacityDecision:
     """Decide whether one paper entry is fundable and operationally admissible.
 
@@ -202,6 +262,17 @@ def evaluate_capacity(
             decision = _horizon_admission(lane_key, entry_at)
             if decision is not None:
                 return decision
+        if requested_exposure is not None:
+            decision = _exposure_admission(requested_exposure, open_exposures or [])
+            if decision is not None:
+                return decision
+        decision = _risk_hierarchy_admission(
+            lane_key,
+            float(option_premium_cash or 0.0) + float(hedge_margin or 0.0),
+            risk_used,
+        )
+        if decision is not None:
+            return decision
 
     if canonical_underlying in _LIFECYCLE_UNSUPPORTED_UNDERLYINGS:
         return CapacityDecision(

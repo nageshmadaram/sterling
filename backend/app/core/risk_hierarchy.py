@@ -148,3 +148,49 @@ class RiskHierarchy:
             for level, scope in scopes.items()
             if self.limit_for(level, scope) is None
         )
+
+
+#: Environment variable holding the limits, as JSON:
+#: ``{"global": {"": 100000}, "strategy": {"snapback": 60000},
+#:    "mode": {"snapback:swing": 30000}, "position": {"snapback:swing": 10000}}``
+ENV_VAR = "STERLING_RISK_LIMITS"
+
+
+def configured_hierarchy(env: Mapping[str, str] | None = None) -> "RiskHierarchy | None":
+    """The hierarchy the operator configured, or ``None`` when none is set.
+
+    ``None`` means "no hierarchy declared", which is not the same as "no
+    limits": callers fall back to whatever other capital checks they have, and
+    the doctor reports the gap. A malformed value raises instead of yielding
+    ``None``, because an operator who tried to set limits and mistyped must not
+    silently get none.
+    """
+    import json
+    import os
+
+    source = env if env is not None else os.environ
+    raw = (source.get(ENV_VAR) or "").strip()
+    if not raw:
+        return None
+    try:
+        blob = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RiskConfigurationError(f"{ENV_VAR} is not valid JSON: {exc}") from exc
+    if not isinstance(blob, dict):
+        raise RiskConfigurationError(f"{ENV_VAR} must be a JSON object")
+
+    limits: dict[RiskLevel, dict[str, float]] = {}
+    for level_name, scopes in blob.items():
+        try:
+            level = RiskLevel(str(level_name))
+        except ValueError as exc:
+            raise RiskConfigurationError(
+                f"{ENV_VAR}: unknown risk level {level_name!r}; expected any of "
+                f"{[l.value for l in RiskLevel]}"
+            ) from exc
+        if not isinstance(scopes, dict):
+            raise RiskConfigurationError(
+                f"{ENV_VAR}: {level_name} must map a scope to a limit"
+            )
+        limits[level] = {str(k): float(v) for k, v in scopes.items()}
+    return RiskHierarchy(limits=limits)

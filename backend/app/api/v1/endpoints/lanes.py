@@ -178,5 +178,17 @@ async def lane_promotion(
 
 @router.get("/lanes/dashboard")
 async def lanes_dashboard(_user: UserContext = Depends(get_current_user)) -> dict:
-    """All ten lanes plus system health, as the operator screen shows them."""
-    return operator_dashboard()
+    """All ten lanes plus live system health, as the operator screen shows them."""
+    from app.services.snapback_system_health import system_health
+
+    return operator_dashboard(system_health())
+
+
+@router.get("/system/health")
+async def system_health_status(
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """The one status an operator acts on, with every component that fed it."""
+    from app.services.snapback_system_health import system_health
+
+    return system_health().as_dict()

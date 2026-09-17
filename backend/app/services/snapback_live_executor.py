@@ -57,6 +57,7 @@ class SnapbackLiveExecutor:
         protection_fn: Callable[..., Any],
         revalidate_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
         uid: str = "default",
+        intent_store: Any = None,
     ) -> None:
         self.plan_store = plan_store
         self.execution_service = execution_service
@@ -65,6 +66,108 @@ class SnapbackLiveExecutor:
         self.protection_fn = protection_fn
         self.revalidate_fn = revalidate_fn
         self.uid = uid
+        self.intent_store = intent_store
+
+    # ── durable intent record ────────────────────────────────────────────
+    #
+    # The plan store already gives exactly-once via its CONSUMED flag, but it
+    # has no state for "sent, outcome never read". A restart between submission
+    # and acknowledgement therefore could not tell a working order from an
+    # un-sent one. The intent store adds exactly that, and is optional so
+    # existing callers keep working.
+
+    def _reserve_intent(
+        self, plan: Dict[str, Any], *, symbol: str, exchange: str,
+        quantity: int, action: str,
+    ):
+        store = getattr(self, "intent_store", None)
+        if store is None:
+            return None
+        from app.core.horizon import canonical_mode
+        from app.core.trade_intent import TradeIntent, make_intent_id
+
+        try:
+            mode = canonical_mode(str(plan.get("mode") or "swing"))
+            kwargs = dict(
+                strategy_id="snapback",
+                strategy_version=str(plan.get("strategy_version") or "snapback_core_v1"),
+                mode=mode,
+                mode_version=str(plan.get("mode_version") or f"snapback_{mode.value}_v1"),
+                opportunity_id=str(plan.get("opportunity_id") or plan.get("plan_id") or ""),
+                instrument_token=int(plan.get("option_instrument_token") or 0),
+                exchange=exchange,
+                tradingsymbol=symbol,
+                side="BUY",
+                quantity=int(quantity),
+                order_type=str(plan.get("order_type") or "MARKET"),
+                limit_price=plan.get("limit_price"),
+                protection_required=True,
+                max_loss_budget=float(plan.get("max_loss_budget") or 0.0),
+                horizon_plan_id=str(plan.get("horizon_plan_id") or ""),
+                config_hash=str(plan.get("config_hash") or ""),
+                runtime_sha=str(plan.get("runtime_sha") or ""),
+                action=action,
+            )
+            intent = TradeIntent(
+                intent_id=make_intent_id(
+                    strategy_id=kwargs["strategy_id"], mode=mode,
+                    opportunity_id=kwargs["opportunity_id"],
+                    instrument_token=kwargs["instrument_token"], action=action,
+                ),
+                **kwargs,
+            )
+            stored = store.reserve(intent)
+            # Written BEFORE the broker call, so a crash mid-submit is
+            # recoverable as SUBMITTED_UNKNOWN rather than looking un-sent.
+            store.record_submission(intent.intent_id)
+            return stored.intent
+        except Exception as exc:  # noqa: BLE001 - never block on bookkeeping
+            log.warning("Snapback live: intent not recorded: %s", exc)
+            return None
+
+    def _record_broker_outcome(self, intent, result) -> None:
+        store = getattr(self, "intent_store", None)
+        if store is None or intent is None:
+            return
+        from app.core.trade_intent import IntentState
+
+        status = str(getattr(result, "status", "") or "").upper()
+        filled = int(getattr(result, "filled_quantity", 0) or 0)
+        if status == "UNKNOWN":
+            return  # already SUBMITTED_UNKNOWN; the broker must be asked first
+        if not getattr(result, "success", False):
+            state = IntentState.REJECTED
+        elif filled >= intent.quantity:
+            state = IntentState.FILLED
+        elif filled > 0:
+            state = IntentState.PARTIAL
+        else:
+            state = IntentState.OPEN
+        try:
+            store.record_broker_state(
+                intent.intent_id, state,
+                broker_order_id=str(getattr(result, "order_id", "") or ""),
+                filled_quantity=filled,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Snapback live: broker state not recorded: %s", exc)
+
+    def _record_protection(self, intent, state) -> None:
+        store = getattr(self, "intent_store", None)
+        if store is None or intent is None:
+            return
+        from app.core.trade_intent import ProtectionState as DurableProtection
+
+        try:
+            store.record_protection(
+                intent.intent_id,
+                DurableProtection.CONFIRMED
+                if str(getattr(state, "value", state)) == "ACTIVE"
+                else DurableProtection.FAILED,
+                note=f"broker protection state {getattr(state, 'value', state)}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Snapback live: protection state not recorded: %s", exc)
 
     async def execute(self, plan_id: str) -> LiveExecutionResult:
         plan = self.plan_store.get(plan_id)
@@ -118,11 +221,26 @@ class SnapbackLiveExecutor:
                 reasons=[f"risk_denied:{getattr(approval, 'reason', '')}"],
             )
 
-        # 4. The option leg.
+        # 4. The option leg. The venue comes from the plan, never a default:
+        # "or NFO" would route a SENSEX order, which lives on BFO, to the wrong
+        # exchange and either reject it or hit a different instrument.
+        option_exchange = str(plan.get("option_exchange") or "").strip().upper()
+        if not option_exchange:
+            return LiveExecutionResult(
+                status="REFUSED", plan_id=plan_id,
+                reasons=["plan_missing_option_exchange"],
+            )
+
+        intent = self._reserve_intent(
+            plan, symbol=option_symbol, exchange=option_exchange,
+            quantity=option_qty, action="entry",
+        )
+
         option_result = await self._submit(
-            plan, symbol=option_symbol, exchange=str(plan.get("option_exchange") or "NFO"),
+            plan, symbol=option_symbol, exchange=option_exchange,
             side="BUY", quantity=option_qty, approval=approval,
         )
+        self._record_broker_outcome(intent, option_result)
 
         if option_result.status == "UNKNOWN":
             # The order may be working. Hedging against a position that may not
@@ -160,9 +278,15 @@ class SnapbackLiveExecutor:
                 quantity=hedge_qty,
                 generation_id=str(plan.get("policy_snapshot_hash") or ""),
             )
+            futures_exchange = str(plan.get("futures_exchange") or "").strip().upper()
+            if not futures_exchange:
+                return LiveExecutionResult(
+                    status="RECONCILING", plan_id=plan_id, reconcile_first=True,
+                    reasons=["plan_missing_futures_exchange_after_option_fill"],
+                )
             hedge_result = await self._submit(
                 plan, symbol=str(plan.get("futures_symbol") or ""),
-                exchange=str(plan.get("futures_exchange") or "NFO"),
+                exchange=futures_exchange,
                 side="BUY", quantity=hedge_qty, approval=hedge_approval,
             )
             hedge_filled = int(getattr(hedge_result, "filled_quantity", 0) or 0)
@@ -174,6 +298,7 @@ class SnapbackLiveExecutor:
             account_id=account_id,
         ) or {}
         state = ProtectionState(str(protection.get("state") or "REQUIRED"))
+        self._record_protection(intent, state)
 
         if state is not ProtectionState.ACTIVE:
             action = protection_deadline_action(

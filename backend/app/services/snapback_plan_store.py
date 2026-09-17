@@ -42,6 +42,36 @@ class PlanExpiredError(PlanStoreError):
     """
 
 
+def _hydrate_plan(row: Any) -> Dict[str, Any]:
+    """A plan row with its ``extra_json`` fields merged back in.
+
+    ``publish(**extra)`` stored anything beyond the declared columns as JSON,
+    and ``get`` used to return that blob as a string — so a caller passing
+    ``option_exchange="BFO"`` saw it accepted and then read back nothing. The
+    executor's ``or "NFO"`` fallback was covering for exactly that, which would
+    have routed a SENSEX order to the NSE derivative venue.
+
+    Real columns win over extras: a stored column is the authoritative value,
+    and an extra of the same name must not be able to shadow it.
+    """
+    import json as _json
+
+    plan = dict(row)
+    raw = plan.get("extra_json")
+    if not raw:
+        return plan
+    try:
+        extra = _json.loads(raw)
+    except (TypeError, ValueError):
+        return plan
+    if not isinstance(extra, dict):
+        return plan
+    for key, value in extra.items():
+        if key not in plan or plan[key] in (None, ""):
+            plan[key] = value
+    return plan
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -127,7 +157,7 @@ class PlanStore:
             ).fetchone()
         finally:
             conn.close()
-        return dict(row) if row is not None else None
+        return _hydrate_plan(row) if row is not None else None
 
     def events(self, plan_id: str) -> list:
         conn = self._connect()
