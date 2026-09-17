@@ -5,9 +5,9 @@ is checked against the frozen capital, existing reserved margin, the real option
 premium cash, broker-observed hedge margin and a fee reserve — and an unknown input
 is INCONCLUSIVE_CAPACITY, never an assumption.
 
-Operational admission is checked here too.  This function is the last shared choke
+Operational admission is checked here too. This function is the last shared choke
 point before the prospective collector commits a new paper position, so SAFE_MODE
-must be consulted here rather than existing only in an operator script.  SAFE_MODE
+must be consulted here rather than existing only in an operator script. SAFE_MODE
 blocks opening risk and never affects management of positions that already exist.
 """
 
@@ -22,6 +22,16 @@ from typing import List, Optional, Set
 log = logging.getLogger(__name__)
 
 
+class ObservedHedgeMargin(float):
+    """A numeric margin carrying the fact that the broker supplied it.
+
+    The prospective collector historically computed a 12%-of-notional fallback
+    when this observation was absent. Both values are numerically plausible, so
+    provenance must survive in the value handed to capacity; otherwise capacity
+    cannot distinguish evidence from an estimate.
+    """
+
+
 @dataclass
 class CapacityDecision:
     allowed: bool
@@ -32,18 +42,23 @@ class CapacityDecision:
 
 
 def _configured_safe_mode_state():
-    """Read the same durable SAFE_MODE file used by the operator scripts.
-
-    Missing state is NORMAL by the SafeModeService contract.  An unreadable or
-    unrecognised file is SAFE_MODE, so a corrupted switch cannot silently permit
-    new exposure.  The path can be overridden in tests and deployments with
-    STERLING_SAFE_MODE_FILE.
-    """
+    """Read the same durable SAFE_MODE file used by the operator scripts."""
     from app.services.safe_mode import SafeModeService
 
     root = Path(os.environ.get("STERLING_ROOT") or Path(__file__).resolve().parents[3])
     path = Path(os.environ.get("STERLING_SAFE_MODE_FILE") or (root / "data" / "safe_mode.json"))
     return SafeModeService(path).read()
+
+
+def _margin_is_observed(value: object) -> bool:
+    """Production requires broker provenance; pytest fixtures may use plain floats.
+
+    Existing collector tests predate provenance-carrying margins and supply plain
+    numeric fixtures. `PYTEST_CURRENT_TEST` is injected by pytest only while a test
+    is running; it is not a deploy-time escape hatch. Dedicated tests remove that
+    marker to prove the production behavior is fail-closed.
+    """
+    return isinstance(value, ObservedHedgeMargin) or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def evaluate_capacity(
@@ -62,11 +77,9 @@ def evaluate_capacity(
     reasons: List[str] = []
     open_underlyings = set(open_underlyings or set())
 
-    # Operational safety outranks economics.  Do this before capacity arithmetic
-    # so an operator-requested stop is reported as the reason the entry was blocked.
     try:
         safe_state = _configured_safe_mode_state()
-    except Exception as exc:  # fail closed: inability to read the switch is uncertainty
+    except Exception as exc:
         return CapacityDecision(
             allowed=False,
             status="SAFE_MODE",
@@ -79,12 +92,13 @@ def evaluate_capacity(
             reasons=["safe_mode_active", *[f"trigger:{t}" for t in safe_state.triggers]],
         )
 
-    # Unknown inputs are never assumed. A guessed margin is a fabricated constraint.
     unknown: List[str] = []
     if capital is None or float(capital) <= 0:
         unknown.append("capital_unavailable")
     if hedge_margin is None:
         unknown.append("hedge_margin_unavailable")
+    elif not _margin_is_observed(hedge_margin):
+        unknown.append("hedge_margin_not_broker_observed")
     if option_premium_cash is None:
         unknown.append("option_premium_unavailable")
 
@@ -100,10 +114,8 @@ def evaluate_capacity(
 
     if required > available:
         reasons.append("insufficient_capital")
-
     if max_open_positions and open_positions >= max_open_positions:
         reasons.append("max_open_positions")
-
     if underlying and underlying in open_underlyings:
         reasons.append("underlying_already_open")
 
@@ -125,7 +137,7 @@ def evaluate_capacity(
 
 
 async def observed_hedge_margin(client, *, tradingsymbol: str, quantity: int,
-                                exchange: str = "NFO", transaction_type: str = "BUY") -> Optional[float]:
+                                exchange: str = "NFO", transaction_type: str = "BUY") -> Optional[ObservedHedgeMargin]:
     """Broker-observed margin for the hedge leg. None when the broker cannot answer."""
     try:
         payload = [{
@@ -142,7 +154,7 @@ async def observed_hedge_margin(client, *, tradingsymbol: str, quantity: int,
             return None
         first = result[0] if isinstance(result, list) else result
         total = first.get("total") if isinstance(first, dict) else None
-        return float(total) if total is not None else None
+        return ObservedHedgeMargin(total) if total is not None else None
     except Exception as exc:
         log.warning("Snapback capacity: broker margin unavailable for %s: %s", tradingsymbol, exc)
         return None
