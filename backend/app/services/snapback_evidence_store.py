@@ -179,10 +179,14 @@ class SnapbackEvidenceStore:
         accepting that as a two-event history would erase the fact that sequence 1
         was lost. The same applies to duplicated ids and impossible transitions.
         """
+        # The recorder calls this class State. The other name this used to
+        # import belongs to app.engines.adaptive_edge.contracts and is an
+        # unrelated enum, so the import raised at call time and this validator
+        # could never run.
         from app.services.snapback_evidence_recorder import (
-            EvidenceLifecycleEvent,
             LEGAL_TRANSITIONS,
-            OpportunityState,
+            EvidenceLifecycleEvent,
+            State,
         )
 
         events = [EvidenceLifecycleEvent(**row) for row in self.read("lifecycle")]
@@ -210,7 +214,7 @@ class SnapbackEvidenceStore:
                             f"first lifecycle event for {opportunity_id} has previous_state "
                             f"{event.previous_state!r}"
                         )
-                    if event.state != OpportunityState.OPPORTUNITY_CREATED:
+                    if event.state != State.OPPORTUNITY_CREATED:
                         raise EvidenceStoreError(
                             f"first lifecycle event for {opportunity_id} is {event.state!r}, "
                             "not OPPORTUNITY_CREATED"
