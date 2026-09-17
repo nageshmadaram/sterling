@@ -46,8 +46,9 @@ canonical release-to-commit binding, and this file names the tag rather than
 chasing its own hash.
 
 ```
-release identity               tag: runtime-1.6
-                               exact commit: git rev-parse runtime-1.6^{commit}
+release identity               tag: snapback-prospective-runtime-1.6
+                               exact commit:
+                                 git rev-parse snapback-prospective-runtime-1.6^{commit}
 release-candidate source       branch runtime-1.6-evidence
 parent runtime-1.5 SHA         9a706f5848ed087b947b690161c02208a249955e
 
@@ -105,18 +106,39 @@ to match fails the suite.
 
 ---
 
-## The discrepancy that shaped this release
+## Two selections, recorded separately
 
-The implementation specification assumed the production selector chose from the
-live option chain. It does not. `pick_for` solves for a strike in closed form
-via `strike_for_delta`, rounds it to the instrument's published strike step, and
-treats a strike on the grid as listed. No chain is consulted, and there is no
-code path in which the candidate universe could influence the result.
+Snapback selects twice, and an earlier draft of this record described only the
+first — claiming broadly that "the production selector does not consult a chain".
+That is true of the frozen theoretical selector and false of the path that
+actually buys.
 
-Making selection depend on candidates would change which contract Snapback
-buys — a strategy change during a frozen prospective experiment. So the frozen
-behaviour was preserved exactly, and the candidate universe is used only for the
-question it can honestly answer:
+**The frozen theoretical selector** (`pick_for`) is closed-form. It solves for a
+strike via `strike_for_delta`, rounds it to the instrument's published strike
+step, and consults no option chain.
+
+**The T+1 prospective execution path** separately evaluates the real listed
+chain under the frozen executability constraints — monthly expiry inside the DTE
+window, quote present, spread within `max_spread_pct`, premium at or above
+`min_option_premium`, open interest at or above `min_option_oi` — and selects the
+eligible contract closest to `target_delta`.
+
+Runtime 1.6 records these as two separate facts:
+
+```
+theoretical SelectionRecord        what the frozen rule targeted
+actual ExecutionContractRecord     what the real chain would sell
+```
+
+Neither may overwrite or masquerade as the other. Collapsing them would credit
+the closed-form rule with a chain-aware choice it never makes, and would erase
+`strike_gap` and `delta_gap` — the distance between intention and reality, which
+is the execution quantity this release exists to measure.
+
+Making the *theoretical* selection depend on candidates would change which
+contract Snapback buys — a strategy change during a frozen prospective
+experiment. So that behaviour is preserved exactly, and the candidate universe
+answers only the question it honestly can:
 
 ```
 LISTED       the computed contract exists in the observed master
@@ -149,7 +171,15 @@ answerable; it does not answer it.
 | `d51b5c4a1` | live evidence acceptance harness |
 | `b586ca34d` | kitelake fno-fut expectation |
 | `b8badac0a` | evidence auditor + fail-closed operator controls |
-| `8c49034a5` | fail closed on incomplete contract/tick identity before live acceptance |
+| `830a215b3`, `74e0aae49` | release record, bound to its tag rather than its own SHA |
+| `b51203be1` | make the acceptance harness runnable |
+| `fbda6efe5`, `4ceb6fe76` | restore fail-closed prospective evidence hardening |
+| `e1a5f41b9` | execution-contract evidence + production recorder wiring |
+
+The fail-closed contract/tick hardening was first written on a sibling commit
+(`8c49034a5`) that is not in this branch's history; its changes reached the
+release through `4ceb6fe76`. The lineage above is the branch as it actually
+stands, which is what the tag will point at.
 
 ### Two un-backfillable gaps closed
 
@@ -203,8 +233,8 @@ An unreadable or unrecognised state file reads as SAFE_MODE, not NORMAL.
 ## Verification
 
 ```
-backend unit + integration     1982 pass
-kitelake                        291 pass    (fully green for the first time)
+backend unit + integration     1995 pass
+kitelake                        294 pass
 frontend vitest                1539 pass
 frontend typecheck             clean
 frontend production build      succeeds
@@ -217,12 +247,9 @@ evidence auditor CLI           verified, text and --json
 backup manifest                sha256 -c VERIFIED against the mounted lake
 ```
 
-The counts above are the last complete local gate before the final hardening
-commit. The hardening commit itself must rerun the affected backend and kitelake
-tests plus remote CI before release; this record must not imply a green result
-that has not been observed yet.
-
-Remote CI: PR #179; release requires all checks green at the final head.
+Remote CI: PR #179, 13/13 checks SUCCESS at the code-complete head
+`e1a5f41b9`. This record is the only change after it, and CI must be green again
+at the resulting head before the live acceptance run certifies that SHA.
 
 ## Backups
 
@@ -243,12 +270,12 @@ manifest   41f1f2c398f45a901bbce598b5305d172bd81dd4ca49839ca83d924b43b49c09
    and timestamp semantics therefore remain unconfirmed against the vendor until
    `acceptance-*.json` reports `overall: PASS` using a current token during market
    hours.
-2. **The recorder/lifecycle journal is not yet proven on the production live
-   opportunity path.** Unit and integration tests prove its behaviour, but the
-   pre-release audit found no production import of `SnapbackEvidenceRecorder` and
-   no production use of `evidence_tick_row`; those hooks must be traced/closed or
-   explicitly resolved before the release tag. A recorder that real opportunities
-   never call does not satisfy runtime 1.6's purpose.
+2. **The recorder has not observed a natural live opportunity.** The
+   recorder/lifecycle journal is wired into the real
+   `SnapbackProspectiveCollector` production path and proven by production-path
+   integration tests that drive `execute_pending_entry` itself rather than the
+   helpers in isolation. What remains is prospective evidence still to be
+   collected, not an implementation gap.
 3. **Listedness is unmeasured for real Snapback opportunities.** The acceptance
    master proves the universe can be built from reality; an acceptance probe is
    not a frozen strategy signal with its real `assumed_iv`.
