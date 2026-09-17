@@ -86,12 +86,21 @@ def _snapback_source() -> str:
     return (root / "app" / "services" / "snapback.py").read_text(encoding="utf-8")
 
 
-def test_the_post_entry_lifecycle_still_reconstructs_nfo_and_nse():
-    """The containment exists because of these. When they go, lift it.
+def test_sensex_containment_must_be_removed_when_post_entry_routing_becomes_identity_aware():
+    """TRIPWIRE. This test is deliberately inverted: it asserts a defect is
+    STILL PRESENT, and fails once the defect is fixed.
 
-    This test is deliberately the inverse of the usual shape: it asserts a
-    defect is still present. A containment kept after its cause is fixed is a
-    silently narrowed strategy universe, which is its own kind of dishonesty.
+    If you are reading this because the test failed, do NOT restore the
+    hardcoded venue to make it pass. The correct response is:
+
+      1. confirm post-entry MTM, risk and exit use the stored UnderlyingIdentity
+      2. prove a SENSEX opportunity end to end: entry -> MTM -> risk -> exit
+      3. remove SENSEX from _LIFECYCLE_UNSUPPORTED_UNDERLYINGS
+      4. delete this test
+
+    All four in the same change. A containment left in place after its cause is
+    fixed is a silently narrowed strategy universe, which is its own kind of
+    dishonesty.
     """
     source = _snapback_source()
 

@@ -210,13 +210,23 @@ class Report:
 
         Strategy reality is deliberately excluded. Sterling can be correct on a
         day Snapback cannot trade.
+
+        A vendor contradiction is checked first and dominates. Evaluating the
+        engineering gate first meant a report carrying CONTRADICTED but no
+        engineering check returned NOT_EXERCISED — softening a proven defect
+        into "untested", which is the same masking this layer exists to prevent,
+        one level up. That ordering is unreachable in a real run, because
+        instrument_master is recorded before any vendor check; the layer whose
+        job is to be unfoolable should not depend on that accident.
         """
         if not self.checks:
+            return FAIL
+        if self.vendor_assumptions == CONTRADICTED:
             return FAIL
         if self.engineering_gate != PASS:
             return self.engineering_gate
         if self.vendor_assumptions != PROVEN:
-            return FAIL if self.vendor_assumptions == CONTRADICTED else INCONCLUSIVE
+            return INCONCLUSIVE
         return PASS
 
     def as_dict(self) -> dict[str, Any]:

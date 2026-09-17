@@ -737,3 +737,32 @@ def test_the_artifact_carries_strategy_reality_as_a_structure():
 
     assert isinstance(blob["conclusions"]["strategy_reality"], dict)
     assert blob["conclusions"]["strategy_reality"]["status"] == "BLOCKED"
+
+
+def test_a_vendor_contradiction_dominates_the_overall_verdict():
+    """Spec 8.1's pinned case, with nothing else recorded.
+
+    Evaluating the engineering gate first let a report carrying CONTRADICTED but
+    no engineering check return NOT_EXERCISED, softening a proven defect into
+    "untested". Unreachable in a real run — instrument_master is always recorded
+    first — but the layer whose job is to be unfoolable must not rely on that.
+    """
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("market_data_live", FAIL)
+    report.record("option_order_counts", FAIL)
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
+
+
+def test_a_contradiction_outranks_an_unfinished_engineering_gate():
+    from study.snapback_live_evidence_acceptance import CONTRADICTED
+
+    report = _report()
+    report.record("option_depth_quantities", FAIL)   # vendor contradiction
+    report.record("instrument_master", SKIP)         # engineering incomplete
+
+    assert report.vendor_assumptions == CONTRADICTED
+    assert report.overall == FAIL
