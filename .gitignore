@@ -166,3 +166,8 @@ backend/data/evidence_acceptance/
 artifacts/snapback_forward/
 backend/data/snapback/
 artifacts/snapback_shadow_replay/
+
+# Backup manifests are per-machine runtime artifacts: they describe a backup
+# that exists on one disk. The RELEASE manifest (data/manifests/release.json)
+# is the opposite — it is the frozen identity and belongs in the repository.
+data/backups/
