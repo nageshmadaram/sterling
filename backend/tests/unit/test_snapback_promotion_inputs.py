@@ -304,3 +304,50 @@ def test_an_opportunity_from_another_build_cannot_vouch_for_an_outcome():
             records=records, expected_identity=IDENTITY,
             source_snapshot_sha256="snap-1", observed_sessions=12,
         )
+
+
+# ─── adversarial authority cases (spec §16) ──────────────────────────────────
+
+def test_a_replay_sourced_opportunity_cannot_vouch_for_an_outcome():
+    """LIVE_CATCHUP_REPLAY is how a five-session-old signal once became
+    authoritative. It must not back a promotable trade."""
+    records = _records(n=1)
+    records["opportunities"] = [_opportunity(0, source="LIVE_CATCHUP_REPLAY")]
+
+    with pytest.raises(PromotionInputError):
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+
+def test_a_non_authoritative_opportunity_cannot_vouch_for_an_outcome():
+    records = _records(n=1)
+    records["opportunities"] = [_opportunity(0, authoritative=0)]
+
+    with pytest.raises(PromotionInputError):
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+
+def test_a_duplicate_opportunity_identity_is_refused_not_resolved():
+    """Two Day-T rows claiming one opportunity_id means the join is ambiguous.
+
+    A dict comprehension silently kept whichever arrived last, which is a guess
+    about which signal produced the trade and which signal_iv priced it.
+    """
+    records = _records(n=1)
+    records["opportunities"] = [
+        _opportunity(0, signal_iv=0.18),
+        _opportunity(0, signal_iv=0.42),
+    ]
+
+    with pytest.raises(PromotionInputError) as excinfo:
+        build_promotion_input(
+            records=records, expected_identity=IDENTITY,
+            source_snapshot_sha256="snap-1", observed_sessions=12,
+        )
+
+    assert any("duplicate" in e.lower() for e in excinfo.value.errors)

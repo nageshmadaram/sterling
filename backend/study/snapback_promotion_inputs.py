@@ -202,11 +202,24 @@ def build_promotion_input(
     outcomes = _authoritative("outcomes")
     cost_rows = [dict(r) for r in _authoritative("costs")]
     opportunities = [dict(r) for r in _authoritative("opportunities")]
-    opportunity_by_id = {
-        str(row.get("opportunity_id") or ""): row
-        for row in opportunities
-        if str(row.get("opportunity_id") or "")
-    }
+    # Two authoritative Day-T rows claiming one opportunity_id make the join
+    # ambiguous, and a dict comprehension would silently keep whichever arrived
+    # last — a guess about which signal produced the trade, and about which
+    # signal_iv priced it. Ambiguous authority is refused, not resolved.
+    opportunity_by_id: dict[str, Any] = {}
+    duplicate_opportunity_ids: set[str] = set()
+    for row in opportunities:
+        key = str(row.get("opportunity_id") or "")
+        if not key:
+            continue
+        if key in opportunity_by_id:
+            duplicate_opportunity_ids.add(key)
+        opportunity_by_id[key] = row
+    for key in sorted(duplicate_opportunity_ids):
+        errors.append(
+            f"{key}: duplicate authoritative Day-T opportunity rows; the join is "
+            "ambiguous and cannot be resolved by choosing one"
+        )
     positions = [dict(r) for r in (records.get("paper_positions") or [])]
 
     ledger: Dict[str, float] = {}
