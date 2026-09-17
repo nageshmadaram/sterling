@@ -89,6 +89,29 @@ Usable as evidence: YES
 The ten lane rows below it never pool. 299 Swing trades plus 1 Scalping trade is
 not 300 Swing trades, and the report will never present it as one.
 
+## When an alert arrives
+
+Every alert states four things. If one is missing, that is a defect — report it.
+
+1. **What happened**, in plain language.
+2. **Whether new trading is blocked.**
+3. **Which positions are affected** (or "none identified", which is not the same
+   as "none").
+4. **The next safe action.**
+
+| Severity | Means | You |
+|---|---|---|
+| `INFO` | Routine. Daily start healthy, backup done, no signals. | Read it in the digest. |
+| `WARNING` | Something needs attention today. Lane blocked, margin unavailable, repeated no-fill, wide spread. | Look at it during the day. |
+| `CRITICAL` | Broker mismatch, unprotected fill, unresolved exposure, evidence DB failure, daily-loss breach. | Act now. New exposure is already blocked. |
+
+**Every CRITICAL blocks new exposure automatically.** You do not need to react
+fast to make Sterling safe; it is already safe. You need to react correctly.
+
+One root cause arrives as **one** incident. A dead database also fails the
+backup, the report and the session package, and those are listed underneath the
+cause as "downstream of the above". Fix the cause; the effects go with it.
+
 ## Weekly, once a week
 
 Run through [../evidence/PROMOTION_POLICY.md](../evidence/PROMOTION_POLICY.md)
