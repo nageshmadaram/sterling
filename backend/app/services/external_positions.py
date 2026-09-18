@@ -275,6 +275,11 @@ def record_observation(exposure: ExternalExposure) -> None:
             "readable": exposure.readable,
             "count": exposure.count,
             "instruments": [p.instrument for p in exposure.positions],
+            # The whole position, not just its name: the operator screen has to
+            # show quantity, price and account without making its own broker
+            # call, and a request-time network read is the thing the admission
+            # design exists to avoid.
+            "positions": [p.as_dict() for p in exposure.positions],
             "detail": exposure.detail,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except Exception as exc:  # noqa: BLE001

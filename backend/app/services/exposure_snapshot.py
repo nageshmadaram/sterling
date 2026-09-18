@@ -105,12 +105,35 @@ def _external() -> tuple[int | None, str, tuple[str, ...], Any]:
             tuple(p.instrument for p in exposure.positions), exposure)
 
 
+def _external_recorded() -> tuple[int | None, str, tuple[str, ...], Any]:
+    """The last recorded broker answer, with no network call.
+
+    A dashboard refreshing every ten seconds, and a certification report, must
+    not each open a broker connection. They read what the last reconciliation
+    saw. A missing record is UNKNOWN — the same answer an unreachable broker
+    gives, because in both cases nobody can say what the account holds.
+    """
+    from app.services.external_positions import ExternalExposure, last_observation
+
+    record = last_observation()
+    if record is None:
+        return None, "no reconciliation has recorded what the broker holds", (), None
+    if not record.get("readable", False) or record.get("count") is None:
+        return (None, str(record.get("detail") or "the broker could not be read"),
+                (), ExternalExposure(readable=False,
+                                     detail=str(record.get("detail") or "")))
+
+    instruments = tuple(str(i) for i in (record.get("instruments") or []))
+    return int(record.get("count") or 0), "", instruments, None
+
+
 def exposure_snapshot(*, include_broker: bool = True) -> ExposureSnapshot:
     """Read every operator's durable exposure, and the broker's. Never raises.
 
-    ``include_broker=False`` is for callers that already hold the broker answer
-    or must not make a network call; the external count is then UNKNOWN, and
-    UNKNOWN still refuses.
+    ``include_broker=True`` asks the broker and records the answer.
+    ``include_broker=False`` reads the last recorded answer instead, for callers
+    that must not make a network call — the dashboard poll and the certification
+    report. Either way a missing or unreadable answer is UNKNOWN, never flat.
     """
     try:
         from app.services import db
@@ -141,8 +164,7 @@ def exposure_snapshot(*, include_broker: bool = True) -> ExposureSnapshot:
         held.extend(p.symbol for p in positions_open)
 
     external_count, external_detail, external_instruments, external = (
-        _external() if include_broker
-        else (None, "the broker was not queried by this caller", (), None)
+        _external() if include_broker else _external_recorded()
     )
 
     return ExposureSnapshot(

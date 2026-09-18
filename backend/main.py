@@ -444,6 +444,9 @@ def create_app() -> FastAPI:
     from app.api.v1.endpoints.snapback_ops import router as snapback_ops_router
     app.include_router(snapback_ops_router, prefix="/api/v1")
 
+    from app.api.v1.endpoints.family_operations import router as family_operations_router
+    app.include_router(family_operations_router, prefix="/api/v1")
+
     from app.api.v1.endpoints.snapback_plans import router as snapback_plans_router
     app.include_router(snapback_plans_router, prefix="/api/v1")
 

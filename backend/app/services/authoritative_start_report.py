@@ -54,9 +54,12 @@ def _unresolved_exposure() -> int | None:
     Unreadable is None, not zero: an exposure count nobody could read is the
     one number that must never be reported as "none".
     """
-    from app.services.exposure_snapshot import unresolved_exposure_count
+    from app.services.exposure_snapshot import exposure_snapshot
 
-    return unresolved_exposure_count()
+    # The recorded broker answer, not a live call: this report is rendered by
+    # `sterlingctl evidence-start` and by the operator dashboard, and neither
+    # should open a broker connection to count rows.
+    return exposure_snapshot(include_broker=False).total
 
 
 def _identity_drift() -> int | None:
