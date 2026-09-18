@@ -10,6 +10,7 @@ import { useKiteStatusCardStore } from '../../store/useKiteStatusCardStore';
 import { ensureMacLoadingStyles } from './MacLoadingSurface';
 import { KiteLoader, ButtonLoader } from './KiteLoader';
 import { k } from '../../styles/kiteUI';
+import { EgressAddressRow } from './EgressAddressRow';
 
 const DISMISS_KEY = 'sterling_kite_session_guard_dismissed';
 
@@ -268,6 +269,8 @@ export function KiteSessionGuard({ onOpenAccountSettings }: { onOpenAccountSetti
             </span>
           </div>
         </div>
+
+        <EgressAddressRow />
 
         {/* Login Window & Action Controls */}
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(15,23,42,.07)', display: 'flex', flexDirection: 'column', gap: 8 }}>

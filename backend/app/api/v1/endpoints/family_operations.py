@@ -227,3 +227,50 @@ async def family_operations(
 
     response.headers["Cache-Control"] = "no-store"
     return family_operations_v2()
+
+
+class EgressStatusResponse(BaseModel):
+    """What address this deployment answers from, for the broker's allowlist."""
+
+    expected_ip: str | None = None
+    observed_ip: str | None = None
+    observed_at: str | None = None
+    router_generation: str | None = None
+    #: True, False, or None when it could not be determined.
+    verified: bool | None = None
+    reason: str = ""
+    #: What changed, when the observed address moved.
+    changed_from: str | None = None
+    #: How to record an observation, shown verbatim to the operator.
+    record_command: str = "sterlingctl egress record <ip>"
+
+
+@router.get("/operations/egress", response_model=EgressStatusResponse)
+async def operations_egress(
+    _user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """The deployment's outbound address, as recorded — never probed.
+
+    Sterling does not ask the internet what its own address is: a safety check
+    that depends on a third party is a safety check that fails when that third
+    party does, and the answer would say nothing about what the broker sees
+    anyway. The deployment records what it observed; this reads it.
+    """
+    from app.core.deployment_identity import (
+        DeploymentIdentityStore,
+        verify_deployment_identity,
+    )
+
+    verdict = verify_deployment_identity()
+    latest = DeploymentIdentityStore().latest()
+
+    return {
+        "expected_ip": verdict.expected_ip or None,
+        "observed_ip": latest.outbound_ip if latest else None,
+        "observed_at": latest.observed_at if latest else None,
+        "router_generation": (latest.router_generation or None) if latest else None,
+        "verified": verdict.verified,
+        "reason": verdict.reason,
+        "changed_from": verdict.changed_from or None,
+        "record_command": "sterlingctl egress record <ip>",
+    }

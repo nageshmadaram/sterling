@@ -43,6 +43,8 @@ Usage: sterlingctl <command>
   drills           the twelve failure drills and their record on this build
   digest           the one-screen daily status, including on a quiet day
   exposure         everything open: Sterling's own, and what the broker holds
+  egress           the outbound address this host answers from
+  egress record IP [ROUTER_GENERATION]   record what the deployment observed
   secrets plan     how many stored secrets would be re-encrypted
   secrets migrate --to-env-file PATH [--from-key KEY]   re-key every stored secret
   drills record DRILL PASS|FAIL WHO "what happened" [REF]
@@ -298,6 +300,59 @@ if total is None:
     sys.exit(2)
 print(f"TOTAL EXPOSURE: {total}")
 sys.exit(0 if total == 0 else 1)
+PY
+    ;;
+
+  egress)
+    if [ "${2:-}" = "record" ]; then
+      [ -n "${3:-}" ] || { echo 'usage: sterlingctl egress record IP [ROUTER_GENERATION]' >&2; exit 64; }
+      STERLING_EGRESS_IP="$3" STERLING_EGRESS_ROUTER="${4:-}" run_py <<'PY'
+import os, socket
+
+from app.core.deployment_identity import DeploymentIdentityStore
+from app.core.release_manifest import release_tag, runtime_sha
+
+observation = DeploymentIdentityStore().record(
+    host_id=socket.gethostname(),
+    outbound_ip=os.environ["STERLING_EGRESS_IP"],
+    router_generation=os.environ.get("STERLING_EGRESS_ROUTER", ""),
+    runtime_sha=runtime_sha(),
+    release_tag=release_tag(),
+)
+print(f"recorded {observation.outbound_ip} from {observation.host_id} at {observation.observed_at}")
+print("Register this address with the broker if their API requires an allowlist.")
+PY
+      exit $?
+    fi
+    run_py <<'PY'
+import sys
+
+from app.core.deployment_identity import DeploymentIdentityStore, verify_deployment_identity
+
+verdict = verify_deployment_identity()
+store = DeploymentIdentityStore()
+history = store.read()
+
+print("DEPLOYMENT EGRESS")
+print(f"  registered (expected)   {verdict.expected_ip or 'UNSET'}")
+latest = history[-1] if history else None
+print(f"  last observed           {latest.outbound_ip if latest else 'NEVER OBSERVED'}")
+if latest:
+    print(f"  observed at             {latest.observed_at}")
+    print(f"  host                    {latest.host_id}")
+    if latest.router_generation:
+        print(f"  router generation       {latest.router_generation}")
+if verdict.changed_from:
+    print(f"  changed from            {verdict.changed_from}")
+print()
+print({True: "VERIFIED", False: "MISMATCH", None: "UNKNOWN"}[verdict.verified])
+print(f"  {verdict.reason}")
+if len(history) > 1:
+    print()
+    print("history (newest last):")
+    for observation in history[-5:]:
+        print(f"  {observation.observed_at}  {observation.outbound_ip}")
+sys.exit(0 if verdict.verified else (1 if verdict.verified is False else 2))
 PY
     ;;
 
