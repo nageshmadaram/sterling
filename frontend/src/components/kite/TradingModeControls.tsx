@@ -71,14 +71,17 @@ export function TradingModeControls() {
 
   const onExec = (side: 'left' | 'right') => {
     if (side === 'right') { refetchReadiness(); setConfirm('go-live'); return; }
-    update.mutate({ id: active.id, is_paper: true });
     update.mutate({ id: active.id, is_paper: true }, {
       onSuccess: () => notifyOrder({ kind: 'info', title: 'Trading mode changed', message: 'Account switched to Paper trading.' }),
       onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
     });
   };
-  const confirmGoLive = () =>
-    update.mutate({ id: active.id, is_paper: false }, { onSuccess: () => setConfirm(null) });
+
+  // Braced on purpose. As a concise arrow body this ended at the first
+  // semicolon, which left the second `update.mutate` as a statement in the
+  // component body — so rendering this panel switched the account to LIVE with
+  // no click, and each success re-rendered and did it again.
+  const confirmGoLive = () => {
     update.mutate({ id: active.id, is_paper: false }, {
       onSuccess: () => {
         setConfirm(null);
@@ -86,31 +89,34 @@ export function TradingModeControls() {
       },
       onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
     });
+  };
 
   const onSignals = (side: 'left' | 'right') => {
     if (!cfg) return;
     if (side === 'right') { refetchReadiness(); setConfirm('enable-auto'); return; }
-    setCfg.mutate({ auto_execute: false });
     setCfg.mutate({ auto_execute: false }, {
       onSuccess: () => notifyOrder({ kind: 'info', title: 'Execution mode changed', message: 'Signals switched to Manual execution.' }),
       onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
     });
   };
-  const confirmEnableAuto = () =>
-    cfg && setCfg.mutate({ auto_execute: true }, { onSuccess: () => setConfirm(null) });
-    cfg && setCfg.mutate({ auto_execute: true }, {
+
+  // Same defect as confirmGoLive: unbraced, the second statement ran on every
+  // render and turned auto-execution ON without a click.
+  const confirmEnableAuto = () => {
+    if (!cfg) return;
+    setCfg.mutate({ auto_execute: true }, {
       onSuccess: () => {
         setConfirm(null);
         notifyOrder({ kind: 'info', title: 'Execution mode changed', message: 'Signals switched to Auto execution.' });
       },
       onError: (err) => notifyOrder({ kind: 'error', title: 'Mode change failed', message: err.message }),
     });
+  };
 
   const handleApplyProductionPreset = () => {
     applyProduction.mutate(undefined, {
       onSuccess: () => {
         setConfirm(null);
-        setFeedback('Production preset applied: Fast Trail, One-Red Exit, ADX 25, Time Stop 48, 2% Daily Loss.');
         const msg = 'Production preset applied: Fast Trail, One-Red Exit, ADX 25, Time Stop 48, 2% Daily Loss.';
         setFeedback(msg);
         notifyOrder({ kind: 'info', title: 'Preset applied', message: msg });
