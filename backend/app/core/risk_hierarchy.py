@@ -1,9 +1,14 @@
-"""Risk limits at four levels, and what happens when one is not configured.
+"""Risk limits at five levels, and what happens when one is not configured.
 
-Limits exist at GLOBAL, STRATEGY, MODE and POSITION level, and all four apply
-to every request. A per-mode allocation that a strategy-level cap would already
-have blocked is not redundant: the strategy cap is what stops five modes each
-using their full allocation.
+Limits exist at GLOBAL, STRATEGY, UNDERLYING, MODE and POSITION level, and all
+of them apply to every request. A per-mode allocation that a strategy-level cap
+would already have blocked is not redundant: the strategy cap is what stops five
+modes each using their full allocation.
+
+UNDERLYING is the layer that stops ten differently-labelled lanes becoming one
+oversized NIFTY position. It sits between STRATEGY and MODE because it is
+broader than a lane and narrower than the whole book, and it cuts across
+strategies: Snapback and SuperTrend both long NIFTY are one bet with two names.
 
 The rule worth stating plainly is the one in :meth:`RiskHierarchy.check`. A
 missing limit is INCONCLUSIVE_RISK_CONFIGURATION, never "no limit". Treating an
@@ -22,6 +27,8 @@ from app.core.strategy_identity import stable_hash
 class RiskLevel(StrEnum):
     GLOBAL = "global"
     STRATEGY = "strategy"
+    #: Scope key is the canonical underlying, e.g. ``"NIFTY"``.
+    UNDERLYING = "underlying"
     MODE = "mode"
     POSITION = "position"
 
@@ -31,9 +38,15 @@ class RiskLevel(StrEnum):
 _CHECK_ORDER = (
     RiskLevel.GLOBAL,
     RiskLevel.STRATEGY,
+    RiskLevel.UNDERLYING,
     RiskLevel.MODE,
     RiskLevel.POSITION,
 )
+
+#: Returned when UNDERLYING limits are declared but the caller did not say which
+#: underlying it is about. Skipping the level would be the "absent means
+#: unlimited" mistake this module exists to refuse, one layer down.
+UNDERLYING_UNKNOWN = "INCONCLUSIVE_UNDERLYING_UNKNOWN"
 
 INCONCLUSIVE = "INCONCLUSIVE_RISK_CONFIGURATION"
 
@@ -58,9 +71,9 @@ class RiskDecision:
 class RiskHierarchy:
     """Declared limits, keyed by level and then by scope.
 
-    Scope keys: ``""`` at GLOBAL, the strategy id at STRATEGY, the lane key at
-    MODE, and the lane key again at POSITION (a per-position budget belongs to
-    the lane that opens it).
+    Scope keys: ``""`` at GLOBAL, the strategy id at STRATEGY, the canonical
+    underlying at UNDERLYING, the lane key at MODE, and the lane key again at
+    POSITION (a per-position budget belongs to the lane that opens it).
     """
 
     limits: Mapping[RiskLevel, Mapping[str, float]] = field(default_factory=dict)
@@ -88,6 +101,10 @@ class RiskHierarchy:
     def limit_for(self, level: RiskLevel, scope: str) -> float | None:
         return self.limits.get(level, {}).get(scope)
 
+    def declares(self, level: RiskLevel) -> bool:
+        """Has the operator configured any limit at this level?"""
+        return bool(self.limits.get(level))
+
     def check(
         self,
         *,
@@ -95,19 +112,36 @@ class RiskHierarchy:
         lane_key: str,
         requested: float,
         used: Mapping[RiskLevel, float] | None = None,
+        underlying: str | None = None,
     ) -> RiskDecision:
-        """May ``requested`` more risk be taken, given what is already used?"""
+        """May ``requested`` more risk be taken, given what is already used?
+
+        ``underlying`` is optional only so that a hierarchy which declares no
+        UNDERLYING limits behaves exactly as before. Once any are declared, a
+        caller that cannot name the underlying gets INCONCLUSIVE rather than a
+        skipped level — an unnamed underlying is an unmeasured concentration.
+        """
         if requested < 0:
             raise RiskConfigurationError("requested risk must not be negative")
         consumed = used or {}
+
+        underlying_scope = (underlying or "").strip().upper()
+        if self.declares(RiskLevel.UNDERLYING) and not underlying_scope:
+            return RiskDecision(False, UNDERLYING_UNKNOWN, RiskLevel.UNDERLYING)
+
         scopes = {
             RiskLevel.GLOBAL: "",
             RiskLevel.STRATEGY: strategy_id.strip().lower(),
+            RiskLevel.UNDERLYING: underlying_scope,
             RiskLevel.MODE: lane_key,
             RiskLevel.POSITION: lane_key,
         }
 
         for level in _CHECK_ORDER:
+            if level is RiskLevel.UNDERLYING and not self.declares(level):
+                # Nothing declared at this level: the hierarchy is the four it
+                # was before, not a level that silently permits everything.
+                continue
             scope = scopes[level]
             limit = self.limit_for(level, scope)
             if limit is None:
@@ -135,7 +169,9 @@ class RiskHierarchy:
 
         return RiskDecision(True)
 
-    def missing_scopes(self, *, strategy_id: str, lane_key: str) -> tuple[str, ...]:
+    def missing_scopes(
+        self, *, strategy_id: str, lane_key: str, underlying: str | None = None
+    ) -> tuple[str, ...]:
         """Which limits a lane would need before it can take any risk."""
         scopes = {
             RiskLevel.GLOBAL: "",
@@ -143,6 +179,8 @@ class RiskHierarchy:
             RiskLevel.MODE: lane_key,
             RiskLevel.POSITION: lane_key,
         }
+        if self.declares(RiskLevel.UNDERLYING):
+            scopes[RiskLevel.UNDERLYING] = (underlying or "").strip().upper()
         return tuple(
             f"{level.value}/{scope or '*'}"
             for level, scope in scopes.items()
@@ -152,7 +190,11 @@ class RiskHierarchy:
 
 #: Environment variable holding the limits, as JSON:
 #: ``{"global": {"": 100000}, "strategy": {"snapback": 60000},
+#:    "underlying": {"NIFTY": 40000},
 #:    "mode": {"snapback:swing": 30000}, "position": {"snapback:swing": 10000}}``
+#:
+#: The ``underlying`` block is optional. Declaring it turns the level on, and
+#: from then on a request that cannot name its underlying is refused.
 ENV_VAR = "STERLING_RISK_LIMITS"
 
 

@@ -1,4 +1,9 @@
-fastapi>=0.115.0
+# Upper bounds, not just floors. An unpinned floor let CI resolve fastapi
+# 0.141.1 / starlette 1.6.0 while a developer venv held 0.136.1 / 1.0.0, and
+# the two versions disagree about what `include_router` puts in app.routes.
+# Tested pair: fastapi 0.141.1 + starlette 1.6.0 (CI) and 0.136.1 + 1.0.0.
+fastapi>=0.115.0,<0.142.0
+starlette>=1.0.0,<1.7.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 pydantic-settings>=2.3.0

@@ -140,10 +140,18 @@ reality, not to earn.
 - If live execution contradicts the shadow model, the lane returns to SHADOW or
   SAFE_MODE.
 
-Capital limits are layered: global, per strategy, per mode, per underlying, per
-position. The per-underlying layer exists because two different lane labels can
-still be the same market bet — ten lanes must never become one oversized NIFTY
-position.
+Capital limits are layered: global, per strategy, per underlying, per mode, per
+position (`app/core/risk_hierarchy.py`). The per-underlying layer exists because
+two different lane labels can still be the same market bet — ten lanes must
+never become one oversized NIFTY position.
+
+The `underlying` block is optional in `STERLING_RISK_LIMITS`. Declaring it turns
+the level on, and from then on a request that cannot name its underlying is
+refused as `INCONCLUSIVE_UNDERLYING_UNKNOWN` rather than skipping the level —
+an unnamed underlying is an unmeasured concentration.
+
+`ExposureCoordinator` is the separate, stricter control: it refuses a
+same-underlying same-direction request outright, whatever the capital says.
 
 ## 7. When a lane fails
 

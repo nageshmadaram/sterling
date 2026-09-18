@@ -166,8 +166,9 @@ def _risk_hierarchy_admission(
     lane_key: Optional[str],
     requested: float,
     used: Optional[Dict[Any, float]],
+    underlying: Optional[str] = None,
 ) -> Optional[CapacityDecision]:
-    """Apply the four-level risk hierarchy, when one has been configured.
+    """Apply the five-level risk hierarchy, when one has been configured.
 
     Absent configuration the hierarchy is not consulted and the capital
     arithmetic below stands alone. That is deliberate rather than fail-open:
@@ -183,7 +184,11 @@ def _risk_hierarchy_admission(
         return None
     strategy, _, _mode = str(lane_key).partition(":")
     decision = hierarchy.check(
-        strategy_id=strategy, lane_key=lane_key, requested=requested, used=used
+        strategy_id=strategy,
+        lane_key=lane_key,
+        requested=requested,
+        used=used,
+        underlying=underlying,
     )
     if decision.allowed:
         return None
@@ -270,6 +275,7 @@ def evaluate_capacity(
             lane_key,
             float(option_premium_cash or 0.0) + float(hedge_margin or 0.0),
             risk_used,
+            canonical_underlying,
         )
         if decision is not None:
             return decision

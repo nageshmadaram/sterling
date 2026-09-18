@@ -266,6 +266,97 @@ def from_operational(
     )
 
 
+def daily_digest(
+    *,
+    session_status: str,
+    signals_found: int,
+    lanes_originating: int,
+    backup_passed: bool | None,
+    restore_checked: bool | None = None,
+) -> list[OperatorAlert]:
+    """The INFO-severity lines that belong in a digest, not in a notification.
+
+    Section 15 asks for an INFO level: daily start healthy, backup completed, no
+    signals. Without a producer the level existed and nothing ever used it, so
+    a quiet day reached the operator as silence — and silence is what a dead
+    scheduler also looks like.
+
+    Nothing here blocks trading. Anything that should is a WARNING or CRITICAL
+    and comes from the fault path instead.
+    """
+    rows: list[OperatorAlert] = [
+        OperatorAlert(
+            code="session_status",
+            severity=Severity.INFO,
+            what_happened=f"Session status is {session_status}.",
+            trading_blocked=False,
+            next_action="Nothing. Read it in the daily digest.",
+        ),
+        OperatorAlert(
+            code="lane_origination",
+            severity=Severity.INFO,
+            what_happened=(
+                f"{lanes_originating} of 10 lanes may open a trade today."
+            ),
+            trading_blocked=False,
+            next_action=(
+                "Nothing. A lane that may not originate has not earned a sample "
+                "yet; `sterlingctl lanes` says why."
+            ),
+        ),
+    ]
+
+    if signals_found == 0:
+        rows.append(
+            OperatorAlert(
+                code="no_signals",
+                severity=Severity.INFO,
+                what_happened="No signals today. The scan ran and found nothing.",
+                trading_blocked=False,
+                next_action=(
+                    "Nothing. Check the session line above: a quiet market and a "
+                    "scan that never ran look identical without it."
+                ),
+            )
+        )
+    else:
+        rows.append(
+            OperatorAlert(
+                code="signals_found",
+                severity=Severity.INFO,
+                what_happened=f"{signals_found} signal(s) recorded.",
+                trading_blocked=False,
+                next_action="Nothing. Review them in the weekly evidence review.",
+            )
+        )
+
+    # An unknown backup result is NOT reported as success here. It is left out,
+    # and the fault path raises backup_failed, so the digest can never be the
+    # thing that says a backup happened when nobody checked.
+    if backup_passed is True:
+        rows.append(
+            OperatorAlert(
+                code="backup_completed",
+                severity=Severity.INFO,
+                what_happened="Evidence backup completed.",
+                trading_blocked=False,
+                next_action=(
+                    "Nothing"
+                    if restore_checked
+                    else "Run `sterlingctl restore-check`; an untested backup is not proved."
+                ),
+            )
+        )
+
+    return rows
+
+
+def render_digest(rows: Iterable[OperatorAlert]) -> str:
+    """One line per INFO item. Nothing here needs an operator to act."""
+    lines = [f"- {row.what_happened}" for row in rows if row.severity is Severity.INFO]
+    return "\n".join(lines) or "- Nothing to report."
+
+
 def collapse_to_root_causes(
     alerts: Iterable[OperatorAlert],
 ) -> tuple[tuple[OperatorAlert, ...], tuple[OperatorAlert, ...]]:
@@ -332,7 +423,9 @@ __all__ = [
     "OperatorAlert",
     "Severity",
     "collapse_to_root_causes",
+    "daily_digest",
     "from_operational",
+    "render_digest",
     "render_alert",
     "render_incident",
     "should_enter_safe_mode",

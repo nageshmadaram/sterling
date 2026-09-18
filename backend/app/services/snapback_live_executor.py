@@ -46,6 +46,65 @@ class LiveExecutionResult:
     stop_new_entries: bool = False
 
 
+#: Where the durable intent record lives. Overridable so a drill or a second
+#: account can use its own file, never so it can be switched off.
+INTENT_DB_ENV = "STERLING_INTENT_DB"
+DEFAULT_INTENT_DB = "data/intents.db"
+
+
+def default_intent_store():
+    """The durable intent store this deployment should use.
+
+    Kept separate from the executor so there is one answer to "where do intents
+    live", and so `build_live_executor` cannot be given a different one by
+    accident.
+    """
+    import os
+    from pathlib import Path
+
+    from app.core.trade_intent import IntentStore
+
+    root = Path(__file__).resolve().parents[3]
+    configured = (os.environ.get(INTENT_DB_ENV) or "").strip()
+    path = Path(configured) if configured else root / DEFAULT_INTENT_DB
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return IntentStore(path)
+
+
+def build_live_executor(
+    *,
+    plan_store,
+    execution_service,
+    reconciliation_fn: Callable[[str], Dict[str, Any]],
+    risk_approval_fn: Callable[..., Any],
+    protection_fn: Callable[..., Any],
+    revalidate_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
+    uid: str = "default",
+    intent_store: Any = None,
+) -> "SnapbackLiveExecutor":
+    """Build the live executor with durable intent recording already attached.
+
+    The constructor takes ``intent_store=None`` because the bridge was added to
+    an existing class and every test that predates it still constructs one
+    without. That default is safe in a test and wrong in production: without a
+    store there is no record of "sent, outcome never read", so a crash between
+    submission and acknowledgement leaves an order that looks un-sent.
+
+    Any real caller goes through here, where the store is supplied by default
+    and can be replaced but not omitted.
+    """
+    return SnapbackLiveExecutor(
+        plan_store=plan_store,
+        execution_service=execution_service,
+        reconciliation_fn=reconciliation_fn,
+        risk_approval_fn=risk_approval_fn,
+        protection_fn=protection_fn,
+        revalidate_fn=revalidate_fn,
+        uid=uid,
+        intent_store=intent_store if intent_store is not None else default_intent_store(),
+    )
+
+
 class SnapbackLiveExecutor:
     def __init__(
         self,
