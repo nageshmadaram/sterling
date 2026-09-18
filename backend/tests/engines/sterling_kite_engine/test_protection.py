@@ -27,6 +27,7 @@ from app.services.kite_engine import monitor
 from app.services.kite_engine import positions as pos
 from app.services.kite_engine import protection, protective_stop
 import app.services.exchanges.kite.ticker_manager as _ticker_manager
+from tests.engines.sterling_kite_engine.canonical_double import CanonicalBrokerDouble
 
 
 class _NotFound(Exception):
@@ -41,7 +42,7 @@ class _InputError(Exception):
     error_type = "InputException"
 
 
-class _FakeClient:
+class _FakeClient(CanonicalBrokerDouble):
     """Records what was sent to the broker. ``cancel_error`` makes delete_gtt fail
     the way Zerodha would for a trigger that has already fired.
 
@@ -478,8 +479,10 @@ class TestManualOrdersAreProtected:
         client.place_order_option_entry = _order
         monkeypatch.setattr(kite_accounts, "get_active", lambda uid: _Acct())
         monkeypatch.setattr(kite_accounts, "acquire_client", lambda acct: _async(client))
+        # SafetySupervisor asks the same authority positionally, so the double
+        # has to accept both spellings or admission fails closed on a TypeError.
         monkeypatch.setattr(ksvc.live_safety, "assert_safe_to_trade",
-                            lambda **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
+                            lambda *a, **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
         monkeypatch.setattr(ksvc.live_safety, "check_idempotency", lambda key: None)
         monkeypatch.setattr(ksvc.live_safety, "record_idempotency", lambda key, oid: None)
         pos.reset("m-user")
@@ -682,8 +685,10 @@ class TestManualExitTellsTheTruth:
 
         monkeypatch.setattr(kite_accounts, "get_active", lambda uid: _Acct())
         monkeypatch.setattr(kite_accounts, "acquire_client", lambda acct: _async(client))
+        # SafetySupervisor asks the same authority positionally, so the double
+        # has to accept both spellings or admission fails closed on a TypeError.
         monkeypatch.setattr(ksvc.live_safety, "assert_safe_to_trade",
-                            lambda **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
+                            lambda *a, **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
         monkeypatch.setattr(ksvc.live_safety, "check_idempotency", lambda key: None)
         monkeypatch.setattr(ksvc.live_safety, "record_idempotency",
                             lambda key, oid: recorded.append(key))
@@ -859,8 +864,10 @@ class TestAStaleStopIsNotArmed:
 
         monkeypatch.setattr(kite_accounts, "get_active", lambda uid: _Acct())
         monkeypatch.setattr(kite_accounts, "acquire_client", lambda acct: _async(client))
+        # SafetySupervisor asks the same authority positionally, so the double
+        # has to accept both spellings or admission fails closed on a TypeError.
         monkeypatch.setattr(ksvc.live_safety, "assert_safe_to_trade",
-                            lambda **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
+                            lambda *a, **kw: type("D", (), {"allowed": True, "code": "", "reason": ""})())
         monkeypatch.setattr(ksvc.live_safety, "check_idempotency", lambda key: None)
         monkeypatch.setattr(ksvc.live_safety, "record_idempotency", lambda key, oid: None)
         pos.reset("z-user")
@@ -1166,7 +1173,7 @@ def _spot_row(underlying="RELIANCE", direction="long", *, current_reds=None, ts=
         score=85.0, timestamp_ms=ts, current_reds=current_reds)
 
 
-class _QuotelessClient:
+class _QuotelessClient(CanonicalBrokerDouble):
     """A broker that cannot answer a quote - strike untraded today, or the call was
     rate-limited and swallowed. entry_premium and therefore stop_premium resolve to 0."""
 

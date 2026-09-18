@@ -19,7 +19,7 @@ from app.engines.sterling_kite_engine.config import SterlingKiteEngineConfig
 from app.engines.sterling_kite_engine.schemas import EngineConfigModel
 from app.services import live_safety
 from app.services.kite_engine import fill_ledger
-from app.services.kite_engine import monitor, order_journal, positions, protection, protective_stop, sizing, state
+from app.services.kite_engine import canonical_entry, monitor, order_journal, positions, protection, protective_stop, sizing, state
 from app.services.kite_engine import futures as futures_mod
 from app.services.kite_engine.greeks import (
     black_scholes_greeks, implied_vol, premium_stop_from_move,
@@ -167,9 +167,32 @@ async def place_manual_order(uid: str, option_symbol: str, side: str,
     if norm == "buy" and getattr(cfg, "protect_manual_orders", True):
         plan = protection.plan_for_symbol(uid, option_symbol)
 
+    # Only a simulated account reaches here: a live BUY went to
+    # `_place_live_manual_buy` above, and a live SELL either matched a tracked
+    # holding and exited through the monitor, or was refused. A simulated order
+    # is still an exposure increase, so it takes the same canonical door — which
+    # means it is also subject to the same admission authority and the same
+    # capital evidence rather than being allowed on the grounds of being fake.
+    from math import isfinite
+    acct = str(getattr(client, "_account_id", "") or "")
+    if not acct:
+        return {"status": "blocked", "reason": "execution_account_identity_missing"}
     try:
-        result = await client.place_order_option(
-            option_symbol, norm, quantity, exchange=exchange, tag=idem)
+        available = await available_fo_capital(client)
+    except Exception as exc:  # noqa: BLE001
+        state.log(uid, "order_failed", f"{side} {option_symbol}: capital unreadable: {exc}")
+        return {"status": "error", "message": "Capital evidence unavailable"}
+    if not isfinite(available) or available <= 0:
+        return {"status": "blocked", "reason": "broker_capital_unavailable_or_insufficient"}
+
+    try:
+        result = await canonical_entry.submit_entry(
+            client=client, uid=uid, account_id=acct, symbol=option_symbol,
+            exchange=exchange, side=side.upper(), quantity=quantity,
+            evidence=canonical_entry.EntryEvidence(
+                available_capital=available, capital_required=0.0,
+                generation_id="manual-v1", signal_id=idem),
+            order_type="market_order", tag=idem)
     except KiteError as exc:
         state.log(uid, "order_failed", f"{side} {option_symbol}: {exc}")
         return {"status": "error", "message": str(exc)}
@@ -177,7 +200,14 @@ async def place_manual_order(uid: str, option_symbol: str, side: str,
         state.log(uid, "order_failed", f"{side} {option_symbol}: {exc}")
         return {"status": "error", "message": str(exc)}
 
-    oid = (result or {}).get("order_id", "")
+    if not result.success:
+        if result.status == "UNKNOWN":
+            state.log(uid, "order_failed", f"{side} {option_symbol}: {result.error}")
+            return {"status": "error", "message": "Order outcome uncertain; reconcile with the broker"}
+        state.log(uid, "order_blocked", f"{side} {option_symbol} blocked: {result.error}")
+        return {"status": "blocked", "reason": result.error or "canonical_execution_refused"}
+
+    oid = result.order_id
     if oid:
         live_safety.record_idempotency(idem, oid)
     state.log(uid, "order_placed", f"{side} {quantity} {option_symbol} (#{oid})")
@@ -258,29 +288,35 @@ async def _place_live_manual_buy(client, uid, symbol, quantity, exchange, order_
                        entry_delta=plan.entry_delta, strike=plan.strike, expiry=plan.expiry,
                        target_premium=plan.target_premium, stop_mode=cfg.stop_mode,
                        exit_mode=cfg.exit_mode)
-        intent = order_journal.reserve(uid=uid, account_id=account_id(client),
-            strategy_id="sterling-kite", generation_id="manual-v1",
-            signal_id=f"{row.source}:{row.timestamp_ms}:{row.direction}",
-            exchange=exchange, symbol=symbol, side="BUY", quantity=quantity, payload=payload,
-            capital_required=required, available_capital=available)
-        if not order_journal.claim_submission(intent.intent_key):
-            return {"status": "blocked", "reason": "durable_entry_already_reserved_or_submitted"}
+        acct = account_id(client)
+        entry_evidence_proof = canonical_entry.EntryEvidence(
+            available_capital=available, capital_required=required,
+            generation_id="manual-v1",
+            signal_id=f"{row.source}:{row.timestamp_ms}:{row.direction}")
     except Exception as exc:
         return {"status": "blocked", "reason": str(exc)}
-    try:
-        # Bounded LIMIT price makes the reserved premium an actual upper bound.
-        result = await client.place_order_option(symbol, "buy", quantity, exchange=exchange,
-            order_type="limit_order", limit_price=round(ceiling, 2), tag=intent.tag)
-        oid = str((result or {}).get("order_id") or "")
-        if not oid:
-            raise RuntimeError("missing_order_id")
-        intent = order_journal.acknowledge(intent.intent_key, oid)
-        register_pending(intent, oid)
-        return {"status": "ok", "order_id": oid, "protected": False,
-                "protection": "awaiting confirmed fill", "message": "Entry submitted; fill pending"}
-    except Exception as exc:
-        order_journal.submission_uncertain(intent.intent_key, type(exc).__name__)
+
+    # The canonical service owns the journal for this order: it reserves, claims,
+    # rechecks safety with nothing between that check and the send, acknowledges,
+    # and records an uncertain submission. Reserving here as well would put two
+    # intents behind one trade.
+    #
+    # Bounded LIMIT price makes the reserved premium an actual upper bound.
+    result = await canonical_entry.submit_entry(
+        client=client, uid=uid, account_id=acct, symbol=symbol, exchange=exchange,
+        side="BUY", quantity=quantity, evidence=entry_evidence_proof,
+        order_type="limit_order", limit_price=round(ceiling, 2), payload=payload)
+
+    if result.status == "UNKNOWN":
         return {"status": "error", "message": "Entry outcome uncertain; broker reconciliation required"}
+    if not result.success or not result.order_id:
+        return {"status": "blocked", "reason": result.error or "canonical_execution_refused"}
+
+    intent = order_journal.find(uid=uid, account_id=acct, order_id=result.order_id)
+    if intent is not None:
+        register_pending(intent, result.order_id)
+    return {"status": "ok", "order_id": result.order_id, "protected": False,
+            "protection": "awaiting confirmed fill", "message": "Entry submitted; fill pending"}
 
 
 async def arm_manual_option_buy(client, uid: str, *, option_symbol: str, exchange: str,
@@ -1013,50 +1049,50 @@ def _make_place_cb(client, uid: str):
         if session_reason:
             state.log(uid, "order_blocked", f"{trade_symbol}: {session_reason}")
             return
-        intent = None
-        if getattr(client, "_is_paper", True) is False:
-            try:
-                import hashlib, json
-                from app.services.kite_engine.execution_lifecycle import account_id
-                from app.services.exchanges.kite import accounts
+        # The canonical execution service is the only path to an exposure
+        # increase. It reserves the durable intent, claims it, re-asks the safety
+        # authority with nothing between that answer and the send, acknowledges
+        # the broker order id and records an uncertain submission — so nothing
+        # here reserves or journals, and nothing here calls the broker.
+        try:
+            import hashlib, json
+            from app.services.exchanges.kite import accounts
+            acct = str(getattr(client, "_account_id", "") or "")
+            if not acct:
+                raise ValueError("execution_account_identity_missing")
+            if getattr(client, "_is_paper", True) is False:
                 if not accounts.client_is_current(client, user_id=uid):
                     raise ValueError("account_changed_before_submission")
                 held = positions.get(uid, trade_symbol)
                 if held and held.status in (positions.PENDING, positions.OPEN):
                     raise ValueError("live_scale_in_blocked")
-                generation = hashlib.sha256(
-                    json.dumps(cfg.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
-                intent = order_journal.reserve(
-                    uid=uid, account_id=account_id(client),
-                    strategy_id="sterling-kite", generation_id=generation,
-                    signal_id=f"{row.source}:{row.timestamp_ms}:{row.direction}",
-                    exchange=trade_exchange, symbol=trade_symbol, side=trade_side.upper(), quantity=qty,
-                    capital_required=(required_margin if use_futures else entry_px * qty * limit_buffer),
-                    available_capital=available,
-                    payload=dict(symbol=trade_symbol, exchange=trade_exchange, quantity=qty,
-                        lot_size=trade_lot, entry_premium=entry_px, stop_premium=stop_px,
-                        direction=pos_direction, signal_direction=signal_dir, vehicle=vehicle_label,
-                        underlying=row.underlying, token=trade_token, guard_key=guard_key,
-                        entry_spot=pos_entry_spot, entry_delta=pos_delta, strike=pos_strike,
-                        expiry=pos_expiry, target_premium=target_px, exit_mode=cfg.exit_mode,
-                        stop_mode=cfg.stop_mode))
-                if intent.state != "RESERVED":
-                    state.log(uid, "order_blocked", f"{trade_symbol}: durable intent already {intent.state}")
-                    return
-                if not order_journal.claim_submission(intent.intent_key):
-                    return
-            except Exception as exc:
-                state.log(uid, "order_blocked", f"{trade_symbol}: durable order reservation failed: {exc}")
-                return
+            generation = hashlib.sha256(
+                json.dumps(cfg.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()[:16]
+            entry_proof = canonical_entry.EntryEvidence(
+                available_capital=available,
+                capital_required=(required_margin if use_futures else entry_px * qty * limit_buffer),
+                generation_id=generation,
+                signal_id=f"{row.source}:{row.timestamp_ms}:{row.direction}")
+            entry_payload = dict(symbol=trade_symbol, exchange=trade_exchange, quantity=qty,
+                lot_size=trade_lot, entry_premium=entry_px, stop_premium=stop_px,
+                direction=pos_direction, signal_direction=signal_dir, vehicle=vehicle_label,
+                underlying=row.underlying, token=trade_token, guard_key=guard_key,
+                entry_spot=pos_entry_spot, entry_delta=pos_delta, strike=pos_strike,
+                expiry=pos_expiry, target_premium=target_px, exit_mode=cfg.exit_mode,
+                stop_mode=cfg.stop_mode)
+        except Exception as exc:
+            state.log(uid, "order_blocked", f"{trade_symbol}: canonical entry preparation failed: {exc}")
+            return
         try:
             if use_futures:
                 side = "buy" if signal_dir == "long" else "sell"
-                result = await client.place_order_future(
-                    trade_symbol, side, qty, exchange=trade_exchange,
-                    **({"order_type": "limit_order", "limit_price":
-                        live_evidence.sell_limit if pos_direction == "short" else live_evidence.buy_limit}
-                       if live_evidence else {}),
-                    tag=(intent.tag if intent else idem))
+                fut_limit = (live_evidence.sell_limit if pos_direction == "short"
+                             else live_evidence.buy_limit) if live_evidence else None
+                result = await canonical_entry.submit_entry(
+                    client=client, uid=uid, account_id=acct, symbol=trade_symbol,
+                    exchange=trade_exchange, side=side, quantity=qty, evidence=entry_proof,
+                    order_type="limit_order" if fut_limit else "market_order",
+                    limit_price=fut_limit, payload=entry_payload, tag=idem)
             else:
                 # `stop_px` — not args["stop_loss"] — is the authoritative premium stop:
                 # it is what the protective GTT and the tick monitor below use, and for
@@ -1071,23 +1107,24 @@ def _make_place_cb(client, uid: str):
                     order_type = "market_order"
                 if live_evidence:
                     limit_px, order_type = live_evidence.buy_limit, "limit_order"
-                result = await client.place_order_option(
-                    trade_symbol, "buy", qty, order_type=order_type, limit_price=limit_px,
-                    exchange=trade_exchange,
+                result = await canonical_entry.submit_entry(
+                    client=client, uid=uid, account_id=acct, symbol=trade_symbol,
+                    exchange=trade_exchange, side="BUY", quantity=qty, evidence=entry_proof,
+                    order_type=order_type, limit_price=limit_px,
                     stop_loss=(stop_px if stop_px > 0 else None),
-                    tag=(intent.tag if intent else idem))
+                    payload=entry_payload, tag=idem)
         except Exception as exc:  # noqa: BLE001
-            if intent is not None:
-                order_journal.submission_uncertain(intent.intent_key, type(exc).__name__)
+            # The canonical service converts a broker failure into a journalled
+            # status; an exception escaping it is the service itself failing.
             state.log(uid, "order_failed", f"{row.underlying} {trade_symbol}: {exc}")
             return
-        oid = (result or {}).get("order_id", "")
-        if not oid:
-            if intent is not None:
-                order_journal.submission_uncertain(intent.intent_key, "missing_order_id")
+        if not result.success:
+            state.log(uid, "order_blocked" if result.status != "UNKNOWN" else "order_failed",
+                      f"{trade_symbol}: canonical execution {result.status}: {result.error}")
             return
-        if intent is not None:
-            order_journal.acknowledge(intent.intent_key, str(oid))
+        oid = result.order_id
+        if not oid:
+            return
         live_safety.record_idempotency(idem, oid)
         state.mark_auto_open(uid, guard_key)  # one-position guard (per slot)
 
