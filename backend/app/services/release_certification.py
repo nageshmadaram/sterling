@@ -75,7 +75,7 @@ _GATES_BY_KEY: Final[Mapping[str, Gate]] = {g.key: g for g in RELEASE_GATES}
 
 #: Gates composed from a per-item register rather than attested in one line.
 #: `certify attest` refuses these: the register is the attestation, item by item.
-_DERIVED_GATES: Final[frozenset[str]] = frozenset({"failure_drills"})
+_DERIVED_GATES: Final[frozenset[str]] = frozenset({"failure_drills", "open_exposure"})
 
 #: The gates RELEASE_READY is the conjunction of. Every gate blocks something,
 #: but these are the ones that block shipping at all.
@@ -328,6 +328,24 @@ def _failure_drills_gate(sha: str) -> GateResult:
                       "on this build")
 
 
+def _open_exposure_gate() -> GateResult:
+    """Derived, not attested: nobody may declare exposure closed that is open."""
+    from app.services.exposure_snapshot import exposure_snapshot
+
+    snapshot = exposure_snapshot()
+    if snapshot.total is None:
+        return GateResult("open_exposure", UNKNOWN,
+                          snapshot.detail or "durable exposure could not be read")
+    if snapshot.total:
+        held = ", ".join(snapshot.held[:5])
+        return GateResult("open_exposure", FAIL,
+                          f"{snapshot.open_positions} open position(s) and "
+                          f"{snapshot.unresolved_intents} unresolved intent(s)"
+                          + (f": {held}" if held else ""))
+    return GateResult("open_exposure", PASS, "no open position, no unresolved intent",
+                      attested_by="sterlingctl")
+
+
 def certification_report(
     *,
     sha: str | None = None,
@@ -338,6 +356,12 @@ def certification_report(
     """Compose the automated checks with whatever has been attested for this SHA."""
     resolved_sha = sha if sha is not None else runtime_sha()
     resolved_tag = tag if tag is not None else release_tag()
+    if unresolved_exposure is None:
+        # Nothing supplied this, so the gate was permanently UNKNOWN — not
+        # because exposure was open but because nobody had read the stores.
+        from app.services.exposure_snapshot import unresolved_exposure_count
+
+        unresolved_exposure = unresolved_exposure_count()
     attested = (store or CertificationStore()).read(resolved_sha)
 
     automated = {
@@ -348,6 +372,7 @@ def certification_report(
         # single "drills passed" cannot say which of the twelve was run, or
         # what the system did when it was.
         "failure_drills": _failure_drills_gate(resolved_sha),
+        "open_exposure": _open_exposure_gate(),
     }
 
     results: list[GateResult] = []

@@ -365,40 +365,19 @@ def _step_stop_reconcile() -> StepResult:
 
 def _step_no_abandoned_exposure() -> StepResult:
     """Refuse an ordinary shutdown that would abandon something being managed."""
-    try:
-        from app.services.kite_engine import order_journal, positions
-    except Exception as exc:  # noqa: BLE001
-        return StepResult(3, "no exposure left unmanaged", None, f"registry unreadable: {exc}")
+    from app.services.exposure_snapshot import exposure_snapshot
 
-    # Every operator the registry knows about, not just a default one: a
-    # shutdown that checks one user and abandons another's position is the
-    # failure this step exists to prevent.
-    try:
-        uids = sorted(positions.known_uids()) if hasattr(positions, "known_uids") else None
-    except Exception as exc:  # noqa: BLE001
-        return StepResult(3, "no exposure left unmanaged", None, f"registry unreadable: {exc}")
-    if uids is None:
+    snapshot = exposure_snapshot()
+    if snapshot.total is None:
         return StepResult(3, "no exposure left unmanaged", None,
-                          "position registry does not expose the set of operators")
-
-    held: List[str] = []
-    pending: List[str] = []
-    for uid in uids:
-        try:
-            held.extend(p.symbol for p in positions.open_positions(uid))
-            pending.extend(i.symbol for i in order_journal.unresolved(uid))
-        except Exception as exc:  # noqa: BLE001
-            return StepResult(3, "no exposure left unmanaged", None,
-                              f"state for {uid} unreadable: {exc}")
-
-    if held:
+                          snapshot.detail or "durable exposure could not be read")
+    if snapshot.open_positions:
         return StepResult(3, "no exposure left unmanaged", False,
-                          f"{len(held)} open position(s) still require monitoring: "
-                          + ", ".join(sorted(set(held))[:5]))
-    if pending:
+                          f"{snapshot.open_positions} open position(s) still require "
+                          "monitoring: " + ", ".join(snapshot.held[:5]))
+    if snapshot.unresolved_intents:
         return StepResult(3, "no exposure left unmanaged", False,
-                          f"{len(pending)} unresolved order intent(s): "
-                          + ", ".join(sorted(set(pending))[:5]))
+                          f"{snapshot.unresolved_intents} unresolved order intent(s)")
     return StepResult(3, "no exposure left unmanaged", True)
 
 

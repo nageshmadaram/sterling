@@ -54,16 +54,9 @@ def _unresolved_exposure() -> int | None:
     Unreadable is None, not zero: an exposure count nobody could read is the
     one number that must never be reported as "none".
     """
-    try:
-        from app.services.kite_engine import order_journal, positions
+    from app.services.exposure_snapshot import unresolved_exposure_count
 
-        total = 0
-        for uid in positions.known_uids():
-            total += len(order_journal.unresolved(uid))
-        return total
-    except Exception as exc:  # noqa: BLE001
-        log.warning("authoritative start: unresolved exposure unreadable: %s", exc)
-        return None
+    return unresolved_exposure_count()
 
 
 def _identity_drift() -> int | None:
