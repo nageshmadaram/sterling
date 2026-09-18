@@ -39,6 +39,7 @@ Usage: sterlingctl <command>
   verify           compare the frozen manifest against what is running
   report [DATE]    daily evidence completeness report (default: today)
   lanes            the ten lanes, their state, and whether they may originate
+  evidence-start   whether the forward sample has actually started at zero
 
   certify          the release certification gate table for this build
   certify attest GATE PASS|FAIL WHO [REF]   record one human-observed gate
@@ -116,6 +117,21 @@ case "${1:-}" in
       echo "no scripts/sterling-stop in this checkout; stop the service directly."; exit 69; }
     exec "$STERLING_ROOT/scripts/sterling-stop" "${@:2}"
     ;;
+  evidence-start)
+    run_py <<'PY'
+import sys
+
+from app.core.authoritative_start import render_start
+from app.services.authoritative_start_report import authoritative_start_state
+
+start = authoritative_start_state()
+print(render_start(start))
+if start.started_clean:
+    sys.exit(0)
+sys.exit(2 if start.unknowns else 1)
+PY
+    ;;
+
   safe)          exec "$STERLING_ROOT/scripts/sterling-safe-mode" "${@:2}" ;;
 
   reconcile)

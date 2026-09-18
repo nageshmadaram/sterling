@@ -894,6 +894,16 @@ class SnapbackObservationWarehouse:
         "identity_hash": "TEXT NOT NULL DEFAULT ''",
         "evidence_class": "TEXT NOT NULL DEFAULT ''",
         "release_tag": "TEXT NOT NULL DEFAULT ''",
+        # The rest of the provenance a forward sample needs to be reproducible.
+        # A row that cannot say which configuration, which rules and which
+        # universe produced it cannot be re-derived, and a number that cannot be
+        # re-derived is an anecdote. `evidence_schema_version` is what lets a
+        # later reader know which of these fields it is entitled to expect.
+        "config_hash": "TEXT NOT NULL DEFAULT ''",
+        "rule_hash": "TEXT NOT NULL DEFAULT ''",
+        "universe_hash": "TEXT NOT NULL DEFAULT ''",
+        "evidence_schema_version": "TEXT NOT NULL DEFAULT ''",
+        "execution_vehicle": "TEXT NOT NULL DEFAULT ''",
     }
 
     #: The frozen horizon a position was opened under. Held on the position and
