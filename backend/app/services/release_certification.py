@@ -356,20 +356,35 @@ def _remote_ci_gate(sha: str) -> GateResult:
                       "contexts have no record on this commit")
 
 
-def _open_exposure_gate() -> GateResult:
-    """Derived, not attested: nobody may declare exposure closed that is open."""
+def _open_exposure_gate(snapshot=None) -> GateResult:
+    """Derived, not attested: nobody may declare exposure closed that is open.
+
+    Takes the snapshot the caller already read. Reading it twice asks the broker
+    twice and lets the gate and the summary line disagree about the same
+    account, which is worse than either answer.
+    """
     from app.services.exposure_snapshot import exposure_snapshot
 
-    snapshot = exposure_snapshot()
+    if snapshot is None:
+        snapshot = exposure_snapshot()
     if snapshot.total is None:
         return GateResult("open_exposure", UNKNOWN,
                           snapshot.detail or "durable exposure could not be read")
     if snapshot.total:
-        held = ", ".join(snapshot.held[:5])
-        return GateResult("open_exposure", FAIL,
-                          f"{snapshot.open_positions} open position(s) and "
-                          f"{snapshot.unresolved_intents} unresolved intent(s)"
-                          + (f": {held}" if held else ""))
+        parts = []
+        if snapshot.open_positions:
+            parts.append(f"{snapshot.open_positions} open position(s)"
+                         + (f" [{', '.join(snapshot.held[:5])}]" if snapshot.held else ""))
+        if snapshot.unresolved_intents:
+            parts.append(f"{snapshot.unresolved_intents} unresolved intent(s)")
+        if snapshot.external_positions:
+            # A broker position Sterling never opened is still the family's money.
+            parts.append(
+                f"{snapshot.external_positions} EXTERNAL broker position(s) Sterling "
+                "did not open and does not manage"
+                + (f" [{', '.join(snapshot.external_instruments[:5])}]"
+                   if snapshot.external_instruments else ""))
+        return GateResult("open_exposure", FAIL, "; ".join(parts))
     return GateResult("open_exposure", PASS, "no open position, no unresolved intent",
                       attested_by="sterlingctl")
 
@@ -384,12 +399,15 @@ def certification_report(
     """Compose the automated checks with whatever has been attested for this SHA."""
     resolved_sha = sha if sha is not None else runtime_sha()
     resolved_tag = tag if tag is not None else release_tag()
+    exposure = None
     if unresolved_exposure is None:
         # Nothing supplied this, so the gate was permanently UNKNOWN — not
         # because exposure was open but because nobody had read the stores.
-        from app.services.exposure_snapshot import unresolved_exposure_count
+        # One read, shared with the gate below.
+        from app.services.exposure_snapshot import exposure_snapshot
 
-        unresolved_exposure = unresolved_exposure_count()
+        exposure = exposure_snapshot()
+        unresolved_exposure = exposure.total
     attested = (store or CertificationStore()).read(resolved_sha)
 
     automated = {
@@ -400,7 +418,7 @@ def certification_report(
         # single "drills passed" cannot say which of the twelve was run, or
         # what the system did when it was.
         "failure_drills": _failure_drills_gate(resolved_sha),
-        "open_exposure": _open_exposure_gate(),
+        "open_exposure": _open_exposure_gate(exposure),
         "remote_ci": _remote_ci_gate(resolved_sha),
     }
 

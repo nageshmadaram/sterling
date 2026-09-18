@@ -25,7 +25,7 @@ __all__ = ["ExposureSnapshot", "exposure_snapshot", "unresolved_exposure_count"]
 
 @dataclass(frozen=True)
 class ExposureSnapshot:
-    """What the durable store says is still open, per operator."""
+    """What is actually open — in Sterling's stores AND at the broker."""
 
     #: None means the stores could not be read. Never zero in that case.
     unresolved_intents: int | None
@@ -34,17 +34,32 @@ class ExposureSnapshot:
     held: tuple[str, ...] = ()
     uids: tuple[str, ...] = ()
     detail: str = ""
+    #: Broker positions with no Sterling intent behind them. None when the
+    #: broker could not be asked — which is not the same as none being held.
+    #: Sterling's own stores once said "flat" while the account held 16625 of a
+    #: CDSL call; that is the reading this field exists to prevent.
+    external_positions: int | None = None
+    external_detail: str = ""
+    external_instruments: tuple[str, ...] = ()
+    #: The full broker answer, so a caller can render it without asking twice.
+    #: Two reads can disagree — one can time out — and a report that shows both
+    #: is worse than one that shows either.
+    external: Any = None
 
     @property
     def total(self) -> int | None:
-        if self.unresolved_intents is None or self.open_positions is None:
+        parts = (self.unresolved_intents, self.open_positions, self.external_positions)
+        if any(p is None for p in parts):
             return None
-        return self.unresolved_intents + self.open_positions
+        return sum(p for p in parts if p is not None)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "unresolved_intents": self.unresolved_intents,
             "open_positions": self.open_positions,
+            "external_positions": self.external_positions,
+            "external_instruments": list(self.external_instruments),
+            "external_detail": self.external_detail,
             "total": self.total,
             "held": list(self.held),
             "uids": list(self.uids),
@@ -52,14 +67,57 @@ class ExposureSnapshot:
         }
 
 
-def exposure_snapshot() -> ExposureSnapshot:
-    """Read every operator's durable exposure. Never raises."""
+def _external() -> tuple[int | None, str, tuple[str, ...], Any]:
+    """Ask the broker what it holds that Sterling did not open.
+
+    Returns ``(count, detail, instruments)`` with ``None`` when the broker could
+    not be asked. Run outside an event loop; inside one, the caller is the async
+    path and should await `external_exposure` directly.
+    """
+    import asyncio
+
+    from app.services.external_positions import external_exposure
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        return None, "broker not queried from inside a running event loop", (), None
+
+    try:
+        exposure = asyncio.run(external_exposure())
+    except Exception as exc:  # noqa: BLE001
+        return None, f"broker could not be asked: {type(exc).__name__}: {exc}", (), None
+
+    # Whatever the broker said — including that it could not be asked — is
+    # recorded here, because admission reads the record rather than the broker.
+    try:
+        from app.services.external_positions import record_observation
+
+        record_observation(exposure)
+    except Exception:  # noqa: BLE001 - recording must never break the read
+        pass
+
+    if not exposure.readable:
+        return None, exposure.detail, (), exposure
+    return (len(exposure.positions), exposure.detail,
+            tuple(p.instrument for p in exposure.positions), exposure)
+
+
+def exposure_snapshot(*, include_broker: bool = True) -> ExposureSnapshot:
+    """Read every operator's durable exposure, and the broker's. Never raises.
+
+    ``include_broker=False`` is for callers that already hold the broker answer
+    or must not make a network call; the external count is then UNKNOWN, and
+    UNKNOWN still refuses.
+    """
     try:
         from app.services import db
 
         db.init()
     except Exception as exc:  # noqa: BLE001
-        return ExposureSnapshot(None, None, detail=f"database unavailable: {exc}")
+        return ExposureSnapshot(None, None, detail=f"database unavailable: {exc}")  # noqa: E501
 
     try:
         from app.services.kite_engine import order_journal, positions
@@ -82,11 +140,20 @@ def exposure_snapshot() -> ExposureSnapshot:
         open_count += len(positions_open)
         held.extend(p.symbol for p in positions_open)
 
+    external_count, external_detail, external_instruments, external = (
+        _external() if include_broker
+        else (None, "the broker was not queried by this caller", (), None)
+    )
+
     return ExposureSnapshot(
         unresolved_intents=intents,
         open_positions=open_count,
         held=tuple(sorted(set(held))),
         uids=uids,
+        external_positions=external_count,
+        external_detail=external_detail,
+        external_instruments=external_instruments,
+        external=external,
     )
 
 

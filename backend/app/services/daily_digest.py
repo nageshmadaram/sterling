@@ -36,6 +36,7 @@ class Digest:
     recovery: str = UNKNOWN
     open_exposure: str = UNKNOWN
     unresolved_exposure: str = UNKNOWN
+    external_exposure: str = UNKNOWN
     market_feed: str = UNKNOWN
     backup_age: str = UNKNOWN
     lanes: list[str] = field(default_factory=list)
@@ -53,6 +54,7 @@ class Digest:
             "recovery": self.recovery,
             "open_exposure": self.open_exposure,
             "unresolved_exposure": self.unresolved_exposure,
+            "external_exposure": self.external_exposure,
             "market_feed": self.market_feed,
             "backup_age": self.backup_age,
             "lanes": list(self.lanes),
@@ -116,6 +118,14 @@ def build_digest() -> Digest:
                                 else str(snapshot.open_positions))
         digest.unresolved_exposure = (UNKNOWN if snapshot.unresolved_intents is None
                                       else str(snapshot.unresolved_intents))
+        if snapshot.external_positions is None:
+            digest.external_exposure = f"{UNKNOWN} ({snapshot.external_detail})"
+        elif snapshot.external_positions:
+            digest.external_exposure = (
+                f"{snapshot.external_positions} NOT MANAGED BY STERLING: "
+                + ", ".join(snapshot.external_instruments[:5]))
+        else:
+            digest.external_exposure = "0"
     except Exception:  # noqa: BLE001
         pass
 
@@ -140,6 +150,12 @@ def build_digest() -> Digest:
 
 def _next_action(digest: Digest) -> str:
     """The single most useful thing to do next, in the operator's own words."""
+    # A live position nobody is watching outranks every procedural state: the
+    # others cost time, this one can cost money while the operator reads.
+    if (digest.external_exposure not in ("0", UNKNOWN)
+            and not digest.external_exposure.startswith(UNKNOWN)):
+        return ("The broker holds a position Sterling did not open. Decide whether to "
+                "hold or exit it at the broker; Sterling will not manage it.")
     if digest.recovery.startswith("FAIL"):
         return "Run `sterlingctl reconcile`, then `sterlingctl doctor`."
     if digest.safety.startswith("FAIL"):
@@ -164,6 +180,7 @@ def render_digest(digest: Digest) -> str:
         f"Account binding: {digest.account_binding}",
         f"Safety: {digest.safety} / {digest.recovery}",
         f"Exposure: open={digest.open_exposure} unresolved={digest.unresolved_exposure}",
+        f"External broker exposure: {digest.external_exposure}",
         f"Market feed: {digest.market_feed}",
         f"Backup: {digest.backup_age}",
         "Lanes:",

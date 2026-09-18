@@ -411,6 +411,34 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
             return False, f"recovery state is {recovery}"
         return True, "CLEAN"
 
+    def _broker_flatness():
+        """Does the broker hold anything Sterling did not open?
+
+        Sterling's own stores once read flat while the account held 16625 of a
+        CDSL call. This check asks the broker, and an unanswerable broker is
+        UNKNOWN rather than flat.
+        """
+        import asyncio
+
+        from app.services.external_positions import external_exposure
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            exposure = asyncio.run(external_exposure())
+        else:
+            return None, "cannot query the broker from inside a running event loop"
+
+        if not exposure.readable:
+            return None, exposure.detail
+        if exposure.positions:
+            listed = ", ".join(
+                f"{p.instrument} x{p.quantity}" for p in exposure.positions[:5])
+            return False, ("the broker holds position(s) Sterling did not open and "
+                           f"does not manage: {listed}")
+        return True, "the broker holds nothing Sterling did not open"
+
+    add("broker_flatness", _broker_flatness)
     add("deployment_identity", _deployment_identity)
     add("broker_session", _broker_session)
     add("market_freshness", _market_freshness)

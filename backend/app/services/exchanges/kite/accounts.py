@@ -467,11 +467,28 @@ def client_is_current(client, *, user_id: str) -> bool:
                 getattr(client, "_account_generation", "") == _client_identity(account))
 
 
+def _running_loop_id() -> int:
+    """Which event loop is asking. Clients are not portable between loops."""
+    import asyncio
+
+    try:
+        return id(asyncio.get_running_loop())
+    except RuntimeError:
+        return 0
+
+
 async def acquire_client(a: _Account):
     """Return a warm KiteClient for the account, reusing its instrument cache and
-    connection pool. Execution mode and every credential/owner change rebuild it."""
+    connection pool. Execution mode and every credential/owner change rebuild it.
+
+    A cached client also belongs to the event loop that built it: its HTTP
+    session holds that loop's transports. A command-line process that calls
+    `asyncio.run` twice gets a second loop, and the cached client then fails
+    with "Event loop is closed" — which reads as "the broker is unreachable"
+    and, for a flatness check, as "the account might be flat". So the loop is
+    part of the cache identity."""
     cached = _client_cache.get(a.id)
-    identity = _client_identity(a)
+    identity = (_client_identity(a), _running_loop_id())
     if cached is not None and cached[0] == identity:
         return cached[1]
     if cached is not None:                      # credentials rotated — drop the stale client

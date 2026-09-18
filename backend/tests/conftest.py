@@ -19,6 +19,23 @@ if "STERLING_DB_PATH" not in os.environ:
 if "STERLING_SHADOW_DIR" not in os.environ:
     os.environ["STERLING_SHADOW_DIR"] = tempfile.mkdtemp(suffix="_sterling_test_shadow")
 
+# Admission now refuses new exposure on a host that has a live broker account
+# and no recorded answer about what that broker holds — the state the CDSL
+# discovery made real. The suite stands up the reconciled equivalent: a fresh
+# observation saying the broker holds nothing Sterling did not open. A test that
+# wants the blocking behaviour writes its own record over this one.
+if "STERLING_EXTERNAL_EXPOSURE_FILE" not in os.environ:
+    import json as _json
+    from datetime import datetime as _datetime, timezone as _timezone
+
+    _EXTERNAL = tempfile.NamedTemporaryFile(
+        suffix="_sterling_test_external_exposure.json", delete=False, mode="w"
+    )
+    _json.dump({"observed_at": _datetime.now(_timezone.utc).isoformat(),
+                "readable": True, "count": 0, "instruments": [], "detail": ""}, _EXTERNAL)
+    _EXTERNAL.close()
+    os.environ["STERLING_EXTERNAL_EXPOSURE_FILE"] = _EXTERNAL.name
+
 # An absent safety state now reads as SAFE_MODE, which is the correct production
 # answer and the wrong default for a test suite: every capacity and execution test
 # would refuse before reaching the behaviour it is actually asserting. So the suite

@@ -245,6 +245,18 @@ class SafetySupervisor:
             blockers.append(decision.code or "refused")
             reasons.append(decision.reason or "refused")
 
+        # A broker position Sterling never opened is exposure it cannot see the
+        # risk of: no entry price it chose, no stop it armed, no monitor
+        # watching. Adding new exposure on top of an unexplained one means the
+        # account's total risk is unknown at the moment of the decision, so
+        # admission is refused until it is resolved — and an unreadable broker
+        # refuses too, because "we could not ask" is not "there is nothing
+        # there". Protective actions are unaffected: this only gates increases.
+        external_blocker, external_reason = self._external_exposure_blocker()
+        if external_blocker and external_blocker not in blockers:
+            blockers.append(external_blocker)
+            reasons.append(external_reason)
+
         return SafetySnapshot(
             operator_state=operator_state,
             recovery_state=recovery_state,
@@ -256,6 +268,23 @@ class SafetySupervisor:
             blockers=tuple(blockers),
             blocker_reasons=tuple(reasons),
         )
+
+    @staticmethod
+    def _external_exposure_blocker() -> tuple[str, str]:
+        """Broker positions with no Sterling record, as an admission blocker.
+
+        Reads the recorded observation, never the broker. Admission is on the
+        path of every order decision: a check that needs the network is a check
+        that fails in the conditions it exists for, and it would put a remote
+        call inside a hot loop.
+        """
+        try:
+            from app.services.external_positions import admission_blocker
+
+            return admission_blocker()
+        except Exception as exc:  # noqa: BLE001
+            return ("external_exposure_unreadable",
+                    f"broker exposure could not be established: {exc}")
 
     def authorize(
         self,
