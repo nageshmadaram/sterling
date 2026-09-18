@@ -42,6 +42,7 @@ SAFE_MODE = "SAFE_MODE"
 class SafeModeTrigger:
     """Conditions that force safe mode. Each names a specific uncertainty."""
 
+    SAFETY_STATE_UNAVAILABLE = "SAFETY_STATE_UNAVAILABLE"
     UNKNOWN_BROKER_EXPOSURE = "UNKNOWN_BROKER_EXPOSURE"
     POSITION_MISMATCH = "POSITION_MISMATCH"
     RECONCILIATION_FAILURE = "RECONCILIATION_FAILURE"
@@ -55,6 +56,7 @@ class SafeModeTrigger:
     OPERATOR = "OPERATOR"
 
     ALL = frozenset({
+        SAFETY_STATE_UNAVAILABLE,
         UNKNOWN_BROKER_EXPOSURE, POSITION_MISMATCH, RECONCILIATION_FAILURE,
         PROTECTION_MISSING, PROTECTION_FAILURE, EVIDENCE_WRITER_FAILURE,
         MARKET_DATA_INTEGRITY, RUNTIME_IDENTITY_MISMATCH, UNRESOLVED_ORDER,
@@ -123,26 +125,24 @@ class SafeModeService:
         file that says NORMAL.
         """
         if not self._path.exists():
-            return SafeModeState(
-                state=NORMAL, triggers=(), reason="no safe-mode file; never engaged",
-                entered_at=None, updated_at=datetime.now(timezone.utc).isoformat(),
-                runtime_sha=self._runtime_sha,
+            # A missing file is the loudest unknown of all: nobody can say whether
+            # this is a machine that has never been initialised or one whose safety
+            # state was deleted while capital was at risk. Both get the same answer.
+            return self._unavailable(
+                "safety state missing; refusing to assume NORMAL"
             )
         try:
             blob = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            return SafeModeState(
-                state=SAFE_MODE,
-                triggers=(SafeModeTrigger.EVIDENCE_WRITER_FAILURE,),
-                reason=f"safe-mode file unreadable ({type(exc).__name__}); refusing to assume NORMAL",
-                entered_at=None, updated_at=datetime.now(timezone.utc).isoformat(),
-                runtime_sha=self._runtime_sha,
+            return self._unavailable(
+                f"safe-mode file unreadable ({type(exc).__name__}); refusing to assume NORMAL"
             )
 
         state = blob.get("state")
         if state not in (NORMAL, SAFE_MODE):
             return SafeModeState(
-                state=SAFE_MODE, triggers=(SafeModeTrigger.OPERATOR,),
+                state=SAFE_MODE,
+                triggers=(SafeModeTrigger.SAFETY_STATE_UNAVAILABLE,),
                 reason=f"unrecognised state {state!r}; refusing to assume NORMAL",
                 entered_at=blob.get("entered_at"),
                 updated_at=datetime.now(timezone.utc).isoformat(),
@@ -157,6 +157,40 @@ class SafeModeService:
             updated_at=blob.get("updated_at", ""),
             runtime_sha=blob.get("runtime_sha", ""),
         )
+
+    def _unavailable(self, reason: str) -> SafeModeState:
+        """The state to report when the durable state cannot be read at all."""
+        return SafeModeState(
+            state=SAFE_MODE,
+            triggers=(SafeModeTrigger.SAFETY_STATE_UNAVAILABLE,),
+            reason=reason,
+            entered_at=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            runtime_sha=self._runtime_sha,
+        )
+
+    def initialise(self, *, operator_ack: bool = False, note: str = "") -> SafeModeState:
+        """Create a NORMAL state on a machine that has never had one.
+
+        This is the only way a missing file becomes NORMAL, and it is deliberately
+        an explicit act rather than a side effect of reading. ``operator_ack`` is
+        required because on a machine that once traded, an absent file is a deleted
+        file, and only a person can tell those two cases apart.
+        """
+        if self._path.exists():
+            return self.read()
+        if not operator_ack:
+            raise SafeModeError(
+                "refusing to initialise safety state without an explicit operator "
+                "acknowledgement: a missing file may be a deleted file"
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        state = SafeModeState(
+            state=NORMAL, triggers=(), reason=note or "initialised by operator",
+            entered_at=None, updated_at=now, runtime_sha=self._runtime_sha,
+        )
+        self._write(state)
+        return state
 
     def _write(self, state: SafeModeState) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,12 +214,19 @@ class SafeModeService:
 
         now = datetime.now(timezone.utc).isoformat()
         current = self.read()
-        triggers = tuple(sorted(set(current.triggers) | {trigger}))
+
+        # SAFETY_STATE_UNAVAILABLE is a verdict about the read, not a condition of
+        # the system. This write is about to make the state readable, so carrying
+        # it forward would leave every engaged state permanently claiming its own
+        # file could not be read.
+        inherited = set(current.triggers) - {SafeModeTrigger.SAFETY_STATE_UNAVAILABLE}
+        triggers = tuple(sorted(inherited | {trigger}))
+        was_engaged = current.active and current.entered_at is not None
 
         state = SafeModeState(
             state=SAFE_MODE, triggers=triggers,
-            reason=reason or current.reason or trigger,
-            entered_at=current.entered_at if current.active else now,
+            reason=reason or (current.reason if was_engaged else "") or trigger,
+            entered_at=current.entered_at if was_engaged else now,
             updated_at=now, runtime_sha=self._runtime_sha,
         )
         self._write(state)

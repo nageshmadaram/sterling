@@ -12,6 +12,72 @@ if "STERLING_DB_PATH" not in os.environ:
     _TEST_DB.close()
     os.environ["STERLING_DB_PATH"] = _TEST_DB.name
 
+# An absent safety state now reads as SAFE_MODE, which is the correct production
+# answer and the wrong default for a test suite: every capacity and execution test
+# would refuse before reaching the behaviour it is actually asserting. So the suite
+# stands up an initialised NORMAL state, in a temporary file, exactly as a real
+# machine does on first boot. Tests that care about safe mode engage it themselves.
+if "STERLING_SAFE_MODE_FILE" not in os.environ:
+    _TEST_SAFE_MODE = tempfile.NamedTemporaryFile(
+        suffix="_sterling_test_safe_mode.json", delete=False
+    )
+    _TEST_SAFE_MODE.close()
+    os.environ["STERLING_SAFE_MODE_FILE"] = _TEST_SAFE_MODE.name
+    os.unlink(_TEST_SAFE_MODE.name)
+    from app.services.safe_mode import SafeModeService
+
+    SafeModeService(_TEST_SAFE_MODE.name).initialise(
+        operator_ack=True, note="pytest session"
+    )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    """Seed the control plane for whichever database this test ended up pointed at.
+
+    Dozens of test fixtures build a throwaway database of their own, and an
+    execution_control table with no row now reads RECOVERY_REQUIRED — the right
+    production answer for a database that has never spoken to the broker, and a
+    blanket refusal for every order-placing test. This runs after fixture setup,
+    so it sees the test's own database, and it only writes when no state exists.
+    A test that wants the uninitialised control plane deletes the row in its own
+    body, after this has run.
+    """
+    try:
+        from app.services import db
+
+        if db._available and not int(db.get_execution_control().get("initialized", 0)):
+            reconciled_control_plane()
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reconciled_control_plane():
+    """Give the shared test database the state a completed startup recovery leaves.
+
+    An execution_control table with no row now reads RECOVERY_REQUIRED, which is
+    the right production answer — a fresh database has never spoken to the broker
+    — and the wrong default for the suite: every order-placing test would refuse
+    before reaching what it asserts. Tests about the uninitialised control plane
+    build their own database and delete the row themselves.
+    """
+    try:
+        from app.services import db
+
+        db.init()
+        db.set_execution_control(
+            operator_state="RUNNING",
+            recovery_state="CLEAN",
+            reason_code="test_session",
+            reason="pytest session startup recovery",
+            actor="tests",
+        )
+    except Exception:
+        pass
+    yield
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_test_db():
@@ -22,6 +88,39 @@ def _cleanup_test_db():
             os.remove(test_db_path)
     except Exception:
         pass
+
+
+
+def reconciled_control_plane():
+    """Write the execution-control state a completed startup recovery leaves.
+
+    A database with no execution_control row now reads RECOVERY_REQUIRED, because
+    a fresh database has never spoken to the broker. Any test that stands up its
+    own database and then places an order has to say that recovery ran.
+    """
+    from app.services import db
+
+    db.set_execution_control(
+        operator_state="RUNNING",
+        recovery_state="CLEAN",
+        reason_code="test_session",
+        reason="pytest startup recovery",
+        actor="tests",
+    )
+
+
+def normal_safe_mode_file(monkeypatch, path):
+    """Point the safety state at ``path`` and stand it up as NORMAL.
+
+    An absent file is SAFE_MODE, so a test that only wants an isolated safety
+    state — rather than an engaged one — has to initialise it, exactly as a real
+    machine does on first boot.
+    """
+    from app.services.safe_mode import SafeModeService
+
+    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(path))
+    SafeModeService(path).initialise(operator_ack=True, note="test fixture")
+    return path
 
 
 def make_candles(n: int = 100, base: float = 30000.0, trend: float = 10.0) -> List[Candle]:

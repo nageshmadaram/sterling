@@ -21,6 +21,9 @@ def _db(tmp_path, monkeypatch):
     from app.services import gamma_move_runner as runner
     monkeypatch.setattr(db, "_DB_PATH", str(tmp_path / "t.db"), raising=False)
     db.init()
+    from tests.conftest import reconciled_control_plane
+
+    reconciled_control_plane()
     store.reset()
     runner.clear()
     yield

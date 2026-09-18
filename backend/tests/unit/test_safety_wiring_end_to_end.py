@@ -28,7 +28,9 @@ LIMITS = (
 
 @pytest.fixture(autouse=True)
 def _clean_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe_mode.json"))
+    from tests.conftest import normal_safe_mode_file
+
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe_mode.json"))
     monkeypatch.delenv(ENV_VAR, raising=False)
 
 
@@ -161,7 +163,9 @@ def test_a_probe_that_raises_is_recorded_as_failed(monkeypatch):
 def test_safe_mode_shows_in_the_composed_status(tmp_path, monkeypatch):
     path = tmp_path / "safe.json"
     path.write_text('{"state": "SAFE_MODE", "triggers": ["OPERATOR"], "reason": "t"}')
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(path))
+    from tests.conftest import normal_safe_mode_file
+
+    normal_safe_mode_file(monkeypatch, str(path))
     report = system_health()
     safe = next(c for c in report.components if c.name == "safe_mode")
     assert safe.status is SystemHealth.SAFE_MODE

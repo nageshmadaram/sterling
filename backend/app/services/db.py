@@ -431,6 +431,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             revision INTEGER NOT NULL DEFAULT 1,
             actor TEXT NOT NULL DEFAULT 'system',
             last_reconciled_ms INTEGER NOT NULL DEFAULT 0,
+            initialized INTEGER NOT NULL DEFAULT 0,
             created_ms INTEGER NOT NULL DEFAULT 0,
             updated_ms INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (scope, uid, account_id)
@@ -445,6 +446,11 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE execution_control ADD COLUMN reason_code TEXT NOT NULL DEFAULT ''")
     if "last_reconciled_ms" not in cols:
         conn.execute("ALTER TABLE execution_control ADD COLUMN last_reconciled_ms INTEGER NOT NULL DEFAULT 0")
+    if "initialized" not in cols:
+        # A row that predates this column was written by a running system, so it
+        # has been through startup. Only the absence of a row is uninitialised.
+        conn.execute("ALTER TABLE execution_control ADD COLUMN initialized INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE execution_control SET initialized = 1")
     if "state" in cols:
         conn.execute("UPDATE execution_control SET operator_state = 'HALTED', recovery_state = 'CLEAN' WHERE state = 'HALTED'")
         conn.execute("UPDATE execution_control SET operator_state = 'RUNNING', recovery_state = 'RECOVERY_REQUIRED' WHERE state = 'RECOVERY_REQUIRED'")
@@ -1119,23 +1125,28 @@ def get_execution_control(
     try:
         with _conn() as c:
             row = c.execute(
-                "SELECT scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, created_ms, updated_ms"
+                "SELECT scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, initialized, created_ms, updated_ms"
                 " FROM execution_control WHERE scope=? AND uid=? AND account_id=?",
                 (scope, uid, account_id),
             ).fetchone()
         if not row:
+            # No row means startup recovery has never run for this scope. That is
+            # not a clean state: reporting CLEAN would let a brand-new database
+            # assert "we have reconciled with the broker" without ever having
+            # spoken to it. Only reconciliation may write CLEAN.
             return {
                 "scope": scope,
                 "uid": uid,
                 "account_id": account_id,
                 "operator_state": "RUNNING",
                 "state": "RUNNING",
-                "recovery_state": "CLEAN",
-                "reason_code": "",
-                "reason": "",
+                "recovery_state": "RECOVERY_REQUIRED",
+                "reason_code": "uninitialized_control_plane",
+                "reason": "no execution-control state; startup recovery has not run",
                 "revision": 0,
                 "actor": "system",
                 "last_reconciled_ms": 0,
+                "initialized": 0,
                 "created_ms": 0,
                 "updated_ms": 0,
             }
@@ -1149,6 +1160,12 @@ def get_execution_control(
         d["operator_state"] = op
         d["state"] = op
         d["recovery_state"] = rec
+        # A row written before the column existed is initialised by construction:
+        # something had to be running to write it.
+        d["initialized"] = int(d.get("initialized", 1) or 0)
+        if not d["initialized"]:
+            d["recovery_state"] = "RECOVERY_REQUIRED"
+            d["reason_code"] = d.get("reason_code") or "uninitialized_control_plane"
         return d
     except Exception as exc:
         if isinstance(exc, ControlPlaneUnavailableError):
@@ -1193,7 +1210,10 @@ def set_execution_control(
         if operator_state is None:
             operator_state = row["operator_state"] if row else "RUNNING"
         if recovery_state is None:
-            recovery_state = row["recovery_state"] if row else "CLEAN"
+            # Creating the first row must not invent a reconciliation that never
+            # happened. Only an explicit set_recovery_state("CLEAN") — which is
+            # what reconciliation calls — may assert a clean state.
+            recovery_state = row["recovery_state"] if row else "RECOVERY_REQUIRED"
 
         if operator_state not in ("RUNNING", "HALTED"):
             raise ValueError(f"Invalid operator_state: '{operator_state}'. Must be 'RUNNING' or 'HALTED'.")
@@ -1206,12 +1226,13 @@ def set_execution_control(
 
         c.execute(
             "INSERT INTO execution_control ("
-            "scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, created_ms, updated_ms"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "scope, uid, account_id, operator_state, recovery_state, reason_code, reason, revision, actor, last_reconciled_ms, initialized, created_ms, updated_ms"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"
             " ON CONFLICT(scope, uid, account_id) DO UPDATE SET"
             " operator_state=excluded.operator_state, recovery_state=excluded.recovery_state,"
             " reason_code=excluded.reason_code, reason=excluded.reason, revision=excluded.revision,"
-            " actor=excluded.actor, last_reconciled_ms=excluded.last_reconciled_ms, updated_ms=excluded.updated_ms",
+            " actor=excluded.actor, last_reconciled_ms=excluded.last_reconciled_ms,"
+            " initialized=1, updated_ms=excluded.updated_ms",
             (scope, uid, account_id, operator_state, recovery_state, reason_code, reason, next_rev, actor, reconciled_ms, created_ms, now_ms),
         )
 
@@ -1227,6 +1248,7 @@ def set_execution_control(
         "revision": next_rev,
         "actor": actor,
         "last_reconciled_ms": reconciled_ms,
+        "initialized": 1,
         "created_ms": created_ms,
         "updated_ms": now_ms,
     }

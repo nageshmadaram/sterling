@@ -210,6 +210,14 @@ def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=Tr
                 op_state = ctrl.get("operator_state") or ctrl.get("state", "RUNNING")
                 rec_state = ctrl.get("recovery_state", "CLEAN")
 
+                # A narrower scope with no row of its own is an absent override, not
+                # an unreconciled account: it inherits the global state, which is
+                # checked first. Only the global default scope must exist, because
+                # that is the one startup recovery writes.
+                is_root_scope = (scope, tgt_uid, tgt_acct) == ("global", "default", "default")
+                if not int(ctrl.get("initialized", 1) or 0) and not is_root_scope:
+                    continue
+
                 if rec_state == "RECOVERY_REQUIRED":
                     return SafetyDecision(False, f"Durable control plane RECOVERY_REQUIRED at {scope} scope (broker reconciliation pending)", "recovery_required")
                 if op_state == "HALTED":
@@ -254,6 +262,17 @@ def reset_all_for_tests():
         if db._available:
             with db._conn() as c:
                 c.execute("DELETE FROM execution_control")
+            # An empty table is now RECOVERY_REQUIRED, which is the right answer
+            # for a real machine and the wrong starting point for a test: every
+            # order would refuse before reaching what the test asserts. Reset to
+            # the state a completed startup recovery leaves behind.
+            db.set_execution_control(
+                operator_state="RUNNING",
+                recovery_state="CLEAN",
+                reason_code="test_reset",
+                reason="reset_all_for_tests",
+                actor="tests",
+            )
     except Exception:
         pass
 

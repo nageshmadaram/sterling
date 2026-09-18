@@ -19,12 +19,73 @@ def setup_db_for_test(tmp_path, monkeypatch):
     live_safety.reset_all_for_tests()
 
 
-def test_execution_control_default_state():
-    """Default execution control for unconfigured account should be RUNNING + CLEAN."""
+def _reconciled_global_scope():
+    """The state a completed startup recovery leaves behind for the default scope.
+
+    ``assert_safe_to_trade`` walks from the global scope inward, so a test about a
+    narrower scope has to stand the outer one up first or it is really testing the
+    uninitialised-control-plane refusal.
+    """
+    db.set_execution_control(
+        operator_state="RUNNING",
+        recovery_state="CLEAN",
+        reason="startup recovery complete",
+        scope="global",
+        uid="default",
+        account_id="default",
+    )
+
+
+def _erase_control_plane():
+    with db._conn() as conn:
+        conn.execute("DELETE FROM execution_control")
+
+
+def test_a_missing_control_row_is_recovery_required_not_clean():
+    """An absent row means startup recovery never ran, and must read that way.
+
+    Reporting CLEAN let a brand-new database assert "we have reconciled with the
+    broker" without ever having spoken to it.
+    """
+    _erase_control_plane()
     ctrl = db.get_execution_control(uid="user1", account_id="acc1")
     assert ctrl["operator_state"] == "RUNNING"
-    assert ctrl["recovery_state"] == "CLEAN"
+    assert ctrl["recovery_state"] == "RECOVERY_REQUIRED"
+    assert ctrl["initialized"] == 0
     assert ctrl["revision"] == 0
+
+
+def test_a_missing_control_row_blocks_new_exposure():
+    _erase_control_plane()
+    decision = live_safety.assert_safe_to_trade(
+        [], exposure_effect="INCREASE_EXPOSURE"
+    )
+    assert decision.allowed is False
+    assert decision.code == "recovery_required"
+
+
+def test_a_missing_control_row_still_permits_closing():
+    _erase_control_plane()
+    for effect in ("CLOSE_POSITION", "REDUCE_EXPOSURE", "CANCEL_ORDER"):
+        assert live_safety.assert_safe_to_trade(
+            [], exposure_effect=effect
+        ).allowed is True
+
+
+def test_a_missing_row_on_a_narrower_scope_inherits_rather_than_blocking():
+    """An absent per-account row is no override, not an unreconciled account."""
+    _reconciled_global_scope()
+    assert live_safety.assert_safe_to_trade(
+        [], uid="user1", account_id="acc1", exposure_effect="INCREASE_EXPOSURE"
+    ).allowed is True
+
+
+def test_creating_a_row_does_not_invent_a_reconciliation():
+    """The first write must not silently claim CLEAN."""
+    _erase_control_plane()
+    res = db.set_operator_state(operator_state="RUNNING", uid="fresh", account_id="fresh")
+    assert res["recovery_state"] == "RECOVERY_REQUIRED"
+    assert db.get_execution_control(uid="fresh", account_id="fresh")["initialized"] == 1
 
 
 def test_execution_control_set_and_cas():
@@ -74,6 +135,7 @@ def test_execution_control_fail_closed():
 
 def test_live_safety_exposure_effects():
     """HALTED blocks INCREASE_EXPOSURE, but permits CLOSE_POSITION / CANCEL_ORDER."""
+    _reconciled_global_scope()
     db.set_execution_control(
         operator_state="HALTED",
         recovery_state="CLEAN",

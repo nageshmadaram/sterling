@@ -31,10 +31,40 @@ def service(tmp_path):
 # ─── safe mode ───────────────────────────────────────────────────────────────
 
 
-def test_a_fresh_system_is_normal(service):
+def test_a_missing_state_file_blocks_rather_than_reading_as_normal(service):
+    """No file is an unknown, and an unknown must not admit new risk.
+
+    A machine whose safety state was deleted looks exactly like one that never
+    had it. Reading the absence as NORMAL made deleting the file a way to turn
+    safe mode off.
+    """
     state = service.read()
+    assert state.state == SAFE_MODE
+    assert state.may_open_new_exposure is False
+    assert SafeModeTrigger.SAFETY_STATE_UNAVAILABLE in state.triggers
+    # Managing what is already open is never blocked.
+    assert state.may_manage_existing_exposure is True
+
+
+def test_a_missing_state_file_stays_blocked_across_a_restart(service, tmp_path):
+    assert service.read().active is True
+    assert SafeModeService(tmp_path / "safe_mode.json").read().active is True
+
+
+def test_initialising_is_the_only_way_a_missing_state_becomes_normal(service):
+    with pytest.raises(SafeModeError):
+        service.initialise()
+
+    state = service.initialise(operator_ack=True, note="first boot")
     assert state.state == NORMAL
-    assert state.may_open_new_exposure is True
+    assert service.read().may_open_new_exposure is True
+
+
+def test_initialising_never_overwrites_an_engaged_state(service):
+    service.engage(trigger=SafeModeTrigger.PROTECTION_MISSING, reason="GTT missing")
+    state = service.initialise(operator_ack=True)
+    assert state.active is True
+    assert SafeModeTrigger.PROTECTION_MISSING in state.triggers
 
 
 def test_engaging_blocks_new_exposure_only(service):
@@ -97,7 +127,14 @@ def test_an_unknown_trigger_is_refused(service):
 
 
 def test_releasing_when_not_engaged_is_harmless(service):
+    service.initialise(operator_ack=True)
     assert service.release().state == NORMAL
+
+
+def test_releasing_a_missing_state_still_needs_an_acknowledgement(service):
+    """There is no quiet path from "no safety state" to "trading allowed"."""
+    with pytest.raises(SafeModeError):
+        service.release()
 
 
 def test_the_state_file_is_written_atomically(service, tmp_path):

@@ -11,8 +11,9 @@ from app.services.snapback_capacity import ObservedHedgeMargin, evaluate_capacit
 
 def test_sensex_is_admitted_now_that_the_lifecycle_is_identity_aware(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe.json"))
+    from tests.conftest import normal_safe_mode_file
 
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe.json"))
     decision = evaluate_capacity(
         capital=1_000_000.0,
         reserved_margin=0.0,
@@ -34,8 +35,9 @@ def test_sensex_is_admitted_now_that_the_lifecycle_is_identity_aware(monkeypatch
 
 def test_nifty_remains_admissible_when_other_capacity_inputs_are_authoritative(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe.json"))
+    from tests.conftest import normal_safe_mode_file
 
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe.json"))
     decision = evaluate_capacity(
         capital=1_000_000.0,
         reserved_margin=0.0,

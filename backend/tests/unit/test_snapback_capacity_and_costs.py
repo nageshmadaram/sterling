@@ -24,8 +24,17 @@ from app.services.snapback_capacity import (
 
 @pytest.fixture(autouse=True)
 def _isolated_safe_mode(monkeypatch, tmp_path):
-    """Capacity tests must not depend on an operator's real SAFE_MODE file."""
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe_mode.json"))
+    """Capacity tests must not depend on an operator's real SAFE_MODE file.
+
+    The file is initialised rather than merely pointed at: an absent safety state
+    is itself SAFE_MODE now, so a test that wants to exercise capacity arithmetic
+    has to stand up a NORMAL state first, exactly as a real machine does.
+    """
+    from app.services.safe_mode import SafeModeService
+
+    path = tmp_path / "safe_mode.json"
+    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(path))
+    SafeModeService(path).initialise(operator_ack=True, note="test fixture")
 
 
 # ----------------------------------------------------------------- costs

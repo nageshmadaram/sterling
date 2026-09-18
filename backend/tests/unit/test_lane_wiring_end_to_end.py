@@ -37,9 +37,9 @@ FUNDABLE = dict(
 @pytest.fixture(autouse=True)
 def _no_safe_mode(tmp_path, monkeypatch):
     """Point SAFE_MODE at an untouched path so it reads NORMAL."""
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe_mode.json"))
+    from tests.conftest import normal_safe_mode_file
 
-
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe_mode.json"))
 # ── admission consults the lane registry ──────────────────────────────────
 
 
@@ -85,7 +85,9 @@ def test_focus_mode_blocks_admission(monkeypatch):
 def test_safe_mode_still_outranks_the_lane_gate(tmp_path, monkeypatch):
     path = tmp_path / "safe_mode.json"
     path.write_text('{"state": "SAFE_MODE", "triggers": ["OPERATOR"], "reason": "test"}')
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(path))
+    from tests.conftest import normal_safe_mode_file
+
+    normal_safe_mode_file(monkeypatch, str(path))
     decision = evaluate_capacity(**FUNDABLE, lane_key="snapback:swing")
     assert decision.status == "SAFE_MODE"
 

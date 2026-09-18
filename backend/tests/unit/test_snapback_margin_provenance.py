@@ -19,8 +19,9 @@ def _decision(margin):
 
 def test_plain_numeric_margin_is_not_authoritative_in_production(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe.json"))
+    from tests.conftest import normal_safe_mode_file
 
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe.json"))
     decision = _decision(120_000.0)
 
     assert decision.allowed is False
@@ -30,8 +31,9 @@ def test_plain_numeric_margin_is_not_authoritative_in_production(monkeypatch, tm
 
 def test_broker_observed_margin_is_admitted_in_production(monkeypatch, tmp_path):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(tmp_path / "safe.json"))
+    from tests.conftest import normal_safe_mode_file
 
+    normal_safe_mode_file(monkeypatch, str(tmp_path / "safe.json"))
     decision = _decision(ObservedHedgeMargin(120_000.0))
 
     assert decision.allowed is True

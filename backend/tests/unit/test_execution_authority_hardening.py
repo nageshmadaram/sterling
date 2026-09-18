@@ -816,9 +816,12 @@ async def test_slice_2_2_typed_kite_error_imports_from_errors_module():
     assert res.status == "REJECTED"
     assert "Insufficient margin" in res.error
 
-    # Verify intent state is REJECTED (not UNKNOWN)
+    # A broker rejection must not latch RECOVERY_REQUIRED: the order never reached
+    # the account, so there is nothing to reconcile. The scope stays untouched —
+    # no row was written at all, which is what initialized == 0 says.
     ctrl = db.get_execution_control(scope="global", uid="u_p9", account_id="acct_p9")
-    assert ctrl["recovery_state"] == "CLEAN"  # Order rejection does NOT latch recovery required!
+    assert ctrl["initialized"] == 0
+    assert ctrl["revision"] == 0
 
 
 @pytest.mark.asyncio
