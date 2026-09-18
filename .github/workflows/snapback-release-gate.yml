@@ -11,15 +11,18 @@ name: snapback-release-gate
 #   - a gate caller outside the single promotion authority
 
 on:
+  # No path filter, deliberately. This gate is a REQUIRED status check on main,
+  # and a required check that only runs for some PRs is a required check that
+  # blocks the rest forever: the context is never reported, so the PR can never
+  # satisfy it. Two PRs hit that deadlock before this was fixed, and the
+  # workaround — dispatching the workflow by hand — attaches a run to the commit
+  # that branch protection does not accept for the pull request.
+  #
+  # A gate whose job is to prove the frozen Snapback runtime is still intact
+  # also has no business trusting a path list to decide when that could have
+  # changed. It takes about three minutes; that is the correct price.
   pull_request:
     branches: [main]
-    paths:
-      - 'backend/app/services/snapback*'
-      - 'backend/app/engines/snapback/**'
-      - 'backend/study/snapback*'
-      - 'backend/tests/unit/test_snapback*'
-      - 'docs/strategy/snapback/**'
-      - '.github/workflows/snapback-release-gate.yml'
   push:
     branches: [main]
   workflow_dispatch:
