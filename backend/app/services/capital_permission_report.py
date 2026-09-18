@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services import lane_gate_inputs
 from app.core.capital_permission import (
     CapitalPermission,
     EntryPermissionInputs,
@@ -91,12 +92,17 @@ def lane_permission(
             ),
             safety_may_increase_exposure=_safety_may_increase(strategy),
             lane_state=lane.state.value if lane else "",
-            # The remaining four are per-lane evidence verdicts that no lane has
-            # yet produced. They are reported as unknown rather than False so the
-            # report says "not measured", which is the true state today.
-            lane_promotion_passed=None,
-            lane_identity_matches_frozen=None,
-            shadow_gate_passed=None,
+            # Three of these are now derived from live state rather than left
+            # unknown: the shadow path writes records, the manifest can be
+            # compared, and the economic gate can be run on broker rows. Each
+            # still answers None when the question genuinely cannot be answered,
+            # and `may_send_entry` refuses on None.
+            lane_promotion_passed=lane_gate_inputs.lane_promotion_passed(lane_key),
+            lane_identity_matches_frozen=lane_gate_inputs.lane_identity_matches_frozen(lane_key),
+            shadow_gate_passed=lane_gate_inputs.shadow_gate_passed(lane_key),
+            # The risk hierarchy and exposure coordinator are asked per order,
+            # not per lane: there is no lane-level answer to derive here, and
+            # inventing one would be a claim about an order nobody has placed.
             risk_gate_passed=None,
             exposure_gate_passed=None,
             vehicle_live_capable=_vehicle_live_capable(lane_key),
