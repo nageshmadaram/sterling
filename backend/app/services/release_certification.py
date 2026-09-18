@@ -366,7 +366,7 @@ def _open_exposure_gate(snapshot=None) -> GateResult:
     from app.services.exposure_snapshot import exposure_snapshot
 
     if snapshot is None:
-        snapshot = exposure_snapshot()
+        snapshot = exposure_snapshot(include_broker=False)
     if snapshot.total is None:
         return GateResult("open_exposure", UNKNOWN,
                           snapshot.detail or "durable exposure could not be read")
@@ -406,7 +406,10 @@ def certification_report(
         # One read, shared with the gate below.
         from app.services.exposure_snapshot import exposure_snapshot
 
-        exposure = exposure_snapshot()
+        # The recorded broker answer, not a fresh call: this report is rendered
+        # by an operator dashboard on a timer, and it must not open a broker
+        # connection every few seconds. `sterlingctl exposure` refreshes it.
+        exposure = exposure_snapshot(include_broker=False)
         unresolved_exposure = exposure.total
     attested = (store or CertificationStore()).read(resolved_sha)
 

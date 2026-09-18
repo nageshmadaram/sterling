@@ -152,7 +152,7 @@ def shadow_gate_passed(lane_key: str, *, store: Any = None) -> bool | None:
     return True
 
 
-def operational_gate_passed(lane_key: str) -> bool | None:
+def operational_gate_passed(lane_key: str, *, report: Any = None) -> bool | None:
     """Is the deployment itself fit to carry this lane's orders?
 
     This is the question the economic and shadow gates cannot ask: the numbers
@@ -163,27 +163,36 @@ def operational_gate_passed(lane_key: str) -> bool | None:
     Answered from the doctor rather than from a second implementation of the
     same checks — one place to add a check, one place for it to be wrong.
     """
-    try:
-        from app.core.operator_report import doctor_from_preflight, lane_doctor_checks
-        from app.services.snapback_preflight import run_preflight
+    # The doctor is the same for every lane, and running it ten times to answer
+    # ten lanes took nearly a minute. Callers that already have it pass it in.
+    if report is None:
+        try:
+            from app.core.operator_report import doctor_from_preflight, lane_doctor_checks
+            from app.services.snapback_preflight import run_preflight
 
-        report = doctor_from_preflight(run_preflight().checks, extra=lane_doctor_checks())
-    except Exception as exc:  # noqa: BLE001
-        log.warning("lane gate: operational doctor could not run for %s: %s", lane_key, exc)
-        return None
+            report = doctor_from_preflight(run_preflight().checks,
+                                           extra=lane_doctor_checks())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("lane gate: operational doctor could not run for %s: %s",
+                        lane_key, exc)
+            return None
 
     if report.unknowns:
         return None
     return not report.failures
 
 
-def lane_verdicts(lane_key: str):
-    """The three independent verdicts for one lane, composed but not merged."""
+def lane_verdicts(lane_key: str, *, doctor_report: Any = None):
+    """The three independent verdicts for one lane, composed but not merged.
+
+    ``doctor_report`` lets a caller asking about several lanes run the
+    deployment checks once instead of once per lane.
+    """
     from app.core.lane_verdicts import compose_lane_verdicts
 
     economic = lane_promotion_passed(lane_key)
     shadow = shadow_gate_passed(lane_key)
-    operational = operational_gate_passed(lane_key)
+    operational = operational_gate_passed(lane_key, report=doctor_report)
 
     reasons: list[str] = []
     if economic is None:

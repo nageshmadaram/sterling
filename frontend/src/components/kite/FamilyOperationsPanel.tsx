@@ -1,159 +1,138 @@
 /**
  * Family Operations.
  *
- * One screen, no strategy controls, no eligibility arithmetic in the browser. It
- * shows what the system is doing, whether it is allowed to trade, what it holds, and
- * gives exactly one way to stop new trading.
+ * One screen an operator can act on without a terminal: what build is running,
+ * whether it may trade, what the broker actually holds, and why anything is
+ * blocked. Every value comes from one backend payload — the browser computes no
+ * health, no eligibility and no risk, because a screen that can reason about
+ * whether trading is allowed is a screen that can be wrong about it.
+ *
+ * The one rule that shapes the layout: when the backend is unreachable, nothing
+ * green is shown. Cached data is demoted to a muted "last known" line, never
+ * presented as current state.
  */
-import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
-  useSnapbackFamilyControls,
-  useSnapbackFamilyOperations,
-  type FamilySystemStatus,
-} from '../../hooks/useSnapbackFamilyOperations';
-
-const STATUS_COLOUR: Record<string, string> = {
-  HEALTHY: 'var(--k-ok, #10b981)',
-  DEGRADED: 'var(--k-warn, #f59e0b)',
-  HALTED: 'var(--k-err, #ef4444)',
-  RECONCILING: 'var(--k-warn, #f59e0b)',
-  RECOVERY_REQUIRED: 'var(--k-err, #ef4444)',
-};
-
-function statusColour(status: FamilySystemStatus | string): string {
-  return STATUS_COLOUR[status] ?? 'var(--k-err, #ef4444)';
-}
-
-function money(value: number | null | undefined): string {
-  if (value === null || value === undefined) return 'UNKNOWN';
-  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-}
-
-function pct(value: number | null | undefined): string {
-  if (value === null || value === undefined) return 'UNKNOWN';
-  return `${value.toFixed(2)}%`;
-}
-
-function Flag({ label, ok }: { label: string; ok: boolean | null }) {
-  const text = ok === null ? 'UNKNOWN' : ok ? 'OK' : 'NO';
-  const colour = ok === null ? 'var(--k-warn, #f59e0b)' : ok ? 'var(--k-ok, #10b981)' : 'var(--k-err, #ef4444)';
-  return (
-    <div className="family-flag" data-testid={`flag-${label}`}>
-      <span className="family-flag-label">{label}</span>
-      <span className="family-flag-value" style={{ color: colour }}>{text}</span>
-    </div>
-  );
-}
+  FAMILY_OPERATIONS_V2_KEY,
+  dataAgeSeconds,
+  useFamilyOperationsV2,
+} from '../../hooks/useFamilyOperationsV2';
+import { useSnapbackFamilyControls } from '../../hooks/useSnapbackFamilyOperations';
+import { BrokerExposureCard } from './family/BrokerExposureCard';
+import { CertificationGrid } from './family/CertificationGrid';
+import { DeploymentCard } from './family/DeploymentCard';
+import { EvidenceCard } from './family/EvidenceCard';
+import { FailureDrillsCard } from './family/FailureDrillsCard';
+import { LaneMatrix } from './family/LaneMatrix';
+import { OperatorActions } from './family/OperatorActions';
+import { ProductionModeBanner } from './family/ProductionModeBanner';
+import { ReleaseCard } from './family/ReleaseCard';
+import { SafetyAdmissionCard } from './family/SafetyAdmissionCard';
+import { mono } from './family/Card';
 
 export function FamilyOperationsPanel() {
-  const { data, isLoading, isError } = useSnapbackFamilyOperations();
-  const { stop, resume } = useSnapbackFamilyControls();
-  const [confirmResume, setConfirmResume] = useState(false);
+  const query = useFamilyOperationsV2();
+  const controls = useSnapbackFamilyControls();
+  const qc = useQueryClient();
 
-  if (isLoading) return <div className="family-panel">Loading Sterling status…</div>;
+  const unreachable = query.isError;
+  const payload = query.data;
+  const age = dataAgeSeconds(payload?.generated_at);
 
-  if (isError || !data) {
-    // An unreachable backend is not a healthy one.
-    return (
-      <div className="family-panel" data-testid="family-unreachable">
-        <h2 style={{ color: 'var(--k-err, #ef4444)' }}>STERLING UNREACHABLE</h2>
-        <p>Sterling is not answering. Contact technical help before trading.</p>
-      </div>
-    );
-  }
+  const refresh = () => qc.invalidateQueries({ queryKey: FAMILY_OPERATIONS_V2_KEY });
+  const mutationError =
+    (controls.stop.error as Error | null)?.message ??
+    (controls.resume.error as Error | null)?.message ??
+    null;
 
   return (
-    <div className="family-panel" data-testid="family-operations">
-      <header className="family-header">
-        <h1>STERLING</h1>
-        <div className="family-status" data-testid="system-status" style={{ color: statusColour(data.system_status) }}>
-          {data.system_status}
+    <div data-testid="family-operations" style={{ padding: 10, minWidth: 0 }}>
+      <ProductionModeBanner
+        mode={payload?.production_mode ?? 'UNKNOWN'}
+        unreachable={unreachable}
+      />
+
+      {unreachable && (
+        <div
+          data-testid="family-unreachable"
+          role="alert"
+          aria-live="assertive"
+          style={{
+            padding: '6px 10px',
+            marginBottom: 10,
+            border: '1px solid var(--k-err, #ef4444)',
+            color: 'var(--k-err, #ef4444)',
+            fontSize: 12,
+          }}
+        >
+          STERLING UNREACHABLE — the values below, if any, are the last known state
+          and are not current.
         </div>
-        <div className="family-mode" data-testid="mode">{data.mode}</div>
-        <div className="family-strategy">{data.strategy}</div>
-      </header>
-
-      <section className="family-evidence">
-        <h2>Evidence</h2>
-        <div data-testid="evidence">{data.evidence}</div>
-        {data.live_blocked && (
-          <div data-testid="live-blocked" className="family-live-blocked">
-            LIVE TRADING BLOCKED
-          </div>
-        )}
-        <ul>
-          {data.evidence_missing_requirements.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="family-flags">
-        <Flag label="broker" ok={data.broker_connected} />
-        <Flag label="market-data" ok={data.market_data_fresh} />
-        <Flag label="runner" ok={data.runner_alive} />
-        <Flag label="backup" ok={data.backup_ok} />
-        <Flag label="alerts" ok={data.alert_transport_configured} />
-      </section>
-
-      <section className="family-risk">
-        <h2>Today</h2>
-        <div data-testid="allocated-capital">Allocated: {money(data.allocated_capital)}</div>
-        <div data-testid="cumulative-pnl">Net P&amp;L: {money(data.cumulative_net_pnl)}</div>
-        <div data-testid="exposure">Exposure: {money(data.current_exposure_inr)}</div>
-        <div data-testid="drawdown">Drawdown: {pct(data.drawdown_pct)}</div>
-        <div data-testid="open-positions">Open positions: {data.open_positions_count}</div>
-        <div data-testid="exit-pending">Exit pending: {data.exit_pending}</div>
-      </section>
-
-      {data.unresolved_errors.length > 0 && (
-        <section className="family-errors" data-testid="unresolved-errors">
-          <h2>Needs attention</h2>
-          <ul>
-            {data.unresolved_errors.map((code) => (
-              <li key={code}>{code}</li>
-            ))}
-          </ul>
-        </section>
       )}
 
-      <section className="family-controls">
-        {data.new_trades_halted ? (
-          <>
-            <div data-testid="halted-notice">New trades are stopped.</div>
-            {confirmResume ? (
-              <button
-                type="button"
-                data-testid="confirm-resume"
-                onClick={() => {
-                  resume.mutate('family resume');
-                  setConfirmResume(false);
-                }}
-              >
-                CONFIRM RESUME
-              </button>
-            ) : (
-              <button type="button" data-testid="resume" onClick={() => setConfirmResume(true)}>
-                RESUME
-              </button>
-            )}
-          </>
-        ) : (
-          <button
-            type="button"
-            data-testid="stop-new-trades"
-            className="family-stop"
-            onClick={() => stop.mutate('family stop switch')}
-          >
-            STOP ALL NEW TRADES
-          </button>
-        )}
-      </section>
+      {!payload && !unreachable && (
+        <div style={{ fontSize: 12, color: 'var(--k-muted, #8b93a7)' }}>Loading…</div>
+      )}
 
-      <footer className="family-footer">
-        <div data-testid="runtime-build">Build: {data.build_sha ?? data.runtime_sha ?? 'UNKNOWN'}</div>
-        <div>Updated: {data.generated_at}</div>
-      </footer>
+      {payload && (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 10,
+              marginBottom: 10,
+              fontSize: 11,
+              color: unreachable ? 'var(--k-muted, #8b93a7)' : 'inherit',
+              opacity: unreachable ? 0.6 : 1,
+            }}
+          >
+            <span>
+              next safe action:{' '}
+              <strong>{payload.next_safe_action || 'none reported'}</strong>
+            </span>
+            <span style={mono}>
+              {unreachable ? 'last known ' : ''}
+              {age === null ? 'age UNKNOWN' : `${age}s ago`}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+              gap: 10,
+              opacity: unreachable ? 0.5 : 1,
+            }}
+          >
+            <SafetyAdmissionCard safety={payload.safety} />
+            <ReleaseCard release={payload.release} />
+            <DeploymentCard deployment={payload.deployment} security={payload.security} />
+            <EvidenceCard evidence={payload.evidence} />
+            <FailureDrillsCard drills={payload.drills} />
+            <OperatorActions
+              operator={payload.operator}
+              onStop={(reason) => controls.stop.mutate(reason)}
+              onResume={(reason) => controls.resume.mutate(reason)}
+              onRefresh={refresh}
+              pending={controls.stop.isPending || controls.resume.isPending}
+              error={mutationError}
+            />
+          </div>
+
+          <div style={{ marginTop: 10, opacity: unreachable ? 0.5 : 1 }}>
+            <BrokerExposureCard broker={payload.broker} />
+          </div>
+
+          <div style={{ marginTop: 10, opacity: unreachable ? 0.5 : 1 }}>
+            <LaneMatrix lanes={payload.lanes} />
+          </div>
+
+          <div style={{ marginTop: 10, opacity: unreachable ? 0.5 : 1 }}>
+            <CertificationGrid certification={payload.certification} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

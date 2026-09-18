@@ -415,25 +415,41 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
         """Does the broker hold anything Sterling did not open?
 
         Sterling's own stores once read flat while the account held 16625 of a
-        CDSL call. This check asks the broker, and an unanswerable broker is
-        UNKNOWN rather than flat.
-        """
-        import asyncio
+        CDSL call.
 
-        from app.services.external_positions import external_exposure
+        Reads the recorded observation rather than calling the broker: the
+        doctor is rendered by an operator dashboard on a timer, and a check that
+        opens a broker connection every few seconds is a check that will be
+        turned off. `sterlingctl exposure` refreshes the record; a record that
+        does not exist, cannot be read, or is stale is UNKNOWN, never flat.
+        """
+        from app.services.external_positions import (
+            MAX_OBSERVATION_AGE_SECONDS,
+            last_observation,
+        )
+
+        record = last_observation()
+        if record is None:
+            return None, ("nothing has recorded what the broker holds; run "
+                          "`sterlingctl exposure`")
+        if not record.get("readable", False) or record.get("count") is None:
+            return None, str(record.get("detail") or "the broker could not be read")
+
+        from datetime import datetime, timezone
 
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            exposure = asyncio.run(external_exposure())
-        else:
-            return None, "cannot query the broker from inside a running event loop"
+            seen = datetime.fromisoformat(str(record.get("observed_at") or ""))
+        except ValueError:
+            return None, "the recorded broker observation has no usable timestamp"
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+        if age > MAX_OBSERVATION_AGE_SECONDS:
+            return None, f"the broker was last checked {int(age // 3600)}h ago"
 
-        if not exposure.readable:
-            return None, exposure.detail
-        if exposure.positions:
-            listed = ", ".join(
-                f"{p.instrument} x{p.quantity}" for p in exposure.positions[:5])
+        count = int(record.get("count") or 0)
+        if count:
+            listed = ", ".join(str(i) for i in (record.get("instruments") or [])[:5])
             return False, ("the broker holds position(s) Sterling did not open and "
                            f"does not manage: {listed}")
         return True, "the broker holds nothing Sterling did not open"

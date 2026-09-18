@@ -81,6 +81,7 @@ def build_digest() -> Digest:
     digest.runtime_sha = _safe(lambda: runtime_sha()[:12])
 
     checks: dict[str, Any] = {}
+    report = None
     try:
         from app.core.operator_report import doctor_from_preflight, lane_doctor_checks
         from app.services.snapback_preflight import run_preflight
@@ -113,7 +114,9 @@ def build_digest() -> Digest:
     try:
         from app.services.exposure_snapshot import exposure_snapshot
 
-        snapshot = exposure_snapshot()
+        # The recorded broker answer. The digest is a report, not a probe:
+        # `sterlingctl exposure` and reconciliation are what refresh the record.
+        snapshot = exposure_snapshot(include_broker=False)
         digest.open_exposure = (UNKNOWN if snapshot.open_positions is None
                                 else str(snapshot.open_positions))
         digest.unresolved_exposure = (UNKNOWN if snapshot.unresolved_intents is None
@@ -134,7 +137,8 @@ def build_digest() -> Digest:
         from app.services.lane_gate_inputs import lane_verdicts
 
         for lane_key in sorted(LANES):
-            verdicts = lane_verdicts(lane_key)
+            # One doctor for ten lanes: running it per lane took ~55 seconds.
+            verdicts = lane_verdicts(lane_key, doctor_report=report)
             digest.lanes.append(
                 f"{lane_key}: {LANES[lane_key].state.value}"
                 f" | economic {verdicts.economic.value}"
