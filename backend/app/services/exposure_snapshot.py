@@ -90,6 +90,15 @@ def _external() -> tuple[int | None, str, tuple[str, ...], Any]:
     except Exception as exc:  # noqa: BLE001
         return None, f"broker could not be asked: {type(exc).__name__}: {exc}", (), None
 
+    # Whatever the broker said — including that it could not be asked — is
+    # recorded here, because admission reads the record rather than the broker.
+    try:
+        from app.services.external_positions import record_observation
+
+        record_observation(exposure)
+    except Exception:  # noqa: BLE001 - recording must never break the read
+        pass
+
     if not exposure.readable:
         return None, exposure.detail, (), exposure
     return (len(exposure.positions), exposure.detail,

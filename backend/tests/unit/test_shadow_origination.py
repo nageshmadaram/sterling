@@ -160,6 +160,10 @@ class TestTheEngineActuallyWritesOne:
         from app.services.kite_engine import shadow_origination
 
         monkeypatch.setattr(shadow_origination, "record_entry_intent", _spy)
+        # The session gate is wall-clock dependent — outside market hours it
+        # refuses with `cash_signal_auction` and this test would pass or fail
+        # by time of day. It is about the shadow wiring, so the gate is stubbed.
+        monkeypatch.setattr(ksvc, "entry_data_block_reason", lambda *a, **kw: "")
 
         # Drive the same callback the scanner uses, with the double from the
         # engine suite, and assert the entry decision produced an intent.
@@ -186,8 +190,6 @@ class TestTheEngineActuallyWritesOne:
                             option_symbol="RELIANCE25JUN3000CE", strike=3000,
                             expiry="2026-06-26", lot_size=250)],
             spot=3010.0, stop_loss=2950.0, score=85.0,
-            # The engine refuses a signal that is not one closed bar old, so the
-            # timestamp has to be a realistic one rather than a placeholder.
             timestamp_ms=int((time.time() - 3600) * 1000))
 
         await ksvc._make_place_cb(_Client(), "shadow-uid")(row, None)

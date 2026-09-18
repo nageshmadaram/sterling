@@ -234,3 +234,120 @@ def render_external(exposure: ExternalExposure) -> str:
         lines.append("      Sterling has no intent, no fill and no protection for this "
                      "position. It is not managed here.")
     return "\n".join(lines)
+
+
+# -- the recorded observation ------------------------------------------------
+#
+# Admission must not make a network call. It is on the path of every order
+# decision, and a safety check that depends on a broker answering in time is a
+# safety check that fails in exactly the conditions it exists for. So the
+# broker answer is recorded when something already asks — the doctor, the
+# exposure view, reconciliation — and admission reads the record.
+
+OBSERVATION_FILE: str = "data/manifests/external_exposure.json"
+
+#: An observation older than this says nothing about now. A position can be
+#: opened by hand at any time, so the window is a trading day, not a week.
+MAX_OBSERVATION_AGE_SECONDS: int = 24 * 60 * 60
+
+
+def _observation_path():
+    import os
+    from pathlib import Path
+
+    root = os.environ.get("STERLING_EXTERNAL_EXPOSURE_FILE")
+    if root:
+        return Path(root)
+    configured = os.environ.get("STERLING_ROOT")
+    base = Path(configured) if configured else Path(__file__).resolve().parents[3]
+    return base / OBSERVATION_FILE
+
+
+def record_observation(exposure: ExternalExposure) -> None:
+    """Persist what the broker last said. Never raises into the caller."""
+    import json
+
+    path = _observation_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "readable": exposure.readable,
+            "count": exposure.count,
+            "instruments": [p.instrument for p in exposure.positions],
+            "detail": exposure.detail,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("external positions: could not record observation: %s", exc)
+
+
+def last_observation() -> dict[str, Any] | None:
+    """The last recorded broker answer, or None if there is none to read."""
+    import json
+
+    path = _observation_path()
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a corrupt record is no record
+        return None
+
+
+def _live_account_configured() -> bool:
+    """Is there a broker account this deployment could even hold a position in?
+
+    A host with no live account cannot have external broker exposure, so a
+    missing observation there is not a gap. On a host that does have one, a
+    missing observation is exactly the state that must block.
+    """
+    try:
+        from app.services.exchanges.kite import accounts as kite_accounts
+
+        kite_accounts.bootstrap()
+        return any(not getattr(a, "is_paper", True) for a in kite_accounts.all_accounts())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def admission_blocker() -> tuple[str, str]:
+    """Should new exposure be refused because of what the broker holds?
+
+    Returns ``(code, reason)``, or ``("", "")`` to permit. Reads the recorded
+    observation rather than the broker: admission is a hot path, and a check
+    that needs the network is a check that fails when the network does.
+    """
+    if not _live_account_configured():
+        return "", ""
+
+    record = last_observation()
+    if record is None:
+        return ("external_exposure_never_observed",
+                "no reconciliation has recorded what the broker holds; run "
+                "`sterlingctl exposure` or `sterlingctl doctor`")
+
+    if not record.get("readable", False) or record.get("count") is None:
+        return ("external_exposure_unreadable",
+                str(record.get("detail") or "the broker could not be asked what it holds"))
+
+    observed_at = str(record.get("observed_at") or "")
+    try:
+        seen = datetime.fromisoformat(observed_at)
+    except ValueError:
+        return ("external_exposure_unreadable",
+                f"the recorded observation has no usable timestamp: {observed_at!r}")
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - seen).total_seconds()
+    if age > MAX_OBSERVATION_AGE_SECONDS:
+        return ("external_exposure_stale",
+                f"the broker was last checked {int(age // 3600)}h ago; a position can "
+                "be opened by hand at any time")
+
+    count = int(record.get("count") or 0)
+    if count:
+        listed = ", ".join(str(i) for i in (record.get("instruments") or [])[:3])
+        return ("external_broker_exposure",
+                f"the broker holds {count} position(s) Sterling did not open and does "
+                f"not manage" + (f": {listed}" if listed else ""))
+    return "", ""

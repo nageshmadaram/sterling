@@ -194,3 +194,122 @@ class TestTheClientIsNotSharedBetweenLoops:
         # A client cached from a closed loop fails with "Event loop is closed",
         # which a flatness check would read as "the broker is unreachable".
         assert "_running_loop_id()" in source
+
+
+class TestItBlocksNewRiskAdmission:
+    """An unexplained broker position means the account's total risk is unknown.
+
+    Admission reads a recorded observation rather than calling the broker: a
+    safety check that needs the network fails exactly when the network does,
+    and this one sits on the path of every order decision.
+    """
+
+    @pytest.fixture()
+    def recorded(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STERLING_EXTERNAL_EXPOSURE_FILE",
+                           str(tmp_path / "external_exposure.json"))
+        monkeypatch.setattr(
+            "app.services.external_positions._live_account_configured", lambda: True)
+        return tmp_path / "external_exposure.json"
+
+    def _write(self, path, **overrides):
+        import json
+        from datetime import datetime, timezone
+
+        record = {"observed_at": datetime.now(timezone.utc).isoformat(),
+                  "readable": True, "count": 0, "instruments": [], "detail": ""}
+        record.update(overrides)
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    def test_an_external_position_blocks_an_exposure_increase(self, recorded):
+        from app.services.external_positions import admission_blocker
+
+        self._write(recorded, count=1, instruments=["CDSL26SEP1500CE"])
+        code, reason = admission_blocker()
+        assert code == "external_broker_exposure"
+        assert "CDSL26SEP1500CE" in reason
+
+    def test_an_unreadable_broker_answer_also_blocks(self, recorded):
+        from app.services.external_positions import admission_blocker
+
+        self._write(recorded, readable=False, count=None, detail="ConnectTimeout")
+        code, reason = admission_blocker()
+        # "We could not ask" is not "there is nothing there".
+        assert code == "external_exposure_unreadable"
+        assert "ConnectTimeout" in reason
+
+    def test_never_having_looked_blocks_on_a_live_host(self, recorded):
+        from app.services.external_positions import admission_blocker
+
+        assert admission_blocker()[0] == "external_exposure_never_observed"
+
+    def test_a_stale_observation_blocks(self, recorded):
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.external_positions import admission_blocker
+
+        old = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        self._write(recorded, observed_at=old)
+        # A position can be opened by hand at any time.
+        assert admission_blocker()[0] == "external_exposure_stale"
+
+    def test_a_recent_flat_observation_permits(self, recorded):
+        from app.services.external_positions import admission_blocker
+
+        self._write(recorded)
+        assert admission_blocker() == ("", "")
+
+    def test_a_host_with_no_live_account_is_not_blocked(self, tmp_path, monkeypatch):
+        from app.services.external_positions import admission_blocker
+
+        monkeypatch.setenv("STERLING_EXTERNAL_EXPOSURE_FILE",
+                           str(tmp_path / "nothing.json"))
+        monkeypatch.setattr(
+            "app.services.external_positions._live_account_configured", lambda: False)
+        # No broker account means no broker position is possible, so a missing
+        # observation is not a gap.
+        assert admission_blocker() == ("", "")
+
+    def test_a_corrupt_record_is_treated_as_never_observed(self, recorded):
+        from app.services.external_positions import admission_blocker
+
+        recorded.write_text("{ not json", encoding="utf-8")
+        assert admission_blocker()[0] == "external_exposure_never_observed"
+
+    def test_the_blocker_reaches_the_admission_verdict(self, recorded, monkeypatch):
+        from app.services.safety_supervisor import SafetySupervisor
+
+        self._write(recorded, count=1, instruments=["CDSL26SEP1500CE"])
+        snapshot = SafetySupervisor().snapshot()
+        assert "external_broker_exposure" in snapshot.blockers
+
+    def test_a_reading_crash_blocks_rather_than_permits(self, monkeypatch):
+        from app.services.safety_supervisor import SafetySupervisor
+
+        def _boom():
+            raise RuntimeError("store exploded")
+
+        monkeypatch.setattr(
+            "app.services.external_positions.admission_blocker", _boom)
+        assert SafetySupervisor._external_exposure_blocker()[0] == \
+            "external_exposure_unreadable"
+
+
+class TestTheObservationIsRecordedWhereItIsRead:
+    def test_reading_the_snapshot_records_what_the_broker_said(self, tmp_path, monkeypatch):
+        from app.services import exposure_snapshot as module
+        from app.services.external_positions import ExternalExposure, last_observation
+
+        monkeypatch.setenv("STERLING_EXTERNAL_EXPOSURE_FILE",
+                           str(tmp_path / "external_exposure.json"))
+        monkeypatch.setattr("app.services.db.init", lambda *a, **k: True)
+        monkeypatch.setattr("app.services.kite_engine.positions.known_uids", lambda: [])
+
+        async def _exposure(*_a, **_k):
+            return ExternalExposure(positions=(), readable=True)
+
+        monkeypatch.setattr("app.services.external_positions.external_exposure", _exposure)
+        module.exposure_snapshot()
+
+        record = last_observation()
+        assert record is not None and record["readable"] is True
