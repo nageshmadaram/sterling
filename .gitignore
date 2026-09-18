@@ -165,9 +165,15 @@ data/shadow/
 # evidence. Regenerated per run, and never authoritative (TEST_ACCEPTANCE).
 data/evidence_acceptance/
 backend/data/evidence_acceptance/
+# A pattern containing a slash is anchored to this file's directory, so
+# `artifacts/...` never matched `backend/artifacts/...` and a forward-collection
+# run left the worktree dirty — which fails `source_identity` and therefore
+# blocks release certification for a reason unrelated to the source.
 artifacts/snapback_forward/
+backend/artifacts/snapback_forward/
 backend/data/snapback/
 artifacts/snapback_shadow_replay/
+backend/artifacts/snapback_shadow_replay/
 
 # Manifests describe one deployment, not the source. The release manifest names
 # the commit that is running, so committing it would make it stale on the very
