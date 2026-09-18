@@ -559,9 +559,11 @@ def test_an_unrecorded_gate_is_not_a_passed_gate(tmp_path):
     assert report.release_ready is False
     assert {r.key for r in report.unknowns}
 
-    store.attest(SHA, "remote_ci", "PASS", attested_by="operator", evidence_ref="ci/123")
+    # `remote_ci` is derived from the per-context CI register now, so an
+    # attestable gate is used to prove the same point.
+    store.attest(SHA, "reconnect", "PASS", attested_by="operator", evidence_ref="run/123")
     again = certification_report(sha=SHA, tag=TAG, store=store, unresolved_exposure=0)
-    assert again.by_key["remote_ci"].passed is True
+    assert again.by_key["reconnect"].passed is True
     assert again.release_ready is False  # the rest are still unrecorded
 
 
@@ -600,7 +602,7 @@ def test_attestations_do_not_carry_across_shas(tmp_path):
     from app.services.release_certification import CertificationStore
 
     store = CertificationStore(tmp_path)
-    store.attest(SHA, "remote_ci", "PASS", attested_by="operator")
+    store.attest(SHA, "reconnect", "PASS", attested_by="operator")
     other = "f" * 40
     assert store.read(other) == {}
 

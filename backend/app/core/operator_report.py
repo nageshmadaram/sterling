@@ -144,6 +144,7 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
     actually allowed to trade.
     """
     import os
+    from pathlib import Path
 
     checks: list[DoctorCheck] = []
 
@@ -279,6 +280,144 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
             return False, f"the broker path was last reachable {age.days} days ago"
         return True, f"broker reachable, observed {observed}"
 
+    def _deployment_identity():
+        """What this host observed about itself, not what it was configured to be."""
+        from app.core.deployment_identity import verify_deployment_identity
+
+        verdict = verify_deployment_identity()
+        return verdict.verified, verdict.reason
+
+    def _broker_session():
+        """Is there an authenticated broker session, and whose account is it?
+
+        The account registry is an in-process cache that the web app fills at
+        startup, so a doctor run from a command line sees nothing until it is
+        loaded from the database. An empty cache is not an empty deployment.
+        """
+        from app.services.exchanges.kite import accounts as kite_accounts
+
+        kite_accounts.bootstrap()
+        rows = kite_accounts.all_accounts()
+        if not rows:
+            return None, "no broker account is configured on this host"
+        live = [a for a in rows if not getattr(a, "is_paper", True)]
+        if not live:
+            return False, f"{len(rows)} account(s) configured, none of them live"
+        names = ", ".join(str(getattr(a, "kite_user_id", "") or a.id) for a in live)
+        return True, f"live account(s): {names}"
+
+    def _market_freshness():
+        """Ticks arriving, not merely a socket that is open.
+
+        Read from the running process over the loopback ops view; a doctor run
+        with the service down cannot answer this, and says so.
+        """
+        import json
+        import time
+        import urllib.request
+
+        base = os.environ.get("STERLING_OPS_URL", "http://127.0.0.1:8000")
+        try:
+            with urllib.request.urlopen(  # noqa: S310 - loopback, operator's own host
+                f"{base.rstrip('/')}/api/v1/ops/runtime", timeout=3.0
+            ) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return None, f"the running service could not be asked: {exc}"
+
+        feed = body.get("feed") or {}
+        if feed.get("connected") is not True:
+            return False, "the tick socket is not connected"
+        last = int(feed.get("last_tick_ms") or 0)
+        if last <= 0:
+            return None, "no tick has arrived on this socket"
+        age = int(time.time() * 1000) - last
+        if age > 60_000:
+            return False, f"the last tick arrived {age // 1000}s ago"
+        return True, f"last tick {age // 1000}s ago"
+
+    def _backup_age():
+        """How old the newest backup is, and whether its restore was proved."""
+        from datetime import datetime, timezone
+
+        from app.core.backup_manifest import latest_backup_dir, read_backup_manifest
+
+        backup_root = Path(
+            os.environ.get("STERLING_BACKUP_ROOT")
+            or Path(os.environ.get("STERLING_ROOT", ".")) / "backups" / "snapback"
+        )
+        directory = latest_backup_dir(backup_root)
+        if directory is None:
+            return False, f"no backup exists under {backup_root}"
+        manifest_file = directory / "manifest.json"
+        if not manifest_file.exists():
+            return None, f"the backup at {directory.name} has no manifest"
+        manifest = read_backup_manifest(manifest_file)
+        try:
+            created = datetime.fromisoformat(str(manifest.created_at))
+        except Exception:  # noqa: BLE001
+            return None, f"the backup at {directory.name} has no readable date"
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - created
+        if age.days > 1:
+            return False, f"the newest backup is {age.days} days old"
+        return True, f"newest backup {directory.name}, {age.seconds // 3600}h old"
+
+    def _restore_check():
+        from app.core.backup_manifest import latest_backup_dir, read_backup_manifest
+
+        backup_root = Path(
+            os.environ.get("STERLING_BACKUP_ROOT")
+            or Path(os.environ.get("STERLING_ROOT", ".")) / "backups" / "snapback"
+        )
+        directory = latest_backup_dir(backup_root)
+        if directory is None:
+            return False, "there is no backup to restore-check"
+        manifest_file = directory / "manifest.json"
+        if not manifest_file.exists():
+            return None, f"the backup at {directory.name} has no manifest"
+        status = str(getattr(read_backup_manifest(manifest_file),
+                             "restore_test_status", "") or "UNTESTED")
+        if status.upper() == "PASSED":
+            return True, f"{directory.name}: PASSED"
+        if status.upper() == "UNTESTED":
+            return None, f"{directory.name}: never restore-checked"
+        return False, f"{directory.name}: {status}"
+
+    def _safe_mode_state():
+        """Operator safe mode. An unreadable state already fails closed elsewhere."""
+        from app.services.safe_mode import SafeModeService
+
+        path = os.environ.get("STERLING_SAFE_MODE_FILE")
+        if not path:
+            return None, "STERLING_SAFE_MODE_FILE is unset; the safety state has no home"
+        state = SafeModeService(path).read()
+        engaged = bool(getattr(state, "engaged", getattr(state, "safe_mode", False)))
+        detail = getattr(state, "note", "") or getattr(state, "reason", "")
+        if engaged:
+            return False, f"SAFE_MODE is engaged{': ' + detail if detail else ''}"
+        return True, "NORMAL"
+
+    def _execution_control_state():
+        from app.services import db
+
+        db.init()
+        control = db.get_execution_control()
+        recovery = str(control.get("recovery_state") or "").upper()
+        if not recovery:
+            return None, "execution control has no recovery state recorded"
+        if recovery != "CLEAN":
+            return False, f"recovery state is {recovery}"
+        return True, "CLEAN"
+
+    add("deployment_identity", _deployment_identity)
+    add("broker_session", _broker_session)
+    add("market_freshness", _market_freshness)
+    add("backup_age", _backup_age)
+    add("restore_check", _restore_check)
+    add("safe_mode_state", _safe_mode_state)
+    add("execution_control_state", _execution_control_state)
     add("lake_mount", _lake_mount)
     add("network_path", _network_path)
     add("static_egress", _static_egress)

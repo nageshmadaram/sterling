@@ -193,6 +193,15 @@ def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
         # is a day of market data that cannot be bought back.
         "lake_mount",
         "network_path",
+        # Go-live section 10.1: the deployment host, the broker session, the
+        # feed, the backups and the two safety states an operator acts on.
+        "deployment_identity",
+        "broker_session",
+        "market_freshness",
+        "backup_age",
+        "restore_check",
+        "safe_mode_state",
+        "execution_control_state",
     }
 
 

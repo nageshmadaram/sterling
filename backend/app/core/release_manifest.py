@@ -263,9 +263,87 @@ def build_release_manifest(
             "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
             "universe_schema_version": str(UNIVERSE_SCHEMA_VERSION),
         },
+        # What this release was certified against, frozen with it. Read from
+        # the certification and CI stores rather than asserted: a manifest that
+        # claims CI passed, written by a hand that did not check, is worse than
+        # one that says UNKNOWN.
+        "certification": _certification_facts(resolved_sha),
+        # Which account the evidence under this release belongs to, and the one
+        # switch that separates shadow from capital.
+        "account_binding_id": _active_binding_id(),
+        "live_execution_enabled": _live_execution_enabled(),
         "lane_count": len(lanes),
         "lanes": lanes,
     }
+
+
+def _certification_facts(sha: str) -> dict[str, Any]:
+    """CI and live-acceptance facts for this SHA, as the stores hold them."""
+    facts: dict[str, Any] = {"ci": {"all_required_contexts": UNKNOWN},
+                             "live_acceptance": {"overall": UNKNOWN}}
+    try:
+        from app.core.ci_certification import ci_report
+
+        report = ci_report(sha)
+        facts["ci"] = {
+            "all_required_contexts": "PASS" if report.all_passed else UNKNOWN,
+            "contexts": {r.context: {"conclusion": r.conclusion, "run_id": r.run_id}
+                         for r in report.records},
+        }
+    except Exception:  # noqa: BLE001 - a manifest must still be writable
+        pass
+
+    try:
+        from app.services.release_certification import CertificationStore
+
+        gate = CertificationStore().read(sha).get("kite_live_acceptance")
+        if gate is not None:
+            facts["live_acceptance"] = {
+                "overall": gate.status,
+                "artifact_ref": gate.evidence_ref,
+                "artifact_sha256": _artifact_sha256(gate.evidence_ref),
+                "observed_by": gate.attested_by,
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return facts
+
+
+def _artifact_sha256(reference: str) -> str:
+    """Checksum the acceptance report so the manifest pins the bytes it means."""
+    if not reference:
+        return ""
+    path = Path(reference)
+    if not path.is_absolute():
+        path = repo_root() / reference
+    if not path.exists():
+        return ""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _active_binding_id() -> str:
+    try:
+        from app.services.account_binding_service import active_binding
+
+        binding = active_binding()
+        return str(getattr(binding, "binding_id", "") or "") if binding else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _live_execution_enabled() -> bool | None:
+    try:
+        from app.core.lane_registry import LIVE_EXECUTION_ENABLED
+
+        return bool(LIVE_EXECUTION_ENABLED)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _challenger_manifests(*, sha: str, tag: str) -> list[dict[str, Any]]:

@@ -179,18 +179,57 @@ def _step_preflight() -> StepResult:
     return StepResult(2, "pre-start doctor", True, f"{len(report.checks)} checks passed")
 
 
+def _step_production_security() -> StepResult:
+    """Are the secrets this deployment runs on fit for an unattended machine?
+
+    In production this refuses a development fallback key, a short key, or one
+    reused as the JWT signer. Outside production it reports what mode it is in
+    rather than passing silently, because "we were not in production" is the
+    explanation nobody remembers a month later.
+    """
+    environment = os.environ.get("ENVIRONMENT", "development").lower()
+    try:
+        from app.core.security import validate_production_security
+
+        validate_production_security()
+    except RuntimeError as exc:
+        return StepResult(4, "production security", False, str(exc)[:200])
+    except Exception as exc:  # noqa: BLE001
+        return StepResult(4, "production security", None, f"could not be checked: {exc}")
+
+    if environment != "production":
+        return StepResult(4, "production security", None,
+                          f"ENVIRONMENT={environment}: production secret rules were not applied")
+    return StepResult(4, "production security", True, "production secrets validated")
+
+
+def _step_account_binding() -> StepResult:
+    """Is there exactly one active, live-ready broker account binding?"""
+    try:
+        from app.services.account_binding_service import binding_health
+
+        health = binding_health()
+    except Exception as exc:  # noqa: BLE001
+        return StepResult(5, "account binding", None, f"binding store unreadable: {exc}")
+
+    if health.get("live_ready") is True:
+        return StepResult(5, "account binding", True, str(health.get("active_id") or ""))
+    reason = health.get("reason") or "no ACTIVE, live-ready broker account binding"
+    return StepResult(5, "account binding", False, str(reason)[:200])
+
+
 def _step_start_unit() -> StepResult:
     try:
         completed = _systemctl("start", _UNIT)
     except FileNotFoundError:
-        return StepResult(3, "start service unit", None,
+        return StepResult(6, "start service unit", None,
                           "systemctl not available on this host")
     except Exception as exc:  # noqa: BLE001
-        return StepResult(3, "start service unit", None, f"could not run systemctl: {exc}")
+        return StepResult(6, "start service unit", None, f"could not run systemctl: {exc}")
     if completed.returncode != 0:
-        return StepResult(3, "start service unit", False,
+        return StepResult(6, "start service unit", False,
                           (completed.stderr or completed.stdout or "").strip()[:200])
-    return StepResult(3, "start service unit", True, _UNIT)
+    return StepResult(6, "start service unit", True, _UNIT)
 
 
 def _step_wait_health() -> StepResult:
@@ -200,14 +239,14 @@ def _step_wait_health() -> StepResult:
         try:
             body = _ops_get("/api/v1/health/live", timeout=3.0)
             if body.get("alive") is True:
-                return StepResult(4, "application health", True)
+                return StepResult(7, "application health", True)
             last_error = f"health said {body}"
         except urllib.error.URLError as exc:
             last_error = str(exc.reason)
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
         time.sleep(2.0)
-    return StepResult(4, "application health", None,
+    return StepResult(7, "application health", None,
                       f"no healthy response within {HEALTH_TIMEOUT_S:.0f}s: {last_error}")
 
 
@@ -217,16 +256,16 @@ def _step_release_identity() -> StepResult:
 
         stored = read_manifest()
         if stored is None:
-            return StepResult(5, "release identity", None,
+            return StepResult(3, "release identity", None,
                               "no frozen release manifest; run `sterlingctl freeze`")
         verdict = verify_manifest(stored)
     except Exception as exc:  # noqa: BLE001
-        return StepResult(5, "release identity", None, f"manifest unreadable: {exc}")
+        return StepResult(3, "release identity", None, f"manifest unreadable: {exc}")
     if verdict.matches:
         tag = (stored.get("build") or {}).get("release_tag") or "frozen"
-        return StepResult(5, "release identity", True, str(tag))
+        return StepResult(3, "release identity", True, str(tag))
     drift = [str(d) for d in verdict.drift] + [f"lane missing: {l}" for l in verdict.missing_lanes]
-    return StepResult(5, "release identity", False, "; ".join(drift)[:200])
+    return StepResult(3, "release identity", False, "; ".join(drift)[:200])
 
 
 def _step_broker_connected() -> StepResult:
@@ -234,19 +273,19 @@ def _step_broker_connected() -> StepResult:
     try:
         body = _ops_get("/api/v1/ops/runtime")
     except Exception as exc:  # noqa: BLE001
-        return StepResult(6, "broker connection", None, f"runtime view unavailable: {exc}")
+        return StepResult(8, "broker connection", None, f"runtime view unavailable: {exc}")
     broker = body.get("broker") or {}
     if broker.get("connected") is not True:
-        return StepResult(6, "broker connection", bool(broker.get("connected")),
+        return StepResult(8, "broker connection", bool(broker.get("connected")),
                           broker.get("detail") or "not connected")
     if broker.get("binding_matches") is False:
-        return StepResult(6, "broker connection", False,
+        return StepResult(8, "broker connection", False,
                           f"authenticated account {broker.get('account_id')} is not the "
                           f"active binding {broker.get('bound_client_id')}")
     if broker.get("binding_matches") is None:
-        return StepResult(6, "broker connection", None,
+        return StepResult(8, "broker connection", None,
                           "no active account binding to verify against")
-    return StepResult(6, "broker connection", True, str(broker.get("account_id") or ""))
+    return StepResult(8, "broker connection", True, str(broker.get("account_id") or ""))
 
 
 def _step_reconcile() -> StepResult:
@@ -255,47 +294,47 @@ def _step_reconcile() -> StepResult:
 
         snapshot = latest_reconciliation()
     except Exception as exc:  # noqa: BLE001
-        return StepResult(7, "reconcile broker state", None, f"reconciliation unreadable: {exc}")
+        return StepResult(9, "reconcile broker state", None, f"reconciliation unreadable: {exc}")
     if snapshot is None:
-        return StepResult(7, "reconcile broker state", None, "no reconciliation recorded")
+        return StepResult(9, "reconcile broker state", None, "no reconciliation recorded")
     payload = snapshot.as_dict()
     if payload.get("clean") is None:
-        return StepResult(7, "reconcile broker state", None, "reconciliation result unknown")
+        return StepResult(9, "reconcile broker state", None, "reconciliation result unknown")
     if not payload.get("clean"):
-        return StepResult(7, "reconcile broker state", False,
+        return StepResult(9, "reconcile broker state", False,
                           f"{len(payload.get('mismatches') or [])} mismatch(es)")
-    return StepResult(7, "reconcile broker state", True)
+    return StepResult(9, "reconcile broker state", True)
 
 
 def _step_subscriptions() -> StepResult:
     try:
         body = _ops_get("/api/v1/ops/runtime")
     except Exception as exc:  # noqa: BLE001
-        return StepResult(8, "market subscriptions", None, f"runtime view unavailable: {exc}")
+        return StepResult(10, "market subscriptions", None, f"runtime view unavailable: {exc}")
     feed = body.get("feed") or {}
     subscribed = feed.get("subscribed")
     if subscribed is None:
-        return StepResult(8, "market subscriptions", None, "subscription set not reported")
+        return StepResult(10, "market subscriptions", None, "subscription set not reported")
     if not subscribed:
-        return StepResult(8, "market subscriptions", False, "no instrument is subscribed")
-    return StepResult(8, "market subscriptions", True, f"{len(subscribed)} instrument(s)")
+        return StepResult(10, "market subscriptions", False, "no instrument is subscribed")
+    return StepResult(10, "market subscriptions", True, f"{len(subscribed)} instrument(s)")
 
 
 def _step_fresh_feed() -> StepResult:
     try:
         body = _ops_get("/api/v1/ops/runtime")
     except Exception as exc:  # noqa: BLE001
-        return StepResult(9, "fresh market feed", None, f"runtime view unavailable: {exc}")
+        return StepResult(11, "fresh market feed", None, f"runtime view unavailable: {exc}")
     feed = body.get("feed") or {}
     if feed.get("connected") is not True:
-        return StepResult(9, "fresh market feed", False, "tick socket is not connected")
+        return StepResult(11, "fresh market feed", False, "tick socket is not connected")
     last_tick_ms = int(feed.get("last_tick_ms") or 0)
     if last_tick_ms <= 0:
-        return StepResult(9, "fresh market feed", None, "no tick has arrived yet")
+        return StepResult(11, "fresh market feed", None, "no tick has arrived yet")
     age_ms = int(time.time() * 1000) - last_tick_ms
     if age_ms > MAX_TICK_AGE_MS:
-        return StepResult(9, "fresh market feed", False, f"last tick {age_ms // 1000}s ago")
-    return StepResult(9, "fresh market feed", True, f"last tick {age_ms // 1000}s ago")
+        return StepResult(11, "fresh market feed", False, f"last tick {age_ms // 1000}s ago")
+    return StepResult(11, "fresh market feed", True, f"last tick {age_ms // 1000}s ago")
 
 
 def _step_evidence_writer() -> StepResult:
@@ -305,10 +344,10 @@ def _step_evidence_writer() -> StepResult:
 
         passed, detail = check_database()
     except Exception as exc:  # noqa: BLE001
-        return StepResult(10, "evidence writer", None, f"evidence store unreadable: {exc}")
+        return StepResult(12, "evidence writer", None, f"evidence store unreadable: {exc}")
     if not passed:
-        return StepResult(10, "evidence writer", False, json.dumps(detail)[:200])
-    return StepResult(10, "evidence writer", True)
+        return StepResult(12, "evidence writer", False, json.dumps(detail)[:200])
+    return StepResult(12, "evidence writer", True)
 
 
 def _step_clear_recovery() -> StepResult:
@@ -316,22 +355,28 @@ def _step_clear_recovery() -> StepResult:
         _set_recovery("CLEAN", "STARTUP_COMPLETE",
                       "Start sequence completed; broker reconciled and feed verified")
     except Exception as exc:  # noqa: BLE001
-        return StepResult(11, "clear RECOVERY_REQUIRED", None, f"state store unwritable: {exc}")
-    return StepResult(11, "clear RECOVERY_REQUIRED", True)
+        return StepResult(13, "clear RECOVERY_REQUIRED", None, f"state store unwritable: {exc}")
+    return StepResult(13, "clear RECOVERY_REQUIRED", True)
 
 
+#: The go-live order. Release identity, production secrets and the account
+#: binding are verified BEFORE the service is started: starting a process that
+#: is about to be refused wastes nothing, but connecting it to a broker under
+#: an unverified identity is how an order reaches the wrong account.
 START_STEPS: List[Callable[[], StepResult]] = [
-    _step_engage_recovery,
-    _step_preflight,
-    _step_start_unit,
-    _step_wait_health,
-    _step_release_identity,
-    _step_broker_connected,
-    _step_reconcile,
-    _step_subscriptions,
-    _step_fresh_feed,
-    _step_evidence_writer,
-    _step_clear_recovery,
+    _step_engage_recovery,        # 1
+    _step_preflight,              # 2
+    _step_release_identity,       # 3
+    _step_production_security,    # 4
+    _step_account_binding,        # 5
+    _step_start_unit,             # 6
+    _step_wait_health,            # 7
+    _step_broker_connected,       # 8
+    _step_reconcile,              # 9
+    _step_subscriptions,          # 10
+    _step_fresh_feed,             # 11
+    _step_evidence_writer,        # 12
+    _step_clear_recovery,         # 13
 ]
 
 

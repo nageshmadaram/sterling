@@ -88,6 +88,19 @@ def check_order(
     realised_loss_today: float | None,
     is_averaging_down: bool | None,
     envelope: LiveMinimumEnvelope | None = None,
+    # Section 21.1: the state of the system the order is being sent from. Each
+    # is tri-state and each None refuses, because an order sent from a machine
+    # whose safety state could not be read is not a safe order, it is an
+    # unexamined one.
+    lane_permission: bool | None = None,
+    release_certification: bool | None = None,
+    account_binding: bool | None = None,
+    safety_state: bool | None = None,
+    recovery_state: bool | None = None,
+    broker_session: bool | None = None,
+    market_freshness: bool | None = None,
+    unresolved_exposure: int | None = None,
+    daily_loss_remaining: float | None = None,
 ) -> LiveMinimumVerdict:
     """Does this order fit inside the first-capital envelope?
 
@@ -95,6 +108,10 @@ def check_order(
     could not be computed, against an exposure that could not be read, is not a
     small order — it is an unmeasured one, and the whole point of LIVE_MINIMUM
     is that the first one is measured.
+
+    All blockers are returned, never only the first: an operator fixing one
+    condition at a time, discovering the next only after the next attempt, is
+    how a careful person ends up disabling checks.
     """
     limits = envelope if envelope is not None else configured_envelope()
     blockers: list[str] = []
@@ -128,6 +145,30 @@ def check_order(
         blockers.append("AVERAGING_DOWN_UNKNOWN")
     elif is_averaging_down:
         blockers.append("AVERAGING_DOWN_PROHIBITED")
+
+    for value, unknown_code, refusal_code in (
+        (lane_permission, "LANE_PERMISSION_UNKNOWN", "LANE_NOT_PERMITTED"),
+        (release_certification, "RELEASE_CERTIFICATION_UNKNOWN", "RELEASE_NOT_CERTIFIED"),
+        (account_binding, "ACCOUNT_BINDING_UNKNOWN", "ACCOUNT_BINDING_NOT_READY"),
+        (safety_state, "SAFETY_STATE_UNKNOWN", "SAFETY_BLOCKS_EXPOSURE"),
+        (recovery_state, "RECOVERY_STATE_UNKNOWN", "RECOVERY_REQUIRED"),
+        (broker_session, "BROKER_SESSION_UNKNOWN", "BROKER_SESSION_NOT_READY"),
+        (market_freshness, "MARKET_FRESHNESS_UNKNOWN", "MARKET_DATA_STALE"),
+    ):
+        if value is None:
+            blockers.append(unknown_code)
+        elif not value:
+            blockers.append(refusal_code)
+
+    if unresolved_exposure is None:
+        blockers.append("UNRESOLVED_EXPOSURE_UNKNOWN")
+    elif unresolved_exposure:
+        blockers.append("UNRESOLVED_EXPOSURE_OPEN")
+
+    if daily_loss_remaining is None:
+        blockers.append("DAILY_LOSS_REMAINING_UNKNOWN")
+    elif daily_loss_remaining <= 0:
+        blockers.append("DAILY_LOSS_BUDGET_SPENT")
 
     return LiveMinimumVerdict(
         allowed=not blockers, blockers=tuple(blockers), envelope=limits

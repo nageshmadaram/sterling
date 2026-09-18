@@ -25,6 +25,8 @@ __all__ = [
     "lane_identity_matches_frozen",
     "lane_promotion_passed",
     "shadow_gate_passed",
+    "operational_gate_passed",
+    "lane_verdicts",
     "MIN_SHADOW_INTENTS",
 ]
 
@@ -148,3 +150,50 @@ def shadow_gate_passed(lane_key: str, *, store: Any = None) -> bool | None:
     if metrics.protection_unknown:
         return False
     return True
+
+
+def operational_gate_passed(lane_key: str) -> bool | None:
+    """Is the deployment itself fit to carry this lane's orders?
+
+    This is the question the economic and shadow gates cannot ask: the numbers
+    can be excellent and the machine still be running unreleased code, from an
+    unverified address, with a backup nobody has ever restored. Section 20.2
+    keeps it separate for that reason.
+
+    Answered from the doctor rather than from a second implementation of the
+    same checks — one place to add a check, one place for it to be wrong.
+    """
+    try:
+        from app.core.operator_report import doctor_from_preflight, lane_doctor_checks
+        from app.services.snapback_preflight import run_preflight
+
+        report = doctor_from_preflight(run_preflight().checks, extra=lane_doctor_checks())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lane gate: operational doctor could not run for %s: %s", lane_key, exc)
+        return None
+
+    if report.unknowns:
+        return None
+    return not report.failures
+
+
+def lane_verdicts(lane_key: str):
+    """The three independent verdicts for one lane, composed but not merged."""
+    from app.core.lane_verdicts import compose_lane_verdicts
+
+    economic = lane_promotion_passed(lane_key)
+    shadow = shadow_gate_passed(lane_key)
+    operational = operational_gate_passed(lane_key)
+
+    reasons: list[str] = []
+    if economic is None:
+        reasons.append("economic: the lane's authoritative sample could not be read")
+    if shadow is None:
+        reasons.append("shadow: no shadow record has been written for this lane")
+    if operational is None:
+        reasons.append("operational: at least one deployment check could not be run")
+
+    return compose_lane_verdicts(
+        lane_key, economic=economic, shadow_execution=shadow,
+        operational=operational, reasons=tuple(reasons),
+    )

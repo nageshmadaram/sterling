@@ -14,11 +14,17 @@ from app.core.live_minimum import (
 ENVELOPE = LiveMinimumEnvelope(daily_loss_budget=2_000.0, gross_exposure_limit=50_000.0)
 
 
+#: Section 21.1 adds the system-state inputs. A fully-supplied order is the
+#: only one that can pass; the fixture supplies them so each test can withdraw
+#: exactly one and see it refuse.
 def _order(**overrides):
     order = dict(
         quantity=75, minimum_executable_quantity=75, order_value=7_500.0,
         open_gross_exposure=0.0, realised_loss_today=0.0, is_averaging_down=False,
         envelope=ENVELOPE,
+        lane_permission=True, release_certification=True, account_binding=True,
+        safety_state=True, recovery_state=True, broker_session=True,
+        market_freshness=True, unresolved_exposure=0, daily_loss_remaining=2_000.0,
     )
     order.update(overrides)
     return order
@@ -83,3 +89,53 @@ class TestUnknownIsNeverSmall:
                                        is_averaging_down=True))
         assert {"QUANTITY_ABOVE_MINIMUM", "DAILY_LOSS_UNKNOWN",
                 "AVERAGING_DOWN_PROHIBITED"} <= set(verdict.blockers)
+
+
+class TestTheSystemStateInputs:
+    """Section 21.1: the order is only as safe as the machine sending it."""
+
+    @pytest.mark.parametrize("field,code", [
+        ("lane_permission", "LANE_NOT_PERMITTED"),
+        ("release_certification", "RELEASE_NOT_CERTIFIED"),
+        ("account_binding", "ACCOUNT_BINDING_NOT_READY"),
+        ("safety_state", "SAFETY_BLOCKS_EXPOSURE"),
+        ("recovery_state", "RECOVERY_REQUIRED"),
+        ("broker_session", "BROKER_SESSION_NOT_READY"),
+        ("market_freshness", "MARKET_DATA_STALE"),
+    ])
+    def test_a_false_state_refuses_with_its_own_code(self, field, code):
+        verdict = check_order(**_order(**{field: False}))
+        assert code in verdict.blockers
+
+    @pytest.mark.parametrize("field,code", [
+        ("lane_permission", "LANE_PERMISSION_UNKNOWN"),
+        ("release_certification", "RELEASE_CERTIFICATION_UNKNOWN"),
+        ("account_binding", "ACCOUNT_BINDING_UNKNOWN"),
+        ("safety_state", "SAFETY_STATE_UNKNOWN"),
+        ("recovery_state", "RECOVERY_STATE_UNKNOWN"),
+        ("broker_session", "BROKER_SESSION_UNKNOWN"),
+        ("market_freshness", "MARKET_FRESHNESS_UNKNOWN"),
+        ("unresolved_exposure", "UNRESOLVED_EXPOSURE_UNKNOWN"),
+        ("daily_loss_remaining", "DAILY_LOSS_REMAINING_UNKNOWN"),
+    ])
+    def test_an_unreadable_state_refuses_distinctly_from_a_no(self, field, code):
+        verdict = check_order(**_order(**{field: None}))
+        assert code in verdict.blockers
+
+    def test_open_unresolved_exposure_refuses(self):
+        assert "UNRESOLVED_EXPOSURE_OPEN" in check_order(
+            **_order(unresolved_exposure=1)).blockers
+
+    def test_a_spent_remaining_budget_refuses(self):
+        assert "DAILY_LOSS_BUDGET_SPENT" in check_order(
+            **_order(daily_loss_remaining=0.0)).blockers
+
+    def test_the_defaults_refuse_everything_that_was_not_supplied(self):
+        # A caller that forgets the system state gets a refusal per omission,
+        # never an order.
+        verdict = check_order(
+            quantity=75, minimum_executable_quantity=75, order_value=1.0,
+            open_gross_exposure=0.0, realised_loss_today=0.0,
+            is_averaging_down=False, envelope=ENVELOPE)
+        assert verdict.allowed is False
+        assert len(verdict.blockers) == 9

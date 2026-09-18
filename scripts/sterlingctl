@@ -41,10 +41,15 @@ Usage: sterlingctl <command>
   lanes            the ten lanes, their state, and whether they may originate
   evidence-start   whether the forward sample has actually started at zero
   drills           the twelve failure drills and their record on this build
+  digest           the one-screen daily status, including on a quiet day
+  secrets plan     how many stored secrets would be re-encrypted
+  secrets migrate --to-env-file PATH [--from-key KEY]   re-key every stored secret
   drills record DRILL PASS|FAIL WHO "what happened" [REF]
 
   certify          the release certification gate table for this build
   certify attest GATE PASS|FAIL WHO [REF]   record one human-observed gate
+  certify ci        the nine required CI contexts recorded for this build
+  certify ci-sync   read this build's check runs from GitHub and record them
   bindings         every broker account binding, and which one is active
   bind declare BROKER HOLDER CLIENT_ID SCOPE DEPLOYMENT [EGRESS_PROFILE]
   bind verify|activate|deactivate BINDING_ID
@@ -155,7 +160,7 @@ try:
         os.environ["STERLING_DRILL_STATUS"],
         observed_by=os.environ["STERLING_DRILL_WHO"],
         observed=os.environ["STERLING_DRILL_OBSERVED"],
-        evidence_ref=os.environ.get("STERLING_DRILL_REF", ""),
+        evidence_refs=[r for r in os.environ.get("STERLING_DRILL_REF", "").split(",") if r.strip()],
     )
 except (KeyError, ValueError) as exc:
     print(str(exc))
@@ -177,6 +182,85 @@ print(render_drills(report))
 if report.all_passed:
     sys.exit(0)
 sys.exit(1 if report.failures else 2)
+PY
+    ;;
+
+  secrets)
+    case "${2:-}" in
+      plan)
+        run_py <<'PY'
+import os, sys
+
+from app.services.secret_migration import plan_migration
+
+db = os.environ.get("STERLING_DB_PATH") or "sterling_paper.db"
+plan = plan_migration(db)
+print(f"database {db}")
+for name, count in sorted(plan.counts.items()):
+    print(f"  {name:<44}{count}")
+print(f"  {'total':<44}{plan.total}")
+for name in plan.missing_tables:
+    print(f"  absent: {name}")
+for name in plan.unknown_columns:
+    print(f"  UNDECLARED: {name} — would stay readable under the old key")
+sys.exit(1 if plan.unknown_columns else 0)
+PY
+        exit $?
+        ;;
+      migrate)
+        shift 2
+        ENV_FILE=""; FROM_KEY=""
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --to-env-file) ENV_FILE="${2:-}"; shift 2 ;;
+            --from-key)    FROM_KEY="${2:-}"; shift 2 ;;
+            *) echo "usage: sterlingctl secrets migrate --to-env-file PATH [--from-key KEY]" >&2; exit 64 ;;
+          esac
+        done
+        [ -n "$ENV_FILE" ] || { echo "--to-env-file is required" >&2; exit 64; }
+        echo "This re-encrypts every stored secret and writes new keys to $ENV_FILE."
+        echo "The service must be restarted with those keys afterwards."
+        printf 'Type MIGRATE to continue: '
+        read -r CONFIRM
+        [ "$CONFIRM" = "MIGRATE" ] || { echo "aborted; nothing changed."; exit 1; }
+        STERLING_MIGRATE_ENV_FILE="$ENV_FILE" STERLING_MIGRATE_FROM_KEY="$FROM_KEY" run_py <<'PY'
+import os, sys
+
+from app.services.secret_migration import migrate_secrets
+
+db = os.environ.get("STERLING_DB_PATH") or "sterling_paper.db"
+result = migrate_secrets(
+    db_path=db,
+    env_file=os.environ["STERLING_MIGRATE_ENV_FILE"],
+    old_secret=os.environ.get("STERLING_MIGRATE_FROM_KEY") or None,
+)
+if not result.ok:
+    print(f"migration did NOT happen: {result.error}")
+    if result.backup_path:
+        print(f"backup: {result.backup_path}")
+    sys.exit(1)
+
+print(f"re-encrypted {result.migrated} value(s); {result.verified} verified under the new key")
+print(f"backup     {result.backup_path}")
+print(f"new keys   {result.env_file}  (mode 600 — move it off this repository)")
+print()
+print("Next: restart with ENVIRONMENT=production and both secrets from that file,")
+print("then run `sterlingctl doctor` and a fresh Kite login.")
+PY
+        exit $?
+        ;;
+      *)
+        echo "usage: sterlingctl secrets plan | secrets migrate --to-env-file PATH" >&2
+        exit 64
+        ;;
+    esac
+    ;;
+
+  digest)
+    run_py <<'PY'
+from app.services.daily_digest import build_digest, render_digest
+
+print(render_digest(build_digest()))
 PY
     ;;
 
@@ -430,6 +514,43 @@ PY
     ;;
 
   certify)
+    if [ "${2:-}" = "ci" ]; then
+      run_py <<'PY'
+import sys
+
+from app.core.ci_certification import ci_report, render_ci
+from app.core.release_manifest import runtime_sha
+
+report = ci_report(runtime_sha())
+print(render_ci(report))
+sys.exit(0 if report.all_passed else (1 if report.failures else 2))
+PY
+      exit $?
+    fi
+    if [ "${2:-}" = "ci-sync" ]; then
+      run_py <<'PY'
+import sys
+
+from app.core.ci_certification import ci_report, render_ci
+from app.core.release_manifest import runtime_sha
+from app.services.ci_context_sync import sync_ci_contexts
+
+sha = runtime_sha()
+result = sync_ci_contexts(sha)
+if result.error:
+    print(f"could not read GitHub check runs for {sha[:12]}: {result.error}")
+    sys.exit(2)
+
+print(f"recorded {len(result.recorded)} context(s) for {sha[:12]}")
+for name in result.recorded:
+    print(f"  {name}")
+print()
+report = ci_report(sha)
+print(render_ci(report))
+sys.exit(0 if report.all_passed else (1 if report.failures else 2))
+PY
+      exit $?
+    fi
     if [ "${2:-}" = "attest" ]; then
       STERLING_GATE="${3:-}" STERLING_STATUS="${4:-}" STERLING_WHO="${5:-}" \
       STERLING_REF="${6:-}" run_py <<'PY'

@@ -42,8 +42,8 @@ class TestTheSequenceStopsAtTheFirstNonPass:
         assert report.exit_code == 2
         assert "That is not a pass" in render_report(report)
 
-    def test_all_eleven_passing_completes(self):
-        report = start_sequence([_step(i, f"s{i}", True) for i in range(1, 12)])
+    def test_all_thirteen_passing_completes(self):
+        report = start_sequence([_step(i, f"s{i}", True) for i in range(1, 14)])
         assert report.completed is True
         assert report.exit_code == 0
         assert report.stopped_at is None
@@ -192,13 +192,62 @@ class TestTheOperatorCanReadIt:
 
     def test_a_clean_run_says_so_without_qualification(self):
         report = LifecycleReport(action="start",
-                                 steps=[StepResult(i, f"s{i}", True) for i in range(1, 12)])
+                                 steps=[StepResult(i, f"s{i}", True) for i in range(1, 14)])
         assert "completed; every step ran and passed" in render_report(report)
 
 
 def test_the_documented_step_counts_match_the_spec():
-    """Eleven start steps and five stop steps, as the runbook promises."""
-    assert len(lifecycle.START_STEPS) == 11
+    """Thirteen start steps and five stop steps, as the runbook promises.
+
+    The go-live specification adds production-secret validation and the account
+    binding, and moves release identity ahead of starting the service.
+    """
+    assert len(lifecycle.START_STEPS) == 13
     assert len(lifecycle.STOP_STEPS) == 5
     assert [s().step for s in ()] == []  # no accidental empty-sequence pass
     assert start_sequence([]).completed is False
+
+
+class TestTheGoLiveOrdering:
+    """Section 9.1: identity and secrets are verified before the service runs."""
+
+    def test_release_identity_and_secrets_precede_starting_the_unit(self):
+        names = [f.__name__ for f in lifecycle.START_STEPS]
+        assert names.index("_step_release_identity") < names.index("_step_start_unit")
+        assert names.index("_step_production_security") < names.index("_step_start_unit")
+        assert names.index("_step_account_binding") < names.index("_step_start_unit")
+
+    def test_the_broker_is_only_reached_after_health(self):
+        names = [f.__name__ for f in lifecycle.START_STEPS]
+        assert names.index("_step_wait_health") < names.index("_step_broker_connected")
+
+    def test_a_development_environment_is_unknown_not_a_pass(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        result = lifecycle._step_production_security()
+        # "We were not in production" is not a security verdict.
+        assert result.ok is None
+        assert "development" in result.detail
+
+    def test_a_refused_production_secret_fails_the_step(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        def _refuse():
+            raise RuntimeError("Production security error: STERLING_SECRET_KEY too short")
+
+        monkeypatch.setattr("app.core.security.validate_production_security", _refuse)
+        result = lifecycle._step_production_security()
+        assert result.ok is False
+        assert "STERLING_SECRET_KEY" in result.detail
+
+    def test_no_active_binding_fails_the_step(self, monkeypatch):
+        monkeypatch.setattr("app.services.account_binding_service.binding_health",
+                            lambda: {"live_ready": False, "reason": "no ACTIVE binding"})
+        result = lifecycle._step_account_binding()
+        assert result.ok is False
+
+    def test_an_unreadable_binding_store_is_unknown(self, monkeypatch):
+        def _boom():
+            raise RuntimeError("manifest directory missing")
+
+        monkeypatch.setattr("app.services.account_binding_service.binding_health", _boom)
+        assert lifecycle._step_account_binding().ok is None

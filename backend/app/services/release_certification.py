@@ -75,7 +75,9 @@ _GATES_BY_KEY: Final[Mapping[str, Gate]] = {g.key: g for g in RELEASE_GATES}
 
 #: Gates composed from a per-item register rather than attested in one line.
 #: `certify attest` refuses these: the register is the attestation, item by item.
-_DERIVED_GATES: Final[frozenset[str]] = frozenset({"failure_drills", "open_exposure"})
+_DERIVED_GATES: Final[frozenset[str]] = frozenset(
+    {"failure_drills", "open_exposure", "remote_ci"}
+)
 
 #: The gates RELEASE_READY is the conjunction of. Every gate blocks something,
 #: but these are the ones that block shipping at all.
@@ -328,6 +330,32 @@ def _failure_drills_gate(sha: str) -> GateResult:
                       "on this build")
 
 
+def _remote_ci_gate(sha: str) -> GateResult:
+    """All nine required contexts, recorded against this exact commit.
+
+    Derived rather than attested. "CI was green" cannot say which contexts ran,
+    and a green run on another commit is the mistake this replaces.
+    """
+    try:
+        from app.core.ci_certification import REQUIRED_CONTEXTS, ci_report
+    except Exception as exc:  # pragma: no cover - import guard
+        return GateResult("remote_ci", UNKNOWN, f"CI record store unavailable: {exc}")
+
+    report = ci_report(sha)
+    if report.all_passed:
+        runs = ", ".join(sorted({r.run_id for r in report.records if r.run_id}))
+        return GateResult("remote_ci", PASS,
+                          f"all {len(REQUIRED_CONTEXTS)} required contexts succeeded"
+                          + (f" (runs {runs})" if runs else ""),
+                          attested_by="github-actions")
+    if report.failures:
+        return GateResult("remote_ci", FAIL,
+                          "failed: " + ", ".join(r.context for r in report.failures))
+    return GateResult("remote_ci", UNKNOWN,
+                      f"{len(report.unknowns)} of {len(REQUIRED_CONTEXTS)} required "
+                      "contexts have no record on this commit")
+
+
 def _open_exposure_gate() -> GateResult:
     """Derived, not attested: nobody may declare exposure closed that is open."""
     from app.services.exposure_snapshot import exposure_snapshot
@@ -373,6 +401,7 @@ def certification_report(
         # what the system did when it was.
         "failure_drills": _failure_drills_gate(resolved_sha),
         "open_exposure": _open_exposure_gate(),
+        "remote_ci": _remote_ci_gate(resolved_sha),
     }
 
     results: list[GateResult] = []

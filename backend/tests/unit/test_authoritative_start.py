@@ -33,6 +33,7 @@ def _complete_row(**overrides):
         "universe_hash": "u1",
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
         "evidence_class": "paper",
+        "execution_vehicle": "OPTIONS_LONG",
     }
     row.update(overrides)
     return row
@@ -40,25 +41,30 @@ def _complete_row(**overrides):
 
 class TestTheThirteenFields:
     def test_the_required_set_is_exactly_the_specified_thirteen(self):
-        assert len(REQUIRED_ROW_FIELDS) == 13
+        assert len(REQUIRED_ROW_FIELDS) == 14
         assert set(REQUIRED_ROW_FIELDS) == {
             "strategy_id", "strategy_version", "mode", "mode_version", "lane_key",
-            "identity_hash", "runtime_sha", "release_tag", "config_hash",
-            "rule_hash", "universe_hash", "evidence_schema_version", "evidence_class",
+            "identity_hash", "execution_vehicle", "runtime_sha", "release_tag",
+            "config_hash", "rule_hash", "universe_hash", "evidence_schema_version",
+            "execution_regime",
         }
 
     def test_a_complete_row_is_complete(self):
         assert missing_fields(_complete_row()) == ()
 
-    def test_the_warehouse_spelling_of_the_runtime_sha_is_accepted(self):
-        """The column is `runtime_build_sha`; the rule is about the row."""
+    def test_the_warehouse_spellings_are_accepted(self):
+        """The columns are `runtime_build_sha` and `evidence_class`.
+
+        The rule is about what the row can answer, not about column names.
+        """
         row = _complete_row()
-        assert "runtime_sha" not in row
+        assert "runtime_sha" not in row and "execution_regime" not in row
         assert missing_fields(row) == ()
 
     @pytest.mark.parametrize("field", REQUIRED_ROW_FIELDS)
     def test_each_field_is_actually_required(self, field):
-        column = "runtime_build_sha" if field == "runtime_sha" else field
+        column = {"runtime_sha": "runtime_build_sha",
+                  "execution_regime": "evidence_class"}.get(field, field)
         assert missing_fields(_complete_row(**{column: ""})) == (field,)
 
     def test_whitespace_is_not_a_value(self):

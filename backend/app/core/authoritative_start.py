@@ -34,7 +34,7 @@ __all__ = [
 #: Bumped when the required set below changes. A row carries the version it was
 #: written under, so a reader can tell "this field did not exist yet" from "the
 #: writer forgot it" — the two look identical in an empty column.
-EVIDENCE_SCHEMA_VERSION: Final[str] = "2"
+EVIDENCE_SCHEMA_VERSION: Final[str] = "3"
 
 #: Every authoritative row must carry all of these. The order is the order the
 #: specification lists them in, so the two can be read side by side.
@@ -51,13 +51,24 @@ REQUIRED_ROW_FIELDS: Final[tuple[str, ...]] = (
     "rule_hash",
     "universe_hash",
     "evidence_schema_version",
-    "evidence_class",
+    # Which vehicle produced the row, and which execution regime it belongs to.
+    # The same signal in bought options and in futures is two experiments, and
+    # a paper row and a broker row answer two different questions — neither
+    # distinction survives if the row does not carry it.
+    "execution_vehicle",
+    "execution_regime",
 )
+#: Fourteen, matching the specification's list exactly. `evidence_class` is not
+#: a fourteenth field: it is how the warehouse spells `execution_regime`, and
+#: requiring both would have counted one column twice.
 
 #: The warehouse stores the runtime SHA under its build-era name. Reading either
 #: spelling keeps the rule about the row, not about the column name.
 _ALIASES: Final[dict[str, tuple[str, ...]]] = {
     "runtime_sha": ("runtime_sha", "runtime_build_sha"),
+    # The regime is the evidence class by another name: the warehouse stores
+    # `evidence_class`, and PAPER/SHADOW/BROKER are exactly the three regimes.
+    "execution_regime": ("execution_regime", "evidence_class"),
 }
 
 

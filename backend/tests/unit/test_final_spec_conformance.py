@@ -22,21 +22,26 @@ BACKEND = Path(__file__).resolve().parents[2]
 
 # -- §5 fresh authoritative evidence store ----------------------------------
 
-def test_section_5_every_authoritative_row_carries_thirteen_fields():
+def test_section_14_every_authoritative_row_carries_fourteen_fields():
     from app.core.authoritative_start import REQUIRED_ROW_FIELDS
 
-    assert len(REQUIRED_ROW_FIELDS) == 13
+    assert len(REQUIRED_ROW_FIELDS) == 14
+    # The go-live specification adds the two that separate one experiment from
+    # another: which vehicle traded it, and which regime observed it.
+    assert {"execution_vehicle", "execution_regime"} <= set(REQUIRED_ROW_FIELDS)
 
 
-def test_section_5_the_warehouse_can_store_all_thirteen():
+def test_section_14_the_warehouse_can_store_every_required_field():
     """A required field with no column is a rule nothing can obey."""
     from app.core.authoritative_start import REQUIRED_ROW_FIELDS
     from app.services.snapback_observation_warehouse import SnapbackObservationWarehouse
 
     columns = set(SnapbackObservationWarehouse._LANE_IDENTITY_COLUMNS)
-    # runtime_sha is stored under its build-era name; the rest are literal.
-    expected = {f for f in REQUIRED_ROW_FIELDS if f != "runtime_sha"}
-    assert expected <= columns | {"mode", "strategy_id"}
+    # Two fields are stored under the warehouse's own spelling: the runtime SHA
+    # under its build-era name, and the execution regime as `evidence_class`.
+    stored_elsewhere = {"runtime_sha", "execution_regime"}
+    assert {f for f in REQUIRED_ROW_FIELDS if f not in stored_elsewhere} <= columns
+    assert "evidence_class" in columns
 
 
 def test_section_5_an_unreadable_count_is_never_zero():
@@ -151,10 +156,10 @@ def test_section_12_the_doctor_covers_the_deployment_host():
 
 # -- §13 one-command lifecycle ----------------------------------------------
 
-def test_section_13_start_is_eleven_steps_and_stop_is_five():
+def test_section_9_start_is_thirteen_steps_and_stop_is_five():
     from app.services.service_lifecycle import START_STEPS, STOP_STEPS
 
-    assert len(START_STEPS) == 11
+    assert len(START_STEPS) == 13
     assert len(STOP_STEPS) == 5
 
 
@@ -285,3 +290,60 @@ def test_the_unverifiable_sections_are_named_not_assumed():
 
     keys = {g.key for g in RELEASE_GATES}
     assert {"kite_live_acceptance", "remote_ci"} <= keys
+
+
+# -- go-live specification ---------------------------------------------------
+
+def test_golive_section_5_ci_is_recorded_per_context_against_one_sha():
+    from app.core.ci_certification import REQUIRED_CONTEXTS
+
+    assert len(REQUIRED_CONTEXTS) == 9
+
+
+def test_golive_section_5_remote_ci_cannot_be_attested_in_one_line():
+    from app.services.release_certification import _DERIVED_GATES
+
+    assert "remote_ci" in _DERIVED_GATES
+
+
+def test_golive_section_8_the_manifest_carries_its_certification():
+    from app.core.release_manifest import build_release_manifest
+
+    manifest = build_release_manifest()
+    assert "certification" in manifest
+    assert "account_binding_id" in manifest
+    assert manifest["live_execution_enabled"] is False
+
+
+def test_golive_section_7_the_migration_is_all_or_nothing():
+    import inspect
+
+    from app.services.secret_migration import migrate_secrets
+
+    source = inspect.getsource(migrate_secrets)
+    # The write happens once, after every value has round-tripped.
+    assert "aborted before writing" in source
+    assert "restored from backup" in source
+
+
+def test_golive_section_11_deployment_identity_is_observed_not_configured():
+    from app.core.deployment_identity import DeploymentObservation
+
+    fields = DeploymentObservation.__dataclass_fields__
+    assert {"host_id", "outbound_ip", "observed_at", "router_generation",
+            "runtime_sha", "release_tag"} <= set(fields)
+
+
+def test_golive_section_20_a_lane_needs_three_independent_verdicts():
+    from app.core.lane_verdicts import Verdict, compose_lane_verdicts
+
+    verdicts = compose_lane_verdicts(
+        "snapback:swing", economic=True, shadow_execution=True, operational=None)
+    assert verdicts.eligible_for_live_minimum is False
+    assert verdicts.operational is Verdict.UNKNOWN
+
+
+def test_golive_section_24_a_quiet_day_still_produces_a_digest():
+    from app.services.daily_digest import build_digest
+
+    assert build_digest().generated_at

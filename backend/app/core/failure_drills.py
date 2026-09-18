@@ -86,7 +86,8 @@ class DrillResult:
     status: str = UNKNOWN
     observed: str = ""
     observed_by: str = ""
-    evidence_ref: str = ""
+    evidence_refs: tuple[str, ...] = ()
+    started_at: str = ""
     recorded_at: str = ""
 
     @property
@@ -99,7 +100,8 @@ class DrillResult:
             "status": self.status,
             "observed": self.observed,
             "observed_by": self.observed_by,
-            "evidence_ref": self.evidence_ref,
+            "evidence_refs": list(self.evidence_refs),
+            "started_at": self.started_at,
             "recorded_at": self.recorded_at,
         }
 
@@ -122,12 +124,18 @@ class DrillRegister:
         for row in payload.get("drills", []):
             key = str(row.get("key") or "")
             if key:
+                refs = row.get("evidence_refs")
+                if refs is None:
+                    # Records written before the schema carried several refs.
+                    single = str(row.get("evidence_ref") or "")
+                    refs = [single] if single else []
                 out[key] = DrillResult(
                     key=key,
                     status=str(row.get("status") or UNKNOWN),
                     observed=str(row.get("observed") or ""),
                     observed_by=str(row.get("observed_by") or ""),
-                    evidence_ref=str(row.get("evidence_ref") or ""),
+                    evidence_refs=tuple(str(r) for r in refs if str(r).strip()),
+                    started_at=str(row.get("started_at") or ""),
                     recorded_at=str(row.get("recorded_at") or ""),
                 )
         return out
@@ -140,7 +148,8 @@ class DrillRegister:
         *,
         observed_by: str,
         observed: str = "",
-        evidence_ref: str = "",
+        evidence_refs: Iterable[str] = (),
+        started_at: str = "",
     ) -> DrillResult:
         """Record what one drill actually did on one exact build."""
         if key not in DRILLS_BY_KEY:
@@ -159,7 +168,9 @@ class DrillRegister:
         existing = self.read(sha)
         existing[key] = DrillResult(
             key=key, status=status, observed=observed.strip(),
-            observed_by=observed_by.strip(), evidence_ref=evidence_ref.strip(),
+            observed_by=observed_by.strip(),
+            evidence_refs=tuple(str(r).strip() for r in evidence_refs if str(r).strip()),
+            started_at=started_at.strip() or _now(),
             recorded_at=_now(),
         )
         self.directory.mkdir(parents=True, exist_ok=True)
