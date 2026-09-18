@@ -186,9 +186,9 @@ async function openFamilyTab(page: any) {
   await expect(family).toBeVisible({ timeout: 15_000 });
   await family.click();
 
-  await expect(
-    page.getByTestId('family-operations').or(page.getByTestId('family-unreachable')),
-  ).toBeVisible({ timeout: 15_000 });
+  // The container renders in both states, and the unreachable alert lives
+  // INSIDE it — an `.or()` of the two matches both and trips strict mode.
+  await expect(page.getByTestId('family-operations')).toBeVisible({ timeout: 15_000 });
 }
 
 test.describe('Family production operations', () => {
