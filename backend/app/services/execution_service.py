@@ -198,11 +198,21 @@ class CanonicalExecutionService:
         uid: str = "default",
         account_id: str = "default",
         exposure_effect: ExposureEffect = ExposureEffect.INCREASE_EXPOSURE,
+        strategy_id: str = "",
+        ignore_intent_keys: Tuple[str, ...] = (),
     ) -> Tuple[bool, str]:
-        from app.services import live_safety
-        decision = live_safety.assert_safe_to_trade([], uid=uid, account_id=account_id, exposure_effect=exposure_effect.value)
-        if not decision.allowed:
-            return False, decision.reason
+        """Ask the one safety authority. Never decide admission locally."""
+        from app.services.safety_supervisor import SafetySupervisor
+
+        verdict = SafetySupervisor().authorize(
+            exposure_effect.value,
+            uid=uid,
+            account_id=account_id,
+            strategy_id=strategy_id,
+            ignore_intent_keys=ignore_intent_keys,
+        )
+        if not verdict.allowed:
+            return False, verdict.reason
         return True, "OK"
 
     async def submit_order(
@@ -299,6 +309,7 @@ class CanonicalExecutionService:
             uid=request.uid,
             account_id=request.account_id,
             exposure_effect=effective_effect,
+            strategy_id=request.strategy_id,
         )
         if not allowed:
             log.warning("Execution rejected by control plane: %s", reason)
@@ -399,7 +410,35 @@ class CanonicalExecutionService:
                 error=f"Broker client account identity ({client_acct}) missing or does not match request account identity ({request.account_id})",
             )
 
-        # 5. Broker Send using real KiteClient signature & arguments
+        # 5. Last check before the account is touched.
+        #
+        # Everything above — the risk approval, the family gate, the journal
+        # reservation, the account identity check — takes time, and an operator
+        # who engages SAFE_MODE during that window expects no order to follow.
+        # Checking admission once at the top of submit_order left exactly that
+        # race open, so the same authority is asked again here, with nothing
+        # between it and the send.
+        if is_exposure_increasing:
+            still_allowed, still_reason = self.is_trading_allowed(
+                uid=request.uid,
+                account_id=request.account_id,
+                exposure_effect=effective_effect,
+                strategy_id=request.strategy_id,
+                ignore_intent_keys=(intent.intent_key,),
+            )
+            if not still_allowed:
+                order_journal.transition(
+                    intent.intent_key, "REJECTED", error=f"Safety engaged before send: {still_reason}"
+                )
+                log.warning("Execution rejected at the broker boundary: %s", still_reason)
+                return ExecutionResult(
+                    success=False,
+                    status="HALTED",
+                    intent_key=intent.intent_key,
+                    error=still_reason,
+                )
+
+        # 6. Broker Send using real KiteClient signature & arguments
         order_id = ""
         try:
             place_fn = getattr(broker_client, "place_order", None)

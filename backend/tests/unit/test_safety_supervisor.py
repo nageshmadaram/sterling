@@ -1,328 +1,203 @@
-"""Health composition, cross-lane exposure, and the four-level risk hierarchy.
+"""One safety authority, and it is checked at the broker boundary.
 
-Each of these fails closed in a different way, and each default is the one that
-costs money if it is wrong the other way round.
+Sterling used to keep four switches that each meant "stop" and were each read by
+a different part of the code. The two properties worth testing are that engaging
+any one of them refuses new exposure everywhere, and that engaging one *after* a
+submission has already passed admission still stops the order — because the
+window between "admitted" and "sent" is exactly when an operator reaches for the
+switch.
 """
 from __future__ import annotations
 
 import pytest
 
-from app.core.exposure import (
-    Exposure,
-    ExposureCoordinator,
-    ExposureVerdict,
-    Interaction,
-    is_averaging_down,
+from app.services import db, live_safety
+from app.services.execution_service import (
+    CanonicalExecutionService,
+    ExecutionRequest,
+    ExposureEffect,
+    RiskApproval,
 )
-from app.core.health import (
-    REQUIRED_COMPONENTS,
-    ComponentHealth,
-    SystemHealth,
-    compose_health,
-    worst,
-)
-from app.core.risk_hierarchy import (
-    INCONCLUSIVE,
-    RiskConfigurationError,
-    RiskHierarchy,
-    RiskLevel,
-)
+from app.services.safe_mode import SafeModeService, SafeModeTrigger
+from app.services.safety_supervisor import ExposureIntent, SafetySupervisor
 
 
-def _all_ok(**over) -> dict[str, ComponentHealth]:
-    components = {
-        name: ComponentHealth(name, SystemHealth.NORMAL)
-        for name in REQUIRED_COMPONENTS
-    }
-    components.update(over)
-    return components
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    db_file = str(tmp_path / "supervisor.db")
+    monkeypatch.setenv("STERLING_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_DB_PATH", db_file)
+    monkeypatch.setattr(db, "_available", True)
+    db.init()
 
+    safe_file = tmp_path / "safe_mode.json"
+    monkeypatch.setenv("STERLING_SAFE_MODE_FILE", str(safe_file))
+    SafeModeService(safe_file).initialise(operator_ack=True, note="test")
 
-# ── health ────────────────────────────────────────────────────────────────
+    monkeypatch.setenv("STERLING_NEW_TRADES_HALT_PATH", str(tmp_path / "halt.json"))
 
-
-def test_all_normal_composes_to_normal():
-    report = compose_health(_all_ok())
-    assert report.overall is SystemHealth.NORMAL
-    assert report.may_open_new_exposure is True
-    assert report.missing == ()
-
-
-def test_the_most_severe_component_wins():
-    report = compose_health(
-        _all_ok(
-            safe_mode=ComponentHealth("safe_mode", SystemHealth.SAFE_MODE),
-            broker=ComponentHealth("broker", SystemHealth.BROKER_ERROR),
-        )
+    live_safety.reset_all_for_tests()
+    db.set_execution_control(
+        operator_state="RUNNING",
+        recovery_state="CLEAN",
+        reason="startup recovery complete",
+        actor="tests",
     )
-    assert report.overall is SystemHealth.BROKER_ERROR
+    yield safe_file
+    live_safety.reset_all_for_tests()
 
 
-def test_recovery_required_outranks_everything():
-    report = compose_health(
-        _all_ok(
-            broker=ComponentHealth("broker", SystemHealth.BROKER_ERROR),
-            evidence=ComponentHealth("evidence", SystemHealth.EVIDENCE_ERROR),
-            reconciliation=ComponentHealth(
-                "reconciliation", SystemHealth.RECOVERY_REQUIRED
-            ),
-        )
+def test_a_clean_system_admits_new_exposure(_isolated_state):
+    assert SafetySupervisor().authorize(ExposureIntent.INCREASE_EXPOSURE).allowed is True
+
+
+def test_safe_mode_refuses_new_exposure(_isolated_state):
+    SafeModeService(_isolated_state).engage(
+        trigger=SafeModeTrigger.OPERATOR, reason="operator stop"
     )
-    assert report.overall is SystemHealth.RECOVERY_REQUIRED
 
+    verdict = SafetySupervisor().authorize(ExposureIntent.INCREASE_EXPOSURE)
 
-@pytest.mark.parametrize("missing", sorted(REQUIRED_COMPONENTS))
-def test_a_silent_component_is_a_failure_not_a_pass(missing):
-    """"Nobody checked the broker" must not read the same as "the broker is fine"."""
-    components = _all_ok()
-    components.pop(missing)
-    report = compose_health(components)
-    assert report.overall is not SystemHealth.NORMAL
-    assert missing in report.missing
-    assert report.may_open_new_exposure is False
-
-
-def test_an_empty_report_is_the_most_severe_state():
-    report = compose_health({})
-    assert report.overall is SystemHealth.RECOVERY_REQUIRED
-    assert set(report.missing) == REQUIRED_COMPONENTS
-
-
-def test_managing_existing_exposure_is_never_blocked():
-    report = compose_health({})
-    assert report.may_manage_existing_exposure is True
-
-
-def test_worst_of_nothing_is_not_normal():
-    assert worst() is SystemHealth.RECOVERY_REQUIRED
-
-
-# ── exposure ──────────────────────────────────────────────────────────────
-
-
-def _pos(lane="snapback:swing", **over) -> Exposure:
-    base = dict(
-        lane_key=lane,
-        underlying="NIFTY",
-        exchange="NFO",
-        tradingsymbol="NIFTY26SEP24000CE",
-        direction="long",
-        quantity=75,
-        expiry="2026-09-24",
-        strike=24000.0,
-        option_type="CE",
-    )
-    base.update(over)
-    return Exposure(**base)
-
-
-COORD = ExposureCoordinator()
-
-
-def test_an_unrelated_underlying_is_allowed():
-    other = _pos(
-        lane="supertrend:swing",
-        underlying="RELIANCE",
-        tradingsymbol="RELIANCE26SEP3000CE",
-    )
-    assert COORD.evaluate(other, [_pos()]).allowed is True
-
-
-def test_an_empty_book_allows_anything():
-    assert COORD.evaluate(_pos(), []).allowed is True
-
-
-def test_the_same_contract_in_the_same_direction_is_refused():
-    """This is averaging down wearing a second lane's label."""
-    decision = COORD.evaluate(_pos(lane="supertrend:swing"), [_pos()])
-    assert decision.allowed is False
-    assert decision.interaction is Interaction.SAME_CONTRACT
-    assert decision.conflicting_lane == "snapback:swing"
-
-
-def test_the_same_contract_in_the_opposite_direction_is_refused():
-    decision = COORD.evaluate(
-        _pos(lane="supertrend:swing", direction="short"), [_pos()]
-    )
-    assert decision.allowed is False
-    assert decision.interaction is Interaction.SAME_CONTRACT
-
-
-def test_same_underlying_and_expiry_same_side_is_refused():
-    other = _pos(
-        lane="supertrend:swing", tradingsymbol="NIFTY26SEP24500CE", strike=24500.0
-    )
-    decision = COORD.evaluate(other, [_pos()])
-    assert decision.allowed is False
-    assert decision.interaction is Interaction.SAME_EXPIRY
-
-
-def test_an_undeclared_interaction_refuses_and_says_so():
-    """A spread may be sensible; it has never been specified, sized or costed."""
-    other = _pos(
-        lane="supertrend:swing",
-        tradingsymbol="NIFTY26SEP24500PE",
-        strike=24500.0,
-        option_type="PE",
-        direction="short",
-    )
-    decision = COORD.evaluate(other, [_pos()])
-    assert decision.allowed is False
-    assert decision.reason == "EXPOSURE_INTERACTION_UNDECLARED"
-
-
-def test_the_closest_conflict_is_reported_first():
-    """Three conflicts; the operator needs the one they can act on."""
-    far = _pos(lane="a", expiry="2026-10-29", tradingsymbol="NIFTY26OCT24000CE")
-    near = _pos(lane="b")
-    decision = COORD.evaluate(_pos(lane="c"), [far, near])
-    assert decision.interaction is Interaction.SAME_CONTRACT
-    assert decision.conflicting_lane == "b"
-
-
-def test_an_exchange_difference_makes_it_a_different_contract():
-    """A SENSEX option lives on BFO; identity is carried, never rebuilt."""
-    bfo = _pos(
-        lane="supertrend:swing",
-        underlying="SENSEX",
-        exchange="BFO",
-        tradingsymbol="SENSEX26SEP80000CE",
-    )
-    assert COORD.evaluate(bfo, [_pos()]).allowed is True
-
-
-def test_averaging_down_is_detected_independently():
-    assert is_averaging_down(_pos(lane="other"), [_pos()]) is True
-    assert is_averaging_down(_pos(lane="other", direction="short"), [_pos()]) is False
-    assert is_averaging_down(_pos(), []) is False
-
-
-def test_a_permissive_policy_must_be_declared_explicitly():
-    """Nothing is allowed by omission; widening is an explicit act."""
-    permissive = ExposureCoordinator(
-        {
-            (Interaction.SAME_EXPIRY, False): ExposureVerdict.ALLOW,
-            (Interaction.UNRELATED, True): ExposureVerdict.ALLOW,
-            (Interaction.UNRELATED, False): ExposureVerdict.ALLOW,
-        }
-    )
-    spread = _pos(
-        lane="supertrend:swing",
-        tradingsymbol="NIFTY26SEP24500PE",
-        strike=24500.0,
-        option_type="PE",
-        direction="short",
-    )
-    assert permissive.evaluate(spread, [_pos()]).allowed is True
-    # Still refuses the relationships it did not declare.
-    assert permissive.evaluate(_pos(lane="x"), [_pos()]).allowed is False
-
-
-# ── risk hierarchy ────────────────────────────────────────────────────────
-
-
-LANE = "snapback:swing"
-
-
-def _hierarchy(**over) -> RiskHierarchy:
-    limits = {
-        RiskLevel.GLOBAL: {"": 100_000.0},
-        RiskLevel.STRATEGY: {"snapback": 60_000.0},
-        RiskLevel.MODE: {LANE: 30_000.0},
-        RiskLevel.POSITION: {LANE: 10_000.0},
-    }
-    limits.update(over)
-    return RiskHierarchy(limits=limits)
-
-
-def test_a_request_inside_every_limit_is_allowed():
-    assert _hierarchy().check(
-        strategy_id="snapback", lane_key=LANE, requested=5_000.0
-    ).allowed is True
+    assert verdict.allowed is False
+    assert verdict.code == "safe_mode"
+    assert "operator stop" in verdict.reason
 
 
 @pytest.mark.parametrize(
-    "level,used",
+    "effect",
     [
-        (RiskLevel.GLOBAL, {RiskLevel.GLOBAL: 99_000.0}),
-        (RiskLevel.STRATEGY, {RiskLevel.STRATEGY: 59_000.0}),
-        (RiskLevel.MODE, {RiskLevel.MODE: 29_000.0}),
-        (RiskLevel.POSITION, {RiskLevel.POSITION: 9_000.0}),
+        ExposureIntent.REDUCE_EXPOSURE,
+        ExposureIntent.CLOSE_POSITION,
+        ExposureIntent.PROTECT_POSITION,
+        ExposureIntent.CANCEL_ORDER,
+        ExposureIntent.RECONCILE,
     ],
 )
-def test_every_level_can_block_on_its_own(level, used):
-    decision = _hierarchy().check(
-        strategy_id="snapback", lane_key=LANE, requested=5_000.0, used=used
+def test_safe_mode_never_blocks_managing_what_is_already_open(_isolated_state, effect):
+    SafeModeService(_isolated_state).engage(
+        trigger=SafeModeTrigger.OPERATOR, reason="operator stop"
     )
+
+    assert SafetySupervisor().authorize(effect).allowed is True
+
+
+def test_a_missing_safety_state_refuses_new_exposure(_isolated_state):
+    _isolated_state.unlink()
+
+    verdict = SafetySupervisor().authorize(ExposureIntent.INCREASE_EXPOSURE)
+
+    assert verdict.allowed is False
+    assert verdict.code == "safe_mode"
+    assert verdict.snapshot is not None
+    assert SafeModeTrigger.SAFETY_STATE_UNAVAILABLE in verdict.snapshot.safe_mode_triggers
+
+
+def test_the_durable_halt_and_safe_mode_are_one_answer(_isolated_state):
+    """The operator switch and the control plane must not disagree."""
+    db.set_operator_state(operator_state="HALTED", reason="maintenance")
+
+    verdict = SafetySupervisor().authorize(ExposureIntent.INCREASE_EXPOSURE)
+    assert verdict.allowed is False
+
+    snap = SafetySupervisor().snapshot()
+    assert snap.operator_state == "HALTED"
+    assert snap.may_increase_exposure is False
+    assert snap.may_reduce_exposure is True
+    assert snap.may_protect is True
+    assert snap.may_reconcile is True
+
+
+def test_the_family_stop_switch_blocks_snapback_only(_isolated_state):
+    from app.services.snapback_family_ops import set_new_trades_halted
+
+    set_new_trades_halted(True, reason="operator pause")
+
+    assert (
+        SafetySupervisor()
+        .authorize(ExposureIntent.INCREASE_EXPOSURE, strategy_id="snapback")
+        .allowed
+        is False
+    )
+    assert (
+        SafetySupervisor()
+        .authorize(ExposureIntent.INCREASE_EXPOSURE, strategy_id="supertrend")
+        .allowed
+        is True
+    )
+
+
+def test_live_safety_inherits_the_same_authority(_isolated_state):
+    """Every existing caller of assert_safe_to_trade sees SAFE_MODE too."""
+    SafeModeService(_isolated_state).engage(
+        trigger=SafeModeTrigger.PROTECTION_MISSING, reason="GTT missing"
+    )
+
+    decision = live_safety.assert_safe_to_trade([], exposure_effect="INCREASE_EXPOSURE")
     assert decision.allowed is False
-    assert decision.level is level
-    assert decision.reason == f"RISK_LIMIT_EXCEEDED_{level.value.upper()}"
+    assert decision.code == "safe_mode"
+
+    assert live_safety.assert_safe_to_trade(
+        [], exposure_effect="CLOSE_POSITION"
+    ).allowed is True
 
 
-def test_the_broadest_breach_is_reported_first():
-    decision = _hierarchy().check(
-        strategy_id="snapback",
-        lane_key=LANE,
-        requested=5_000.0,
-        used={RiskLevel.GLOBAL: 99_000.0, RiskLevel.POSITION: 9_000.0},
-    )
-    assert decision.level is RiskLevel.GLOBAL
+class _RecordingBroker:
+    """Engages SAFE_MODE the moment the executor asks for its account identity.
 
+    That read happens after admission and after the journal reservation, so it
+    lands the operator's switch precisely inside the window the old single check
+    left open.
+    """
 
-@pytest.mark.parametrize("level", list(RiskLevel))
-def test_a_missing_limit_is_inconclusive_not_unlimited(level):
-    """A config typo must not become an uncapped position."""
-    limits = _hierarchy().limits
-    pruned = {k: v for k, v in limits.items() if k is not level}
-    decision = RiskHierarchy(limits=pruned).check(
-        strategy_id="snapback", lane_key=LANE, requested=1.0
-    )
-    assert decision.allowed is False
-    assert decision.reason == INCONCLUSIVE
-    assert decision.level is level
+    def __init__(self, safe_file):
+        self._safe_file = safe_file
+        self.sent = []
 
-
-def test_an_unconfigured_lane_cannot_take_risk_even_under_a_configured_strategy():
-    decision = _hierarchy().check(
-        strategy_id="snapback", lane_key="snapback:scalping", requested=1.0
-    )
-    assert decision.reason == INCONCLUSIVE
-    assert decision.level is RiskLevel.MODE
-
-
-def test_missing_scopes_names_exactly_what_is_needed():
-    assert _hierarchy().missing_scopes(
-        strategy_id="supertrend", lane_key="supertrend:swing"
-    ) == ("strategy/supertrend", "mode/supertrend:swing", "position/supertrend:swing")
-    assert _hierarchy().missing_scopes(strategy_id="snapback", lane_key=LANE) == ()
-
-
-def test_a_limit_change_changes_the_config_hash():
-    assert _hierarchy().config_hash != _hierarchy(
-        **{RiskLevel.POSITION: {LANE: 12_000.0}}
-    ).config_hash
-
-
-def test_the_config_hash_ignores_declaration_order():
-    a = RiskHierarchy(
-        limits={RiskLevel.GLOBAL: {"": 1.0}, RiskLevel.MODE: {LANE: 2.0}}
-    )
-    b = RiskHierarchy(
-        limits={RiskLevel.MODE: {LANE: 2.0}, RiskLevel.GLOBAL: {"": 1.0}}
-    )
-    assert a.config_hash == b.config_hash
-
-
-def test_a_negative_limit_is_refused_at_construction():
-    with pytest.raises(RiskConfigurationError):
-        RiskHierarchy(limits={RiskLevel.GLOBAL: {"": -1.0}})
-
-
-def test_negative_usage_is_refused_rather_than_creating_headroom():
-    with pytest.raises(RiskConfigurationError):
-        _hierarchy().check(
-            strategy_id="snapback",
-            lane_key=LANE,
-            requested=1.0,
-            used={RiskLevel.GLOBAL: -50_000.0},
+    @property
+    def _account_id(self):
+        SafeModeService(self._safe_file).engage(
+            trigger=SafeModeTrigger.OPERATOR, reason="operator stop mid-flight"
         )
+        return "acct_race"
+
+    async def place_order(self, **kwargs):
+        self.sent.append(kwargs)
+        return {"order_id": "SHOULD-NOT-EXIST"}
+
+
+@pytest.mark.asyncio
+async def test_safe_mode_engaged_after_admission_still_stops_the_order(_isolated_state):
+    broker = _RecordingBroker(_isolated_state)
+    request = ExecutionRequest(
+        uid="u_race",
+        account_id="acct_race",
+        strategy_id="supertrend",
+        generation_id="g1",
+        signal_id="sig1",
+        exchange="NFO",
+        symbol="NIFTY26SEP24000CE",
+        side="BUY",
+        quantity=75,
+        exposure_effect=ExposureEffect.INCREASE_EXPOSURE,
+    )
+    approval = RiskApproval(
+        approval_id="a1",
+        uid="u_race",
+        account_id="acct_race",
+        strategy_id="supertrend",
+        signal_id="sig1",
+        symbol="NIFTY26SEP24000CE",
+        side="BUY",
+        quantity=75,
+        generation_id="g1",
+        available_capital=500_000.0,
+    )
+
+    result = await CanonicalExecutionService().submit_order(
+        request, broker_client=broker, risk_approval=approval
+    )
+
+    assert broker.sent == []
+    assert result.success is False
+    assert result.status == "HALTED"
+    assert "SAFE_MODE" in result.error

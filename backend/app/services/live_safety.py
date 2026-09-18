@@ -182,7 +182,7 @@ class SafetyDecision:
     allowed:bool; reason:str=""; code:str=""
     def to_dict(self):return {"allowed":self.allowed,"reason":self.reason,"code":self.code}
 
-def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=True, uid: str | None = None, account_id: str | None = None, exposure_effect: str = "INCREASE_EXPOSURE"):
+def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=True, uid: str | None = None, account_id: str | None = None, exposure_effect: str = "INCREASE_EXPOSURE", ignore_intent_keys: tuple[str, ...] = ()):
     try:
         from app.services import db
         u = uid or "default"
@@ -200,8 +200,28 @@ def assert_safe_to_trade(positions, idempotency_key=None, *, check_daily_loss=Tr
             scopes_to_check.append(("account", u, acct))
 
         if is_exposure_increasing:
+            # The durable operator switch, checked here so that every path into the
+            # broker inherits it. It used to be consulted only by Snapback capacity,
+            # which meant an operator could engage safe mode and still watch another
+            # engine place an order.
+            from app.services.safe_mode import SafeModeService
+            from app.services.safety_supervisor import safe_mode_path
+
+            safe_state = SafeModeService(safe_mode_path()).read()
+            if safe_state.active:
+                return SafetyDecision(
+                    False,
+                    f"SAFE_MODE engaged ({', '.join(safe_state.triggers) or 'operator'}): {safe_state.reason}",
+                    "safe_mode",
+                )
+
             from app.services.kite_engine import order_journal
             unresolved = order_journal.unresolved(u, account_id=acct)
+            # The canonical executor re-asks this question with its own intent
+            # already claimed and therefore SUBMITTING. That intent is the order
+            # being decided, not a stray one, so it cannot be its own blocker.
+            if ignore_intent_keys:
+                unresolved = [i for i in unresolved if i.intent_key not in ignore_intent_keys]
             if any(i.state in ("SUBMITTING", "UNKNOWN") or i.reconciliation_required for i in unresolved):
                 return SafetyDecision(False, f"Unresolved journal intent present for {u}/{acct} (broker reconciliation pending)", "recovery_required")
 
