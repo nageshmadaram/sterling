@@ -142,6 +142,40 @@ function serve(page: any, body: Record<string, unknown>) {
 }
 
 async function openFamilyTab(page: any) {
+  // The session guard renders a full-page overlay when Kite reads offline, and
+  // in CI there is no broker session — the overlay then intercepts the click on
+  // the Family tab and every test in this file fails on navigation rather than
+  // on what it is about. Stub the session as connected first.
+  await page.route('**/api/v1/kite/status', (route: any) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        connected: true,
+        is_paper: false,
+        user_name: 'Madaram Nagesh',
+        kite_user_id: 'AA0595',
+        has_credentials: true,
+      }),
+    }),
+  );
+  await page.route('**/api/v1/operations/egress', (route: any) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        expected_ip: null,
+        observed_ip: null,
+        observed_at: null,
+        router_generation: null,
+        verified: null,
+        reason: 'no static address is registered for this deployment',
+        changed_from: null,
+        record_command: 'sterlingctl egress record <ip>',
+      }),
+    }),
+  );
+
   await page.goto('/');
 
   const more = page.getByTestId('rail-more');
