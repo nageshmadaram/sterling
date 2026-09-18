@@ -351,6 +351,25 @@ def _step_evidence_writer() -> StepResult:
 
 
 def _step_clear_recovery() -> StepResult:
+    # CLEAN means "the account is understood", not "Sterling's journal is
+    # empty". A broker position with no Sterling intent behind it is exactly
+    # the case where those two differ, and the local answer is the reassuring
+    # one — so the broker is asked before the state is cleared.
+    from app.services.exposure_snapshot import exposure_snapshot
+
+    snapshot = exposure_snapshot()
+    if snapshot.total is None:
+        return StepResult(13, "clear RECOVERY_REQUIRED", None,
+                          "exposure could not be established: "
+                          + (snapshot.external_detail or snapshot.detail
+                             or "unknown source"))
+    if snapshot.total:
+        detail = f"{snapshot.total} open exposure item(s)"
+        if snapshot.external_positions:
+            detail += (f", including {snapshot.external_positions} the broker holds "
+                       "that Sterling did not open")
+        return StepResult(13, "clear RECOVERY_REQUIRED", False, detail)
+
     try:
         _set_recovery("CLEAN", "STARTUP_COMPLETE",
                       "Start sequence completed; broker reconciled and feed verified")
@@ -409,21 +428,40 @@ def _step_stop_reconcile() -> StepResult:
 
 
 def _step_no_abandoned_exposure() -> StepResult:
-    """Refuse an ordinary shutdown that would abandon something being managed."""
+    """Refuse an ordinary shutdown that would abandon something Sterling manages.
+
+    Sterling-managed exposure blocks: stopping leaves a position with no monitor
+    and no trail. A broker position Sterling never opened does NOT block, and
+    the distinction is deliberate — Sterling is not monitoring it either way, so
+    refusing forever would trap the operator without protecting anything. It is
+    reported, loudly, because the operator may not know it is there.
+    """
     from app.services.exposure_snapshot import exposure_snapshot
 
     snapshot = exposure_snapshot()
-    if snapshot.total is None:
+
+    if snapshot.open_positions is None or snapshot.unresolved_intents is None:
         return StepResult(3, "no exposure left unmanaged", None,
                           snapshot.detail or "durable exposure could not be read")
+
+    external_note = ""
+    if snapshot.external_positions:
+        external_note = (f" (separately: {snapshot.external_positions} broker position(s) "
+                         "Sterling never opened and does not monitor — "
+                         + ", ".join(snapshot.external_instruments[:3]) + ")")
+    elif snapshot.external_positions is None:
+        external_note = " (the broker could not be asked about positions Sterling did not open)"
+
     if snapshot.open_positions:
         return StepResult(3, "no exposure left unmanaged", False,
                           f"{snapshot.open_positions} open position(s) still require "
-                          "monitoring: " + ", ".join(snapshot.held[:5]))
+                          "monitoring: " + ", ".join(snapshot.held[:5]) + external_note)
     if snapshot.unresolved_intents:
         return StepResult(3, "no exposure left unmanaged", False,
-                          f"{snapshot.unresolved_intents} unresolved order intent(s)")
-    return StepResult(3, "no exposure left unmanaged", True)
+                          f"{snapshot.unresolved_intents} unresolved order intent(s)"
+                          + external_note)
+    return StepResult(3, "no exposure left unmanaged", True,
+                      external_note.strip() or "")
 
 
 def _step_stop_unit() -> StepResult:

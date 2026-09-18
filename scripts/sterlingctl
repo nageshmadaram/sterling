@@ -42,6 +42,7 @@ Usage: sterlingctl <command>
   evidence-start   whether the forward sample has actually started at zero
   drills           the twelve failure drills and their record on this build
   digest           the one-screen daily status, including on a quiet day
+  exposure         everything open: Sterling's own, and what the broker holds
   secrets plan     how many stored secrets would be re-encrypted
   secrets migrate --to-env-file PATH [--from-key KEY]   re-key every stored secret
   drills record DRILL PASS|FAIL WHO "what happened" [REF]
@@ -261,6 +262,42 @@ PY
 from app.services.daily_digest import build_digest, render_digest
 
 print(render_digest(build_digest()))
+PY
+    ;;
+
+  exposure)
+    run_py <<'PY'
+import sys
+
+from app.services.exposure_snapshot import exposure_snapshot
+from app.services.external_positions import ExternalExposure, render_external
+
+# One read, shared by both halves of this report: asking the broker twice lets
+# the two halves disagree about the same account.
+snapshot = exposure_snapshot()
+
+print("STERLING'S OWN RECORD")
+print(f"  open positions      {snapshot.open_positions if snapshot.open_positions is not None else 'UNKNOWN'}")
+print(f"  unresolved intents  {snapshot.unresolved_intents if snapshot.unresolved_intents is not None else 'UNKNOWN'}")
+if snapshot.held:
+    print(f"  held                {', '.join(snapshot.held)}")
+if snapshot.detail:
+    print(f"  note                {snapshot.detail}")
+print()
+
+external = snapshot.external
+if external is None:
+    external = ExternalExposure(readable=False, detail=snapshot.external_detail
+                                or "the broker was not asked")
+print(render_external(external))
+print()
+
+total = snapshot.total
+if total is None:
+    print("TOTAL EXPOSURE: UNKNOWN. Unknown is not flat.")
+    sys.exit(2)
+print(f"TOTAL EXPOSURE: {total}")
+sys.exit(0 if total == 0 else 1)
 PY
     ;;
 

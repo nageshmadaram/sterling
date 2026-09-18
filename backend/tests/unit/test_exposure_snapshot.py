@@ -26,6 +26,10 @@ def stores(monkeypatch):
 
     state = {"uids": ["family"], "open": {}, "unresolved": {}}
     monkeypatch.setattr("app.services.db.init", lambda *a, **k: True)
+    # The broker is asked for positions Sterling did not open; these tests are
+    # about the local side, so it answers "nothing external" rather than
+    # UNKNOWN, which would correctly make every total None.
+    monkeypatch.setattr(module, "_external", lambda: (0, "", (), None))
     monkeypatch.setattr(positions, "known_uids", lambda: state["uids"])
     monkeypatch.setattr(positions, "open_positions",
                         lambda uid: state["open"].get(uid, []))
@@ -59,6 +63,17 @@ def test_unresolved_intents_count_as_exposure(stores):
 
 
 class TestUnknownNeverBecomesZero:
+    def test_an_unreadable_broker_makes_the_total_unknown(self, monkeypatch):
+        from app.services.kite_engine import order_journal, positions
+
+        monkeypatch.setattr("app.services.db.init", lambda *a, **k: True)
+        monkeypatch.setattr(positions, "known_uids", lambda: ["family"])
+        monkeypatch.setattr(positions, "open_positions", lambda uid: [])
+        monkeypatch.setattr(order_journal, "unresolved", lambda uid: [])
+        monkeypatch.setattr(module, "_external", lambda: (None, "timed out", (), None))
+        # Local flat plus an unanswerable broker is not flat.
+        assert exposure_snapshot().total is None
+
     def test_an_unopenable_database_is_unknown(self, monkeypatch):
         def _boom(*_a, **_k):
             raise RuntimeError("database is locked")
@@ -115,14 +130,14 @@ class TestTheCertificationGate:
         from app.services.release_certification import _open_exposure_gate
 
         stores["open"]["family"] = [_Position("NIFTY26JAN24000CE")]
-        gate = _open_exposure_gate()
+        gate = _open_exposure_gate(exposure_snapshot())
         assert gate.status == "FAIL"
         assert "NIFTY26JAN24000CE" in gate.detail
 
     def test_the_gate_passes_only_on_a_flat_deployment(self, stores):
         from app.services.release_certification import _open_exposure_gate
 
-        assert _open_exposure_gate().status == "PASS"
+        assert _open_exposure_gate(exposure_snapshot()).status == "PASS"
 
     def test_an_unreadable_store_is_unknown_not_a_pass(self, monkeypatch):
         from app.services.release_certification import _open_exposure_gate

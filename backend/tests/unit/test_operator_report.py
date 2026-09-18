@@ -202,6 +202,9 @@ def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
         "restore_check",
         "safe_mode_state",
         "execution_control_state",
+        # The broker's own answer about what it holds. Sterling's stores read
+        # flat while the account held 16625 of a CDSL call.
+        "broker_flatness",
     }
 
 
