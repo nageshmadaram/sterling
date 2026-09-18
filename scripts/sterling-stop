@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Stop Sterling without abandoning exposure.
+#
+# The stop refuses while a position is open or an order intent is unresolved:
+# walking away from a position with no monitor and no protection is worse than
+# staying up. `--force` is for the operator who has read that refusal and needs
+# the machine to stop anyway; it skips no check and hides no result, it only
+# continues past one.
+set -uo pipefail
+
+STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
+
+FORCE="False"
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE="True" ;;
+    *) echo "usage: sterling-stop [--force]" >&2; exit 64 ;;
+  esac
+done
+
+"$PYTHON" -c "
+import sys
+sys.path.insert(0, '$STERLING_ROOT/backend')
+from app.services.service_lifecycle import render_report, stop_sequence
+
+report = stop_sequence(force=$FORCE)
+print(render_report(report))
+if report.exit_code and $FORCE:
+    print()
+    print('--force was given: the service was stopped despite the refusal above.')
+    sys.exit(0)
+sys.exit(report.exit_code)
+"

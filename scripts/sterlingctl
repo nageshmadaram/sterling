@@ -28,8 +28,8 @@ Usage: sterlingctl <command>
 
   status           what Sterling is doing, and which lanes may open trades
   doctor           run every safety check; non-zero exit means DO NOT TRADE
-  start            doctor, then start (refuses if doctor is unhappy)
-  stop             stop the runner
+  start            the eleven-step start; refuses at the first step that is not a pass
+  stop [--force]   the five-step stop; refuses to abandon open exposure
   safe on|off      block or allow new trades (off needs --ack)
   reconcile        compare local state against the broker
   backup           take a checksummed backup, with a manifest
@@ -104,23 +104,17 @@ case "${1:-}" in
   status)        cmd_status ;;
   doctor)        cmd_doctor ;;
   start)
-    # Recovery is never bypassed: a non-zero doctor stops start here.
-    cmd_doctor || { echo; echo "start refused: doctor is not clean."; exit 1; }
-    shift
-    if [ -x "$STERLING_ROOT/scripts/sterling-start" ]; then
-      exec "$STERLING_ROOT/scripts/sterling-start" "$@"
-    fi
-    echo
-    echo "doctor is clean, but no scripts/sterling-start exists in this checkout."
-    echo "Start the service the way you normally do; the safety gate above passed."
-    exit 0
+    # The doctor is step 2 of the sequence itself, so it is not run twice here:
+    # running it separately would let the state change between the check and the
+    # start, which is the race the single sequence exists to close.
+    [ -x "$STERLING_ROOT/scripts/sterling-start" ] || {
+      echo "no scripts/sterling-start in this checkout."; exit 69; }
+    exec "$STERLING_ROOT/scripts/sterling-start" "${@:2}"
     ;;
   stop)
-    if [ -x "$STERLING_ROOT/scripts/sterling-stop" ]; then
-      exec "$STERLING_ROOT/scripts/sterling-stop" "${@:2}"
-    fi
-    echo "no scripts/sterling-stop in this checkout; stop the service directly."
-    exit 69
+    [ -x "$STERLING_ROOT/scripts/sterling-stop" ] || {
+      echo "no scripts/sterling-stop in this checkout; stop the service directly."; exit 69; }
+    exec "$STERLING_ROOT/scripts/sterling-stop" "${@:2}"
     ;;
   safe)          exec "$STERLING_ROOT/scripts/sterling-safe-mode" "${@:2}" ;;
 

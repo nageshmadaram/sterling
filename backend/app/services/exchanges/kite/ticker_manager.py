@@ -297,10 +297,16 @@ async def stop(user_id: str) -> dict:
     return {"ok": True}
 
 
+def known_users() -> List[str]:
+    """Every user with a ticker in this process. For the operator runtime view."""
+    return sorted(_tickers.keys())
+
+
 def status(user_id: str) -> dict:
     ticker = _tickers.get(user_id)
     if not ticker:
-        return {"active": False, "connected": False, "subscribed": [], "tick_count": 0}
+        return {"active": False, "connected": False, "subscribed": [],
+                "tick_count": 0, "last_tick_ms": 0}
     return ticker.status()
 
 
