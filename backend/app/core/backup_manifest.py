@@ -17,6 +17,7 @@ a backup that was never exercised cannot be mistaken for one that was.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 import tempfile
@@ -26,7 +27,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, Iterable, Mapping, Sequence
 
+from app.core.backup_coverage import Coverage as BackupCoverage
+from app.core.backup_coverage import coverage_report as backup_coverage_report
 from app.services.snapback_backup import BackupIntegrityError, sha256_file
+
+log = logging.getLogger(__name__)
 
 #: Written relative to the repository root.
 BACKUP_MANIFEST_DIR: Final[str] = "data/backups/manifests"
@@ -257,6 +262,10 @@ def declared_databases(root: Path | str | None = None) -> tuple[Path, ...]:
         candidates = [
             Path(evidence),
             base / "backend/sterling_paper.db",
+            # The SuperTrend engine's own durable state: its position registry
+            # projection and config. Left out, a restore brings back the
+            # evidence and forgets what the engine was holding.
+            base / "backend/kite_engine.db",
             base / "data/intents.db",
         ]
 
@@ -322,6 +331,13 @@ class FullBackup:
     manifest: "BackupManifest"
     databases: tuple[str, ...]
     missing: tuple[str, ...] = field(default_factory=tuple)
+    #: Non-database artifacts copied into the backup, by declared name.
+    captured: tuple[str, ...] = field(default_factory=tuple)
+    #: Artifacts recorded by checksum only — the deployment configuration, which
+    #: holds credentials and must not travel in a file people copy around.
+    referenced: tuple[str, ...] = field(default_factory=tuple)
+    #: Artifacts that exist on this host and were NOT captured. Always a defect.
+    gaps: tuple[str, ...] = field(default_factory=tuple)
 
 
 def create_full_backup(
@@ -365,6 +381,11 @@ def create_full_backup(
         json.dumps(build_release_manifest(), indent=2, sort_keys=True) + "\n"
     )
 
+    # Section 14 asks for more than databases: the safety state, the lane and
+    # release manifests, the shadow records. A backup that restores the numbers
+    # and loses the system is not a backup of the system.
+    captured, referenced = _capture_declared_artifacts(base, directory)
+
     manifest = build_backup_manifest(
         directory,
         created_at=stamp,
@@ -372,13 +393,101 @@ def create_full_backup(
     )
     write_backup_manifest(manifest, root=base, backup_dir=directory)
 
+    statuses = backup_coverage_report(
+        base,
+        captured=[*captured, *_database_artifact_names(base, present)],
+        referenced=referenced,
+    )
+    gaps = tuple(s.artifact.name for s in statuses if s.coverage is BackupCoverage.GAP)
+    (directory / "coverage.json").write_text(
+        json.dumps([s.as_dict() for s in statuses], indent=2, sort_keys=True) + "\n"
+    )
 
     return FullBackup(
         directory=directory,
         manifest=manifest,
         databases=tuple(source.name for source in present),
         missing=tuple(missing),
+        captured=tuple(captured),
+        referenced=tuple(referenced),
+        gaps=gaps,
     )
+
+
+#: Where a copied artifact lands inside the backup directory.
+ARTIFACT_SUBDIR: Final[str] = "state"
+
+
+def _database_artifact_names(root: Path, sources: Iterable[Path]) -> list[str]:
+    """Map snapshotted database files onto their declared artifact names.
+
+    Matched by resolved path, then by file name: a deployment may point an
+    environment variable at a database outside the tree, and it is still that
+    artifact.
+    """
+    from app.core.backup_coverage import ArtifactKind, resolve_artifacts
+
+    declared = [
+        (artifact, path)
+        for artifact, path in resolve_artifacts(root)
+        if artifact.kind is ArtifactKind.DATABASE and path is not None
+    ]
+    names: list[str] = []
+    for source in sources:
+        resolved = Path(source).expanduser()
+        match = next(
+            (a.name for a, p in declared if p == resolved),
+            next((a.name for a, p in declared if p.name == resolved.name), None),
+        )
+        if match:
+            names.append(match)
+    return names
+
+
+def _capture_declared_artifacts(
+    root: Path, directory: Path
+) -> tuple[list[str], list[str]]:
+    """Copy every declared non-database artifact into ``directory``/state.
+
+    Returns the names copied and the names recorded by reference. A copy that
+    fails is left out of both, so it shows up as a GAP in the coverage report
+    rather than being silently counted as present.
+    """
+    import shutil
+
+    from app.core.backup_coverage import ArtifactKind, resolve_artifacts
+
+    state_dir = directory / ARTIFACT_SUBDIR
+    captured: list[str] = []
+    referenced: list[str] = []
+
+    for artifact, path in resolve_artifacts(root):
+        if path is None or not path.exists():
+            continue
+        if artifact.kind is ArtifactKind.DATABASE:
+            continue  # snapshotted separately, with SQLite's own backup API
+        if artifact.kind is ArtifactKind.REFERENCED:
+            # Checksum only. The contents hold credentials and must not travel.
+            digest = sha256_file(path)
+            state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / f"{artifact.name}.sha256").write_text(
+                f"{digest}  {path}\n", encoding="utf-8")
+            referenced.append(artifact.name)
+            continue
+        try:
+            destination = state_dir / artifact.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if artifact.kind is ArtifactKind.DIRECTORY:
+                shutil.copytree(path, destination, dirs_exist_ok=True)
+            else:
+                shutil.copyfile(path, destination.with_suffix(path.suffix))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("backup: could not capture %s (%s): %s", artifact.name, path, exc)
+            continue
+        captured.append(artifact.name)
+
+    return captured, referenced
+
 
 
 def augment_backup_directory(
@@ -550,6 +659,39 @@ def prove_restore(
                 for table, sql in expected_schema.items():
                     if actual_schema.get(table) != sql:
                         failures.append(f"{name}.{table}: schema differs after restore")
+        # A restore that verifies only what the backup happens to contain can
+        # pass while the backup is missing half the system. The coverage record
+        # written at backup time is what makes that visible here.
+        coverage_file = directory / "coverage.json"
+        if not coverage_file.exists():
+            failures.append(
+                "coverage.json: missing, so this backup cannot say which "
+                "artifacts it was supposed to contain")
+        else:
+            try:
+                rows = json.loads(coverage_file.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                failures.append(f"coverage.json: unreadable ({exc})")
+            else:
+                gaps = [r["name"] for r in rows
+                        if r.get("coverage") == BackupCoverage.GAP.value]
+                if gaps:
+                    failures.append(
+                        "artifacts existed and were not backed up: " + ", ".join(sorted(gaps)))
+                for row in rows:
+                    if row.get("coverage") != BackupCoverage.COPIED.value:
+                        continue
+                    name = row["name"]
+                    # A database travels under its own file name at the top of
+                    # the backup; everything else under state/<artifact name>.
+                    filename = Path(row["path"]).name if row.get("path") else ""
+                    if filename and (directory / filename).exists():
+                        continue
+                    state_dir = directory / ARTIFACT_SUBDIR
+                    if (state_dir / name).exists() or any(state_dir.glob(f"{name}.*")):
+                        continue
+                    failures.append(
+                        f"{name}: recorded as copied but not present in the backup")
     finally:
         if own_tmp:
             shutil.rmtree(target, ignore_errors=True)

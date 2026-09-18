@@ -73,6 +73,10 @@ RELEASE_GATES: Final[tuple[Gate, ...]] = (
 
 _GATES_BY_KEY: Final[Mapping[str, Gate]] = {g.key: g for g in RELEASE_GATES}
 
+#: Gates composed from a per-item register rather than attested in one line.
+#: `certify attest` refuses these: the register is the attestation, item by item.
+_DERIVED_GATES: Final[frozenset[str]] = frozenset({"failure_drills"})
+
 #: The gates RELEASE_READY is the conjunction of. Every gate blocks something,
 #: but these are the ones that block shipping at all.
 _REQUIRED_FOR_READY: Final[tuple[str, ...]] = tuple(g.key for g in RELEASE_GATES)
@@ -203,6 +207,11 @@ class CertificationStore:
         """Record one human gate against one exact SHA."""
         if key not in _GATES_BY_KEY:
             raise KeyError(f"unknown certification gate {key!r}")
+        if key in _DERIVED_GATES:
+            raise ValueError(
+                f"{key} is derived from its own register and cannot be attested "
+                "in one line; record each item with `sterlingctl drills record`"
+            )
         status = status.strip().upper()
         if status not in (PASS, FAIL, UNKNOWN):
             raise ValueError(f"status must be {PASS}, {FAIL} or {UNKNOWN}; got {status!r}")
@@ -298,6 +307,27 @@ def _backup_restore_gate() -> GateResult:
     )
 
 
+def _failure_drills_gate(sha: str) -> GateResult:
+    """Every declared drill, on this exact SHA, with a name against each PASS."""
+    try:
+        from app.core.failure_drills import DRILLS, drill_report
+    except Exception as exc:  # pragma: no cover - import guard
+        return GateResult("failure_drills", UNKNOWN, f"drill register unavailable: {exc}")
+
+    report = drill_report(sha)
+    if report.all_passed:
+        names = sorted({r.observed_by for r in report.results if r.observed_by})
+        return GateResult("failure_drills", PASS,
+                          f"all {len(DRILLS)} drills passed on this build",
+                          attested_by=", ".join(names))
+    if report.failures:
+        return GateResult("failure_drills", FAIL,
+                          "failed: " + ", ".join(r.key for r in report.failures))
+    return GateResult("failure_drills", UNKNOWN,
+                      f"{len(report.unknowns)} of {len(DRILLS)} drills have no record "
+                      "on this build")
+
+
 def certification_report(
     *,
     sha: str | None = None,
@@ -314,6 +344,10 @@ def certification_report(
         "source_identity": _source_identity(resolved_sha, resolved_tag),
         "release_manifest": _release_manifest_gate(),
         "backup_restore": _backup_restore_gate(),
+        # Derived from the drill register rather than attested as one line: a
+        # single "drills passed" cannot say which of the twelve was run, or
+        # what the system did when it was.
+        "failure_drills": _failure_drills_gate(resolved_sha),
     }
 
     results: list[GateResult] = []
@@ -321,6 +355,12 @@ def certification_report(
         # An operator attestation never overrides a machine check that FAILs:
         # a human cannot attest that the working tree is clean when it is not.
         auto = automated.get(gate.key)
+        if gate.key in _DERIVED_GATES:
+            # These are composed from their own per-item registers, so a blanket
+            # attestation would be exactly the claim the register exists to
+            # replace: "the drills passed", with no record of which ones ran.
+            results.append(auto if auto is not None else GateResult(gate.key))
+            continue
         if auto is not None and auto.status != UNKNOWN:
             results.append(auto)
             continue

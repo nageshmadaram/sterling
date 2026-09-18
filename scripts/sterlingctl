@@ -40,6 +40,8 @@ Usage: sterlingctl <command>
   report [DATE]    daily evidence completeness report (default: today)
   lanes            the ten lanes, their state, and whether they may originate
   evidence-start   whether the forward sample has actually started at zero
+  drills           the twelve failure drills and their record on this build
+  drills record DRILL PASS|FAIL WHO "what happened" [REF]
 
   certify          the release certification gate table for this build
   certify attest GATE PASS|FAIL WHO [REF]   record one human-observed gate
@@ -132,6 +134,52 @@ sys.exit(2 if start.unknowns else 1)
 PY
     ;;
 
+  drills)
+    if [ "${2:-}" = "record" ]; then
+      shift 2
+      [ "$#" -ge 4 ] || {
+        echo 'usage: sterlingctl drills record DRILL PASS|FAIL WHO "what happened" [REF]'
+        exit 64; }
+      STERLING_DRILL_KEY="$1" STERLING_DRILL_STATUS="$2" STERLING_DRILL_WHO="$3" \
+      STERLING_DRILL_OBSERVED="$4" STERLING_DRILL_REF="${5:-}" run_py <<'PY'
+import os, sys
+
+from app.core.failure_drills import DrillRegister
+from app.core.release_manifest import runtime_sha
+
+sha = runtime_sha()
+try:
+    result = DrillRegister().record(
+        sha,
+        os.environ["STERLING_DRILL_KEY"],
+        os.environ["STERLING_DRILL_STATUS"],
+        observed_by=os.environ["STERLING_DRILL_WHO"],
+        observed=os.environ["STERLING_DRILL_OBSERVED"],
+        evidence_ref=os.environ.get("STERLING_DRILL_REF", ""),
+    )
+except (KeyError, ValueError) as exc:
+    print(str(exc))
+    sys.exit(64)
+
+print(f"{result.key} = {result.status} for {sha[:12]}, observed by {result.observed_by}")
+print("This record applies to this SHA only. Any code change voids it.")
+PY
+      exit $?
+    fi
+    run_py <<'PY'
+import sys
+
+from app.core.failure_drills import drill_report, render_drills
+from app.core.release_manifest import runtime_sha
+
+report = drill_report(runtime_sha())
+print(render_drills(report))
+if report.all_passed:
+    sys.exit(0)
+sys.exit(1 if report.failures else 2)
+PY
+    ;;
+
   safe)          exec "$STERLING_ROOT/scripts/sterling-safe-mode" "${@:2}" ;;
 
   reconcile)
@@ -193,6 +241,13 @@ print(f"databases {', '.join(result.databases)}")
 print(f"manifest  {manifest_path(manifest, root)}")
 print(f"rows      {rows} across {len(manifest.row_counts)} database(s)")
 print(f"release   {manifest.release_tag} ({manifest.release_sha[:12]})")
+print(f"state     {', '.join(result.captured) or 'nothing'}"
+      + (f" (+{', '.join(result.referenced)} by checksum)" if result.referenced else ""))
+if result.gaps:
+    print()
+    print("GAPS — these exist on this host and were NOT backed up:")
+    for name in result.gaps:
+        print(f"  {name}")
 for name, checksum in sorted(manifest.file_checksums.items()):
     print(f"  {checksum[:16]}  {name}")
 if result.missing:

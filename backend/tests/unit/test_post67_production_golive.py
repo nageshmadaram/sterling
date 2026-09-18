@@ -579,8 +579,14 @@ def test_unknown_unresolved_exposure_blocks_release(tmp_path):
         certification_report,
     )
 
+    from app.services.release_certification import _DERIVED_GATES
+
     store = CertificationStore(tmp_path)
     for gate in RELEASE_GATES:
+        # A gate derived from its own per-item register cannot be attested in
+        # one line — that blanket claim is what the register replaced.
+        if gate.key in _DERIVED_GATES:
+            continue
         store.attest(SHA, gate.key, "PASS", attested_by="operator")
 
     unknown = certification_report(sha=SHA, tag=TAG, store=store, unresolved_exposure=None)
@@ -594,7 +600,7 @@ def test_attestations_do_not_carry_across_shas(tmp_path):
     from app.services.release_certification import CertificationStore
 
     store = CertificationStore(tmp_path)
-    store.attest(SHA, "failure_drills", "PASS", attested_by="operator")
+    store.attest(SHA, "remote_ci", "PASS", attested_by="operator")
     other = "f" * 40
     assert store.read(other) == {}
 

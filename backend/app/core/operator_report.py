@@ -235,6 +235,52 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
     add("risk_limits", _risk_limits)
     add("lane_origination", _lanes)
     add("supertrend_core_frozen", _supertrend_frozen)
+    def _lake_mount():
+        """The market-data lake. Data not recorded today cannot be bought back.
+
+        The vendor does not sell the past for expired option contracts, so a
+        day the lake was unplugged is a day that is gone. That makes this an
+        operational check, not a nicety — and an unmounted drive that is
+        physically attached needs a different fix from one that is missing, so
+        the reason says which.
+        """
+        from kitelake.volume import lake_status
+
+        status = lake_status()
+        if status.available:
+            return True, f"mounted at {status.root}"
+        if status.volume_present_unmounted:
+            return False, f"the lake volume is attached but not mounted: {status.reason}"
+        return False, status.reason or "the lake is not reachable"
+
+    def _network_path():
+        """Whether the deployment last observed the broker as reachable.
+
+        Read, never probed. An application that calls out to decide whether it
+        is healthy has made its own safety check depend on a third party being
+        up, and a doctor run on a deliberately offline host would then report a
+        failure that is not one. The deployment records what it saw; an
+        observation older than the egress window is not a current fact.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        observed = (os.environ.get("STERLING_BROKER_REACHABLE_AT") or "").strip()
+        if not observed:
+            return None, ("STERLING_BROKER_REACHABLE_AT is unset: nothing has recorded "
+                          "whether this host can reach the broker")
+        try:
+            stamp = datetime.fromisoformat(observed)
+        except ValueError:
+            return None, f"STERLING_BROKER_REACHABLE_AT is not a timestamp: {observed!r}"
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - stamp
+        if age > timedelta(days=7):
+            return False, f"the broker path was last reachable {age.days} days ago"
+        return True, f"broker reachable, observed {observed}"
+
+    add("lake_mount", _lake_mount)
+    add("network_path", _network_path)
     add("static_egress", _static_egress)
     add("account_binding", _account_binding)
     add("release_certification", _release_certification)

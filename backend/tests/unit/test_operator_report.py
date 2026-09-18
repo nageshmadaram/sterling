@@ -189,6 +189,10 @@ def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
         "static_egress",
         "account_binding",
         "release_certification",
+        # Section 12: the deployment host itself. A day the lake was unplugged
+        # is a day of market data that cannot be bought back.
+        "lake_mount",
+        "network_path",
     }
 
 

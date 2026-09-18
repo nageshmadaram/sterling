@@ -44,6 +44,10 @@ def backup_dir(tmp_path):
     directory.mkdir(parents=True)
     _make_db(directory / "snapback_observations.db", rows=7)
     (directory / "freeze_record.json").write_text('{"frozen": true}')
+    # Assembled by hand, so it declares its own (empty) coverage: a restore-check
+    # refuses a backup that cannot say what it was supposed to contain, and these
+    # tests are about the restore mechanics rather than that rule.
+    (directory / "coverage.json").write_text("[]", encoding="utf-8")
     return directory
 
 
@@ -196,6 +200,17 @@ def test_prove_restore_uses_the_manifest_beside_the_backup(backup_dir, tmp_path)
 
     assert proof.backup_id == "2026-09-18"
     assert proof.passed, proof.failures
+
+
+def test_a_backup_that_cannot_say_what_it_holds_is_refused(backup_dir, tmp_path):
+    manifest = build_backup_manifest(backup_dir)
+    write_backup_manifest(manifest, root=tmp_path, backup_dir=backup_dir)
+    (backup_dir / "coverage.json").unlink()
+
+    proof = prove_restore(backup_dir)
+
+    assert proof.passed is False
+    assert any("coverage.json" in failure for failure in proof.failures)
 
 
 def test_latest_backup_dir_picks_the_newest(tmp_path):
