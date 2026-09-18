@@ -340,15 +340,16 @@ def test_engaging_safe_mode_needs_a_reason(client):
 def test_every_lane_route_is_read_only_except_the_operator_actions(client):
     """Same fix as above: read the fixture's app, and count what was checked so
     an empty route list cannot pass silently."""
+    from tests.route_surface import iter_route_surface
+
     seen = 0
-    app = client.app
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        methods = set(getattr(route, "methods", set()))
+    for path, methods in iter_route_surface(client.app):
         if path.startswith(("/api/v1/strategies", "/api/v1/lanes", "/api/v1/focus")):
             assert methods <= {"GET", "HEAD", "OPTIONS"}, path
             seen += 1
         if path.startswith("/api/v1/operator/"):
             assert methods <= {"POST", "HEAD", "OPTIONS"}, path
             seen += 1
+    # The count is the real assertion: an unreadable route list would make
+    # every check above pass over nothing.
     assert seen >= 10

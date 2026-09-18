@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.auth import get_current_user
+from tests.route_surface import routes_under
 
 
 @pytest.fixture()
@@ -110,15 +111,15 @@ def test_the_dashboard_serves_all_ten_lanes(client):
 def test_the_api_exposes_no_way_to_promote_a_lane(client):
     """Promotion is an evidence decision, never an HTTP call.
 
-    Reads the app the fixture already built. Building a second one here made
-    the assertion depend on module state at that moment: it passed in isolation
-    and in a local full run, and came back empty under CI's ordering.
+    Reads the surface through `tests.route_surface`. Reading `.path` off
+    `app.routes` directly is what broke here: from Starlette 1.6 an included
+    router is one opaque object with no `.path`, so the list came back empty
+    and a read-only assertion over nothing passed vacuously.
     """
-    app = client.app
-    lane_routes = [
-        r for r in app.routes
-        if getattr(r, "path", "").startswith(("/api/v1/strategies", "/api/v1/lanes", "/api/v1/focus"))
-    ]
-    assert lane_routes
-    for route in lane_routes:
-        assert set(getattr(route, "methods", set())) <= {"GET", "HEAD", "OPTIONS"}
+    lane_routes = routes_under(
+        client.app, "/api/v1/strategies", "/api/v1/lanes", "/api/v1/focus"
+    )
+
+    assert lane_routes, "no lane routes were readable; the assertion below proves nothing"
+    for path, methods in lane_routes:
+        assert methods <= {"GET", "HEAD", "OPTIONS"}, path
