@@ -1049,6 +1049,30 @@ def _make_place_cb(client, uid: str):
         if session_reason:
             state.log(uid, "order_blocked", f"{trade_symbol}: {session_reason}")
             return
+        # Before anything is sent: record what this entry looked like against
+        # the observed book. The shadow record is the lane's execution evidence
+        # while it may not send — which is every lane today — and sits beside
+        # the real fill once one may, so the two can be compared. Recording
+        # cannot place an order and cannot cancel this decision: the service
+        # refuses any client exposing an order method, and a failure to record
+        # is logged rather than raised.
+        from app.core.execution_vehicle import ExecutionVehicle
+        from app.services.kite_engine import shadow_origination
+
+        await shadow_origination.record_entry_intent(
+            client=client,
+            lane_key=f"supertrend:{'directional' if cfg.directional_mode else 'swing'}",
+            symbol=trade_symbol, exchange=trade_exchange, quantity=qty,
+            vehicle=(ExecutionVehicle.FUTURES if use_futures else
+                     ExecutionVehicle.DEEP_ITM_OPTIONS if use_deep_itm else
+                     ExecutionVehicle.OPTIONS_LONG),
+            reference_price=entry_px,
+            broker_margin=(required_margin if use_futures else None),
+            margin_available=available,
+            protection_feasible=(stop_px > 0),
+            notes=f"{row.underlying} {signal_dir} via {vehicle_label}",
+        )
+
         # The canonical execution service is the only path to an exposure
         # increase. It reserves the durable intent, claims it, re-asks the safety
         # authority with nothing between that answer and the send, acknowledges
