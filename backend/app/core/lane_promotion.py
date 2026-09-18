@@ -246,6 +246,7 @@ def collect_lane_evidence(
     *,
     allowed_classes: Iterable[EvidenceClass] | None = None,
     identity_hash: str | None = None,
+    required_vehicle: str | None = None,
 ) -> LaneEvidence:
     """Filter rows down to one lane, counting every exclusion.
 
@@ -254,6 +255,10 @@ def collect_lane_evidence(
     turned a missing observed P&L into ₹0 and a missing cost into ₹0, so a trade
     nobody had measured contributed a break-even result and shrank the measured
     effect toward zero while inflating the count.
+
+    Pass ``required_vehicle`` to collect one execution vehicle. A lane that
+    has run as both bought options and futures has produced two experiments,
+    and the futures challenger must never inherit the options sample.
 
     Pass ``identity_hash`` to collect one revision of a lane. Without it the
     caller is pooling every revision that ever wrote under this lane key, which
@@ -269,7 +274,9 @@ def collect_lane_evidence(
 
     for row in rows:
         considered += 1
-        if eligible_for_lane(row, lane_key, allowed_classes=allowed):
+        if eligible_for_lane(
+            row, lane_key, allowed_classes=allowed, required_vehicle=required_vehicle
+        ):
             try:
                 observation = validated_economic_row(row, identity_hash=identity_hash)
             except EconomicRowError as exc:
@@ -281,9 +288,14 @@ def collect_lane_evidence(
             continue
 
         row_lane = str(row.get("lane_key") or "").strip()
+        row_vehicle = str(row.get("execution_vehicle") or "").strip().upper()
         if not row_lane:
             unattributed += 1
         elif row_lane != lane_key:
+            other += 1
+        elif required_vehicle is not None and row_vehicle != str(required_vehicle).upper():
+            # Right lane, wrong instrument. Counted as another lane's row
+            # because economically that is exactly what it is.
             other += 1
         elif not int(row.get("authoritative") or 0):
             not_auth += 1

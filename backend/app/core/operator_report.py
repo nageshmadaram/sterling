@@ -199,11 +199,45 @@ def lane_doctor_checks() -> tuple[DoctorCheck, ...]:
             return False, "; ".join(str(f) for f in findings)
         return True, "supertrend_core_v1 matches the frozen record"
 
+    def _static_egress():
+        from app.services.continuity_doctor import egress_status
+
+        status = egress_status()
+        # Not a failure of today's shadow operation — market data does not need
+        # a registered address — but it is a hard blocker for order placement,
+        # and an operator must learn that before the day they enable capital.
+        return status.verified, status.reason
+
+    def _account_binding():
+        from app.services.account_binding_service import binding_health
+
+        health = binding_health()
+        if not health.get("account_binding_readable"):
+            return None, str(health.get("error") or "binding store unreadable")
+        if not health.get("account_binding_ready"):
+            return False, str(health.get("detail") or "no usable broker account binding")
+        return True, (
+            f"{health.get('account_binding_id')} "
+            f"({health.get('legal_account_holder')}, scope={health.get('account_scope')})"
+        )
+
+    def _release_certification():
+        from app.services.release_certification import certification_report
+
+        report = certification_report()
+        if report.release_ready:
+            return True, f"{report.tag} @ {report.sha[:12]}"
+        outstanding = [r.key for r in report.failures] + [r.key for r in report.unknowns]
+        return False, "gates not passed: " + ", ".join(outstanding)
+
     add("focus_policy", _focus)
     add("release_tag", _release_tag)
     add("risk_limits", _risk_limits)
     add("lane_origination", _lanes)
     add("supertrend_core_frozen", _supertrend_frozen)
+    add("static_egress", _static_egress)
+    add("account_binding", _account_binding)
+    add("release_certification", _release_certification)
     return tuple(checks)
 
 

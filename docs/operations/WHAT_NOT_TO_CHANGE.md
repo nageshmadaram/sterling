@@ -68,3 +68,28 @@ a losing one. Only the full sample answers the question.
 
 And if it passes, start at the smallest size that is real, not at the size you
 would like to be trading.
+
+## Do not turn the SuperTrend long-option wrapper into a family-capital lane
+
+Sterling's own 7.5-year study over real underlyings found 0 of 60 long-option
+configurations net-positive out-of-sample, and none with a profit factor above
+1.0. It stays research. The stronger hypothesis — the same signal expressed
+delta-1 — exists as `supertrend_directional_v1`, a Track-C challenger with its
+own identity, a sample of zero and live orders disabled.
+
+## Do not change the execution vehicle of a lane that is collecting evidence
+
+Bought options and futures are two different economic propositions for the same
+signal. A vehicle change is a new `vehicle_contract_hash`, a new identity, and a
+sample that restarts at zero. It is never an edit to a running lane.
+
+## Do not pool paper, shadow and broker results into one number
+
+They answer three different questions, and the most permissive of them is
+paper. Regimes are reported separately unless a lane's predeclared promotion
+policy names the pooling in advance.
+
+## Do not reassign a fill from one broker account to another
+
+After an account migration the strategy identity is unchanged, but the
+execution-evidence segment is not. Old fills stay with the old account forever.

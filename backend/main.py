@@ -452,6 +452,12 @@ def create_app() -> FastAPI:
     from app.api.v1.endpoints.lanes import router as lanes_router
     app.include_router(lanes_router, prefix="/api/v1")
 
+    # Account continuity, static egress and release certification. Also
+    # read-only, for the same reason: activating a broker account binding is an
+    # operator action taken at the command line, not an HTTP call.
+    from app.api.v1.endpoints.continuity import router as continuity_router
+    app.include_router(continuity_router, prefix="/api/v1")
+
     return app
 
 

@@ -184,6 +184,11 @@ def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
         "risk_limits",
         "lane_origination",
         "supertrend_core_frozen",
+        # Post-67 go-live gaps: none of these is visible from the preflight,
+        # and each one blocks real orders rather than today's shadow session.
+        "static_egress",
+        "account_binding",
+        "release_certification",
     }
 
 

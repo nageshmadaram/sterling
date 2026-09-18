@@ -33,6 +33,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping
 
+from app.core.execution_vehicle import (
+    VEHICLE_POLICY_VERSION,
+    VehicleError,
+    lane_vehicle,
+)
 from app.core.horizon import MODE_TIMELINES, HorizonMode
 from app.core.lane_registry import LANES, LaneDefinition
 from app.core.strategy_identity import EVIDENCE_SCHEMA_VERSION, IdentityError
@@ -139,6 +144,12 @@ class LaneManifest:
     identity: Mapping[str, Any] | None = None
     identity_unavailable: str | None = None
 
+    #: The vehicle this lane trades, exposed as a first-class field. The rule
+    #: hash already absorbs it, but a hash cannot be read: an operator opening
+    #: this artifact in two years must see OPTIONS_LONG or FUTURES written out.
+    execution_vehicle: str | None = None
+    vehicle_policy_version: str | None = None
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "lane_key": self.lane_key,
@@ -150,6 +161,8 @@ class LaneManifest:
             "horizon": dict(self.horizon),
             "identity": dict(self.identity) if self.identity else None,
             "identity_unavailable": self.identity_unavailable,
+            "execution_vehicle": self.execution_vehicle,
+            "vehicle_policy_version": self.vehicle_policy_version,
         }
 
 
@@ -175,7 +188,16 @@ def lane_manifest(
     tag: str,
 ) -> LaneManifest:
     """Describe one lane, with its identity when the lane has frozen rules."""
+    try:
+        vehicle = lane_vehicle(lane.lane_key).value
+    except VehicleError:
+        # A lane with no declared vehicle is recorded as such rather than
+        # guessed at. Guessing is how an options result becomes a futures one.
+        vehicle = None
+
     common = {
+        "execution_vehicle": vehicle,
+        "vehicle_policy_version": VEHICLE_POLICY_VERSION if vehicle else None,
         "lane_key": lane.lane_key,
         "strategy_id": lane.strategy_id,
         "mode": lane.mode.value,
@@ -229,6 +251,7 @@ def build_release_manifest(
     from app.services.snapback_candidate_universe import UNIVERSE_SCHEMA_VERSION
 
     return {
+        "challengers": _challenger_manifests(sha=resolved_sha, tag=resolved_tag),
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
         "build": {
@@ -243,6 +266,25 @@ def build_release_manifest(
         "lane_count": len(lanes),
         "lanes": lanes,
     }
+
+
+def _challenger_manifests(*, sha: str, tag: str) -> list[dict[str, Any]]:
+    """Declared challengers, each with its own identity and zero sample.
+
+    A challenger is listed separately from the ten lanes on purpose. Folding it
+    into the lane list would invite a reader — or a report — to treat its rows
+    as that lane's evidence, which is the one thing a challenger must never be.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        from app.engines.sterling_kite_engine.directional_challenger import (
+            challenger_manifest,
+        )
+
+        rows.append(challenger_manifest(runtime_sha=sha, release_tag=tag))
+    except IdentityError as exc:
+        rows.append({"challenger": "supertrend_directional_v1", "identity_unavailable": str(exc)})
+    return rows
 
 
 @dataclass(frozen=True)
@@ -295,6 +337,10 @@ _IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
         "mode_version",
         "identity_hash",
         "evidence_schema_version",
+        # A vehicle change is an economics change, not a rebuild: the same
+        # signal in futures and in bought options are two experiments.
+        "execution_vehicle",
+        "vehicle_contract_hash",
     }
 )
 
@@ -305,6 +351,8 @@ _LANE_FIELDS: Final[tuple[str, ...]] = (
     "state",
     "rules_defined",
     "identity_unavailable",
+    "execution_vehicle",
+    "vehicle_policy_version",
 )
 
 

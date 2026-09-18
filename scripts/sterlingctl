@@ -40,6 +40,16 @@ Usage: sterlingctl <command>
   report [DATE]    daily evidence completeness report (default: today)
   lanes            the ten lanes, their state, and whether they may originate
 
+  certify          the release certification gate table for this build
+  certify attest GATE PASS|FAIL WHO [REF]   record one human-observed gate
+  bindings         every broker account binding, and which one is active
+  bind declare BROKER HOLDER CLIENT_ID SCOPE DEPLOYMENT [EGRESS_PROFILE]
+  bind verify|activate|deactivate BINDING_ID
+  migrate          the broker account migration procedure
+  continuity       static egress, account binding and the handoff checklist
+  shadow [DATE]    per-lane shadow execution report
+  permission       why each lane may not send a real-money entry
+
 A doctor exit code of 2 means a check could not be run. That is not a pass.
 USAGE
 }
@@ -351,6 +361,164 @@ for key, lane in LANES.items():
     print(f"{key:<28}{lane.state.value:<14}{allowed:<9}{why}{detail}")
 print()
 print("A lane that may not originate is not broken. It has not earned a sample.")
+PY
+    ;;
+
+  certify)
+    if [ "${2:-}" = "attest" ]; then
+      STERLING_GATE="${3:-}" STERLING_STATUS="${4:-}" STERLING_WHO="${5:-}" \
+      STERLING_REF="${6:-}" run_py <<'PY'
+import os, sys
+
+from app.core.release_manifest import runtime_sha
+from app.services.release_certification import CertificationStore
+
+gate, status, who = (
+    os.environ.get("STERLING_GATE", ""),
+    os.environ.get("STERLING_STATUS", ""),
+    os.environ.get("STERLING_WHO", ""),
+)
+if not (gate and status and who):
+    print("usage: sterlingctl certify attest GATE PASS|FAIL WHO [EVIDENCE_REF]")
+    sys.exit(64)
+
+sha = runtime_sha()
+try:
+    result = CertificationStore().attest(
+        sha, gate, status, attested_by=who, evidence_ref=os.environ.get("STERLING_REF", "")
+    )
+except (KeyError, ValueError) as exc:
+    print(str(exc))
+    sys.exit(64)
+
+print(f"{result.key} = {result.status} for {sha[:12]}, attested by {result.attested_by}")
+print("This attestation applies to this SHA only. Any code change voids it.")
+PY
+      exit $?
+    fi
+    run_py <<'PY'
+import sys
+
+from app.services.release_certification import certification_report, render_certification
+
+report = certification_report()
+print(render_certification(report))
+sys.exit(0 if report.release_ready else 1)
+PY
+    ;;
+
+  bindings)
+    run_py <<'PY'
+import sys
+
+from app.core.broker_account_binding import BindingError
+from app.services.account_binding_service import AccountBindingStore
+
+try:
+    bindings = AccountBindingStore().all()
+except BindingError as exc:
+    print(f"account bindings unreadable: {exc}")
+    sys.exit(2)
+
+if not bindings:
+    print("No broker account binding is declared.")
+    print("Sterling cannot place any order, and reconciliation has no account.")
+    print("Declare one with: sterlingctl bind declare ...")
+    sys.exit(1)
+
+print(f"{'binding':<34}{'status':<14}{'holder':<22}scope")
+for binding in bindings:
+    print(f"{binding.binding_id:<34}{binding.status.value:<14}"
+          f"{binding.legal_account_holder:<22}{binding.account_scope}")
+print()
+print("Retired bindings stay listed: their fills are never reassigned.")
+PY
+    ;;
+
+  bind)
+    STERLING_BIND_ACTION="${2:-}" STERLING_A="${3:-}" STERLING_B="${4:-}" \
+    STERLING_C="${5:-}" STERLING_D="${6:-}" STERLING_E="${7:-}" STERLING_F="${8:-}" \
+    run_py <<'PY'
+import os, sys
+
+from app.core.broker_account_binding import BindingError
+from app.services.account_binding_service import AccountBindingStore
+
+action = os.environ.get("STERLING_BIND_ACTION", "")
+store = AccountBindingStore()
+args = [os.environ.get(f"STERLING_{k}", "") for k in ("A", "B", "C", "D", "E", "F")]
+
+try:
+    if action == "declare":
+        broker, holder, client_id, scope, deployment, egress = args
+        if not all([broker, holder, client_id, scope, deployment]):
+            print("usage: sterlingctl bind declare BROKER HOLDER CLIENT_ID SCOPE "
+                  "DEPLOYMENT [EGRESS_PROFILE]")
+            sys.exit(64)
+        binding = store.declare(
+            broker=broker,
+            legal_account_holder=holder,
+            client_id=client_id,
+            account_scope=scope,
+            deployment_id=deployment,
+            static_egress_profile=egress,
+        )
+        print(f"declared {binding.binding_id} ({binding.status.value})")
+        print("It cannot trade until it is verified and activated.")
+    elif action in ("verify", "activate", "deactivate"):
+        binding_id = args[0]
+        if not binding_id:
+            print(f"usage: sterlingctl bind {action} BINDING_ID")
+            sys.exit(64)
+        binding = getattr(store, action)(binding_id)
+        print(f"{binding.binding_id} is now {binding.status.value}")
+        if action == "deactivate":
+            print("Its fills keep its own evidence segment. They are never reassigned.")
+    else:
+        print("usage: sterlingctl bind declare|verify|activate|deactivate ...")
+        sys.exit(64)
+except BindingError as exc:
+    print(str(exc))
+    sys.exit(1)
+PY
+    ;;
+
+  migrate)
+    run_py <<'PY'
+from app.services.account_binding_service import render_migration_procedure
+
+print(render_migration_procedure())
+PY
+    ;;
+
+  continuity)
+    run_py <<'PY'
+import sys
+
+from app.services.continuity_doctor import continuity_report, render_continuity
+
+report = continuity_report()
+print(render_continuity(report))
+sys.exit(0 if report.handoff_ready else 1)
+PY
+    ;;
+
+  shadow)
+    STERLING_SHADOW_DATE="${2:-}" run_py <<'PY'
+import os
+
+from app.services.shadow_execution import shadow_report
+
+date = os.environ.get("STERLING_SHADOW_DATE") or ""
+print(shadow_report([date] if date else None))
+PY
+    ;;
+
+  permission)
+    run_py <<'PY'
+from app.services.capital_permission_report import render_permissions
+
+print(render_permissions())
 PY
     ;;
 

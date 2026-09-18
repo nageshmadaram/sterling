@@ -72,6 +72,27 @@ Turn off new trading first, ask questions second:
 That is always safe. It never prevents closing a position. Then read
 [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).
 
+## If you have taken over from someone else
+
+Sterling is designed to be handed over. Two things have to be settled, and
+neither is a code change:
+
+- **Which broker account it trades through.** That is a recorded binding, not a
+  shared password. See [BROKER_ACCOUNT_HANDOFF.md](BROKER_ACCOUNT_HANDOFF.md).
+- **Who holds access to everything it depends on** — the developer console, the
+  static IP, the encrypted secrets, the alert channels. See
+  [ACCESS_CONTINUITY.md](ACCESS_CONTINUITY.md), and run:
+
+```bash
+./scripts/sterlingctl continuity
+```
+
+To see why no strategy is allowed to spend real money yet:
+
+```bash
+./scripts/sterlingctl permission
+```
+
 ## What Sterling is not
 
 It is not an income machine, and nobody should plan around money from it. It is
