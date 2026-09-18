@@ -279,6 +279,27 @@ def open_positions(uid: str) -> List[OpenPosition]:
     return [p for p in _load(uid).values() if p.status in (PENDING, OPEN)]
 
 
+def known_uids() -> List[str]:
+    """Every operator whose registry has been persisted, read from the store.
+
+    The in-memory registry belongs to one process; a shutdown check that read it
+    from a command-line process would find nothing and report "no exposure" for a
+    machine with open positions. This reads the durable projection instead, so
+    the answer is about the deployment rather than about the caller.
+    """
+    prefix = "kite_engine_positions_"
+    try:
+        with db._conn() as conn:
+            rows = conn.execute(
+                "SELECT key FROM system_config WHERE key LIKE ?", (prefix + "%",)
+            ).fetchall()
+    except Exception:  # noqa: BLE001
+        # An unreadable store is not an empty one. The caller must treat this as
+        # unknown, and a raise is the only answer that cannot be mistaken for "none".
+        raise
+    return sorted({str(r[0])[len(prefix):] for r in rows if str(r[0]).startswith(prefix)})
+
+
 def all_open_tokens(uid: str) -> List[int]:
     return [p.token for p in open_positions(uid) if p.token]
 

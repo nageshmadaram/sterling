@@ -12,6 +12,13 @@ if "STERLING_DB_PATH" not in os.environ:
     _TEST_DB.close()
     os.environ["STERLING_DB_PATH"] = _TEST_DB.name
 
+# Shadow records are written by the live entry path now, so a test that exercises
+# an entry would append to the repository's own data/shadow directory. Point the
+# store at a temporary directory for the whole session: a test run must not leave
+# rows in the evidence a release is judged on.
+if "STERLING_SHADOW_DIR" not in os.environ:
+    os.environ["STERLING_SHADOW_DIR"] = tempfile.mkdtemp(suffix="_sterling_test_shadow")
+
 # An absent safety state now reads as SAFE_MODE, which is the correct production
 # answer and the wrong default for a test suite: every capacity and execution test
 # would refuse before reaching the behaviour it is actually asserting. So the suite

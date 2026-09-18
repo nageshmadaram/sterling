@@ -158,6 +158,8 @@ ui-ux-pro-max-skill/
 # Snapback prospective evidence + backups (local only, never committed)
 backups/
 data/snapback/
+# Shadow execution evidence: written by the live entry path, per deployment.
+data/shadow/
 
 # Live acceptance harness output: instrument-master snapshots and test
 # evidence. Regenerated per run, and never authoritative (TEST_ACCEPTANCE).

@@ -170,9 +170,15 @@ async def lane_promotion(
         "evidence_wired": False,
         "required": {"sessions": MIN_SESSIONS, "completed_trades": MIN_TRADES},
         "verdict": verdict["verdict"],
+        "evidence_scope": verdict["evidence_scope"],
         "checks": verdict["checks"],
         "reasons": verdict["reasons"],
         "lane_evidence": verdict["lane"],
+        # Paper, shadow and broker rows answer three different questions, and
+        # the most permissive of them is paper. The separated view is served
+        # alongside the lane verdict so a reader cannot see one number without
+        # seeing which regimes produced it.
+        "regimes": verdict["regimes"],
     }
 
 

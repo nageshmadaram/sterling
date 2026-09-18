@@ -184,6 +184,24 @@ def test_the_doctor_covers_the_gaps_preflight_does_not(monkeypatch):
         "risk_limits",
         "lane_origination",
         "supertrend_core_frozen",
+        # Post-67 go-live gaps: none of these is visible from the preflight,
+        # and each one blocks real orders rather than today's shadow session.
+        "static_egress",
+        "account_binding",
+        "release_certification",
+        # Section 12: the deployment host itself. A day the lake was unplugged
+        # is a day of market data that cannot be bought back.
+        "lake_mount",
+        "network_path",
+        # Go-live section 10.1: the deployment host, the broker session, the
+        # feed, the backups and the two safety states an operator acts on.
+        "deployment_identity",
+        "broker_session",
+        "market_freshness",
+        "backup_age",
+        "restore_check",
+        "safe_mode_state",
+        "execution_control_state",
     }
 
 

@@ -26,11 +26,12 @@ from app.services.exchanges.kite import accounts as kite_accounts
 from app.services.exchanges.kite.models import KiteAccountCreate
 from app.services.kite_engine import order_journal, positions, service, state
 from app.services.kite_engine.universe import UniverseItem
+from tests.engines.sterling_kite_engine.canonical_double import CanonicalBrokerDouble
 
 UID = "test-dir-exec"
 
 
-class FakeClient:
+class FakeClient(CanonicalBrokerDouble):
     #: Default capital: enough that risk sizing is never the gate. These tests are
     #: about direction, vehicle and the entry filters, but at the old ₹100,000 a
     #: single NIFTY lot (₹2,250 of risk) already broke the 1% budget — so every one

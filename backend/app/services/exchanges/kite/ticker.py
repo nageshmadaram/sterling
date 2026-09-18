@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+import time
 from typing import Awaitable, Callable, Dict, List, Optional
 
 from app.core.logging import get_logger
@@ -142,6 +143,11 @@ class KiteTicker:
         self._on_order_update = on_order_update
         self._subscribed: Dict[int, str] = {}   # token -> mode
         self._ticks: Dict[int, dict] = {}        # latest tick per token
+        # When the last binary tick frame arrived. A connected socket that has
+        # stopped delivering ticks looks identical to a healthy one without
+        # this, and "connected" is not the question an operator is asking
+        # before letting the system trade.
+        self._last_tick_ms: int = 0
         self._active = False
         self._connected = False
         self._last_error: Optional[str] = None
@@ -226,6 +232,8 @@ class KiteTicker:
             "connected": self._connected,
             "subscribed": sorted(self._subscribed.keys()),
             "tick_count": len(self._ticks),
+            # 0 means no tick has ever arrived on this socket — not "just now".
+            "last_tick_ms": self._last_tick_ms,
         }
 
     async def _resubscribe_all(self) -> None:
@@ -278,6 +286,8 @@ class KiteTicker:
             ticks = parse_binary(bytes(raw))
             for t in ticks:
                 self._ticks[t["instrument_token"]] = t
+            if ticks:
+                self._last_tick_ms = int(time.time() * 1000)
             if ticks and self._on_ticks:
                 try:
                     await self._on_ticks(ticks)

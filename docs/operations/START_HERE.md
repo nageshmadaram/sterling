@@ -41,12 +41,46 @@ correct. The status screen prints the reason on the next line.
 ## Starting Sterling
 
 ```bash
-cd ~/Sterling && ./scripts/sterling-status
+cd ~/Sterling && ./scripts/sterlingctl start
 ```
 
-If the backend says NOT RUNNING, start it, then check the status again. If the
-status screen says `Blocked by` something, fix that thing first — do not try to
-work around it.
+That is the whole command. It runs eleven steps in a fixed order and prints
+each one:
+
+ 1. put the system into RECOVERY_REQUIRED — nothing is known to be right yet
+ 2. the pre-start doctor
+ 3. start the service
+ 4. wait for the application to answer
+ 5. check the release identity against the frozen manifest
+ 6. check the broker session is connected, and is the account we are bound to
+ 7. reconcile against the broker
+ 8. check the market subscriptions came back
+ 9. check ticks are actually arriving, not merely that a socket is open
+10. check the evidence store accepts a write
+11. clear RECOVERY_REQUIRED
+
+It stops at the first step that is not a pass, and it treats "could not check"
+as a stop, not as a pass. If it stops, the system stays in RECOVERY_REQUIRED and
+will not open new positions. Fix the thing it names, then run it again — do not
+try to work around it.
+
+To see what is running without changing anything:
+
+```bash
+./scripts/sterling-status
+```
+
+## Stopping Sterling
+
+```bash
+./scripts/sterlingctl stop
+```
+
+The stop refuses while a position is open or an order has not been reconciled,
+because shutting down then would leave money in the market with nothing watching
+it. If you must stop anyway — the machine is being moved, say — add `--force`.
+It skips no check and hides no result; it only continues past the refusal, and
+you should expect to reconcile by hand afterwards.
 
 ## Logging in to the broker
 
@@ -71,6 +105,27 @@ Turn off new trading first, ask questions second:
 
 That is always safe. It never prevents closing a position. Then read
 [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).
+
+## If you have taken over from someone else
+
+Sterling is designed to be handed over. Two things have to be settled, and
+neither is a code change:
+
+- **Which broker account it trades through.** That is a recorded binding, not a
+  shared password. See [BROKER_ACCOUNT_HANDOFF.md](BROKER_ACCOUNT_HANDOFF.md).
+- **Who holds access to everything it depends on** — the developer console, the
+  static IP, the encrypted secrets, the alert channels. See
+  [ACCESS_CONTINUITY.md](ACCESS_CONTINUITY.md), and run:
+
+```bash
+./scripts/sterlingctl continuity
+```
+
+To see why no strategy is allowed to spend real money yet:
+
+```bash
+./scripts/sterlingctl permission
+```
 
 ## What Sterling is not
 

@@ -33,6 +33,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping
 
+from app.core.execution_vehicle import (
+    VEHICLE_POLICY_VERSION,
+    VehicleError,
+    lane_vehicle,
+)
 from app.core.horizon import MODE_TIMELINES, HorizonMode
 from app.core.lane_registry import LANES, LaneDefinition
 from app.core.strategy_identity import EVIDENCE_SCHEMA_VERSION, IdentityError
@@ -139,6 +144,12 @@ class LaneManifest:
     identity: Mapping[str, Any] | None = None
     identity_unavailable: str | None = None
 
+    #: The vehicle this lane trades, exposed as a first-class field. The rule
+    #: hash already absorbs it, but a hash cannot be read: an operator opening
+    #: this artifact in two years must see OPTIONS_LONG or FUTURES written out.
+    execution_vehicle: str | None = None
+    vehicle_policy_version: str | None = None
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "lane_key": self.lane_key,
@@ -150,6 +161,8 @@ class LaneManifest:
             "horizon": dict(self.horizon),
             "identity": dict(self.identity) if self.identity else None,
             "identity_unavailable": self.identity_unavailable,
+            "execution_vehicle": self.execution_vehicle,
+            "vehicle_policy_version": self.vehicle_policy_version,
         }
 
 
@@ -175,7 +188,16 @@ def lane_manifest(
     tag: str,
 ) -> LaneManifest:
     """Describe one lane, with its identity when the lane has frozen rules."""
+    try:
+        vehicle = lane_vehicle(lane.lane_key).value
+    except VehicleError:
+        # A lane with no declared vehicle is recorded as such rather than
+        # guessed at. Guessing is how an options result becomes a futures one.
+        vehicle = None
+
     common = {
+        "execution_vehicle": vehicle,
+        "vehicle_policy_version": VEHICLE_POLICY_VERSION if vehicle else None,
         "lane_key": lane.lane_key,
         "strategy_id": lane.strategy_id,
         "mode": lane.mode.value,
@@ -229,6 +251,7 @@ def build_release_manifest(
     from app.services.snapback_candidate_universe import UNIVERSE_SCHEMA_VERSION
 
     return {
+        "challengers": _challenger_manifests(sha=resolved_sha, tag=resolved_tag),
         "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
         "build": {
@@ -240,9 +263,106 @@ def build_release_manifest(
             "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
             "universe_schema_version": str(UNIVERSE_SCHEMA_VERSION),
         },
+        # What this release was certified against, frozen with it. Read from
+        # the certification and CI stores rather than asserted: a manifest that
+        # claims CI passed, written by a hand that did not check, is worse than
+        # one that says UNKNOWN.
+        "certification": _certification_facts(resolved_sha),
+        # Which account the evidence under this release belongs to, and the one
+        # switch that separates shadow from capital.
+        "account_binding_id": _active_binding_id(),
+        "live_execution_enabled": _live_execution_enabled(),
         "lane_count": len(lanes),
         "lanes": lanes,
     }
+
+
+def _certification_facts(sha: str) -> dict[str, Any]:
+    """CI and live-acceptance facts for this SHA, as the stores hold them."""
+    facts: dict[str, Any] = {"ci": {"all_required_contexts": UNKNOWN},
+                             "live_acceptance": {"overall": UNKNOWN}}
+    try:
+        from app.core.ci_certification import ci_report
+
+        report = ci_report(sha)
+        facts["ci"] = {
+            "all_required_contexts": "PASS" if report.all_passed else UNKNOWN,
+            "contexts": {r.context: {"conclusion": r.conclusion, "run_id": r.run_id}
+                         for r in report.records},
+        }
+    except Exception:  # noqa: BLE001 - a manifest must still be writable
+        pass
+
+    try:
+        from app.services.release_certification import CertificationStore
+
+        gate = CertificationStore().read(sha).get("kite_live_acceptance")
+        if gate is not None:
+            facts["live_acceptance"] = {
+                "overall": gate.status,
+                "artifact_ref": gate.evidence_ref,
+                "artifact_sha256": _artifact_sha256(gate.evidence_ref),
+                "observed_by": gate.attested_by,
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return facts
+
+
+def _artifact_sha256(reference: str) -> str:
+    """Checksum the acceptance report so the manifest pins the bytes it means."""
+    if not reference:
+        return ""
+    path = Path(reference)
+    if not path.is_absolute():
+        path = repo_root() / reference
+    if not path.exists():
+        return ""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _active_binding_id() -> str:
+    try:
+        from app.services.account_binding_service import active_binding
+
+        binding = active_binding()
+        return str(getattr(binding, "binding_id", "") or "") if binding else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _live_execution_enabled() -> bool | None:
+    try:
+        from app.core.lane_registry import LIVE_EXECUTION_ENABLED
+
+        return bool(LIVE_EXECUTION_ENABLED)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _challenger_manifests(*, sha: str, tag: str) -> list[dict[str, Any]]:
+    """Declared challengers, each with its own identity and zero sample.
+
+    A challenger is listed separately from the ten lanes on purpose. Folding it
+    into the lane list would invite a reader — or a report — to treat its rows
+    as that lane's evidence, which is the one thing a challenger must never be.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        from app.engines.sterling_kite_engine.directional_challenger import (
+            challenger_manifest,
+        )
+
+        rows.append(challenger_manifest(runtime_sha=sha, release_tag=tag))
+    except IdentityError as exc:
+        rows.append({"challenger": "supertrend_directional_v1", "identity_unavailable": str(exc)})
+    return rows
 
 
 @dataclass(frozen=True)
@@ -295,6 +415,10 @@ _IDENTITY_FIELDS: Final[frozenset[str]] = frozenset(
         "mode_version",
         "identity_hash",
         "evidence_schema_version",
+        # A vehicle change is an economics change, not a rebuild: the same
+        # signal in futures and in bought options are two experiments.
+        "execution_vehicle",
+        "vehicle_contract_hash",
     }
 )
 
@@ -305,6 +429,8 @@ _LANE_FIELDS: Final[tuple[str, ...]] = (
     "state",
     "rules_defined",
     "identity_unavailable",
+    "execution_vehicle",
+    "vehicle_policy_version",
 )
 
 

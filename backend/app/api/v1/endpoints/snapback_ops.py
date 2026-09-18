@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.auth import UserContext, get_current_user
 
@@ -199,3 +199,77 @@ async def family_resume_new_trades(
         "reason": reason,
         "changed_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/ops/runtime")
+async def ops_runtime(request: Request) -> dict:
+    """What only the running process knows, for the start/stop sequence.
+
+    `sterlingctl start` has to answer three questions no other process can:
+    whether the broker session is live and bound to the account we are supposed
+    to be trading, what the tick socket is subscribed to, and when the last tick
+    actually arrived. Everything else in the sequence is durable state a command
+    line can read for itself.
+
+    Loopback only. The reply names an account and a subscription set — not a
+    secret, but not something to serve to a network either — and this endpoint
+    carries no authentication precisely so that a start script does not need a
+    credential to ask whether the service came up. The two must go together.
+
+    Every field is tri-state. `null` means the question could not be answered,
+    and the caller is required to treat that as a blocker rather than as a no.
+    """
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    broker: dict = {"connected": None, "account_id": None,
+                    "bound_client_id": None, "binding_matches": None, "detail": ""}
+    feed: dict = {"connected": None, "subscribed": None, "last_tick_ms": None}
+
+    try:
+        from app.services.account_binding_service import active_binding
+
+        binding = active_binding()
+        broker["bound_client_id"] = getattr(binding, "client_id", None) if binding else None
+    except Exception as exc:  # noqa: BLE001
+        broker["detail"] = f"binding unreadable: {exc}"
+
+    try:
+        from app.services.exchanges.kite import accounts as kite_accounts
+
+        live = [a for a in kite_accounts.all_accounts() if getattr(a, "connected", False)]
+        broker["connected"] = bool(live)
+        if live:
+            account = live[0]
+            broker["account_id"] = str(getattr(account, "kite_user_id", "") or getattr(account, "id", ""))
+            bound = broker["bound_client_id"]
+            if bound:
+                broker["binding_matches"] = str(bound) == broker["account_id"]
+        else:
+            broker["detail"] = broker["detail"] or "no connected broker account"
+    except Exception as exc:  # noqa: BLE001
+        broker["connected"] = None
+        broker["detail"] = f"broker state unreadable: {exc}"
+
+    try:
+        from app.services.exchanges.kite import ticker_manager
+
+        statuses = [ticker_manager.status(uid) for uid in ticker_manager.known_users()]
+        if statuses:
+            feed["connected"] = any(s.get("connected") for s in statuses)
+            subscribed: set = set()
+            for status in statuses:
+                subscribed.update(status.get("subscribed") or [])
+            feed["subscribed"] = sorted(subscribed)
+            feed["last_tick_ms"] = max((int(s.get("last_tick_ms") or 0) for s in statuses),
+                                       default=0)
+        else:
+            feed["connected"] = False
+            feed["subscribed"] = []
+            feed["last_tick_ms"] = 0
+    except Exception as exc:  # noqa: BLE001
+        feed["detail"] = f"ticker state unreadable: {exc}"
+
+    return {"broker": broker, "feed": feed,
+            "checked_at": datetime.now(timezone.utc).isoformat()}

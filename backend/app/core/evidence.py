@@ -77,6 +77,7 @@ def eligible_for_lane(
     lane_key: str,
     *,
     allowed_classes: Iterable[EvidenceClass] | None = None,
+    required_vehicle: str | None = None,
 ) -> bool:
     """May ``row`` be counted toward ``lane_key``'s economic gate?
 
@@ -85,11 +86,21 @@ def eligible_for_lane(
     * a row from another lane pooled in to reach a trade count;
     * a legacy row with no lane label counted as "probably this one";
     * a non-authoritative row counted because nobody checked the flag;
-    * a modelled row counted as though the fill had been observed.
+    * a modelled row counted as though the fill had been observed;
+    * an option-buying row counted toward a futures challenger, because the
+      lane key matched and nobody compared the execution vehicle.
+
+    ``required_vehicle`` is opt-in so existing single-vehicle callers keep
+    working, but once supplied a row that declares no vehicle is refused: the
+    absence of a vehicle is not evidence that it was the right one.
     """
     allowed = frozenset(allowed_classes) if allowed_classes else PROMOTABLE_CLASSES
     if row_lane(row) != lane_key:
         return False
+    if required_vehicle is not None:
+        declared = str(row.get("execution_vehicle") or "").strip().upper()
+        if declared != str(required_vehicle).strip().upper():
+            return False
     if not int(row.get("authoritative") or 0):
         return False
     try:

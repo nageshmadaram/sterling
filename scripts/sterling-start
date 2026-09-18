@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Start Sterling: eleven steps, in order, refusing at the first one that is not
+# a pass. See app/services/service_lifecycle.py — the order lives there, in one
+# place, so this script stays a way of calling it rather than a second copy of
+# the rules.
+#
+# Exit codes match sterlingctl's contract:
+#   0  every step ran and passed; the system is CLEAN
+#   1  a step failed
+#   2  a step could not be checked — which is NOT a pass
+set -uo pipefail
+
+STERLING_ROOT="${STERLING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON="${STERLING_PYTHON:-$STERLING_ROOT/backend/.venv/bin/python}"
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3)"
+
+"$PYTHON" -c "
+import sys
+sys.path.insert(0, '$STERLING_ROOT/backend')
+from app.services.service_lifecycle import render_report, start_sequence
+
+report = start_sequence()
+print(render_report(report))
+sys.exit(report.exit_code)
+"
