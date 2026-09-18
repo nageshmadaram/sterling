@@ -28,6 +28,13 @@ from app.core.evidence import (
     eligible_for_lane,
     partition_by_lane,
 )
+from app.core.execution_regime import (
+    REGIMES,
+    SEPARATE_REGIMES,
+    PromotionPolicy,
+    assert_pooling_declared,
+    regime_statistics,
+)
 from app.core.lane_registry import LANES, UnknownLane, get_lane
 
 #: The predeclared minimum forward sample, per lane. These mirror the floor
@@ -385,23 +392,88 @@ def evaluate_lane(
     return payload
 
 
+def evaluate_lane_regimes(
+    rows: Iterable[Mapping[str, Any]],
+    lane_key: str,
+    *,
+    policy: PromotionPolicy = SEPARATE_REGIMES,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """One verdict per execution regime, and a pooled one only if declared.
+
+    Paper, shadow and broker rows answer three different questions — does the
+    hypothesis work under controlled execution, would it have been executable
+    against the real book, and what did the account actually do. Averaging them
+    produces a number that answers none of the three, and the most permissive
+    of them dominates the count, so the default policy judges each on its own.
+
+    A pooled verdict appears only when the policy names the classes it pools,
+    and it is labelled as pooled wherever it is rendered. `assert_pooling_declared`
+    is what makes an undeclared pooling an error rather than a default.
+    """
+    materialised = list(rows)
+
+    by_regime: dict[str, dict[str, Any]] = {}
+    for regime in REGIMES:
+        evidence = collect_lane_evidence(
+            materialised, lane_key, allowed_classes={regime}
+        )
+        verdict = evaluate_lane(evidence, **kwargs)
+        verdict["evidence_scope"] = regime.value
+        by_regime[regime.value] = verdict
+
+    pooled: dict[str, Any] | None = None
+    if len(policy.pooled_classes) > 1:
+        assert_pooling_declared(policy, policy.pooled_classes)
+        evidence = collect_lane_evidence(
+            materialised, lane_key, allowed_classes=policy.pooled_classes
+        )
+        pooled = evaluate_lane(evidence, **kwargs)
+        pooled["evidence_scope"] = "POOLED: " + ", ".join(
+            sorted(c.value for c in policy.pooled_classes)
+        )
+
+    return {
+        "lane_key": lane_key,
+        "policy": policy.as_dict(),
+        "statistics": regime_statistics(materialised, lane_key),
+        "by_regime": by_regime,
+        "pooled": pooled,
+    }
+
+
 def evaluate_all_lanes(
     rows: Iterable[Mapping[str, Any]],
+    *,
+    policy: PromotionPolicy = SEPARATE_REGIMES,
     **kwargs: Any,
 ) -> dict[str, dict[str, Any]]:
-    """One verdict per lane. There is deliberately no combined verdict.
+    """One verdict per lane, per execution regime. No combined verdict.
 
     A caller that wants "is Snapback profitable?" is asking a question the
     five-mode model says has no answer: Snapback swing and Snapback scalping
-    are different experiments, and averaging them describes neither.
+    are different experiments, and averaging them describes neither. The same
+    now holds one level down, between the three execution regimes within a lane.
+
+    The lane-level keys of each entry are unchanged, so existing readers keep
+    working; what they were reading is now labelled `evidence_scope` and joined
+    by a `regimes` breakdown that reports each regime on its own.
     """
     materialised = list(rows)
-    return {
-        lane_key: evaluate_lane(
+    out: dict[str, dict[str, Any]] = {}
+    for lane_key in sorted(LANES):
+        # The lane-level verdict keeps its historical scope — every promotable
+        # class — but it now says so, and it sits beside the separated view
+        # rather than standing in for it.
+        verdict = evaluate_lane(
             collect_lane_evidence(materialised, lane_key), **kwargs
         )
-        for lane_key in sorted(LANES)
-    }
+        verdict["evidence_scope"] = "all promotable classes"
+        verdict["regimes"] = evaluate_lane_regimes(
+            materialised, lane_key, policy=policy, **kwargs
+        )
+        out[lane_key] = verdict
+    return out
 
 
 def evaluate_lane_identities(
